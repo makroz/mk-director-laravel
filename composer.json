@@ -1,52 +1,66 @@
 {
-  "name": "mk/director-laravel",
-  "description": "MK-Director: Laravel Core Framework for rapid application development.",
-  "type": "library",
-  "license": "proprietary",
-  "version": "1.0.0",
-  "authors": [
-    {
-      "name": "Mario Guzmán",
-      "email": "makroz@hotmail.com"
+    "name": "makroz/director-laravel",
+    "description": "MK-Director: Laravel Core Framework for rapid application development. Admin module scaffolding with MME (MVC Modular Encapsulated) structure. Part of the @makroz/* suite.",
+    "type": "library",
+    "license": "proprietary",
+    "keywords": [
+        "mk-director",
+        "laravel",
+        "admin",
+        "MME",
+        "modular",
+        "scaffolding"
+    ],
+    "authors": [
+        {
+            "name": "Mario Guzmán",
+            "email": "makroz@hotmail.com"
+        }
+    ],
+    "require": {
+        "php": "^8.4",
+        "illuminate/support": "^13.0",
+        "illuminate/database": "^13.0",
+        "illuminate/http": "^13.0"
+    },
+    "require-dev": {
+        "pestphp/pest": "^5.0",
+        "pestphp/pest-plugin-laravel": "^5.0",
+        "mockery/mockery": "^1.6"
+    },
+    "autoload": {
+        "psr-4": {
+            "Mk\\Director\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Mk\\Director\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Mk\\Director\\MkServiceProvider"
+            ]
+        },
+        "branch-alias": {
+            "dev-main": "1.0.x-dev"
+        }
+    },
+    "scripts": {
+        "test": "vendor/bin/pest",
+        "test:coverage": "vendor/bin/pest --coverage",
+        "lint": "php -l src/**/*.php",
+        "type-check": "phpstan analyse src"
+    },
+    "config": {
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "support": {
+        "issues": "https://github.com/makroz/mk-director-laravel/issues",
+        "source": "https://github.com/makroz/mk-director-laravel"
     }
-  ],
-  "require": {
-    "php": "^8.4",
-    "illuminate/support": "^13.0",
-    "illuminate/database": "^13.0",
-    "illuminate/http": "^13.0"
-  },
-  "require-dev": {
-    "pestphp/pest": "^5.0",
-    "pestphp/pest-plugin-laravel": "^5.0",
-    "mockery/mockery": "^1.6"
-  },
-  "autoload": {
-    "psr-4": {
-      "Mk\\Director\\": "src/"
-    }
-  },
-  "autoload-dev": {
-    "psr-4": {
-      "Mk\\Director\\Tests\\": "tests/"
-    }
-  },
-  "extra": {
-    "laravel": {
-      "providers": [
-        "Mk\\Director\\MkServiceProvider"
-      ]
-    }
-  },
-  "scripts": {
-    "test": "vendor/bin/pest",
-    "test:coverage": "vendor/bin/pest --coverage",
-    "lint": "php -l src/**/*.php",
-    "type-check": "phpstan analyse src"
-  },
-  "config": {
-    "allow-plugins": {
-      "pestphp/pest-plugin": true
-    }
-  }
 }

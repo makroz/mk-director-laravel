@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `mk/director-laravel` will be documented in this file.
+All notable changes to `makroz/director-laravel` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added (1.0.0)
 
-- **Strict Laravel 13 support**: `mk/director-laravel` 1.0.0 declares hard
+- **Strict Laravel 13 support**: `makroz/director-laravel` 1.0.0 declares hard
   `^13.0` constraints on `illuminate/support`, `illuminate/database`, and
   `illuminate/http`. Laravel 10/11/12 are no longer supported.
 - **PHP 8.4 baseline**: hard `^8.4` requirement (typed const, asymmetric
@@ -127,7 +127,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Upgrade guide from 0.0.x
 
 1. Bump your host application's `composer.json`:
-   - `"mk/director-laravel": "^1.0"`
+   - `"makroz/director-laravel": "^1.0"`
 2. Ensure your host project runs on **PHP 8.4** (`composer.json` → `require.php`).
 3. Ensure your host project runs on **Laravel 13**:
    `"laravel/framework": "^13.0"`.

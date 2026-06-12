@@ -1,25 +1,67 @@
-# @mk/laravel
+# makroz/director-laravel
 
-El motor de backend de MK-Director. Basado en Laravel 10+, ofrece una capa de abstracción potente para APIs CRUD.
+> **Part of the [@makroz/* suite](https://github.com/makroz/MK-Director)** — Laravel 13+ core framework for rapid application development with MME (MVC Modular Encapsulated) structure.
 
-> 📖 **[Guía Completa del Desarrollador](DEVELOPER_GUIDE.md)**: Instalación, Configuración, CRUD, ListManager y Plugins.
+[![Packagist](https://img.shields.io/packagist/v/makroz/director-laravel)](https://packagist.org/packages/makroz/director-laravel)
+[![License](https://img.shields.io/badge/license-proprietary-blue.svg)](LICENSE)
+[![PHP](https://img.shields.io/badge/PHP-8.4-blue.svg)](https://php.net)
+[![Laravel](https://img.shields.io/badge/Laravel-13-red.svg)](https://laravel.com)
+
+El motor de backend de MK-Director. Ofrece una capa de abstracción potente para APIs CRUD con estructura MME nativa (cada módulo es autocontenido y se comunica solo vía API pública).
+
+> 📖 **[Guía Completa del Desarrollador](DEVELOPER_GUIDE.md)**: Instalación, Configuración, CRUD, ListManager, Plugins y MME.
 
 ## Características Core
+
 - **Model & Builder**: Soporte nativo para `cacheGet()`, `cacheFirst()` y `cacheFind()`.
 - **Auto-Cache Plugin**: Flushing automático de tags de cache al detectar operaciones de escritura en la DB.
 - **Magic CRUD Controller**: Implementa un ABM completo heredando de `Mk\Director\Controllers\Controller`.
 - **List & Search Managers**: Parsing de strings complejos para búsquedas relacionales y joins dinámicos.
+- **MME (MVC Modular Encapsulated)**: ModuleLoader auto-registra módulos, comunicación inter-módulo solo vía API pública.
+- **Auth + RBAC**: Sistema completo con abilities, roles, scopes y middleware `MkAbility`.
 
-## Configuración
-Publica la configuración:
+## Instalación
+
 ```bash
-php artisan vendor:publish --tag=mk-config
+composer require makroz/director-laravel
 ```
 
+Publica la configuración y migraciones:
+
+```bash
+php artisan vendor:publish --tag=mk-config
+php artisan vendor:publish --tag=mk-migrations
+php artisan migrate
+```
+
+## Configuración
+
 Habilita features en `config/mk_director.php`:
+
 ```php
 'features' => [
     'auto_cache' => true,
     'dynamic_joins' => true,
+    'mme_enforcement' => true,
 ],
 ```
+
+## Stack
+
+- PHP 8.4+
+- Laravel 13+
+- Illuminate components (Support, Database, HTTP)
+
+## Ecosistema @makroz/*
+
+| Package | Description |
+|---------|-------------|
+| [`@makroz/core`](https://www.npmjs.com/package/@makroz/core) | Tipos compartidos y validadores cross-stack |
+| [`@makroz/web`](https://www.npmjs.com/package/@makroz/web) | Next.js 16 + shadcn/ui module layer |
+| [`@makroz/mobile`](https://www.npmjs.com/package/@makroz/mobile) | Expo SDK 56 + expo-router 6 module layer |
+| `makroz/director-laravel` (este) | Laravel 13 backend con MME |
+| `create-makroz-director` | CLI para scaffolding de apps nuevas |
+
+## Licencia
+
+Proprietary — © Mario Guzmán. Ver [LICENSE](LICENSE) si está disponible.

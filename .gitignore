@@ -1,0 +1,11 @@
+/vendor/
+/node_modules/
+/.phpunit.cache/
+/.phpunit.result.cache
+/.env
+/.env.example
+/.env.testing
+/storage/
+/.DS_Store
+*.log
+composer.lock
