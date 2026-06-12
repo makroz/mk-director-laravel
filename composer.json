@@ -1,0 +1,52 @@
+{
+  "name": "mk/director-laravel",
+  "description": "MK-Director: Laravel Core Framework for rapid application development.",
+  "type": "library",
+  "license": "proprietary",
+  "version": "1.0.0",
+  "authors": [
+    {
+      "name": "Mario Guzmán",
+      "email": "makroz@hotmail.com"
+    }
+  ],
+  "require": {
+    "php": "^8.4",
+    "illuminate/support": "^13.0",
+    "illuminate/database": "^13.0",
+    "illuminate/http": "^13.0"
+  },
+  "require-dev": {
+    "pestphp/pest": "^5.0",
+    "pestphp/pest-plugin-laravel": "^5.0",
+    "mockery/mockery": "^1.6"
+  },
+  "autoload": {
+    "psr-4": {
+      "Mk\\Director\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "Mk\\Director\\Tests\\": "tests/"
+    }
+  },
+  "extra": {
+    "laravel": {
+      "providers": [
+        "Mk\\Director\\MkServiceProvider"
+      ]
+    }
+  },
+  "scripts": {
+    "test": "vendor/bin/pest",
+    "test:coverage": "vendor/bin/pest --coverage",
+    "lint": "php -l src/**/*.php",
+    "type-check": "phpstan analyse src"
+  },
+  "config": {
+    "allow-plugins": {
+      "pestphp/pest-plugin": true
+    }
+  }
+}

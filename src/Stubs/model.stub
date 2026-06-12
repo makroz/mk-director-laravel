@@ -1,0 +1,19 @@
+<?php
+
+namespace App\Modules\{{ModuleName}}\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
+
+class {{ModuleName}} extends Model
+{
+    use SoftDeletes;
+
+    protected $fillable = [
+        // 'name', 'status', 'etc...'
+    ];
+
+    protected $casts = [
+        'is_active' => 'boolean',
+    ];
+}

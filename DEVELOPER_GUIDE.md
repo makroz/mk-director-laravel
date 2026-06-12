@@ -1,0 +1,235 @@
+# 📖 Manual del Desarrollador — MK-Director (`mk-laravel`)
+
+Bienvenido a la guía oficial de **MK-Director Core**, el motor de backend diseñado para acelerar el desarrollo de APIs robustas mediante una capa de abstracción potente sobre Laravel.
+
+---
+
+## 🏗️ 1. Arquitectura y Filosofía
+
+MK-Director se basa en el principio de **Zero-Coupling** y **Configuración sobre Código**. El objetivo es que puedas definir el comportamiento de un módulo completo (CRUD, búsquedas, caché, plugins) simplemente configurando un arreglo en tu controlador.
+
+### Flujo Estándar de Respuesta
+Todas las respuestas de MK-Director siguen este formato:
+```json
+{
+  "data": {
+    "data": [...], // Colección de objetos o un objeto único
+    "__extraData": {
+       "total": 150,
+       "perPage": 15,
+       "page": 1,
+       "plugin_verified": true, // Inyectado por plugins
+       ...
+    }
+  },
+  "message": "Operación exitosa",
+  "status": 200,
+  "execution_time": "0.02s" // (Solo en modo Debug)
+}
+```
+
+---
+
+## ⚙️ 2. Configuración (`mk_director.php`)
+
+Después de publicar la configuración (`php artisan vendor:publish --tag=mk-config`), puedes ajustar el comportamiento global:
+
+- **`debug`**: Habilita tiempos de ejecución y análisis de queries (EXPLAIN).
+- **`list`**: Configura `default_per_page` y el `max_per_page`.
+- **`features.auto_cache`**: Activa el **"Magic Cache"** global, el cual invalida automáticamente tags de caché al detectar escrituras (`INSERT`, `UPDATE`, `DELETE`) en las tablas correspondientes.
+
+---
+
+## ⚡ 3. Creando un Módulo con `CRUDSmart`
+
+La forma más rápida de crear un CRUD completo es usar el trait `CRUDSmart` en tu controlador.
+
+### Ejemplo de Controlador:
+```php
+namespace App\Modules\Surveys\Controllers;
+
+use Mk\Director\Controllers\BaseController;
+use Mk\Director\Traits\CRUDSmart;
+use App\Modules\Surveys\Models\Survey;
+use App\Modules\Surveys\Services\SurveyService;
+
+class SurveyController extends BaseController
+{
+    use CRUDSmart;
+
+    protected array $mkConfig = [
+        'model'      => Survey::class,      // Modelo Eloquent
+        'service'    => SurveyService::class, // (Opcional) Lógica de negocio (hooks)
+        'resource'   => SurveyResource::class,// (Opcional) API Resource para transformar data
+        'searchable' => ['title', 'description'], // Campos habilitados para búsqueda `q=`
+        'with'       => ['category'],        // Eager loading fijo
+        'features'   => [
+            'auto_cache'       => true,      // Sobrescribe el global para este módulo
+            'pagination_type'  => 'cursor',  // Options: length_aware, cursor
+        ],
+    ];
+}
+```
+
+---
+
+## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)
+
+Tanto para **Next.js** como para **React Native**, el consumo de listas es estandarizado mediante parámetros URL:
+
+### 4.1 Paginación
+Controlada por `page` y `per_page` (o `cursor` en modo Cursor Pagination).
+
+### 4.2 Filtrado Dinámico
+Usa el parámetro `filter[columna][operador]=valor`.
+- **Filtro exacto**: `/api/surveys?filter[status]=A`
+- **Operadores**:
+  - `neq`: Not Equal (ej: `filter[status][neq]=D`)
+  - `gt` / `gte`: Greater than (ej: `filter[price][gt]=100`)
+  - `lt` / `lte`: Less than
+  - `in`: Lista de valores (ej: `filter[category_id][in]=1,2,3`)
+
+### 4.3 Búsqueda Global (`q=`)
+Realiza una búsqueda tipo "LIKE" en todos los campos definidos en la configuración `'searchable'` del controlador.
+- Ejemplo: `/api/surveys?q=encuesta`
+
+### 4.4 Ordenamiento (`sort`)
+- **Ascendente**: `?sort=title`
+- **Descendente**: `?sort=-title`
+- **Múltiple**: `?sort=-created_at,title`
+
+---
+
+## 🔌 5. Sistema de Plugins (Extensibilidad)
+
+Puedes interceptar cualquier flujo del controlador sin modificar el core.
+
+### 5.1 Crear un Plugin:
+Crea una clase que implemente `Mk\Director\Contracts\MkPluginInterface`.
+
+```php
+namespace App\MkPlugins;
+
+use Mk\Director\Contracts\MkPluginInterface;
+
+class AuditPlugin implements MkPluginInterface
+{
+    public function boot(): void { /* ... */ }
+    
+    public function beforeQuery($query, $request): void {
+        // Ejemplo: Forzar filtrado por un tenant_id global
+        // $query->where('tenant_id', Auth::user()->tenant_id);
+    }
+
+    public function beforeSave($request, array &$data, string $mode): void {
+        if ($mode === 'create') {
+            // Lógica solo para nuevos registros
+        }
+    }
+
+    public function afterSave($model, $request, string $mode): void {
+        // ...
+    }
+
+    public function beforeDelete($model, $request): void { }
+    public function afterDelete($model, $request): void { }
+
+    public function afterResponse(&$responseData): void {
+        // Modificar el JSON final antes de enviarlo
+        if (is_array($responseData) && isset($responseData['__extraData'])) {
+            $responseData['__extraData']['audit_checked'] = true;
+        }
+    }
+}
+```
+
+### 5.2 Registrarlo Globalmente (`config/mk_director.php`):
+```php
+'plugins' => [
+    \App\MkPlugins\AuditPlugin::class,
+],
+```
+
+### 5.3 Registrarlo Localmente (Solo en un Controlador):
+Puedes habilitar plugins específicamente para un controlador añadiéndolos a su `$mkConfig`. Esto es ideal para validaciones o auditorías que solo aplican a un recurso.
+
+```php
+protected array $mkConfig = [
+    'model'   => Survey::class,
+    'plugins' => [
+        \App\MkPlugins\SpecialValidationPlugin::class,
+    ],
+];
+```
+
+### 5.4 Plugins Disponibles en el Core:
+
+#### `FileStoragePlugin`
+Maneja automáticamente la subida de archivos y la conversión de rutas a URLs completas.
+
+**Configuración en Controlador:**
+```php
+'plugins' => [
+    \Mk\Director\Plugins\FileStoragePlugin::class,
+],
+'plugins_config' => [
+    'file_storage' => [
+        'fields'   => ['image', 'avatar'], // Campos que son archivos
+        'disk'     => 'public',             // Disco de Laravel
+        'path'     => 'surveys/images',     // Carpeta destino
+        'auto_url' => true,                 // Convertir ruta a URL en la respuesta
+    ]
+]
+```
+
+---
+
+---
+
+## 🛡️ 7. Diagnóstico y Estándares de Calidad
+
+MK-Director incluye un ecosistema de validación proactiva para evitar errores de configuración comunes.
+
+### 7.1 El Comando `mk:status`
+Este comando audita todos tus controladores `SmartController` y verifica:
+- **Integridad de Clases**: Existencia de Modelos, Servicios y Enums configurados.
+- **Base de Datos**: Verifica que los campos en `'searchable'` existan en la tabla física.
+- **Plugins**: Valida que el modelo tenga los campos necesarios (`getRequirements()`).
+
+**Uso:**
+```bash
+php artisan mk:status
+```
+
+### 7.2 Creación de Plugins con Requerimientos
+Para que un plugin sea compatible con el sistema de diagnóstico, debe implementar `getRequirements()`:
+
+```php
+public function getRequirements(array $config): array {
+    return [
+        'fields' => $config['fields'] ?? [], // Campos requeridos en el modelo
+        'config' => ['disk', 'path']         // Llaves requeridas en plugins_config
+    ];
+}
+```
+
+---
+
+## 🚀 8. Integración con el Frontend (Guía Rápida)
+
+MK-Director estandariza la comunicación mediante un protocolo de URL predefinido:
+
+- **Búsqueda Global**: `?q=termino`
+- **Filtros**: `?filter[campo][operador]=valor` (ej: `filter[status]=A`)
+- **Ordenamiento**: `?sort=-created_at` (el prefijo `-` indica descendente)
+- **Paginación**: `?page=2&per_page=15`
+
+Toda respuesta exitosa (200 OK) garantiza la presencia de la llave `data` y, en colecciones, la llave `__extraData` con metadatos de paginación y telemetría.
+
+---
+
+## 💡 Consideraciones de Performance y Seguridad
+
+1.  **`allowedIncludes`**: Siempre define qué relaciones puede pedir el frontend para evitar fugas de información.
+2.  **`auto_cache`**: Úsalo para tablas con mucha lectura y poca escritura. MK-Director invalidará los tags de caché automáticamente.
+3.  **`MK_DIRECTOR_DEBUG`**: Manténlo en `true` solo en local para ver el análisis de queries y tiempos de ejecución.

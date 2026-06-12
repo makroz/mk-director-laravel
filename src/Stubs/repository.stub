@@ -1,0 +1,42 @@
+<?php
+
+namespace App\Modules\{{ModuleName}}\Repositories;
+
+use App\Modules\{{ModuleName}}\Contracts\{{ModuleName}}RepositoryInterface;
+use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
+use Illuminate\Pagination\LengthAwarePaginator;
+
+/**
+ * Repository de {{ModuleName}} — SOLO queries a la base de datos.
+ * Sin lógica de negocio, sin caché. Ver MK-API Standard R-A-003.
+ */
+class {{ModuleName}}Repository implements {{ModuleName}}RepositoryInterface
+{
+    public function paginate(int $perPage = 15): LengthAwarePaginator
+    {
+        return {{ModuleName}}::query()
+            ->latest()
+            ->paginate($perPage);
+    }
+
+    public function findById(int $id): {{ModuleName}}
+    {
+        return {{ModuleName}}::findOrFail($id);
+    }
+
+    public function create(array $data): {{ModuleName}}
+    {
+        return {{ModuleName}}::create($data);
+    }
+
+    public function update({{ModuleName}} $model, array $data): {{ModuleName}}
+    {
+        $model->update($data);
+        return $model->fresh();
+    }
+
+    public function delete({{ModuleName}} $model): void
+    {
+        $model->delete();
+    }
+}

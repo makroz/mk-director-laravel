@@ -1,0 +1,12 @@
+<?php
+
+use Illuminate\Support\Facades\Route;
+use App\Modules\{{ModuleName}}\Controllers\{{ModuleName}}Controller;
+
+Route::prefix('{{moduleNamePluralLower}}')->group(function () {
+    Route::get('/', [{{ModuleName}}Controller::class, 'index']);
+    Route::get('/{id}', [{{ModuleName}}Controller::class, 'show']);
+    Route::post('/', [{{ModuleName}}Controller::class, 'store']);
+    Route::put('/{id}', [{{ModuleName}}Controller::class, 'update']);
+    Route::delete('/{id}', [{{ModuleName}}Controller::class, 'destroy']);
+});

@@ -1,0 +1,45 @@
+<?php
+
+namespace App\Modules\{{ModuleName}}\DTOs;
+
+use App\Modules\{{ModuleName}}\Requests\Store{{ModuleName}}Request;
+
+/**
+ * DTO de {{ModuleName}} — Contrato de datos tipado entre capas.
+ * Ver MK-API Standard R-A-005.
+ */
+final class {{ModuleName}}Data
+{
+    public function __construct(
+        // TODO: Definir las propiedades tipadas del módulo
+        // public readonly string $name,
+        // public readonly ?string $description = null,
+        // public readonly bool $isActive = true,
+    ) {}
+
+    /**
+     * Crea el DTO desde un FormRequest ya validado.
+     * NUNCA llamar fromRequest() con un Request no validado.
+     */
+    public static function fromRequest(Store{{ModuleName}}Request $request): self
+    {
+        return new self(
+            // name:        $request->validated('name'),
+            // description: $request->validated('description'),
+            // isActive:    $request->boolean('is_active', true),
+        );
+    }
+
+    /**
+     * Para persistencia en el Repository.
+     * Solo serializa los campos que el modelo acepta.
+     */
+    public function toArray(): array
+    {
+        return [
+            // 'name'        => $this->name,
+            // 'description' => $this->description,
+            // 'is_active'   => $this->isActive,
+        ];
+    }
+}

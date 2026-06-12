@@ -1,0 +1,42 @@
+<?php
+
+namespace App\Modules\{{ModuleName}};
+
+use App\Modules\{{ModuleName}}\Contracts\{{ModuleName}}RepositoryInterface;
+use App\Modules\{{ModuleName}}\Repositories\{{ModuleName}}Repository;
+use Illuminate\Support\ServiceProvider;
+
+/**
+ * ServiceProvider de {{ModuleName}}.
+ *
+ * Responsabilidades:
+ * 1. Binding de la Interface del Repository → Implementación concreta (R-A-003 / R-A-007)
+ * 2. Carga de rutas del módulo
+ * 3. Carga de migraciones del módulo
+ */
+class {{ModuleName}}ModuleServiceProvider extends ServiceProvider
+{
+    public function register(): void
+    {
+        // MK-API Standard R-A-003 / R-A-007:
+        // Siempre inyectar la Interface, nunca la clase concreta directamente.
+        // Esto permite mockear el Repository en tests sin tocar implementaciones.
+        $this->app->bind(
+            {{ModuleName}}RepositoryInterface::class,
+            {{ModuleName}}Repository::class,
+        );
+    }
+
+    public function boot(): void
+    {
+        // Rutas del módulo
+        if (file_exists(__DIR__ . '/Routes/api.php')) {
+            $this->loadRoutesFrom(__DIR__ . '/Routes/api.php');
+        }
+
+        // Migraciones del módulo
+        if (is_dir(__DIR__ . '/Database/Migrations')) {
+            $this->loadMigrationsFrom(__DIR__ . '/Database/Migrations');
+        }
+    }
+}

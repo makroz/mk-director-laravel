@@ -1,0 +1,127 @@
+<?php
+
+namespace App\Modules\{{ModuleName}}\Services;
+
+use App\Modules\{{ModuleName}}\Contracts\{{ModuleName}}RepositoryInterface;
+use App\Modules\{{ModuleName}}\DTOs\{{ModuleName}}Data;
+use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
+use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Facades\Cache;
+use Mk\Director\Contracts\MkModuleServiceInterface;
+use Illuminate\Http\Request;
+use Illuminate\Database\Eloquent\Model;
+
+/**
+ * Service de {{ModuleName}} — Business Logic + Cache.
+ * Ver MK-API Standard R-A-004.
+ *
+ * REGLA: Solo esta clase puede escribir/invalidar el caché del módulo.
+ * REGLA: Toda lógica de negocio vive aquí, no en el Controller ni en el Repository.
+ */
+class {{ModuleName}}Service implements MkModuleServiceInterface
+{
+    /** Tag de caché para invalidación atómica de todo el módulo */
+    private const CACHE_TAG = '{{moduleNameLower}}';
+
+    /** TTL en segundos para listas paginadas */
+    private const CACHE_TTL = 3600;
+
+    public function __construct(
+        protected {{ModuleName}}RepositoryInterface $repository
+    ) {}
+
+    // ─── MkModuleServiceInterface ─────────────────────────────────────────────
+
+    public function getModel(): string
+    {
+        return {{ModuleName}}::class;
+    }
+
+    public function getResource(): ?string
+    {
+        return null; // Retornar Resource class si se necesita formato custom
+    }
+
+    public function getService(): ?string
+    {
+        return self::class;
+    }
+
+    public function getSearchable(): array
+    {
+        return ['name', 'description']; // TODO: ajustar campos buscables
+    }
+
+    public function getWith(): array
+    {
+        return []; // TODO: agregar relaciones eager load si aplica
+    }
+
+    // ─── Lifecycle Hooks (SmartController) ───────────────────────────────────
+
+    public function beforeCreate(Request $request, array $input): array
+    {
+        return $input;
+    }
+
+    public function afterCreate(Request $request, Model $model, array $input): void
+    {
+        $this->invalidateCache();
+    }
+
+    // ─── MK-API Standard: Business Logic + Cache ─────────────────────────────
+
+    /**
+     * Lista paginada con caché por página.
+     */
+    public function list(int $perPage = 15): LengthAwarePaginator
+    {
+        $page     = request('page', 1);
+        $cacheKey = self::CACHE_TAG . ".list.page.{$page}.per.{$perPage}";
+
+        return Cache::tags([self::CACHE_TAG])
+            ->remember($cacheKey, self::CACHE_TTL, function () use ($perPage) {
+                return $this->repository->paginate($perPage);
+            });
+    }
+
+    /**
+     * Crea un nuevo registro e invalida el caché del módulo.
+     */
+    public function create({{ModuleName}}Data $data): {{ModuleName}}
+    {
+        $model = $this->repository->create($data->toArray());
+        $this->invalidateCache();
+        return $model;
+    }
+
+    /**
+     * Actualiza un registro e invalida el caché del módulo.
+     */
+    public function update({{ModuleName}} $model, {{ModuleName}}Data $data): {{ModuleName}}
+    {
+        $updated = $this->repository->update($model, $data->toArray());
+        $this->invalidateCache();
+        return $updated;
+    }
+
+    /**
+     * Elimina un registro e invalida el caché del módulo.
+     */
+    public function destroy({{ModuleName}} $model): void
+    {
+        $this->repository->delete($model);
+        $this->invalidateCache();
+    }
+
+    // ─── Private ──────────────────────────────────────────────────────────────
+
+    /**
+     * Invalida TODA la caché del módulo de forma atómica.
+     * Ver MK-API Standard R-A-006.
+     */
+    private function invalidateCache(): void
+    {
+        Cache::tags([self::CACHE_TAG])->flush();
+    }
+}

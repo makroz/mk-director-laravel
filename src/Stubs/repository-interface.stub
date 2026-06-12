@@ -1,0 +1,34 @@
+<?php
+
+namespace App\Modules\{{ModuleName}}\Contracts;
+
+use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
+use Illuminate\Pagination\LengthAwarePaginator;
+
+interface {{ModuleName}}RepositoryInterface
+{
+    /**
+     * Retorna una lista paginada de registros.
+     */
+    public function paginate(int $perPage = 15): LengthAwarePaginator;
+
+    /**
+     * Busca un registro por ID o lanza una excepción 404.
+     */
+    public function findById(int $id): {{ModuleName}};
+
+    /**
+     * Crea un nuevo registro en la base de datos.
+     */
+    public function create(array $data): {{ModuleName}};
+
+    /**
+     * Actualiza un registro existente y retorna el modelo fresco.
+     */
+    public function update({{ModuleName}} $model, array $data): {{ModuleName}};
+
+    /**
+     * Elimina un registro de la base de datos.
+     */
+    public function delete({{ModuleName}} $model): void;
+}

@@ -1,0 +1,27 @@
+<?php
+
+namespace App\Modules\{{ModuleName}}\Controllers;
+
+use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
+use App\Modules\{{ModuleName}}\Services\{{ModuleName}}Service;
+use App\Modules\{{ModuleName}}\DTOs\{{ModuleName}}DTO;
+use Mk\Director\Controllers\SmartController;
+
+class {{ModuleName}}Controller extends SmartController
+{
+    /**
+     * Configuración del módulo MK-Director
+     */
+    protected array $mkConfig = [
+        'model' => {{ModuleName}}::class,
+        'service' => {{ModuleName}}Service::class,
+        'dto' => {{ModuleName}}DTO::class,
+        'searchable' => ['name', 'description'],
+        'with' => [], // Agrega aquí las relaciones Eager Load
+        'allowedIncludes' => [],
+        'features' => [
+            'auto_cache' => true,
+            'remember_state' => true,
+        ]
+    ];
+}
