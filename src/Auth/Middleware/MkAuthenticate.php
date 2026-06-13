@@ -30,10 +30,12 @@ class MkAuthenticate
     {
         // Resolve the current user via Sanctum.
         // If no token, abort 401.
-        $user = $request->user();
+        $user = \Illuminate\Support\Facades\Auth::guard($scope)->user();
         if ($user === null) {
             throw new MissingAbilityException('Unauthenticated.');
         }
+
+        \Illuminate\Support\Facades\Auth::shouldUse($scope);
 
         // The resolver validates the scope; throws on mismatch.
         $this->resolver->resolve($scope);
