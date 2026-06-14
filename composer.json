@@ -13,7 +13,7 @@
     ],
     "authors": [
         {
-            "name": "Mario Guzmán",
+            "name": "Mario Guzm\u00e1n",
             "email": "makroz@hotmail.com"
         }
     ],
@@ -45,7 +45,7 @@
             ]
         },
         "branch-alias": {
-            "dev-main": "1.0.x-dev"
+            "dev-main": "1.1.x-dev"
         }
     },
     "scripts": {
@@ -62,5 +62,7 @@
     "support": {
         "issues": "https://github.com/makroz/mk-director-laravel/issues",
         "source": "https://github.com/makroz/mk-director-laravel"
-    }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
 }

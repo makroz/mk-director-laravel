@@ -5,6 +5,69 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-06-12
+
+### Added (1.1.0)
+
+- **Multi-tenant opt-in (M-1 of the 1.1.0 sprint).** Three new
+  classes under `Mk\Director\Tenancy\*` ship behind a single
+  config flag (`mk_director.tenant.enabled`, default `false`):
+  - `TenantScope` — Eloquent `Scope` that filters by `tenant_id`
+    on every `apply()`. No-op when no tenant is bound, so
+    console / queue jobs see all rows by design.
+  - `HasTenantScope` — model trait that auto-registers a
+    closure-based global scope at `booted()` time. The closure
+    reads `TenantContext` on every query, so the tenant id is
+    always fresh (no Octane-style freeze).
+  - `TenantContext` — singleton service that holds the current
+    tenant id for the duration of a request.
+  - `TenantResolver` — HTTP middleware that reads the tenant
+    from a header (default `X-Tenant-ID`), a path segment, or a
+    subdomain, and writes it into the `TenantContext`. Strict
+    mode (default) returns 400 when the tenant cannot be
+    resolved.
+- **Config flag**: `config/mk_director.php` gains a `tenant` key
+  (`enabled`, `resolver`, `header_name`, `model`, `strict`).
+  The `MkServiceProvider` always registers the middleware on
+  the `api` group, but the middleware itself short-circuits to
+  a pass-through when `tenant.enabled = false` (opt-in per
+  ADR-003).
+- **Sandbox fixtures**: `apps/sandbox-laravel` now ships with
+  a `mk_tenants` table, a `DemoTenantableModel` that uses
+  `HasTenantScope`, and an end-to-end feature test in
+  `tests/Feature/TenantScopeTest.php` that proves isolation
+  (header, 400, cross-tenant 404, write-back with the right
+  tenant).
+- **Documentation**: `docs/guides/MULTI_TENANT.md` is updated
+  to reflect the shipped feature (no more "Available from
+  v1.1.0" warning — it ships with 1.1.0).
+
+### Changed (1.1.0)
+
+- `branch-alias.dev-main` in `composer.json` bumped from
+  `1.0.x-dev` to `1.1.x-dev` to track the new minor line.
+- `composer.json` gained `minimum-stability: dev` +
+  `prefer-stable: true` so the dev toolchain (Pest 5 has only
+  RC releases at the time of this writing) installs cleanly
+  without affecting consumers (the dev deps are not
+  installed by `composer require`).
+- `MkServiceProvider::registerTenantMiddleware()` now always
+  registers the middleware on the `api` group. The middleware
+  is the one that checks `tenant.enabled` and short-circuits.
+  This is more flexible than registering conditionally at
+  boot — flipping the config at runtime (e.g. in tests)
+  picks up the new state without re-booting the framework.
+
+### Fixed (1.1.0)
+
+- `HasTenantScope`'s closure scope was originally typed as
+  `function (Model $model)`, but Eloquent invokes closure
+  scopes with the **Builder** (not the model). The
+  signature is now `function (Builder $builder)`, and the
+  model is obtained via `$builder->getModel()`. This was
+  caught and fixed before merge by the sandbox feature
+  test in `tests/Feature/TenantScopeTest.php`.
+
 ## [1.0.0] - 2026-06-10
 
 ### Added (1.0.0)
