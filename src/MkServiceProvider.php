@@ -20,6 +20,11 @@ class MkServiceProvider extends ServiceProvider
 
         // Auth subsystem (Mk\Director\Auth\AuthServiceProvider)
         $this->app->register(\Mk\Director\Auth\AuthServiceProvider::class);
+
+        // Tenancy subsystem — opt-in. The TenantContext is a
+        // singleton so the same instance is shared by the
+        // middleware (writer) and the trait (reader).
+        $this->app->singleton(\Mk\Director\Tenancy\TenantContext::class);
     }
 
     public function boot()
@@ -27,6 +32,8 @@ class MkServiceProvider extends ServiceProvider
         // Load the package's Auth migrations so the abilities / roles /
         // admins tables are available to every project.
         $this->loadMigrationsFrom(__DIR__ . '/Auth/Database/Migrations');
+
+        $this->registerTenantMiddleware();
 
         if ($this->app->runningInConsole()) {
             $this->publishes([
@@ -45,6 +52,23 @@ class MkServiceProvider extends ServiceProvider
 
         $this->registerGlobalCacheListener();
         $this->registerOpenApiRoutes();
+    }
+
+    /**
+     * Register the TenantResolver middleware on the `api` group.
+     *
+     * The middleware itself checks `mk_director.tenant.enabled`
+     * and short-circuits to a pass-through when the feature is
+     * disabled. We always register it (instead of conditionally
+     * in the provider) so that flipping the config at runtime —
+     * e.g. inside a test — picks up the new state without
+     * requiring the framework to re-boot.
+     */
+    protected function registerTenantMiddleware(): void
+    {
+        /** @var \Illuminate\Routing\Router $router */
+        $router = $this->app['router'];
+        $router->pushMiddlewareToGroup('api', \Mk\Director\Tenancy\TenantResolver::class);
     }
 
     /**

@@ -98,4 +98,37 @@ return [
     'plugins' => [
         // \App\MkPlugins\AuditPlugin::class,
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Multi-Tenant (opt-in)
+    |--------------------------------------------------------------------------
+    |
+    | When `tenant.enabled` is true:
+    |   - The `TenantResolver` middleware is appended to the `api` group.
+    |   - Models using the `HasTenantScope` trait get a global scope
+    |     that filters by the tenant id in the current request.
+    |
+    | When `tenant.enabled` is false (default), the trait and the
+    | middleware are both no-ops — opt-in per ADR-003. Enable
+    | explicitly in your project's `config/mk_director.php` after
+    | publishing.
+    |
+    | Resolver strategies:
+    |   - `header`    : read from a request header (default X-Tenant-ID).
+    |   - `path`      : first URI segment, resolved to a tenant id
+    |                   via the configured `tenant.model` by slug.
+    |   - `subdomain` : leftmost subdomain, same lookup by slug.
+    |
+    | `strict` (default true): reject the request with 400 if the
+    | tenant cannot be resolved. Set to false for public endpoints
+    | that should run without a tenant.
+    */
+    'tenant' => [
+        'enabled'     => env('MK_TENANT_ENABLED', false),
+        'resolver'    => env('MK_TENANT_RESOLVER', 'header'),
+        'header_name' => env('MK_TENANT_HEADER', 'X-Tenant-ID'),
+        'model'       => env('MK_TENANT_MODEL', null), // e.g. App\Models\Tenant
+        'strict'      => env('MK_TENANT_STRICT', true),
+    ],
 ];
