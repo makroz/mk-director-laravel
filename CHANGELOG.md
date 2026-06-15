@@ -5,6 +5,40 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-06-16
+
+### Fixed (1.1.1)
+
+- **`HasTenantScope` now uses `TenantScope` instead of an inline closure** —
+  the global-scope class shipped in 1.1.0 was dead code at runtime because
+  `HasTenantScope::booted()` registered an inline closure with the same
+  `where($column, '=', $tenantId)` logic. The code review that landed
+  alongside 1.1.0 flagged this as 🔴 bloqueante (B-3): the
+  `TenantScope::apply()` was never invoked, the JSDoc on both classes
+  claimed a contract that was not in effect, and the duplication was a
+  footgun for any future change.
+- **`TenantScope::apply()` is now context-aware.** It resolves the current
+  tenant from the `TenantContext` singleton on every apply when no
+  explicit `tenantId` was passed to the constructor. The constructor
+  still accepts an explicit id (used by the 5 unit tests on
+  `TenantScope` and by programmatic scopes); when set, that value wins.
+  The "fresh read" semantics that the inline closure had are preserved,
+  so the scope is safe under long-lived workers (Octane / Swoole) where
+  the tenant can change mid-process.
+- **No behavior change at the `HasTenantScope` trait boundary** — the
+  trait still registers the scope under the alias `'tenant'`, the opt-in
+  guard (`mk_director.tenant.enabled`) is unchanged, and the bypass path
+  (`Model::withoutGlobalScope('tenant')`) still works.
+
+### Cross-repo coordination
+
+This 1.1.1 ships in lockstep with the `create-mk-director@1.1.1` CLI,
+whose templates now require `makroz/director-laravel: ^1.1`. Publishing
+this 1.1.1 is what makes the scaffoldeado de proyectos actually
+`composer install`-able end-to-end. The CLI bump is in
+`makroz/MK-Director#17` (PR #17, already merged into the monorepo's
+`dev`).
+
 ## [1.1.0] - 2026-06-12
 
 ### Added (1.1.0)
