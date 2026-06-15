@@ -121,8 +121,11 @@ test('HasTenantScope registers the global scope when tenant.enabled is true and 
     $all = $prop->getValue();
     $scopes = $all[$cls] ?? [];
 
+    // After the B-3 refactor, the registered scope is a TenantScope
+    // instance (constructed without an id) instead of a closure. The
+    // scope reads the TenantContext lazily on every apply() call.
     expect($scopes)->toBeArray()->toHaveKey('tenant');
-    expect($scopes['tenant'])->toBeInstanceOf(\Closure::class);
+    expect($scopes['tenant'])->toBeInstanceOf(\Mk\Director\Tenancy\TenantScope::class);
 });
 
 test('HasTenantScope is a no-op when no container is bound (CLI without app)', function () {
