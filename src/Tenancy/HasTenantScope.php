@@ -32,20 +32,27 @@ use Illuminate\Database\Eloquent\Model;
  * Opt-in semantics (per ADR-003, default OFF):
  *  - The scope is only registered if `mk_director.tenant.enabled = true`.
  *    When disabled, the trait is a no-op.
- *  - The scope is also a no-op if no tenant id is set on the
+ *  - The scope is also a no-op if no tenant id is resolved from the
  *    current {@see TenantContext}. This keeps console / queue jobs
  *    from accidentally hiding all rows.
  *  - The scope can be bypassed per-query with:
  *    `Model::withoutGlobalScope('tenant')`.
+ *  - The actual filter logic lives in {@see TenantScope}; this trait
+ *    only handles the opt-in wiring and column override. This keeps
+ *    the scope itself reusable from non-model call sites (custom
+ *    queries, reports, etc.).
  */
 trait HasTenantScope
 {
     /**
      * Boot the trait.
      *
-     * Adds the global scope at boot time. Reads the current tenant
-     * via a closure so the value is fresh on every query, not
-     * frozen at boot.
+     * Registers the {@see TenantScope} as a global scope on this
+     * model. The scope is instantiated without a tenant id so it
+     * resolves the current tenant from the {@see TenantContext}
+     * singleton on every query — this matters because the same
+     * model can be queried in different requests (CLI, queue) and
+     * the tenant context can change mid-process (Octane).
      */
     public static function bootHasTenantScope(): void
     {
@@ -53,29 +60,7 @@ trait HasTenantScope
             return;
         }
 
-        // Closure-based registration: tenant_id is read on every
-        // query, not at boot. This matters because the same model
-        // can be queried in different requests (CLI, queue) and
-        // the tenant context can change mid-process (Octane).
-        //
-        // Eloquent calls Closure scopes with the Builder as the
-        // single argument (see Illuminate\Database\Eloquent\Builder
-        // ::callScope). Scope OBJECTS use the (Builder, Model)
-        // signature on Scope::apply.
-        static::addGlobalScope('tenant', function (Builder $builder) {
-            /** @var TenantContext $context */
-            $context = app(TenantContext::class);
-            $tenantId = $context->current();
-
-            if ($tenantId === null) {
-                return;
-            }
-
-            $model = $builder->getModel();
-            $column = $model->getTenantKey() ?? 'tenant_id';
-
-            $builder->where($column, '=', $tenantId);
-        });
+        static::addGlobalScope('tenant', new TenantScope());
     }
 
     /**
