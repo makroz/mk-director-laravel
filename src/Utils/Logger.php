@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Mk\Director\Utils;
 
 use Illuminate\Support\Facades\Log;

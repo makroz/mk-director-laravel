@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Mk\Director\Plugins\Enterprise;
 
 use Mk\Director\Contracts\MkPluginInterface;

@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Mk\Director\Managers;
 
 use Illuminate\Database\Eloquent\Builder;
@@ -29,7 +31,7 @@ class ListManager
 
         // 2. Joins (if enabled globally - this is internal not frontend param)
         if (config('mk_director.features.dynamic_joins', false)) {
-            $query = self::applyJoins($request, $query);
+            $query = self::applyJoins($request, $query, $features['allowed_joins'] ?? []);
         }
 
         // 3. Includes (Dynamic Eager Loading)
@@ -41,7 +43,7 @@ class ListManager
         // 4. Filters
         $useFilters = $features['filters'] ?? config('mk_director.features.filters', true);
         if ($useFilters) {
-            $query = self::applyFilters($request, $query);
+            $query = self::applyFilters($request, $query, $features['allowed_filters'] ?? []);
         }
 
         // 5. Sorting
@@ -101,11 +103,11 @@ class ListManager
     /**
      * Apply dynamic joins
      */
-    protected static function applyJoins(Request $request, Builder $query): Builder
+    protected static function applyJoins(Request $request, Builder $query, array $allowedJoins = []): Builder
     {
         $joins = $request->query('joins');
-        
-        if (empty($joins)) {
+
+        if (empty($joins) || empty($allowedJoins)) {
             return $query;
         }
 
@@ -114,6 +116,11 @@ class ListManager
 
         foreach ($joinParts as $join) {
             $relation = trim($join);
+
+            if (!in_array($relation, $allowedJoins, true)) {
+                continue;
+            }
+
             // Simplified: assumes hasOne/belongsTo relationship
             // Real implementation would inspect relationships
             $foreignKey = $table . '.' . Str::singular($relation) . '_id';
@@ -218,16 +225,20 @@ class ListManager
         return $query;
     }
 
-    public static function applyFilters(Request $request, Builder $query): Builder
+    public static function applyFilters(Request $request, Builder $query, array $allowedFilters = []): Builder
     {
         $filters = $request->query('filter', $request->query('filters'));
-        
-        if (empty($filters) || !is_array($filters)) {
+
+        if (empty($filters) || !is_array($filters) || empty($allowedFilters)) {
             return $query;
         }
 
         foreach ($filters as $field => $value) {
             if ($value === '' || $value === null) {
+                continue;
+            }
+
+            if (!in_array($field, $allowedFilters, true)) {
                 continue;
             }
 

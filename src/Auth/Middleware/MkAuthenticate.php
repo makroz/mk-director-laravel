@@ -6,7 +6,7 @@ namespace Mk\Director\Auth\Middleware;
 
 use Closure;
 use Illuminate\Http\Request;
-use Laravel\Sanctum\Exceptions\MissingAbilityException;
+use Illuminate\Auth\AuthenticationException;
 use Mk\Director\Auth\Services\AuthScopeResolver;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -32,7 +32,7 @@ class MkAuthenticate
         // If no token, abort 401.
         $user = \Illuminate\Support\Facades\Auth::guard($scope)->user();
         if ($user === null) {
-            throw new MissingAbilityException('Unauthenticated.');
+            throw new AuthenticationException('Unauthenticated.', [$scope]);
         }
 
         \Illuminate\Support\Facades\Auth::shouldUse($scope);
