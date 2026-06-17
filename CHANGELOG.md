@@ -5,7 +5,44 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-06-17
+
+### Security
+
+- **A1 — SQL injection mitigado en `ListManager`.** `applyFilters` y `applyJoins` ahora
+  requieren una whitelist explícita (`allowed_filters`, `allowed_joins`). Sin whitelist,
+  cero filtros/joins se aplican (comportamiento defensivo por defecto). Cualquier campo
+  fuera de la lista es ignorado silenciosamente antes de llegar a la query.
+
+### Changed
+
+- **A2 — `MkAuthMiddleware`: respuesta 401 nativa.** Import de `MkResponse` (clase
+  inexistente) removido. Reemplazado por `response()->json(['success' => false,
+  'message' => 'Unauthenticated.', 'code' => 'ERR_UNAUTHENTICATED'], 401)`.
+
+- **A3 — Migración `auth_users`: ID como UUID.** `$table->id()` reemplazado por
+  `$table->uuid('id')->primary()`. Requiere `HasUuids` en el modelo `AuthUser`.
+
+- **A4 — Migración `role_user`: FK como UUID y default configurable.** `user_id`
+  tipado como `uuid` (foreign key coherente con A3). El `user_type` por defecto
+  ahora se lee de `config('mk_director.auth.default_user_type', 'App\\Models\\User')`.
+
+- **A5 — `MkAuthenticate`: excepción correcta al faltar autenticación.** Reemplazado
+  `MissingAbilityException` (de Sanctum, semántica incorrecta) por
+  `AuthenticationException` (framework HTTP estándar de Laravel), pasando el guard
+  activo como guards array para que el handler de exceptions produzca un 401 correcto.
+
+- **A6 — `declare(strict_types=1)` en todo el source del paquete.** Todos los
+  archivos PHP bajo `src/` tienen la declaración strict_types al inicio. Incluye
+  un test automatizado `StrictTypesTest.php` que falla si algún archivo nuevo la omite.
+
+> ⚠️ **Nota de migración**: A3 y A4 son cambios en migraciones de base de datos.
+> Si ya corriste las migraciones anteriores en un entorno, necesitás rollback +
+> re-run (`php artisan migrate:rollback --step=2 && php artisan migrate`).
+> En entornos frescos no hay impacto.
+
 ## [1.1.1] - 2026-06-16
+
 
 ### Fixed (1.1.1)
 
