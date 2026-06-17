@@ -67,6 +67,7 @@ return [
     */
     'auth' => [
         'user_model' => \App\Models\User::class,
+        'default_user_type' => env('MK_AUTH_DEFAULT_USER_TYPE', 'App\\Modules\\Admin\\Models\\Admin'),
     ],
 
     /*

@@ -15,8 +15,8 @@ return new class extends Migration
             $table->foreignId('role_id')
                 ->constrained('roles')
                 ->cascadeOnDelete();
-            $table->unsignedBigInteger('user_id');
-            $table->string('user_type')->default('App\\Modules\\Admin\\Models\\Admin');
+            $table->uuid('user_id');
+            $table->string('user_type')->default(config('mk_director.auth.default_user_type', 'App\\Modules\\Admin\\Models\\Admin'));
             $table->timestamps();
 
             $table->unique(['role_id', 'user_id', 'user_type'], 'role_user_unique');
