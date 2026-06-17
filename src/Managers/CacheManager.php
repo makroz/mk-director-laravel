@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Mk\Director\Managers;
 
 use Illuminate\Http\Request;
