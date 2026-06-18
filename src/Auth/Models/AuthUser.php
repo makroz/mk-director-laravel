@@ -12,6 +12,7 @@ use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 use Mk\Director\Auth\Concerns\HasAbilities;
 use Mk\Director\Auth\Concerns\HasRoles;
+use Mk\Director\Tenancy\Concerns\HasTenantMembership;
 
 /**
  * AuthUser — modelo abstracto base para todos los usuarios
@@ -33,6 +34,7 @@ use Mk\Director\Auth\Concerns\HasRoles;
  * @property string $email
  * @property string $password
  * @property string $auth_scope
+ * @property string|null $client_id
  * @property \Illuminate\Support\Carbon|null $email_verified_at
  * @property string|null $remember_token
  */
@@ -41,6 +43,7 @@ abstract class AuthUser extends Authenticatable implements AuthenticatableContra
     use HasAbilities;
     use HasApiTokens;
     use HasRoles;
+    use HasTenantMembership;
     use HasUuids;
     use Notifiable;
 
@@ -62,6 +65,7 @@ abstract class AuthUser extends Authenticatable implements AuthenticatableContra
         'email',
         'password',
         'auth_scope',
+        'client_id',
     ];
 
     /**
