@@ -40,6 +40,17 @@ class MkAuthenticate
         // The resolver validates the scope; throws on mismatch.
         $this->resolver->resolve($scope);
 
+        // Eager-load the relationship graph used by every downstream authz
+        // check (canMk, policies, ability middleware). Without this, each
+        // check re-queries the same roles/abilities pivot and triggers
+        // an N+1 (audit R4-002).
+        //
+        // loadMissing() is a no-op when the relations are already loaded,
+        // so this is safe to call even if the resolver already pre-loaded.
+        if (method_exists($user, 'loadMissing')) {
+            $user->loadMissing(['roles.abilities', 'directAbilities']);
+        }
+
         return $next($request);
     }
 }
