@@ -46,6 +46,12 @@ trait HasRoles
             );
 
         $this->roles()->syncWithoutDetaching([$roleModel->id]);
+
+        // Roles feed into abilities via ability_role; invalidate the
+        // ability cache so the next canMk() re-resolves.
+        if (method_exists($this, 'invalidateAbilityCache')) {
+            $this->invalidateAbilityCache();
+        }
     }
 
     /**
@@ -62,6 +68,20 @@ trait HasRoles
         }
 
         $this->roles()->detach($roleModel->id);
+
+        if (method_exists($this, 'invalidateAbilityCache')) {
+            $this->invalidateAbilityCache();
+        }
+    }
+
+    /**
+     * Alias de {@see removeRole()} — el 4R audit se refería a revokeRole
+     * (R4-001 invalidation contract); ambos nombres están soportados
+     * para que el código legacy y el código nuevo sean intercambiables.
+     */
+    public function revokeRole(string|Role $role): void
+    {
+        $this->removeRole($role);
     }
 
     /**
@@ -104,6 +124,10 @@ trait HasRoles
         }
 
         $this->roles()->sync($ids);
+
+        if (method_exists($this, 'invalidateAbilityCache')) {
+            $this->invalidateAbilityCache();
+        }
     }
 
     /**
