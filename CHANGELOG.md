@@ -5,6 +5,141 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0-rc1] - 2026-06-17
+
+### Security (R-NEW-001: every entry below cites the diff to `src/`)
+
+The audit found 57 issues (10 critical, 17 high, 19 medium, 12 low).
+This RC closes all 10 P0 and all 17 P0-targeted high-severity findings.
+Items #2–#4 below are code-only changes that fail loudly if a consumer
+was relying on the previous (looser) behavior — there is no data
+migration for those.
+
+- **R4-001 — `HasAbilities::canMk` now delegates to `AbilityResolver`.**
+  The resolver caches the resolved ability names per user with a
+  configurable TTL (default 300s) and short-circuits via Sanctum
+  `currentAccessToken()->can()` before any DB query. Every mutator
+  (`giveAbilityTo`, `revokeAbilityTo`, `syncDirectAbilities`,
+  `assignRole`, `revokeRole`, `syncRoles`) invalidates the cache so
+  the next `canMk` reads fresh data. Commit 656360e.
+
+- **R1-002 — `ability_user` migration published.** The pivot table
+  for direct ability grants was referenced by `HasAbilities` but
+  the migration was never shipped. Now in
+  `src/Auth/Database/Migrations/2026_06_10_000007_create_ability_user_table.php`
+  with FK to `abilities`, `uuid('user_id')` matching `auth_users.id`,
+  and a unique composite index on `(ability_id, user_id, user_type)`.
+  Commit d015cfc.
+
+- **R3-005 — `AuthUser` docblock declares `$id` as `string`.**
+  Was `@property int $id` even after the UUID migration. Tests parse
+  the source file directly because the class uses Sanctum's
+  `HasApiTokens` (not in `composer.json`). Commit 568111d.
+
+- **R4-002 — `MkAuthenticate` eager-loads `roles.abilities` and
+  `directAbilities` after the scope resolver runs.** Closes the N+1
+  every downstream `canMk` would otherwise trigger. Commit 74bfe95.
+
+- **R2-002 / R2-003 — `MkAbility` rejects empty ability lists and
+  short-circuits via Sanctum.** Before: `Route::middleware(['mk.ability:'])`
+  silently passed every request through (privilege escalation trap).
+  Now: returns 500 + `ERR_MIDDLEWARE_MISCONFIGURED`. Sanctum
+  `currentAccessToken()->can($ability)` is checked before the role/
+  direct-grants path. Commit 1d5ffdb.
+
+- **R2-004 — `AuthUser` uses `HasTenantMembership`; `TenantResolver`
+  validates user↔tenant membership.** The middleware now reads the
+  user's tenant via `$user->getTenantId()` and returns 403
+  `ERR_TENANT_MISMATCH` if the resolved tenant differs. Prevents
+  tenant-A tokens from accessing tenant-B data via header. Commit 5dd846d.
+
+- **R2-005 / R2-006 — `TenantContext` is flushed at request end;
+  `HasTenantScope` is per-model opt-in.** `MkServiceProvider::boot`
+  registers a `terminating` callback that calls `TenantContext::flush()`
+  so long-lived workers (Octane / Swoole) do not leak tenant state
+  across requests. `HasTenantScope` now requires `protected static
+  bool $usesTenant = true` per model — adding the trait alone is a
+  no-op. Commit 9a807da.
+
+- **R2-009 / R2-018 / R4-003 — `MkMultiTenantPlugin` whitelist,
+  strict comparison, and mutex with `HasTenantScope`.** The plugin
+  rejects any `$tenantColumn` not in the documented whitelist
+  (`tenant_id`, `client_id`, `org_id`, `company_id`). `beforeDelete`
+  uses strict `!==` (was `!=`) to prevent the int-vs-string coercion
+  bug where `'00000000-...' (string) != 0 (int)` was truthy. When the
+  model already uses `HasTenantScope` with `$usesTenant = true`, the
+  plugin skips its own `where()` to avoid applying the tenant
+  predicate twice. Commit 7004a3d.
+
+- **R2-014 / R3-007 / R2-012 — `ListManager` LIKE escape, operator
+  whitelist, and `restoreState` sanitize.** `escapeLikeWildcards()`
+  wraps `addcslashes($value, '\\%_')` and is used by both `applySearch`
+  and the `like` filter operator so a search for `'50%'` matches
+  the literal string instead of every row containing `50`. The
+  search term is also capped at `mk_director.search.max_length`
+  (default 256). `applyFilterOperator` now throws
+  `InvalidArgumentException` on unknown operators (was a silent
+  fallback to `=`). `restoreState` hashes the storage key with HMAC-
+  SHA256 of `app.key` and sanitizes the rehydrated filter/sort state
+  against the same whitelists used by the apply path. Commit 373007d.
+
+- **R4-005 / R4-006 / R2-016 — Performance + symlink rejection.**
+  `OpenApiController::spec` is wrapped in `Cache::remember()` with a
+  24h TTL; `mk:generate-docs` calls `Cache::forget()` on the same
+  key. `ModuleProviderRegistry::discover()` caches the discovered
+  providers for 1h, keys the cache on `md5(realpath(modules path))`
+  so any directory change invalidates automatically, and rejects
+  symlinked module directories (R2-016) — a symlink under
+  `app/Modules` pointing to `/tmp/evil` would otherwise be discovered
+  as a legitimate module. Commit 77ad693.
+
+### Process (R-NEW-001)
+
+- **CI: monorepo now has a `pest-laravel` job** that runs
+  `./vendor/bin/pest` against the package and is in the `build`
+  dependency chain. Path filter so the job only fires when the
+  package or the workflow file changes. This closes the gap that
+  allowed the previous sprint (PR #3) to declare 6 security fixes
+  and ship only 3 — the monorepo CI never exercised the sub-repo's
+  pest suite.
+- **Spec: `openspec/specs/architecture/modular-encapsulation.md`**
+  documents the rule with the three required scenarios (claim
+  without diff, claim with diff but without test, monorepo CI
+  does not run pest-laravel). R-NEW-001 is enforced at review time.
+
+### Testing infrastructure
+
+- `MkLaravelTestCase` — boots a minimal Laravel Container with
+  config/cache/db/files bindings so the 5 pre-existing pest failures
+  (R3-009, R3-010, R3-011) are green. No new composer dependency
+  (we deliberately avoided `orchestra/testbench` which would pull
+  in the full application kernel).
+- `StrictTypesTest` extended to scan `tests/` (was `src/` only) and
+  asserts `declare(strict_types=1)` is positioned right after
+  `<?php` — 8 pre-existing test files were missing the declaration.
+- `AuthUserMigrationTest`, `RoleUserMigrationTest` — refactored to
+  parse the migration source directly because the chainable
+  `Blueprint` mock fights Laravel's real signatures.
+
+### Documentation
+
+- `docs/UPGRADE_1.2.md` — full upgrade guide covering the breaking
+  changes, pre-flight checklist, runbook for the UUID migration,
+  rollback procedure.
+- `bin/migrate-1.1-to-1.2.php` — standalone CLI script with
+  `--dry-run`, `--connection`, `--chunk`, `--help`. Idempotent,
+  refuses to run outside CLI, refuses to migrate a table whose id
+  is neither BIGINT nor CHAR(36).
+
+### Notes
+
+- **DO NOT publish to Packagist yet.** This RC is tagged locally so
+  the team can validate against `apps/sandbox-laravel` before
+  publishing. Mario will run `composer publish` from his machine
+  after sandbox validation passes.
+- 9 of the 12 medium-priority and all 12 low-priority findings from
+  the audit are deferred to `1.2.2-hardening` (next sprint).
+
 ## [1.2.0] - 2026-06-17
 
 ### Security
