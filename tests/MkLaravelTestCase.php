@@ -121,8 +121,51 @@ abstract class MkLaravelTestCase extends BaseTestCase
             return $capsule;
         });
 
+        // Schema facade binding. Schema::shouldReceive('create') calls
+        // getMockableClass() which goes through resolveFacadeInstance()
+        // before Mockery has had a chance to install the mock — so we
+        // pre-bind a chainable stub that lets the mock be installed
+        // later via Facade::swap(). Once Mockery swaps the facade root,
+        // calls go through the mock.
+        $container->bind('db.schema', function (): object {
+            return new class {
+                public function __call(string $method, array $args): mixed
+                {
+                    return $this;
+                }
+            };
+        });
+
         // Filesystem.
         $container->singleton('files', fn (): Filesystem => new Filesystem());
+
+        // Auth facade chainable stub. The real AuthManager needs a
+        // Laravel-booted kernel + user provider; in unit tests we just
+        // want `Auth::shouldReceive(...)` to swap the facade root.
+        // Mockery sets Facade::$resolvedInstance when shouldReceive()
+        // is called, but the Facade::resolveFacadeInstance() flow will
+        // still touch the container — we pre-bind a chainable stub so
+        // tests that forget to mock a specific call do not blow up
+        // with BindingResolutionException.
+        $container->bind('auth', function (): object {
+            return new class {
+                public function __call(string $method, array $args): mixed
+                {
+                    return $this;
+                }
+            };
+        });
+
+        // Auth driver manager (used when the real AuthManager resolves
+        // a guard). Same chainable stub strategy.
+        $container->bind('auth.driver', function (): object {
+            return new class {
+                public function __call(string $method, array $args): mixed
+                {
+                    return $this;
+                }
+            };
+        });
 
         // Wire facades to this Container.
         Facade::setFacadeApplication($container);
