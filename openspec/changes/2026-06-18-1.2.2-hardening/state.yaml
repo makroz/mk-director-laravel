@@ -8,20 +8,28 @@ publish_strategy: rc1-tag + sandbox-validation (NO composer publish — Mario ru
 
 pre_checks_passed:
   - branches_created:
-      sub_repo: makromania/260618-1230--laravel-1.2.2-hardening at fa4a466
-      monorepo: makromania/260618-1230--laravel-1.2.2-hardening at 5e92f99 (gitlink pending update)
+      sub_repo: makromania/260618-1230--laravel-1.2.2-hardening at 718fed8
+      monorepo: makromania/260618-1230--laravel-1.2.2-hardening at 5e92f99 (gitlink pending update to 718fed8)
   - pest_baseline: 199 passed, 11 deprecated, 0 failed
+  - pest_after_sprint: 222 passed, 11 deprecated, 0 failed (23 new tests across 5 files)
   - php: 8.5.0 (compatible con ^8.4)
   - composer: 2.9.5
   - migrations_location: src/Auth/Database/Migrations/ (NO database/migrations/)
   - auth_users_id: uuid primary (la FK debe ser uuid, no foreignId)
   - composer_json_already_has:
       lint: "php -l src/**/*.php"  # T4.2 reemplaza por Pint
-      type-check: "phpstan analyse src"  # T4.1 instala phpstan
+      type-check: "phpstan analyse src"  # T4.1 instala phpstan (cancelado: Larastan incompatible Laravel 13)
   - sdd_adjustments_made:
       - T1.1: ajustado para reflejar estado real (Cache::tags por tabla, no Cache::clear(); gate via features.auto_cache)
       - T1.3: simplificado (gate role solo, sin cambiar estructura de getDebugData)
       - T2.1: path ajustado a src/Auth/Database/Migrations/, FK a uuid (no foreignId)
+  - commits_landed:
+      sub_repo: 7 atomic commits on makromania/260618-1230--laravel-1.2.2-hardening
+      tag: v1.2.2-rc1 pushed to origin (verified via ls-remote)
+      r_new_001_compliance: verified for sec(laravel) and fix(laravel) commits (both cite diff + test)
+
+in_flight:
+  - monorepo: update gitlink from fa4a466 to 718fed8, commit pest-laravel CI job, push, open PR
 
 findings:
   closing:
