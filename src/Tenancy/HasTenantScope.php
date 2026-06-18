@@ -11,7 +11,7 @@ use Illuminate\Database\Eloquent\Model;
  * HasTenantScope — model trait that auto-registers {@see TenantScope}
  * on the model's `booted()` lifecycle hook.
  *
- * Spec: MK-LAR-1.0.6 (Capa 4) + proposal M-1.
+ * Spec: MK-LAR-1.0.6 (Capa 4) + proposal M-1 + audit R2-006.
  *
  * Usage in a concrete model:
  * ```php
@@ -21,6 +21,10 @@ use Illuminate\Database\Eloquent\Model;
  * {
  *     use HasTenantScope;
  *
+ *     // R2-006: explicit per-model opt-in. Default is FALSE so existing
+ *     // single-tenant apps are unaffected.
+ *     protected static bool $usesTenant = true;
+ *
  *     // Optional: override the column name (default 'tenant_id').
  *     public function getTenantKey(): string
  *     {
@@ -29,9 +33,11 @@ use Illuminate\Database\Eloquent\Model;
  * }
  * ```
  *
- * Opt-in semantics (per ADR-003, default OFF):
- *  - The scope is only registered if `mk_director.tenant.enabled = true`.
- *    When disabled, the trait is a no-op.
+ * Opt-in semantics (per ADR-003 + R2-006):
+ *  - The scope is only registered if BOTH conditions hold:
+ *      (a) `static::$usesTenant` is true on the concrete model class.
+ *      (b) `mk_director.tenant.enabled` is true in config.
+ *    When either is false, the trait is a no-op.
  *  - The scope is also a no-op if no tenant id is resolved from the
  *    current {@see TenantContext}. This keeps console / queue jobs
  *    from accidentally hiding all rows.
@@ -45,6 +51,20 @@ use Illuminate\Database\Eloquent\Model;
 trait HasTenantScope
 {
     /**
+     * R2-006: per-model opt-in flag. Concrete models set this to true
+     * to participate in tenant scoping. Defaults to FALSE — adding the
+     * trait alone does not enable scoping; the model must explicitly
+     * opt in by overriding this property.
+     *
+     * Example:
+     *   class Survey extends Model {
+     *       use HasTenantScope;
+     *       protected static bool $usesTenant = true;
+     *   }
+     */
+    protected static bool $usesTenant = false;
+
+    /**
      * Boot the trait.
      *
      * Registers the {@see TenantScope} as a global scope on this
@@ -56,6 +76,10 @@ trait HasTenantScope
      */
     public static function bootHasTenantScope(): void
     {
+        if (! static::$usesTenant) {
+            return;
+        }
+
         if (! self::tenantEnabled()) {
             return;
         }

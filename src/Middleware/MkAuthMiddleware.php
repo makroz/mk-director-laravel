@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Mk\Director\Middleware;
 
 use Closure;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
@@ -37,7 +38,7 @@ class MkAuthMiddleware
 
         // Si es una petición API o espera JSON, retornar formato estándar MK-API
         if ($request->expectsJson() || $request->is('api/*')) {
-            return response()->json([
+            return new JsonResponse([
                 'success' => false,
                 'message' => 'Unauthenticated.',
                 'code'    => 'ERR_UNAUTHENTICATED'

@@ -37,6 +37,21 @@ class MkServiceProvider extends ServiceProvider
 
         $this->registerTenantMiddleware();
 
+        // R2-005: Flush the TenantContext at the end of every request
+        // so long-lived workers (Octane / Swoole) do not leak tenant
+        // state into the next request. The terminating callback fires
+        // after the response is sent; failures here are swallowed so
+        // a buggy TenantContext cannot break the response pipeline.
+        $this->app->terminating(function () {
+            try {
+                if ($this->app->resolved(\Mk\Director\Tenancy\TenantContext::class)) {
+                    $this->app->make(\Mk\Director\Tenancy\TenantContext::class)->flush();
+                }
+            } catch (\Throwable) {
+                // ignore — never let a flush failure break the response
+            }
+        });
+
         if ($this->app->runningInConsole()) {
             $this->publishes([
                 __DIR__ . '/../config/mk_director.php' => config_path('mk_director.php'),

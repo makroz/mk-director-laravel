@@ -20,42 +20,19 @@ class ModuleLoaderServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-        // Nothing to register explicitly — the providers we discover
-        // are bound by the container when they're resolved.
+        // Bind the registry so consumers (and tests) can swap it.
+        $this->app->singleton(ModuleProviderRegistry::class);
     }
 
     public function boot(): void
     {
-        $modulesPath = app_path('Modules');
+        // R4-006 / R2-016: use the registry instead of walking the
+        // modules directory on every boot. The registry caches the
+        // discovery for 1 hour by default and rejects symlinks.
+        /** @var ModuleProviderRegistry $registry */
+        $registry = $this->app->make(ModuleProviderRegistry::class);
 
-        if (! is_dir($modulesPath)) {
-            return;
-        }
-
-        foreach (new \DirectoryIterator($modulesPath) as $module) {
-            if ($module->isDot() || ! $module->isDir()) {
-                continue;
-            }
-
-            $providerClass = sprintf(
-                'App\\Modules\\%s\\Providers\\%sServiceProvider',
-                $module->getFilename(),
-                $module->getFilename(),
-            );
-
-            if (! class_exists($providerClass)) {
-                // No provider in this module — log and continue.
-                if ($this->app->runningInConsole()) {
-                    $this->app->make('log')->warning(
-                        sprintf('ModuleLoader: no provider for module [%s], skipping.', $module->getFilename())
-                    );
-                }
-                continue;
-            }
-
-            // Laravel resolves providers via the bootstrap config; for a
-            // runtime-discovered module we register the provider on the
-            // app, which kicks off register() + boot().
+        foreach ($registry->discover() as $providerClass) {
             $this->app->register($providerClass);
         }
     }

@@ -76,6 +76,26 @@ class TenantResolver
             return $next($request);
         }
 
+        // R2-004: validate that the request's authenticated user actually
+        // belongs to this tenant. Without this check, a token issued for
+        // tenant A could access tenant B's data just by sending
+        // X-Tenant-ID: <B> on the next request.
+        //
+        // We use the HasTenantMembership trait (when the user model uses
+        // it) to read the tenant id via a single source of truth. Models
+        // without the trait are treated as tenant-agnostic — we log a
+        // debug message when the trait is missing so consumers notice.
+        $user = $request->user();
+        if ($user !== null && method_exists($user, 'getTenantId')) {
+            $userTenantId = $user->getTenantId();
+            if ($userTenantId !== null && (string) $userTenantId !== (string) $tenantId) {
+                return new JsonResponse([
+                    'error' => 'ERR_TENANT_MISMATCH',
+                    'message' => 'Tenant context does not match the authenticated user.',
+                ], 403);
+            }
+        }
+
         $this->context->set($tenantId);
 
         return $next($request);

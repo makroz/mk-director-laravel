@@ -7,5 +7,6 @@
 /.env.testing
 /storage/
 /.DS_Store
+**/.DS_Store
 *.log
 composer.lock

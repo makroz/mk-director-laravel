@@ -1,4 +1,6 @@
 <?php
+declare(strict_types=1);
+
 
 // El paquete mk-laravel no incluye una app Laravel completa, así que
 // los TestCase por archivo se declaran explícitamente. No propagamos

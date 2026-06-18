@@ -132,15 +132,31 @@ class ListManager
 
     protected static function restoreState(Request $request, Model $model): void
     {
-        $storageKey = 'mk_list_state_' . $model->getTable();
-        $state = [];
-        $user = null;
+        // R2-012: hash the storage key with the app secret so user A
+        // cannot guess user B's state key. Also namespace by user id
+        // so two authenticated users do not share cached state.
+        $userId = null;
+        if (method_exists($request, 'user')) {
+            $user = $request->user();
+            if ($user !== null && method_exists($user, 'getAuthIdentifier')) {
+                $userId = (string) $user->getAuthIdentifier();
+            }
+        }
 
+        $baseKey = 'mk_list_state_' . $model->getTable();
+        $secret = (string) config('app.key', 'fallback-secret-key');
+        $userSegment = $userId !== null ? '_u' . hash('sha256', $userId) : '_anon';
+        $storageKey = $baseKey . $userSegment;
+        $hashedStorageKey = hash_hmac('sha256', $storageKey, $secret);
+
+        // Read state from session/cache using the hashed key.
+        $state = [];
         if ($request->hasSession()) {
-            $state = $request->session()->get($storageKey, []);
-        } elseif ($user = $request->user()) {
-            $storageKey .= '_u' . $user->id;
-            $state = \Illuminate\Support\Facades\Cache::get($storageKey, []);
+            // Sessions are per-user by Laravel default; we still hash to
+            // avoid leaking the storage layout.
+            $state = $request->session()->get($hashedStorageKey, []);
+        } elseif ($userId !== null) {
+            $state = \Illuminate\Support\Facades\Cache::get($hashedStorageKey, []);
         } else {
             return;
         }
@@ -189,13 +205,77 @@ class ListManager
             $request->query->set('sort', $state['sort']);
         }
 
-        if ($modified) {
+        // R2-012: sanitize restored state against the same whitelists
+        // we use in the apply path. A malicious actor who tampered with
+        // the cache/session value would otherwise be able to inject
+        // arbitrary filter fields or sort columns.
+        if (isset($state['filter']) && is_array($state['filter'])) {
+            $state['filter'] = self::sanitizeFilterState($state['filter']);
+        }
+        if (isset($state['sort'])) {
+            $state['sort'] = self::sanitizeSortState((string) $state['sort'], $model);
+        }
+
+        if ($modified || $state !== []) {
             if ($request->hasSession()) {
-                $request->session()->put($storageKey, $state);
-            } elseif ($user) {
-                \Illuminate\Support\Facades\Cache::put($storageKey, $state, 86400);
+                $request->session()->put($hashedStorageKey, $state);
+            } elseif ($userId !== null) {
+                \Illuminate\Support\Facades\Cache::put($hashedStorageKey, $state, 86400);
             }
         }
+    }
+
+    /**
+     * Sanitize a restored filter state against the model's fillable +
+     * allowed operators. Anything outside the whitelist is dropped so
+     * a tampered cache cannot inject new filter fields.
+     */
+    protected static function sanitizeFilterState(array $filters): array
+    {
+        $allowedOperators = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'like', 'in', 'not_in'];
+
+        $clean = [];
+        foreach ($filters as $field => $value) {
+            if (! is_string($field) || $field === '') {
+                continue;
+            }
+            // Reject column names that contain SQL-like characters.
+            if (! preg_match('/^[A-Za-z_][A-Za-z0-9_\.]*$/', $field)) {
+                continue;
+            }
+            if (is_array($value)) {
+                $sub = [];
+                foreach ($value as $op => $val) {
+                    if (is_string($op) && in_array($op, $allowedOperators, true)) {
+                        $sub[$op] = $val;
+                    }
+                }
+                $clean[$field] = $sub;
+            } else {
+                $clean[$field] = $value;
+            }
+        }
+
+        return $clean;
+    }
+
+    /**
+     * Sanitize a restored sort value to known column names only.
+     */
+    protected static function sanitizeSortState(string $sort, Model $model): string
+    {
+        $fields = is_array($sort) ? $sort : explode(',', $sort);
+        $allowed = array_merge($model->getFillable(), ['id', 'created_at', 'updated_at']);
+
+        $clean = [];
+        foreach ($fields as $field) {
+            $field = ltrim(trim((string) $field), '-');
+            if (in_array($field, $allowed, true)) {
+                $clean[] = $field;
+            }
+        }
+
+        return implode(',', $clean);
     }
 
     public static function applyIncludes(Request $request, Builder $query, array $allowedIncludes = [], array $allowedWithCount = []): Builder
@@ -254,8 +334,12 @@ class ListManager
         return $query;
     }
 
-    protected static function applyFilterOperator(Builder $query, string $field, string $op, $val) 
+    protected static function applyFilterOperator(Builder $query, string $field, string $op, $val)
     {
+        // R3-007: explicit whitelist. Before this change, an unknown
+        // operator silently fell back to '=' (effectively ignoring the
+        // operator the consumer asked for). Now we throw so the
+        // misconfiguration is loud, not silent.
         $operators = [
             'eq' => '=', 'neq' => '!=',
             'gt' => '>', 'gte' => '>=',
@@ -264,14 +348,27 @@ class ListManager
             'in' => 'in', 'not_in' => 'not in'
         ];
 
-        $sqlOp = $operators[$op] ?? '=';
+        if (! array_key_exists($op, $operators)) {
+            throw new \InvalidArgumentException(sprintf(
+                'ListManager: unknown filter operator "%s". Allowed: %s.',
+                $op,
+                implode(', ', array_keys($operators)),
+            ));
+        }
+
+        $sqlOp = $operators[$op];
 
         if ($sqlOp === 'in') {
             $query->whereIn($field, explode(',', $val));
         } elseif ($sqlOp === 'not in') {
             $query->whereNotIn($field, explode(',', $val));
         } elseif ($sqlOp === 'like') {
-            $query->where($field, 'like', "%{$val}%");
+            // R2-014: escape LIKE wildcards so the search term is treated
+            // as a literal string. Without this, a user typing '50%'
+            // would match every row that contains '50' because '%' is a
+            // SQL LIKE wildcard.
+            $escaped = self::escapeLikeWildcards((string) $val);
+            $query->where($field, 'like', "%{$escaped}%", 'and');
         } else {
             $query->where($field, $sqlOp, $val);
         }
@@ -319,7 +416,7 @@ class ListManager
     protected static function applySearch(Request $request, Builder $query, array $searchable): Builder
     {
         $search = $request->query('q', $request->query('search'));
-        
+
         if (empty($search) || empty($searchable)) {
             return $query;
         }
@@ -329,7 +426,18 @@ class ListManager
             return $query;
         }
 
-        $query->where(function (Builder $q) use ($searchable, $search) {
+        // R2-014: cap the search term length so a 10k-character request
+        // cannot push the LIKE pattern through expensive query plans.
+        $maxLength = (int) config('mk_director.search.max_length', 256);
+        $search = mb_substr((string) $search, 0, $maxLength);
+
+        // R2-014: escape LIKE wildcards so the search term is treated
+        // as a literal string. The ESCAPE '\\' clause tells MySQL/PG
+        // that the backslash is the escape character; SQLite respects
+        // it natively in LIKE.
+        $escaped = self::escapeLikeWildcards($search);
+
+        $query->where(function (Builder $q) use ($searchable, $escaped) {
             foreach ($searchable as $index => $field) {
                 $isFirst = $index === 0;
 
@@ -338,8 +446,8 @@ class ListManager
                     $relationColumn = array_pop($parts);
                     $relationName = implode('.', $parts);
 
-                    $clause = function ($relQuery) use ($relationColumn, $search) {
-                        $relQuery->where($relationColumn, 'like', "%{$search}%");
+                    $clause = function ($relQuery) use ($relationColumn, $escaped) {
+                        $relQuery->where($relationColumn, 'like', "%{$escaped}%");
                     };
 
                     if ($isFirst) {
@@ -349,15 +457,28 @@ class ListManager
                     }
                 } else {
                     if ($isFirst) {
-                        $q->where($field, 'like', "%{$search}%");
+                        $q->where($field, 'like', "%{$escaped}%");
                     } else {
-                        $q->orWhere($field, 'like', "%{$search}%");
+                        $q->orWhere($field, 'like', "%{$escaped}%");
                     }
                 }
             }
         });
 
         return $query;
+    }
+
+    /**
+     * Escape LIKE wildcards (% and _) and the escape character itself
+     * (\\) so a search term is matched as a literal string.
+     *
+     * Audit R2-014. Without this, a search for '50%' would match every
+     * row that contains '50' because '%' is the SQL LIKE wildcard.
+     */
+    public static function escapeLikeWildcards(string $value): string
+    {
+        // Order matters: escape the escape char first, then the wildcards.
+        return addcslashes($value, '\\%_');
     }
 
     /**
