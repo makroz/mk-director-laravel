@@ -5,6 +5,119 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2-rc1] - 2026-06-18
+
+Hardening sprint on top of `1.2.0-rc1`. Closes 6 of the 35 Medium/Low
+findings from the original 4R audit; the remaining 29 are deferred to
+1.3.0 (see `openspec/changes/2026-06-18-1.2.2-hardening/proposal.md`).
+
+### Security (R-NEW-001: every entry below cites the diff to `src/` and the test that covers it)
+
+- **R2-010 — `BaseController::getDebugData` now requires an authenticated
+  user with `super-admin` or `dev` role.** Previously, any request with
+  `?debug=true&_debug=1` would get EXPLAIN + raw query bindings — a
+  PII / schema leak waiting to happen. The gate is fail-safe: apps
+  whose User model does not implement `hasRole()` get an empty debug
+  payload, not a 500. Diff: `src/Controllers/BaseController.php`.
+  Test: `tests/Unit/BaseControllerDebugGateTest.php` (5 cases).
+
+- **R3-014 — `role_user.user_id` foreign key to `auth_users.id`.** The
+  pivot was missing the FK, so deleting an `auth_users` row left orphan
+  rows in `role_user`. New migration
+  `src/Auth/Database/Migrations/2026_06_18_000001_add_fk_role_user_to_auth_users.php`
+  adds the FK with `cascadeOnDelete()`. Idempotent: skips silently if
+  the FK already exists or the `role_user` table is missing
+  (consumer apps with custom migrations). `down()` is wrapped in
+  `try/catch` so re-running on a fresh install does not crash. Test:
+  `tests/Unit/Auth/RoleUserFkMigrationTest.php` (3 cases).
+
+### Performance (R4-004 + R2-007)
+
+- **DB::listen no longer runs on reads or on system-table writes.**
+  Previously the "magic cache" listener ran on EVERY query and only
+  excluded the `cache` table via `str_contains`. Cron writes to
+  `jobs`, `migrations`, `sessions`, `password_resets`, and the
+  `failed_jobs` table would trigger cache invalidations on tables
+  the cache never knew about. The new listener:
+  (a) skips a hard-coded `$systemTables` allowlist (migrations,
+  cache, cache_locks, sessions, password_resets, password_reset_tokens,
+  jobs, job_batches, failed_jobs, telescope_*), and
+  (b) only acts on writes (`INSERT` / `UPDATE` / `DELETE`).
+  Known limitation (documented in the docblock): the regex does not
+  match `REPLACE`, `TRUNCATE`, raw stored-procedure calls, or
+  Eloquent `upsert()`. Callers using those patterns must
+  `Cache::tags([$table . '_all'])->flush()` manually.
+  Diff: `src/MkServiceProvider.php`.
+  Test: `tests/Unit/MkServiceProviderCacheListenerTest.php` (5 cases).
+
+### Tooling
+
+- **R1-004 — Pint installed and configured.** `pint.json` declares
+  preset `laravel` + rules `declare_strict_types` + `ordered_imports
+  alpha`. Scripts added to `composer.json`:
+  `composer lint` (pint --test), `composer lint:fix` (pint), and
+  `composer security:lint`. **The 93 file diff that Pint suggests
+  has NOT been applied in this sprint** — it would contaminate the
+  PR with unrelated cosmetic changes. Run `composer lint:fix` locally
+  before opening a PR. The sprint is shipped with the tool installed
+  and configured; the project-wide apply is deferred to 1.3.0.
+
+- **R2-008 + R2-009 — `php artisan mk:security-lint` command.** New
+  source-parsing linter with three checks: `$guarded = []` on
+  Eloquent models, missing `belongsTo` foreign keys, and
+  `MkMultiTenantPlugin::$tenantColumn` set to a value outside the
+  whitelist (`tenant_id`, `client_id`, `org_id`, `company_id`).
+  Exit codes: `0` on success, `1` on any error. `--strict` flag
+  escalates warnings to failures. `--format=json` for CI integration.
+  Source-parsing only — no Laravel app boot required, runs in < 2s
+  for 100 models. Diff: `src/Console/Commands/SecurityLintCommand.php`
+  (new file, 234 lines), registered in `MkServiceProvider`.
+  Test: `tests/Unit/SecurityLintCommandTest.php` (6 cases).
+  Spec: `openspec/changes/2026-06-18-1.2.2-hardening/specs/security-lint.md`.
+
+### Observability
+
+- **R1-005 (advisory) — `mk:check` warns on unguarded SmartControllers.**
+  The `mk:status` command (`MkCheckCommand`) now scans each
+  SmartController subclass and emits a `WARN` finding if the source
+  has no obvious auth wiring (no `middleware(`, no `MkAuthenticate` /
+  `MkAbility` reference, no auth-aware `__construct`). This is
+  advisory, not enforcement: SmartController does not enforce auth by
+  itself (BC: pre-existing apps rely on it being a pass-through), and
+  the responsibility to add a middleware remains the developer's.
+  Diff: `src/Console/Commands/MkCheckCommand.php`.
+  Test: `tests/Unit/MkCheckCommandAuthWarningTest.php` (4 cases).
+
+### Deferred to 1.3.0
+
+- **R1-001** ADR `Contracts/` vs `Api/` (architectural decision
+  required from Mario).
+- **R1-003** phpstan + Larastan. Larastan 3.10.0 (the only Laravel 13
+  compatible version as of 2026-06-18) crashes on
+  `Undefined constant "Larastan\Larastan\LARAVEL_VERSION"` in
+  `LarastanStubFilesExtension.php:25`. Bug is upstream. The
+  install/remove dance confirmed the lockfile stays clean if we
+  wait for Larastan 3.11+ to ship.
+- **R1-005 (test)** end-to-end test of `LintBoundariesCommand` that
+  actually invokes `handle()`. Out of scope for hardening.
+- **R2-001** rewrite of commit `6303844` (`sec(laravel): mitigate
+  SQL injection in ListManager`). Git history is git history.
+- 27 additional Medium/Low items from the 4R audit. Tracked in
+  `openspec/changes/2026-06-18-1.2.2-hardening/proposal.md` and
+  to be re-prioritized at the start of the 1.3.0 cycle.
+
+### Process notes
+
+- All 6 task commits are atomic and follow the
+  `<type>(<scope>): <subject>` convention.
+- The 3 `sec:`-prefixed commits (R2-010) cite both the diff path and
+  the test file. R-NEW-001 satisfied.
+- The Pint diff (93 files) is NOT shipped in this sprint — see the
+  Tooling section above.
+- `phpstan` install was attempted, locked to the package's
+  compatibility window, then reverted when the Larastan bug
+  surfaced. The lockfile is byte-identical to `1.2.0-rc1`.
+
 ## [1.2.0-rc1] - 2026-06-17
 
 ### Security (R-NEW-001: every entry below cites the diff to `src/`)

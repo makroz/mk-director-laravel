@@ -64,6 +64,7 @@ class MkServiceProvider extends ServiceProvider
                 \Mk\Director\Console\Commands\MakeDTOCommand::class,
                 \Mk\Director\Console\Commands\GenerateDocsCommand::class,
                 \Mk\Director\Console\Commands\LintBoundariesCommand::class,
+                \Mk\Director\Console\Commands\SecurityLintCommand::class,
             ]);
         }
 
@@ -103,6 +104,20 @@ class MkServiceProvider extends ServiceProvider
     /**
      * Register a global DB listener to automatically flush cache tags on write.
      * This is the "Magic Cache" feature of MK-Director.
+     *
+     * R4-004 / R2-007 hardening (1.2.2): the listener now (a) skips system
+     * tables (migrations, cache, sessions, queue, etc.) so cron-driven
+     * writes and self-references don't trigger cache stampedes, and (b) only
+     * acts on write operations (INSERT / UPDATE / DELETE) — the previous
+     * `str_contains($query->sql, 'cache')` heuristic only excluded the
+     * `cache` table and matched reads too, so the listener never fired
+     * reliably.
+     *
+     * Limitation: the regex below matches `update|delete|insert into`. It
+     * does NOT match `REPLACE`, `TRUNCATE`, raw stored-procedure calls, or
+     * Eloquent `upsert()` (which uses `INSERT ... ON DUPLICATE KEY UPDATE`).
+     * Those mutations will not invalidate the cache. Documented so callers
+     * can `Cache::tags([$table . '_all'])->flush()` manually if needed.
      */
     protected function registerGlobalCacheListener()
     {
@@ -110,17 +125,33 @@ class MkServiceProvider extends ServiceProvider
             return;
         }
 
-        DB::listen(function ($query) {
-            // Avoid infinite loops if we are querying the cache table itself (if stored in DB)
-            if (str_contains($query->sql, 'cache')) {
-                return;
+        $systemTables = [
+            'migrations',
+            'cache',
+            'cache_locks',
+            'sessions',
+            'password_resets',
+            'password_reset_tokens',
+            'jobs',
+            'job_batches',
+            'failed_jobs',
+            'telescope_entries',
+            'telescope_monitoring',
+        ];
+
+        DB::listen(function ($query) use ($systemTables) {
+            // 1. Skip system tables (cron writes, self-references).
+            foreach ($systemTables as $table) {
+                if (str_contains($query->sql, $table)) {
+                    return;
+                }
             }
 
-            // Detect write operations (INSERT, UPDATE, DELETE)
-            if (preg_match('/(update|delete|insert into)\s+`?(\w+)`?/i', $query->sql, $matches)) {
+            // 2. Only act on writes (INSERT / UPDATE / DELETE).
+            if (preg_match('/(update|delete|insert\s+into)\s+`?(\w+)`?/i', $query->sql, $matches)) {
                 $table = $matches[2];
                 Cache::tags([$table . '_all'])->flush();
-                
+
                 if (config('mk_director.debug', false)) {
                     Log::info("MK-Director: Cache flushed for table [{$table}] due to write operation.");
                 }
