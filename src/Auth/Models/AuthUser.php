@@ -28,7 +28,7 @@ use Mk\Director\Auth\Concerns\HasRoles;
  * El consumer puede sobreescribirla desde una subclase concreta
  * si necesita una tabla específica del módulo.
  *
- * @property int    $id
+ * @property string $id
  * @property string $name
  * @property string $email
  * @property string $password
