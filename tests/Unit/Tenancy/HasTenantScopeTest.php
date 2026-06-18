@@ -24,15 +24,32 @@ afterEach(function () {
  * on the Eloquent boot registry lazily — we never connect to a DB
  * because we test the trait's config + container behavior, not
  * the SQL it produces.
+ *
+ * Since R2-006, the trait requires an explicit per-model opt-in via
+ * `protected static bool $usesTenant = true`. The default is false
+ * so adding the trait alone does not register the global scope.
  */
-function newDemoModel(): Model
+function newDemoModel(?bool $usesTenant = null): Model
 {
-    $cls = new class extends Model {
+    $cls = new class($usesTenant) extends Model {
         use HasTenantScope;
 
         protected $table = 'demo_tenantables';
 
         protected $guarded = [];
+
+        public function __construct(?bool $usesTenant = null)
+        {
+            if ($usesTenant !== null) {
+                // PHP forbids redeclaring the trait's static property,
+                // so we set it via reflection. This keeps the fixture
+                // independent of the property's static binding at the
+                // trait level.
+                $ref = new \ReflectionProperty(self::class, 'usesTenant');
+                $ref->setAccessible(true);
+                $ref->setValue(null, $usesTenant);
+            }
+        }
     };
 
     return new $cls;
@@ -93,7 +110,8 @@ test('HasTenantScope does not register the global scope when tenant.enabled is f
 
 test('HasTenantScope registers the global scope when tenant.enabled is true and TenantContext has a value', function () {
     // Boot a fresh container with the feature enabled and a
-    // TenantContext that has a value.
+    // TenantContext that has a value. The model must opt in
+    // (R2-006: $usesTenant = true) for the scope to register.
     $app = new Container();
     Container::setInstance($app);
 
@@ -107,7 +125,7 @@ test('HasTenantScope registers the global scope when tenant.enabled is true and 
     $context->set(42);
     $app->instance(TenantContext::class, $context);
 
-    $cls = newDemoModel()::class;
+    $cls = newDemoModel(usesTenant: true)::class;
 
     $cls::clearBootedModels();
     $ref = new \ReflectionClass(Model::class);

@@ -14,11 +14,17 @@ class LikeSearchStrategy implements SearchStrategyInterface
 {
     public function apply(Builder $query, string $column, string $value): Builder
     {
-        return $query->where($column, 'like', "%{$value}%");
+        // R2-014: escape LIKE wildcards so the value is treated as a
+        // literal string. Without this, a search for '50%' would match
+        // every row that contains '50' because '%' is the SQL LIKE
+        // wildcard.
+        $escaped = addcslashes($value, '\\%_');
+        return $query->where($column, 'like', "%{$escaped}%");
     }
 
     public function applyOr(Builder $query, string $column, string $value): Builder
     {
-        return $query->orWhere($column, 'like', "%{$value}%");
+        $escaped = addcslashes($value, '\\%_');
+        return $query->orWhere($column, 'like', "%{$escaped}%");
     }
 }
