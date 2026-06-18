@@ -28,11 +28,20 @@ pre_checks_passed:
       tag: v1.2.2-rc1 pushed to origin (verified via ls-remote)
       r_new_001_compliance: verified for sec(laravel) and fix(laravel) commits (both cite diff + test)
 
-in_flight:
-  - monorepo: update gitlink from fa4a466 to 718fed8, commit pest-laravel CI job, push, open PR
+in_flight: []
+completed_at: 2026-06-18T14:09-04
+sprint_status: closed
+pr_number: 5
+pr_url: https://github.com/makroz/mk-director-laravel/pull/5
+tag: v1.2.2-rc1
+publish_status: pending-mario-sandbox-validation
+post_merge_notes:
+  - PR #4 (4r-fixes, tag v1.2.0-rc1) was merged on 2026-06-18 before this sprint's PR #5 was opened. PR #5 is a delta ON TOP of #4, not a replacement.
+  - When the sandbox validation passes and composer publish is run, the canonical release is `v1.2.2-rc1` (not v1.2.1). The version bump from rc1 → stable happens post-publish.
 
 findings:
   closing:
+    # NOTE: superseded by PR #4 (4r-fixes) merge on 2026-06-18 — this 1.2.2-rc1 PR (#5) is a delta ON TOP of #4. The 1.2.0-rc1 below refers to PR #4's pre-state.
     - id: R1-004
       title: Sin Pint/PHP-CS-Fixer → PSR-12 no se enforce en CI
       track: 4
