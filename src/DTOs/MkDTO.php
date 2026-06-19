@@ -111,7 +111,8 @@ abstract class MkDTO
             }
         }
 
-        $enumFiles = glob($modelDir . '/*Enum.php') ?: [];
+        $enumDir = dirname($modelDir) . '/Enums';
+        $enumFiles = glob($enumDir . '/*Enum.php') ?: [];
 
         foreach ($enumFiles as $file) {
             $className = basename($file, '.php');
