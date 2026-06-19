@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Mk\Director\Console\Commands;
 
 use Illuminate\Console\Command;
@@ -41,8 +43,8 @@ class MkCheckCommand extends Command
         $headers = ['Controlador', 'Modelo', 'Plugins', 'Estado'];
         $rows = [];
 
-        foreach ($controllers as $controllerClass) {
-            $rows[] = $this->auditController($controllerClass);
+        foreach ($controllers as $controllerClass => $controllerSource) {
+            $rows[] = $this->auditController($controllerClass, $controllerSource);
         }
 
         $this->table($headers, $rows);
@@ -78,7 +80,7 @@ class MkCheckCommand extends Command
                 $fullClass = $namespace . '\\' . $className;
 
                 if (class_exists($fullClass)) {
-                    $smartControllers[] = $fullClass;
+                    $smartControllers[$fullClass] = $content;
                 }
             }
         }
@@ -99,8 +101,13 @@ class MkCheckCommand extends Command
 
     /**
      * Auditar un controlador específico.
+     *
+     * @param  string  $controllerClass
+     * @param  string|null  $controllerSource  Raw PHP source of the controller
+     *                                          (used for source-parsing the
+     *                                          auth middleware presence).
      */
-    protected function auditController(string $controllerClass): array
+    protected function auditController(string $controllerClass, ?string $controllerSource = null): array
     {
         try {
             /** @var SmartController $instance */
@@ -108,19 +115,40 @@ class MkCheckCommand extends Command
             $config = $instance->getMkConfig();
             $modelClass = $config['model'] ?? 'N/A';
             $plugins = $config['plugins'] ?? [];
-            
+
             $findings = [];
-            
+
             if ($modelClass !== 'N/A' && class_exists($modelClass)) {
                 $model = new $modelClass;
                 $fillable = $model->getFillable();
-                
+
                 $manager = app(PluginManager::class);
                 $manager->setControllerConfig($config);
                 $manager->registerPlugins($plugins);
-                
+
                 $findings = array_merge($findings, $this->auditConfig($config));
                 $findings = array_merge($findings, $manager->auditRequirements($config, $fillable));
+            }
+
+            // T1.2 hardening (1.2.2): SmartController does not enforce auth
+            // by itself (BC: pre-existing apps rely on it being a
+            // pass-through). Warn the developer if the controller source
+            // contains no obvious auth wiring so the issue is at least
+            // surfaced — it is still the developer's responsibility to add
+            // a middleware (e.g. `MkAuthenticate`, `auth:sanctum`) in
+            // their routes file or the controller's constructor.
+            if ($controllerSource !== null) {
+                $hasAuthSignal = (bool) preg_match(
+                    '/(middleware\s*\(|MkAuthenticate|MkAbility|->middleware\(|public\s+function\s+__construct\s*\([^)]*Auth)/i',
+                    $controllerSource
+                );
+                if (! $hasAuthSignal) {
+                    $findings[] = [
+                        'plugin' => 'Core',
+                        'type' => 'warning',
+                        'message' => "SmartController no enforce auth: agregar middleware (auth / MkAuthenticate) en rutas o en el constructor.",
+                    ];
+                }
             }
 
             $statusText = "<fg=green>OK</>";

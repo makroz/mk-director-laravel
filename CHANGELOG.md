@@ -5,6 +5,388 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2-rc1] - 2026-06-18
+
+Hardening sprint on top of `1.2.0-rc1`. Closes 6 of the 35 Medium/Low
+findings from the original 4R audit; the remaining 29 are deferred to
+1.3.0 (see `openspec/changes/2026-06-18-1.2.2-hardening/proposal.md`).
+
+### Security (R-NEW-001: every entry below cites the diff to `src/` and the test that covers it)
+
+- **R2-010 — `BaseController::getDebugData` now requires an authenticated
+  user with `super-admin` or `dev` role.** Previously, any request with
+  `?debug=true&_debug=1` would get EXPLAIN + raw query bindings — a
+  PII / schema leak waiting to happen. The gate is fail-safe: apps
+  whose User model does not implement `hasRole()` get an empty debug
+  payload, not a 500. Diff: `src/Controllers/BaseController.php`.
+  Test: `tests/Unit/BaseControllerDebugGateTest.php` (5 cases).
+
+- **R3-014 — `role_user.user_id` foreign key to `auth_users.id`.** The
+  pivot was missing the FK, so deleting an `auth_users` row left orphan
+  rows in `role_user`. New migration
+  `src/Auth/Database/Migrations/2026_06_18_000001_add_fk_role_user_to_auth_users.php`
+  adds the FK with `cascadeOnDelete()`. Idempotent: skips silently if
+  the FK already exists or the `role_user` table is missing
+  (consumer apps with custom migrations). `down()` is wrapped in
+  `try/catch` so re-running on a fresh install does not crash. Test:
+  `tests/Unit/Auth/RoleUserFkMigrationTest.php` (3 cases).
+
+### Performance (R4-004 + R2-007)
+
+- **DB::listen no longer runs on reads or on system-table writes.**
+  Previously the "magic cache" listener ran on EVERY query and only
+  excluded the `cache` table via `str_contains`. Cron writes to
+  `jobs`, `migrations`, `sessions`, `password_resets`, and the
+  `failed_jobs` table would trigger cache invalidations on tables
+  the cache never knew about. The new listener:
+  (a) skips a hard-coded `$systemTables` allowlist (migrations,
+  cache, cache_locks, sessions, password_resets, password_reset_tokens,
+  jobs, job_batches, failed_jobs, telescope_*), and
+  (b) only acts on writes (`INSERT` / `UPDATE` / `DELETE`).
+  Known limitation (documented in the docblock): the regex does not
+  match `REPLACE`, `TRUNCATE`, raw stored-procedure calls, or
+  Eloquent `upsert()`. Callers using those patterns must
+  `Cache::tags([$table . '_all'])->flush()` manually.
+  Diff: `src/MkServiceProvider.php`.
+  Test: `tests/Unit/MkServiceProviderCacheListenerTest.php` (5 cases).
+
+### Tooling
+
+- **R1-004 — Pint installed and configured.** `pint.json` declares
+  preset `laravel` + rules `declare_strict_types` + `ordered_imports
+  alpha`. Scripts added to `composer.json`:
+  `composer lint` (pint --test), `composer lint:fix` (pint), and
+  `composer security:lint`. **The 93 file diff that Pint suggests
+  has NOT been applied in this sprint** — it would contaminate the
+  PR with unrelated cosmetic changes. Run `composer lint:fix` locally
+  before opening a PR. The sprint is shipped with the tool installed
+  and configured; the project-wide apply is deferred to 1.3.0.
+
+- **R2-008 + R2-009 — `php artisan mk:security-lint` command.** New
+  source-parsing linter with three checks: `$guarded = []` on
+  Eloquent models, missing `belongsTo` foreign keys, and
+  `MkMultiTenantPlugin::$tenantColumn` set to a value outside the
+  whitelist (`tenant_id`, `client_id`, `org_id`, `company_id`).
+  Exit codes: `0` on success, `1` on any error. `--strict` flag
+  escalates warnings to failures. `--format=json` for CI integration.
+  Source-parsing only — no Laravel app boot required, runs in < 2s
+  for 100 models. Diff: `src/Console/Commands/SecurityLintCommand.php`
+  (new file, 234 lines), registered in `MkServiceProvider`.
+  Test: `tests/Unit/SecurityLintCommandTest.php` (6 cases).
+  Spec: `openspec/changes/2026-06-18-1.2.2-hardening/specs/security-lint.md`.
+
+### Observability
+
+- **R1-005 (advisory) — `mk:check` warns on unguarded SmartControllers.**
+  The `mk:status` command (`MkCheckCommand`) now scans each
+  SmartController subclass and emits a `WARN` finding if the source
+  has no obvious auth wiring (no `middleware(`, no `MkAuthenticate` /
+  `MkAbility` reference, no auth-aware `__construct`). This is
+  advisory, not enforcement: SmartController does not enforce auth by
+  itself (BC: pre-existing apps rely on it being a pass-through), and
+  the responsibility to add a middleware remains the developer's.
+  Diff: `src/Console/Commands/MkCheckCommand.php`.
+  Test: `tests/Unit/MkCheckCommandAuthWarningTest.php` (4 cases).
+
+### Deferred to 1.3.0
+
+- **R1-001** ADR `Contracts/` vs `Api/` (architectural decision
+  required from Mario).
+- **R1-003** phpstan + Larastan. Larastan 3.10.0 (the only Laravel 13
+  compatible version as of 2026-06-18) crashes on
+  `Undefined constant "Larastan\Larastan\LARAVEL_VERSION"` in
+  `LarastanStubFilesExtension.php:25`. Bug is upstream. The
+  install/remove dance confirmed the lockfile stays clean if we
+  wait for Larastan 3.11+ to ship.
+- **R1-005 (test)** end-to-end test of `LintBoundariesCommand` that
+  actually invokes `handle()`. Out of scope for hardening.
+- **R2-001** rewrite of commit `6303844` (`sec(laravel): mitigate
+  SQL injection in ListManager`). Git history is git history.
+- 27 additional Medium/Low items from the 4R audit. Tracked in
+  `openspec/changes/2026-06-18-1.2.2-hardening/proposal.md` and
+  to be re-prioritized at the start of the 1.3.0 cycle.
+
+### Process notes
+
+- All 6 task commits are atomic and follow the
+  `<type>(<scope>): <subject>` convention.
+- The 3 `sec:`-prefixed commits (R2-010) cite both the diff path and
+  the test file. R-NEW-001 satisfied.
+- The Pint diff (93 files) is NOT shipped in this sprint — see the
+  Tooling section above.
+- `phpstan` install was attempted, locked to the package's
+  compatibility window, then reverted when the Larastan bug
+  surfaced. The lockfile is byte-identical to `1.2.0-rc1`.
+
+## [1.2.0-rc1] - 2026-06-17
+
+### Security (R-NEW-001: every entry below cites the diff to `src/`)
+
+The audit found 57 issues (10 critical, 17 high, 19 medium, 12 low).
+This RC closes all 10 P0 and all 17 P0-targeted high-severity findings.
+Items #2–#4 below are code-only changes that fail loudly if a consumer
+was relying on the previous (looser) behavior — there is no data
+migration for those.
+
+- **R4-001 — `HasAbilities::canMk` now delegates to `AbilityResolver`.**
+  The resolver caches the resolved ability names per user with a
+  configurable TTL (default 300s) and short-circuits via Sanctum
+  `currentAccessToken()->can()` before any DB query. Every mutator
+  (`giveAbilityTo`, `revokeAbilityTo`, `syncDirectAbilities`,
+  `assignRole`, `revokeRole`, `syncRoles`) invalidates the cache so
+  the next `canMk` reads fresh data. Commit 656360e.
+
+- **R1-002 — `ability_user` migration published.** The pivot table
+  for direct ability grants was referenced by `HasAbilities` but
+  the migration was never shipped. Now in
+  `src/Auth/Database/Migrations/2026_06_10_000007_create_ability_user_table.php`
+  with FK to `abilities`, `uuid('user_id')` matching `auth_users.id`,
+  and a unique composite index on `(ability_id, user_id, user_type)`.
+  Commit d015cfc.
+
+- **R3-005 — `AuthUser` docblock declares `$id` as `string`.**
+  Was `@property int $id` even after the UUID migration. Tests parse
+  the source file directly because the class uses Sanctum's
+  `HasApiTokens` (not in `composer.json`). Commit 568111d.
+
+- **R4-002 — `MkAuthenticate` eager-loads `roles.abilities` and
+  `directAbilities` after the scope resolver runs.** Closes the N+1
+  every downstream `canMk` would otherwise trigger. Commit 74bfe95.
+
+- **R2-002 / R2-003 — `MkAbility` rejects empty ability lists and
+  short-circuits via Sanctum.** Before: `Route::middleware(['mk.ability:'])`
+  silently passed every request through (privilege escalation trap).
+  Now: returns 500 + `ERR_MIDDLEWARE_MISCONFIGURED`. Sanctum
+  `currentAccessToken()->can($ability)` is checked before the role/
+  direct-grants path. Commit 1d5ffdb.
+
+- **R2-004 — `AuthUser` uses `HasTenantMembership`; `TenantResolver`
+  validates user↔tenant membership.** The middleware now reads the
+  user's tenant via `$user->getTenantId()` and returns 403
+  `ERR_TENANT_MISMATCH` if the resolved tenant differs. Prevents
+  tenant-A tokens from accessing tenant-B data via header. Commit 5dd846d.
+
+- **R2-005 / R2-006 — `TenantContext` is flushed at request end;
+  `HasTenantScope` is per-model opt-in.** `MkServiceProvider::boot`
+  registers a `terminating` callback that calls `TenantContext::flush()`
+  so long-lived workers (Octane / Swoole) do not leak tenant state
+  across requests. `HasTenantScope` now requires `protected static
+  bool $usesTenant = true` per model — adding the trait alone is a
+  no-op. Commit 9a807da.
+
+- **R2-009 / R2-018 / R4-003 — `MkMultiTenantPlugin` whitelist,
+  strict comparison, and mutex with `HasTenantScope`.** The plugin
+  rejects any `$tenantColumn` not in the documented whitelist
+  (`tenant_id`, `client_id`, `org_id`, `company_id`). `beforeDelete`
+  uses strict `!==` (was `!=`) to prevent the int-vs-string coercion
+  bug where `'00000000-...' (string) != 0 (int)` was truthy. When the
+  model already uses `HasTenantScope` with `$usesTenant = true`, the
+  plugin skips its own `where()` to avoid applying the tenant
+  predicate twice. Commit 7004a3d.
+
+- **R2-014 / R3-007 / R2-012 — `ListManager` LIKE escape, operator
+  whitelist, and `restoreState` sanitize.** `escapeLikeWildcards()`
+  wraps `addcslashes($value, '\\%_')` and is used by both `applySearch`
+  and the `like` filter operator so a search for `'50%'` matches
+  the literal string instead of every row containing `50`. The
+  search term is also capped at `mk_director.search.max_length`
+  (default 256). `applyFilterOperator` now throws
+  `InvalidArgumentException` on unknown operators (was a silent
+  fallback to `=`). `restoreState` hashes the storage key with HMAC-
+  SHA256 of `app.key` and sanitizes the rehydrated filter/sort state
+  against the same whitelists used by the apply path. Commit 373007d.
+
+- **R4-005 / R4-006 / R2-016 — Performance + symlink rejection.**
+  `OpenApiController::spec` is wrapped in `Cache::remember()` with a
+  24h TTL; `mk:generate-docs` calls `Cache::forget()` on the same
+  key. `ModuleProviderRegistry::discover()` caches the discovered
+  providers for 1h, keys the cache on `md5(realpath(modules path))`
+  so any directory change invalidates automatically, and rejects
+  symlinked module directories (R2-016) — a symlink under
+  `app/Modules` pointing to `/tmp/evil` would otherwise be discovered
+  as a legitimate module. Commit 77ad693.
+
+### Process (R-NEW-001)
+
+- **CI: monorepo now has a `pest-laravel` job** that runs
+  `./vendor/bin/pest` against the package and is in the `build`
+  dependency chain. Path filter so the job only fires when the
+  package or the workflow file changes. This closes the gap that
+  allowed the previous sprint (PR #3) to declare 6 security fixes
+  and ship only 3 — the monorepo CI never exercised the sub-repo's
+  pest suite.
+- **Spec: `openspec/specs/architecture/modular-encapsulation.md`**
+  documents the rule with the three required scenarios (claim
+  without diff, claim with diff but without test, monorepo CI
+  does not run pest-laravel). R-NEW-001 is enforced at review time.
+
+### Testing infrastructure
+
+- `MkLaravelTestCase` — boots a minimal Laravel Container with
+  config/cache/db/files bindings so the 5 pre-existing pest failures
+  (R3-009, R3-010, R3-011) are green. No new composer dependency
+  (we deliberately avoided `orchestra/testbench` which would pull
+  in the full application kernel).
+- `StrictTypesTest` extended to scan `tests/` (was `src/` only) and
+  asserts `declare(strict_types=1)` is positioned right after
+  `<?php` — 8 pre-existing test files were missing the declaration.
+- `AuthUserMigrationTest`, `RoleUserMigrationTest` — refactored to
+  parse the migration source directly because the chainable
+  `Blueprint` mock fights Laravel's real signatures.
+
+### Documentation
+
+- `docs/UPGRADE_1.2.md` — full upgrade guide covering the breaking
+  changes, pre-flight checklist, runbook for the UUID migration,
+  rollback procedure.
+- `bin/migrate-1.1-to-1.2.php` — standalone CLI script with
+  `--dry-run`, `--connection`, `--chunk`, `--help`. Idempotent,
+  refuses to run outside CLI, refuses to migrate a table whose id
+  is neither BIGINT nor CHAR(36).
+
+### Notes
+
+- **DO NOT publish to Packagist yet.** This RC is tagged locally so
+  the team can validate against `apps/sandbox-laravel` before
+  publishing. Mario will run `composer publish` from his machine
+  after sandbox validation passes.
+- 9 of the 12 medium-priority and all 12 low-priority findings from
+  the audit are deferred to `1.2.2-hardening` (next sprint).
+
+## [1.2.0] - 2026-06-17
+
+### Security
+
+- **A1 — SQL injection mitigado en `ListManager`.** `applyFilters` y `applyJoins` ahora
+  requieren una whitelist explícita (`allowed_filters`, `allowed_joins`). Sin whitelist,
+  cero filtros/joins se aplican (comportamiento defensivo por defecto). Cualquier campo
+  fuera de la lista es ignorado silenciosamente antes de llegar a la query.
+
+### Changed
+
+- **A2 — `MkAuthMiddleware`: respuesta 401 nativa.** Import de `MkResponse` (clase
+  inexistente) removido. Reemplazado por `response()->json(['success' => false,
+  'message' => 'Unauthenticated.', 'code' => 'ERR_UNAUTHENTICATED'], 401)`.
+
+- **A3 — Migración `auth_users`: ID como UUID.** `$table->id()` reemplazado por
+  `$table->uuid('id')->primary()`. Requiere `HasUuids` en el modelo `AuthUser`.
+
+- **A4 — Migración `role_user`: FK como UUID y default configurable.** `user_id`
+  tipado como `uuid` (foreign key coherente con A3). El `user_type` por defecto
+  ahora se lee de `config('mk_director.auth.default_user_type', 'App\\Models\\User')`.
+
+- **A5 — `MkAuthenticate`: excepción correcta al faltar autenticación.** Reemplazado
+  `MissingAbilityException` (de Sanctum, semántica incorrecta) por
+  `AuthenticationException` (framework HTTP estándar de Laravel), pasando el guard
+  activo como guards array para que el handler de exceptions produzca un 401 correcto.
+
+- **A6 — `declare(strict_types=1)` en todo el source del paquete.** Todos los
+  archivos PHP bajo `src/` tienen la declaración strict_types al inicio. Incluye
+  un test automatizado `StrictTypesTest.php` que falla si algún archivo nuevo la omite.
+
+> ⚠️ **Nota de migración**: A3 y A4 son cambios en migraciones de base de datos.
+> Si ya corriste las migraciones anteriores en un entorno, necesitás rollback +
+> re-run (`php artisan migrate:rollback --step=2 && php artisan migrate`).
+> En entornos frescos no hay impacto.
+
+## [1.1.1] - 2026-06-16
+
+
+### Fixed (1.1.1)
+
+- **`HasTenantScope` now uses `TenantScope` instead of an inline closure** —
+  the global-scope class shipped in 1.1.0 was dead code at runtime because
+  `HasTenantScope::booted()` registered an inline closure with the same
+  `where($column, '=', $tenantId)` logic. The code review that landed
+  alongside 1.1.0 flagged this as 🔴 bloqueante (B-3): the
+  `TenantScope::apply()` was never invoked, the JSDoc on both classes
+  claimed a contract that was not in effect, and the duplication was a
+  footgun for any future change.
+- **`TenantScope::apply()` is now context-aware.** It resolves the current
+  tenant from the `TenantContext` singleton on every apply when no
+  explicit `tenantId` was passed to the constructor. The constructor
+  still accepts an explicit id (used by the 5 unit tests on
+  `TenantScope` and by programmatic scopes); when set, that value wins.
+  The "fresh read" semantics that the inline closure had are preserved,
+  so the scope is safe under long-lived workers (Octane / Swoole) where
+  the tenant can change mid-process.
+- **No behavior change at the `HasTenantScope` trait boundary** — the
+  trait still registers the scope under the alias `'tenant'`, the opt-in
+  guard (`mk_director.tenant.enabled`) is unchanged, and the bypass path
+  (`Model::withoutGlobalScope('tenant')`) still works.
+
+### Cross-repo coordination
+
+This 1.1.1 ships in lockstep with the `create-mk-director@1.1.1` CLI,
+whose templates now require `makroz/director-laravel: ^1.1`. Publishing
+this 1.1.1 is what makes the scaffoldeado de proyectos actually
+`composer install`-able end-to-end. The CLI bump is in
+`makroz/MK-Director#17` (PR #17, already merged into the monorepo's
+`dev`).
+
+## [1.1.0] - 2026-06-12
+
+### Added (1.1.0)
+
+- **Multi-tenant opt-in (M-1 of the 1.1.0 sprint).** Three new
+  classes under `Mk\Director\Tenancy\*` ship behind a single
+  config flag (`mk_director.tenant.enabled`, default `false`):
+  - `TenantScope` — Eloquent `Scope` that filters by `tenant_id`
+    on every `apply()`. No-op when no tenant is bound, so
+    console / queue jobs see all rows by design.
+  - `HasTenantScope` — model trait that auto-registers a
+    closure-based global scope at `booted()` time. The closure
+    reads `TenantContext` on every query, so the tenant id is
+    always fresh (no Octane-style freeze).
+  - `TenantContext` — singleton service that holds the current
+    tenant id for the duration of a request.
+  - `TenantResolver` — HTTP middleware that reads the tenant
+    from a header (default `X-Tenant-ID`), a path segment, or a
+    subdomain, and writes it into the `TenantContext`. Strict
+    mode (default) returns 400 when the tenant cannot be
+    resolved.
+- **Config flag**: `config/mk_director.php` gains a `tenant` key
+  (`enabled`, `resolver`, `header_name`, `model`, `strict`).
+  The `MkServiceProvider` always registers the middleware on
+  the `api` group, but the middleware itself short-circuits to
+  a pass-through when `tenant.enabled = false` (opt-in per
+  ADR-003).
+- **Sandbox fixtures**: `apps/sandbox-laravel` now ships with
+  a `mk_tenants` table, a `DemoTenantableModel` that uses
+  `HasTenantScope`, and an end-to-end feature test in
+  `tests/Feature/TenantScopeTest.php` that proves isolation
+  (header, 400, cross-tenant 404, write-back with the right
+  tenant).
+- **Documentation**: `docs/guides/MULTI_TENANT.md` is updated
+  to reflect the shipped feature (no more "Available from
+  v1.1.0" warning — it ships with 1.1.0).
+
+### Changed (1.1.0)
+
+- `branch-alias.dev-main` in `composer.json` bumped from
+  `1.0.x-dev` to `1.1.x-dev` to track the new minor line.
+- `composer.json` gained `minimum-stability: dev` +
+  `prefer-stable: true` so the dev toolchain (Pest 5 has only
+  RC releases at the time of this writing) installs cleanly
+  without affecting consumers (the dev deps are not
+  installed by `composer require`).
+- `MkServiceProvider::registerTenantMiddleware()` now always
+  registers the middleware on the `api` group. The middleware
+  is the one that checks `tenant.enabled` and short-circuits.
+  This is more flexible than registering conditionally at
+  boot — flipping the config at runtime (e.g. in tests)
+  picks up the new state without re-booting the framework.
+
+### Fixed (1.1.0)
+
+- `HasTenantScope`'s closure scope was originally typed as
+  `function (Model $model)`, but Eloquent invokes closure
+  scopes with the **Builder** (not the model). The
+  signature is now `function (Builder $builder)`, and the
+  model is obtained via `$builder->getModel()`. This was
+  caught and fixed before merge by the sandbox feature
+  test in `tests/Feature/TenantScopeTest.php`.
+
 ## [1.0.0] - 2026-06-10
 
 ### Added (1.0.0)

@@ -88,6 +88,45 @@ it('forbids cross-module imports via Services/*', function () use ($modulesPath)
     expect($exit)->toBe(1);
 });
 
+it('detects inline FQCN cross-module imports', function () use ($modulesPath) {
+    makeModule($modulesPath, 'FakeAlpha', 'namespace App\\Modules\\FakeAlpha\\Models; class Alpha {}');
+    makeModule(
+        $modulesPath,
+        'FakeBeta',
+        "namespace App\\Modules\\FakeBeta\\Services;\nclass BetaService {\n    public function run() {\n        \\App\\Modules\\FakeAlpha\\Models\\Alpha::find(1);\n    }\n}",
+    );
+
+    $exit = runLintOn($modulesPath);
+    expect($exit)->toBe(1);
+});
+
+it('excludes the Tests directory from boundary checks', function () use ($modulesPath) {
+    makeModule($modulesPath, 'FakeAlpha', 'namespace App\\Modules\\FakeAlpha\\Models; class Alpha {}');
+    
+    // FakeBeta has a Tests folder with a cross-module import — should be ignored.
+    $betaPath = $modulesPath . '/FakeBeta';
+    if (! is_dir($betaPath)) {
+        mkdir($betaPath, 0o755, true);
+    }
+    $testsPath = $betaPath . '/Tests';
+    if (! is_dir($testsPath)) {
+        mkdir($testsPath, 0o755, true);
+    }
+    file_put_contents(
+        $testsPath . '/BetaTest.php',
+        "<?php\nuse App\\Modules\\FakeAlpha\\Models\\Alpha;\nnamespace App\\Modules\\FakeBeta\\Tests; class BetaTest {}"
+    );
+
+    // Also write a normal clean file in FakeBeta so Finder has something to scan
+    file_put_contents(
+        $betaPath . '/FakeBetaModule.php',
+        "<?php\nnamespace App\\Modules\\FakeBeta; class BetaModule {}"
+    );
+
+    $exit = runLintOn($modulesPath);
+    expect($exit)->toBe(0);
+});
+
 /**
  * Run the lint's discovery + violation logic against an arbitrary path
  * by reflecting into the command's private methods (no Laravel boot
@@ -109,14 +148,15 @@ function runLintOn(string $modulesPath): int
     $extractTarget->setAccessible(true);
     $isAllowed = $ref->getMethod('isAllowedExternal');
     $isAllowed->setAccessible(true);
+    $phpFiles = $ref->getMethod('phpFiles');
+    $phpFiles->setAccessible(true);
 
     foreach ($modules as $sourceModule) {
         $modulePath = $modulesPath . '/' . $sourceModule;
-        $finder = new Symfony\Component\Finder\Finder();
-        $finder->files()->in($modulePath)->name('*.php');
+        $files = $phpFiles->invoke($command, $modulePath);
 
-        foreach ($finder as $file) {
-            $imports = $extract->invoke($command, (string) file_get_contents($file->getPathname()));
+        foreach ($files as $file) {
+            $imports = $extract->invoke($command, (string) file_get_contents($file));
             foreach ($imports as $import) {
                 $target = $extractTarget->invoke($command, $import);
                 if ($target === null || $target === $sourceModule) continue;

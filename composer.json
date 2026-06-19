@@ -13,7 +13,7 @@
     ],
     "authors": [
         {
-            "name": "Mario Guzmán",
+            "name": "Mario Guzm\u00e1n",
             "email": "makroz@hotmail.com"
         }
     ],
@@ -26,7 +26,8 @@
     "require-dev": {
         "pestphp/pest": "^5.0",
         "pestphp/pest-plugin-laravel": "^5.0",
-        "mockery/mockery": "^1.6"
+        "mockery/mockery": "^1.6",
+        "laravel/pint": "^1.20"
     },
     "autoload": {
         "psr-4": {
@@ -45,14 +46,15 @@
             ]
         },
         "branch-alias": {
-            "dev-main": "1.0.x-dev"
+            "dev-main": "1.1.x-dev"
         }
     },
     "scripts": {
         "test": "vendor/bin/pest",
         "test:coverage": "vendor/bin/pest --coverage",
-        "lint": "php -l src/**/*.php",
-        "type-check": "phpstan analyse src"
+        "lint": "vendor/bin/pint --test",
+        "lint:fix": "vendor/bin/pint",
+        "security:lint": "php artisan mk:security-lint"
     },
     "config": {
         "allow-plugins": {
@@ -62,5 +64,7 @@
     "support": {
         "issues": "https://github.com/makroz/mk-director-laravel/issues",
         "source": "https://github.com/makroz/mk-director-laravel"
-    }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
 }

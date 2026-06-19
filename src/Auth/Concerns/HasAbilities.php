@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Mk\Director\Auth\Concerns;
 
+use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Support\Collection;
 use Mk\Director\Auth\Models\Ability;
+use Mk\Director\Auth\Services\AbilityResolver;
 
 /**
  * HasAbilities — relación many-to-many entre AuthUser y Ability.
@@ -25,14 +27,15 @@ use Mk\Director\Auth\Models\Ability;
  *  - `users.*`   matchea `users.edit`, `users.delete`, etc.
  *  - Match exacto en otro caso.
  *
- * Implementación de la relación:
- *  - `abilities()` devuelve la UNION vía rol + directo. La consulta
- *    se hace con subqueries en Laravel 13, no con joins, para evitar
- *    ambigüedades con columnas homónimas.
- *  - `directAbilities()` es la relación BelongsToMany directa
- *    contra `ability_user`. El consumer debe publicar esa migración
- *    si quiere grants directos. Si no existe, `canMk` funciona
- *    solo con abilities-vía-rol.
+ * Implementación:
+ *  - `canMk()` delega al {@see AbilityResolver} singleton para
+ *    cache por usuario + Sanctum short-circuit (R4-001). Cae al
+ *    path legacy inline si no hay container binded (unit tests).
+ *  - Las mutaciones (`giveAbilityTo`, `revokeAbilityTo`,
+ *    `syncDirectAbilities`) invalidan la cache del resolver.
+ *  - Las mutaciones de roles (en HasRoles::assignRole/removeRole/
+ *    syncRoles) también invalidan — los abilities derivados de
+ *    roles dependen de la membresía.
  */
 trait HasAbilities
 {
@@ -87,27 +90,23 @@ trait HasAbilities
     /**
      * ¿El usuario tiene la ability (directa o vía rol),
      * con soporte wildcard?
+     *
+     * Delegates to {@see AbilityResolver} so the result is cached per-user
+     * and a Sanctum token's `can()` short-circuits before any DB query
+     * (audit R4-001).
      */
     public function canMk(string $ability): bool
     {
-        $names = $this->collectAllAbilityNames();
+        $resolver = $this->abilityResolver();
 
-        if ($names->contains('*')) {
-            return true;
+        if ($resolver === null) {
+            // No container (e.g. unit test that did not boot Laravel):
+            // fall back to the legacy inline path so the trait remains
+            // usable in the narrow "no app" case.
+            return $this->canMkLegacy($ability);
         }
 
-        if ($names->contains($ability)) {
-            return true;
-        }
-
-        $segments = explode('.', $ability, 2);
-        $resource = $segments[0] ?? null;
-
-        if ($resource !== null && $resource !== '' && $names->contains($resource . '.*')) {
-            return true;
-        }
-
-        return false;
+        return $resolver->can($this, $ability);
     }
 
     /**
@@ -123,6 +122,8 @@ trait HasAbilities
         );
 
         $this->directAbilities()->syncWithoutDetaching([$abilityModel->id]);
+
+        $this->invalidateAbilityCache();
     }
 
     /**
@@ -138,6 +139,8 @@ trait HasAbilities
         }
 
         $this->directAbilities()->detach($abilityModel->id);
+
+        $this->invalidateAbilityCache();
     }
 
     /**
@@ -166,10 +169,42 @@ trait HasAbilities
         }
 
         $this->directAbilities()->sync($ids);
+
+        $this->invalidateAbilityCache();
+    }
+
+    /**
+     * Legacy inline implementation kept as a no-container fallback
+     * for unit tests that did not boot a Laravel app.
+     */
+    private function canMkLegacy(string $ability): bool
+    {
+        $names = $this->collectAllAbilityNames();
+
+        if ($names->contains('*')) {
+            return true;
+        }
+
+        if ($names->contains($ability)) {
+            return true;
+        }
+
+        $segments = explode('.', $ability, 2);
+        $resource = $segments[0] ?? null;
+
+        if ($resource !== null && $resource !== '' && $names->contains($resource . '.*')) {
+            return true;
+        }
+
+        return false;
     }
 
     /**
      * Recolecta los nombres de abilities (directos + vía rol) sin duplicar.
+     *
+     * Used as a fallback by canMk() when no AbilityResolver is bound
+     * (no container in the test). Resolver-bound callers should not use
+     * this directly — go through AbilityResolver::can() to get caching.
      */
     private function collectAllAbilityNames(): Collection
     {
@@ -193,6 +228,7 @@ trait HasAbilities
 
         // Path 2: abilities directos
         $fromDirect = collect();
+
         try {
             $fromDirect = $this->directAbilities()->pluck('abilities.name');
         } catch (\Throwable) {
@@ -201,5 +237,45 @@ trait HasAbilities
         }
 
         return $fromRoles->merge($fromDirect)->unique()->values();
+    }
+
+    /**
+     * Resolve the AbilityResolver from the container, or null if no
+     * container is available (unit tests that did not boot the app).
+     */
+    private function abilityResolver(): ?AbilityResolver
+    {
+        if (! function_exists('app')) {
+            return null;
+        }
+
+        try {
+            $app = app();
+        } catch (\Throwable) {
+            return null;
+        }
+
+        if (! $app->bound(AbilityResolver::class)) {
+            return null;
+        }
+
+        try {
+            return $app->make(AbilityResolver::class);
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * Drop the cached ability set so the next canMk() call re-reads
+     * from the source of truth. Called by every mutation path that
+     * changes the user's grants (direct + role-derived).
+     */
+    private function invalidateAbilityCache(): void
+    {
+        $resolver = $this->abilityResolver();
+        if ($resolver !== null && $this instanceof Authenticatable) {
+            $resolver->invalidate($this);
+        }
     }
 }

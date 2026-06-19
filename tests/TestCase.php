@@ -4,19 +4,23 @@ declare(strict_types=1);
 
 namespace Mk\Director\Tests;
 
-use PHPUnit\Framework\TestCase as BaseTestCase;
-
 /**
- * TestCase minimal del paquete mk-laravel.
+ * Backwards-compatible alias for {@see MkLaravelTestCase}.
  *
- * No extiende de `Illuminate\Foundation\Testing\TestCase` porque
- * el paquete es un library que NO incluye la app Laravel completa
- * (solo `illuminate/support`, `illuminate/database`, `illuminate/http`).
+ * Existing Unit tests reference `Mk\Director\Tests\TestCase` (the minimal
+ * PHPUnit base from v1.0.x). The 4R audit (R3-009, R3-010, R3-011) flagged
+ * 6 Unit tests as failing because that base did not boot a Container, so
+ * calls to `config()`, `app()`, `Schema::shouldReceive()`, etc. all threw
+ * `BindingResolutionException`.
  *
- * Los Feature tests con app Laravel real viven en
- * `apps/sandbox-laravel/tests/`. Acá los Unit tests son puros
- * o usan Mockery para aislar dependencias.
+ * We keep `TestCase` as a thin alias that extends `MkLaravelTestCase` so
+ * every existing `uses(\Mk\Director\Tests\TestCase::class)` call now gets
+ * the booted Container for free. New tests should use
+ * `uses(\Mk\Director\Tests\MkLaravelTestCase::class)` directly to make the
+ * dependency on a Laravel-aware boot explicit.
+ *
+ * @see audit-2026-06-17-R3-009, audit-2026-06-17-R3-010, audit-2026-06-17-R3-011
  */
-abstract class TestCase extends BaseTestCase
+abstract class TestCase extends MkLaravelTestCase
 {
 }

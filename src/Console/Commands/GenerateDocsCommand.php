@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Mk\Director\Console\Commands;
 
 use Illuminate\Console\Command;
@@ -38,8 +40,13 @@ class GenerateDocsCommand extends Command
         if (!File::exists($directory)) {
             File::makeDirectory($directory, 0755, true);
         }
-        
+
         File::put($outputPath, json_encode($spec, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+        // R4-005: invalidate the in-memory cache so the next request to
+        // /mk/openapi.json picks up the freshly generated spec instead
+        // of serving the previous TTL window.
+        \Illuminate\Support\Facades\Cache::forget(\Mk\Director\Controllers\OpenApiController::CACHE_KEY);
 
         $this->info("✅ Documentación B2B OpenAPI 3.x forjada con éxito en: {$outputPath}");
 

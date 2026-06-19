@@ -1,17 +1,19 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Mk\Director\Middleware;
 
 use Closure;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Mk\Director\Utils\MkResponse;
 
 /**
  * MkAuthMiddleware
  * 
  * Middleware base para la autenticación en MK-Director.
- * Retorna respuestas estandarizadas usando MkResponse si no hay sesión.
+ * Retorna respuestas JSON nativas de Laravel si no hay sesión activa.
  */
 class MkAuthMiddleware
 {
@@ -36,7 +38,11 @@ class MkAuthMiddleware
 
         // Si es una petición API o espera JSON, retornar formato estándar MK-API
         if ($request->expectsJson() || $request->is('api/*')) {
-            return MkResponse::error('Unauthenticated.', 401, 'ERR_UNAUTHENTICATED');
+            return new JsonResponse([
+                'success' => false,
+                'message' => 'Unauthenticated.',
+                'code'    => 'ERR_UNAUTHENTICATED'
+            ], 401);
         }
 
         // De lo contrario redirigir al login (configurable por aplicación)

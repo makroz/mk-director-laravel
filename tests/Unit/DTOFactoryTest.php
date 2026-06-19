@@ -1,4 +1,6 @@
 <?php
+declare(strict_types=1);
+
 
 namespace Mk\Director\Tests\Unit;
 
@@ -118,7 +120,44 @@ test('MkDTO handles readonly property hydration without re-assigning initialized
     expect($dto->name)->toBe('John');
 });
 
-test('MkDTO::detectEnums resolves namespace dynamically based on model namespace', function () {
-    $enums = MkDTO::detectEnums(DTOStubModel::class);
-    expect($enums)->toBeArray();
+test('MkDTO::detectEnums and DTOFactory::detectEnums find sibling Enums', function () {
+    $tmpDir = sys_get_temp_dir() . '/mk-enum-detect-' . getmypid();
+    $modelsDir = $tmpDir . '/Models';
+    $enumsDir = $tmpDir . '/Enums';
+    
+    mkdir($modelsDir, 0o755, true);
+    mkdir($enumsDir, 0o755, true);
+    
+    $modelFileContent = <<<'PHP'
+<?php
+namespace Mk\Director\Tests\Unit\Temp\Models;
+class DummyModel extends \Illuminate\Database\Eloquent\Model {}
+PHP;
+    file_put_contents($modelsDir . '/DummyModel.php', $modelFileContent);
+    require_once $modelsDir . '/DummyModel.php';
+    
+    $enumFileContent = <<<'PHP'
+<?php
+namespace Mk\Director\Tests\Unit\Temp\Enums;
+enum DummyStatusEnum: string {
+    case ACTIVE = 'active';
+}
+PHP;
+    file_put_contents($enumsDir . '/DummyStatusEnum.php', $enumFileContent);
+    require_once $enumsDir . '/DummyStatusEnum.php';
+    
+    $modelClass = 'Mk\Director\Tests\Unit\Temp\Models\DummyModel';
+    $enums1 = MkDTO::detectEnums($modelClass);
+    $enums2 = DTOFactory::detectEnums($modelClass);
+    
+    expect($enums1)->toBeArray();
+    expect($enums1)->toHaveKey('dummy_status');
+    expect($enums1['dummy_status'])->toBe('Mk\Director\Tests\Unit\Temp\Enums\DummyStatusEnum');
+    expect($enums1)->toBe($enums2);
+    
+    unlink($modelsDir . '/DummyModel.php');
+    unlink($enumsDir . '/DummyStatusEnum.php');
+    rmdir($modelsDir);
+    rmdir($enumsDir);
+    rmdir($tmpDir);
 });

@@ -101,26 +101,26 @@ final class LintBoundariesCommand extends Command
     private function phpFiles(string $dir): iterable
     {
         $finder = new Finder();
-        $finder->files()->in($dir)->name('*.php');
+        $finder->files()->in($dir)->name('*.php')->exclude('Tests');
         foreach ($finder as $file) {
             yield $file->getPathname();
         }
     }
 
     /**
-     * Extract fully-qualified class names from `use` statements.
+     * Extract fully-qualified class names starting with App\Modules from code body and use statements.
      *
      * @return list<string>
      */
     private function extractUseStatements(string $src): array
     {
         $out = [];
-        if (preg_match_all('/^use\s+([A-Za-z_][\w\\\\]*)\s*;/m', $src, $matches)) {
+        if (preg_match_all('/(?<![a-zA-Z0-9_\\\\])\\\\?(App\\\\Modules\\\\[A-Za-z0-9_]+(?:\\\\[A-Za-z0-9_]+)*)/', $src, $matches)) {
             foreach ($matches[1] as $m) {
                 $out[] = $m;
             }
         }
-        return $out;
+        return array_unique($out);
     }
 
     private function extractTargetModule(string $fqcn): ?string

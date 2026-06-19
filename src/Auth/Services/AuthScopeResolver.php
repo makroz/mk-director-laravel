@@ -34,7 +34,7 @@ class AuthScopeResolver
      */
     public function resolve(string $expectedScope): ?Authenticatable
     {
-        $user = Auth::user();
+        $user = Auth::guard($expectedScope)->user();
 
         if (! $user instanceof Authenticatable) {
             $this->logMismatch($expectedScope, null, 'no_user');
