@@ -175,28 +175,46 @@ class DTOFactory
         return $decoded;
     }
 
-    /**
-     * Obtener mapa de enums desde el modelo (detección automática)
-     */
     public static function detectEnums(string $modelClass): array
     {
         $enums = [];
         
-        // Buscar en la carpeta del modelo los enums relacionados
-        $modelDir = dirname((new \ReflectionClass($modelClass))->getFileName());
-        $modelName = (new \ReflectionClass($modelClass))->getShortName();
+        $reflection = new \ReflectionClass($modelClass);
+        $modelDir = dirname($reflection->getFileName());
+        $modelNamespace = $reflection->getNamespaceName();
 
-        // Buscar archivos Enum en el mismo directorio
-        $enumFiles = glob($modelDir . '/*Enum.php');
+        // Resolve the enum namespace from the model's own namespace, not hardcoded App\Modules\.
+        // e.g. App\Modules\Survey\Models\SurveyModel → App\Modules\Survey\Enums\
+        $enumNamespace  = preg_replace('/\\\\Models$/', '\\Enums', $modelNamespace)
+            ?: $modelNamespace . '\\Enums';
+
+        if (function_exists('config')) {
+            try {
+                if ($resolver = config('mk_director.enum_namespace_resolver')) {
+                    $enumNamespace = $resolver($modelClass, $modelNamespace);
+                }
+            } catch (\Throwable $e) {
+                // Ignore container/binding resolution errors in bare unit tests
+            }
+        }
+
+        $enumDir = dirname($modelDir) . '/Enums';
+        $enumFiles = glob($enumDir . '/*Enum.php') ?: [];
         
         foreach ($enumFiles as $file) {
             $className = basename($file, '.php');
             
-            // Mapear: SurveyStatus -> status, SurveyFilter -> filter
-            $fieldName = strtolower(preg_replace('/([A-Z])/', '_$1', str_replace('Enum', '', $className)));
-            $fieldName = trim($fieldName, '_');
+            // Mapear: SurveyStatusEnum -> status
+            $fieldName = ltrim(
+                strtolower(preg_replace('/([A-Z])/', '_$1', str_replace('Enum', '', $className))),
+                '_'
+            );
 
-            $enums[$fieldName] = "App\\Modules\\" . str_replace('Model', '', $modelName) . "\\Enums\\" . $className;
+            $fqcn = $enumNamespace . '\\' . $className;
+
+            if (class_exists($fqcn) || interface_exists($fqcn)) {
+                $enums[$fieldName] = $fqcn;
+            }
         }
 
         return $enums;
