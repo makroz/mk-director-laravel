@@ -104,10 +104,11 @@ class MkUpdateCommand extends Command
     protected function getLatestVersion(): string
     {
         try {
-            $response = Http::timeout(5)->get('https://packagist.org/packages/makroz/director-laravel.json');
+            $response = Http::timeout(5)->get('https://repo.packagist.org/p2/makroz/director-laravel.json');
             if ($response->successful()) {
                 $data = $response->json();
-                $versions = array_keys($data['package']['versions'] ?? []);
+                $items = $data['packages']['makroz/director-laravel'] ?? [];
+                $versions = array_column($items, 'version');
                 return $this->getLatestStableVersion($versions);
             }
         } catch (\Throwable) {
