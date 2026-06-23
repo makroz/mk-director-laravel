@@ -42,7 +42,7 @@ test('MkUpdateCommand implements dynamic version retrieval and composer update',
 
     // Live Packagist API check
     expect($source)->toContain('use Illuminate\Support\Facades\Http;');
-    expect($source)->toContain('https://packagist.org/packages/makroz/director-laravel.json');
+    expect($source)->toContain('https://repo.packagist.org/p2/makroz/director-laravel.json');
     expect($source)->toContain('function getLatestVersion(');
     expect($source)->toContain('function getLatestStableVersion(');
 
