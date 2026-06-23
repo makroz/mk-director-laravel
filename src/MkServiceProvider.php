@@ -65,6 +65,7 @@ class MkServiceProvider extends ServiceProvider
                 \Mk\Director\Console\Commands\GenerateDocsCommand::class,
                 \Mk\Director\Console\Commands\LintBoundariesCommand::class,
                 \Mk\Director\Console\Commands\SecurityLintCommand::class,
+                \Mk\Director\Console\Commands\MkUpdateCommand::class,
             ]);
         }
 
