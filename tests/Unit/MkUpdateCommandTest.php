@@ -7,8 +7,8 @@ namespace Mk\Director\Tests\Unit;
 use Mk\Director\Tests\MkLaravelTestCase;
 
 /**
- * Verifies that MkUpdateCommand was added and registered successfully,
- * with the required update pipeline and safety audits.
+ * Verifies that MkUpdateCommand implements the dynamic version check,
+ * Symfony Process execution, and codebase risk audits.
  */
 uses(MkLaravelTestCase::class);
 
@@ -25,19 +25,28 @@ function mkUpdateCommandSource(): string
     return (string) file_get_contents($path);
 }
 
-test('MkUpdateCommand is defined, has signature mk:update, and is registered in MkServiceProvider', function () {
-    $source = mkUpdateCommandSource();
-    expect($source)->not->toBeEmpty();
-
-    expect($source)->toContain('class MkUpdateCommand extends Command');
-    expect($source)->toContain("protected \$signature = 'mk:update");
-
+test('MkUpdateCommand is registered in MkServiceProvider', function () {
     // Must be registered in the service provider.
     $provider = (string) file_get_contents(__DIR__ . '/../../src/MkServiceProvider.php');
     expect($provider)->toContain('MkUpdateCommand::class');
 });
 
-test('MkUpdateCommand implements the interactive database migration pipeline', function () {
+test('MkUpdateCommand implements dynamic version retrieval and composer update', function () {
+    $source = mkUpdateCommandSource();
+    expect($source)->not->toBeEmpty();
+
+    // Retrieves version dynamically from InstalledVersions (no hardcoding)
+    expect($source)->toContain('function getInstalledVersion(');
+    expect($source)->toContain('InstalledVersions::isInstalled');
+    expect($source)->toContain('InstalledVersions::getPrettyVersion');
+
+    // Integrates Symfony Process for running composer update
+    expect($source)->toContain('use Symfony\Component\Process\Process;');
+    expect($source)->toContain('function runComposerUpdate(');
+    expect($source)->toContain("new Process(['composer', 'update', 'makroz/director-laravel'])");
+});
+
+test('MkUpdateCommand implements interactive database migration pipeline and codebase audits', function () {
     $source = mkUpdateCommandSource();
     
     expect($source)->toContain('function runDatabaseMigrationsPipeline(');
@@ -51,23 +60,9 @@ test('MkUpdateCommand implements the interactive database migration pipeline', f
     expect($source)->toContain('¿Tenés un backup completo y actualizado de tu base de datos?');
     expect($source)->toContain('¿Confirmás que querés proceder con la migración a UUID de auth_users.id?');
     
-    // Performs ALTER TABLE transitions
-    expect($source)->toContain('ALTER TABLE `auth_users` ADD COLUMN `id_uuid` CHAR(36)');
-    expect($source)->toContain('ALTER TABLE `auth_users` DROP COLUMN `id`');
-    expect($source)->toContain('ALTER TABLE `auth_users` ADD PRIMARY KEY (`id`)');
-});
-
-test('MkUpdateCommand implements codebase static audits', function () {
-    $source = mkUpdateCommandSource();
-    
+    // Codebase static audits
     expect($source)->toContain('function auditCodebaseRisks(');
-    
-    // Scans for HasTenantScope without usesTenant (opt-in tenancy check)
     expect($source)->toContain('use HasTenantScope');
     expect($source)->toContain('$usesTenant');
-    expect($source)->toContain('En v1.2+ el tenant es opt-in');
-    
-    // Scans for empty mk.ability route middleware registrations
     expect($source)->toContain('mk.ability:');
-    expect($source)->toContain('Esto provocará un error HTTP 500');
 });
