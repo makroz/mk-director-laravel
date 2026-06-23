@@ -40,10 +40,20 @@ test('MkUpdateCommand implements dynamic version retrieval and composer update',
     expect($source)->toContain('InstalledVersions::isInstalled');
     expect($source)->toContain('InstalledVersions::getPrettyVersion');
 
+    // Live Packagist API check
+    expect($source)->toContain('use Illuminate\Support\Facades\Http;');
+    expect($source)->toContain('https://packagist.org/packages/makroz/director-laravel.json');
+    expect($source)->toContain('function getLatestVersion(');
+    expect($source)->toContain('function getLatestStableVersion(');
+
     // Integrates Symfony Process for running composer update
     expect($source)->toContain('use Symfony\Component\Process\Process;');
     expect($source)->toContain('function runComposerUpdate(');
     expect($source)->toContain("new Process(['composer', 'update', 'makroz/director-laravel'])");
+
+    // Warning about composer cache / CDN
+    expect($source)->toContain('composer clear-cache');
+    expect($source)->toContain('sigue siendo menor que la última disponible');
 });
 
 test('MkUpdateCommand implements interactive database migration pipeline and codebase audits', function () {

@@ -8,6 +8,7 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Http;
 use Composer\InstalledVersions;
 use Symfony\Component\Process\Process;
 
@@ -35,14 +36,18 @@ class MkUpdateCommand extends Command
         $this->info("\n🚀 Iniciando actualización interactiva de MK-Director...\n");
 
         $oldVersion = $this->getInstalledVersion();
-        $this->comment("Versión instalada actual: {$oldVersion}");
+        $latestVersion = $this->getLatestVersion();
+
+        $this->line("Tu versión actual es: {$oldVersion} y la última disponible es: {$latestVersion}");
 
         if ($this->option('dry-run')) {
-            $this->comment("[Simulación] Se buscarían actualizaciones en Packagist.");
+            $this->comment("\n[Simulación] Se omitirá la descarga e instalación.");
         } else {
-            if ($this->confirm('¿Querés buscar actualizaciones y actualizar el paquete makroz/director-laravel a la última versión estable?', true)) {
-                $this->runComposerUpdate();
+            if (!$this->confirm('¿Querés actualizar?', true)) {
+                $this->comment("Actualización cancelada por el usuario.");
+                return 0;
             }
+            $this->runComposerUpdate();
         }
 
         // Re-read installed version after possible update
@@ -52,6 +57,11 @@ class MkUpdateCommand extends Command
             $this->info("📈 Transición de versión: {$oldVersion} -> {$newVersion}");
         } else {
             $this->info("✅ Versión del paquete: {$newVersion} (sin cambios).");
+            if ($latestVersion !== 'unknown' && version_compare(ltrim($newVersion, 'v'), ltrim($latestVersion, 'v'), '<')) {
+                $this->warn("⚠️  ADVERTENCIA: La versión instalada ({$newVersion}) sigue siendo menor que la última disponible ({$latestVersion}).");
+                $this->warn("Esto puede deberse a la caché de Composer o CDN.");
+                $this->comment("Sugerencia: Ejecutá 'composer clear-cache' y volvé a correr 'php artisan mk:update'.");
+            }
         }
 
         // 1. Verificar base de datos y correr migraciones evolutivas
@@ -86,6 +96,49 @@ class MkUpdateCommand extends Command
             // fallback
         }
         return 'unknown';
+    }
+
+    /**
+     * Obtiene la última versión estable desde el API de Packagist.
+     */
+    protected function getLatestVersion(): string
+    {
+        try {
+            $response = Http::timeout(5)->get('https://packagist.org/packages/makroz/director-laravel.json');
+            if ($response->successful()) {
+                $data = $response->json();
+                $versions = array_keys($data['package']['versions'] ?? []);
+                return $this->getLatestStableVersion($versions);
+            }
+        } catch (\Throwable) {
+            // silent fallback
+        }
+        return 'unknown';
+    }
+
+    /**
+     * Filtra la lista de versiones para encontrar la versión estable más alta.
+     */
+    protected function getLatestStableVersion(array $versions): string
+    {
+        $stableVersions = [];
+        foreach ($versions as $version) {
+            if (preg_match('/^v?\d+\.\d+\.\d+$/', $version)) {
+                $stableVersions[] = $version;
+            }
+        }
+
+        if (empty($stableVersions)) {
+            return 'unknown';
+        }
+
+        usort($stableVersions, function ($a, $b) {
+            $normA = ltrim($a, 'v');
+            $normB = ltrim($b, 'v');
+            return version_compare($normA, $normB);
+        });
+
+        return end($stableVersions);
     }
 
     /**
