@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Composer\InstalledVersions;
+use Symfony\Component\Process\Process;
 
 class MkUpdateCommand extends Command
 {
@@ -33,16 +34,25 @@ class MkUpdateCommand extends Command
     {
         $this->info("\n🚀 Iniciando actualización interactiva de MK-Director...\n");
 
-        $installedVersion = 'unknown';
-        try {
-            if (class_exists(InstalledVersions::class) && InstalledVersions::isInstalled('makroz/director-laravel')) {
-                $installedVersion = InstalledVersions::getPrettyVersion('makroz/director-laravel');
+        $oldVersion = $this->getInstalledVersion();
+        $this->comment("Versión instalada actual: {$oldVersion}");
+
+        if ($this->option('dry-run')) {
+            $this->comment("[Simulación] Se buscarían actualizaciones en Packagist.");
+        } else {
+            if ($this->confirm('¿Querés buscar actualizaciones y actualizar el paquete makroz/director-laravel a la última versión estable?', true)) {
+                $this->runComposerUpdate();
             }
-        } catch (\Throwable) {
-            // fallback
         }
 
-        $this->comment("Versión instalada del paquete: {$installedVersion}");
+        // Re-read installed version after possible update
+        $newVersion = $this->getInstalledVersion();
+        
+        if ($oldVersion !== $newVersion && $newVersion !== 'unknown' && $oldVersion !== 'unknown') {
+            $this->info("📈 Transición de versión: {$oldVersion} -> {$newVersion}");
+        } else {
+            $this->info("✅ Versión del paquete: {$newVersion} (sin cambios).");
+        }
 
         // 1. Verificar base de datos y correr migraciones evolutivas
         $this->runDatabaseMigrationsPipeline();
@@ -61,6 +71,55 @@ class MkUpdateCommand extends Command
         $this->call('mk:status');
 
         $this->info("🏁 Proceso de actualización finalizado.\n");
+    }
+
+    /**
+     * Devuelve la versión instalada actualmente leyendo los metadatos de Composer.
+     */
+    protected function getInstalledVersion(): string
+    {
+        try {
+            if (class_exists(InstalledVersions::class) && InstalledVersions::isInstalled('makroz/director-laravel')) {
+                return InstalledVersions::getPrettyVersion('makroz/director-laravel');
+            }
+        } catch (\Throwable) {
+            // fallback
+        }
+        return 'unknown';
+    }
+
+    /**
+     * Ejecuta el comando composer update en segundo plano.
+     */
+    protected function runComposerUpdate()
+    {
+        $this->comment("Ejecutando 'composer update makroz/director-laravel'...");
+
+        try {
+            // Usamos Symfony Process nativo en Laravel/Illuminate
+            $process = new Process(['composer', 'update', 'makroz/director-laravel']);
+            $process->setTimeout(300); // 5 minutos de tiempo de espera
+            
+            $process->start();
+
+            $this->output->write('Descargando y actualizando dependencias... ');
+            while ($process->isRunning()) {
+                $this->output->write('.');
+                usleep(1000000); // esperar 1 segundo
+            }
+            $this->line('');
+
+            if ($process->isSuccessful()) {
+                $this->info("✅ Composer se ejecutó correctamente.");
+            } else {
+                $this->error("❌ Error al ejecutar composer update:");
+                $this->line($process->getErrorOutput());
+                $this->line($process->getOutput());
+            }
+        } catch (\Throwable $e) {
+            $this->error("❌ No se pudo ejecutar composer de forma automática: " . $e->getMessage());
+            $this->comment("Por favor, corre 'composer update makroz/director-laravel' manualmente en tu terminal.");
+        }
     }
 
     /**
@@ -137,7 +196,6 @@ class MkUpdateCommand extends Command
                 $connection->statement("UPDATE `auth_users` SET `id_uuid` = {$uuidExpr} WHERE `id_uuid` IS NULL");
 
                 // Paso 3: Dropear la clave primaria anterior y columna
-                // NOTA: Algunos drivers requieren dropear la primary key primero explícitamente.
                 if ($driver === 'mysql') {
                     $connection->statement("ALTER TABLE `auth_users` DROP PRIMARY KEY");
                 }
@@ -273,6 +331,7 @@ class MkUpdateCommand extends Command
         }
 
         if ($driver === 'sqlite') {
+            $connection = DB::connection();
             $rows = $connection->select("PRAGMA table_info({$table})");
             foreach ($rows as $row) {
                 $row = (array) $row;
