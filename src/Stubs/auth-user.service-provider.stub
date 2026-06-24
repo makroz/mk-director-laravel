@@ -1,0 +1,36 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Providers;
+
+use Illuminate\Support\ServiceProvider;
+
+/**
+ * ServiceProvider del scope `{{moduleNameLower}}` — generado por
+ * `php artisan mk:make:auth-user {{ModuleName}}`.
+ *
+ * Responsabilidades:
+ *   1. Cargar las rutas del scope (`/api/{{moduleNameLower}}/auth/*`)
+ *   2. Cargar las migraciones del scope (incluye la tabla `{{moduleNamePluralLower}}`
+ *      y `{{moduleNameLower}}_password_reset_tokens`)
+ *
+ * El módulo se auto-registra en `bootstrap/providers.php`
+ * (Laravel 11+) o en `config/app.php` (Laravel 10).
+ */
+class {{ModuleName}}ServiceProvider extends ServiceProvider
+{
+    public function register(): void
+    {
+        //
+    }
+
+    public function boot(): void
+    {
+        $this->loadRoutesFrom(__DIR__ . '/../Http/Routes/api.php');
+
+        if (is_dir(__DIR__ . '/../Database/Migrations')) {
+            $this->loadMigrationsFrom(__DIR__ . '/../Database/Migrations');
+        }
+    }
+}

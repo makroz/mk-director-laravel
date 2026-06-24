@@ -1,0 +1,140 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Http\Controllers;
+
+use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Routing\Controller;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\ValidationException;
+
+/**
+ * AuthController del scope `{{moduleNameLower}}`.
+ *
+ * Skeleton con la forma del flow MK-Director. Los métodos login / refresh
+ * / forgot / reset son TODO — la implementación real vive en el consumer
+ * (suele usar Mk\Director\Auth\Services\TokenIssuer para emitir pares
+ * access+refresh con la ability `auth_scope: {{moduleNameLower}}`).
+ *
+ * Endpoints (públicos salvo que se indique):
+ *   POST   /api/{{moduleNameLower}}/auth/login    — email + password → tokens
+ *   POST   /api/{{moduleNameLower}}/auth/refresh  — refresh_token → access_token
+ *   POST   /api/{{moduleNameLower}}/auth/forgot   — enviar email de reset
+ *   POST   /api/{{moduleNameLower}}/auth/reset    — reset con token
+ *   POST   /api/{{moduleNameLower}}/auth/logout   — revoca access (auth:{{moduleNameLower}})
+ *   GET    /api/{{moduleNameLower}}/auth/me       — usuario actual (auth:{{moduleNameLower}})
+ *
+ * Rutas generadas en `app/Modules/{{ModuleName}}/Http/Routes/api.php`.
+ */
+class AuthController extends Controller
+{
+    /**
+     * POST /api/{{moduleNameLower}}/auth/login
+     *
+     * TODO: Reemplazar con TokenIssuer::issue($user, '{{moduleNameLower}}')
+     * para emitir access_token (15 min) + refresh_token (7 días) con la
+     * ability `auth_scope: {{moduleNameLower}}`. Ver
+     * `Mk\Director\Auth\Services\TokenIssuer` en el paquete.
+     */
+    public function login(Request $request): JsonResponse
+    {
+        $credentials = $request->validate([
+            'email' => ['required', 'email'],
+            'password' => ['required', 'string'],
+        ]);
+
+        /** @var {{ModuleName}}|null $user */
+        $user = {{ModuleName}}::where('email', $credentials['email'])->first();
+
+        if (! $user || ! Hash::check($credentials['password'], $user->password)) {
+            throw ValidationException::withMessages([
+                'email' => ['Credenciales inválidas.'],
+            ]);
+        }
+
+        // Capa 1: el scope del token DEBE coincidir con el scope del user
+        // (Capa 3 AuthScopeResolver lo valida en cada request, pero acá
+        // también cortamos por las dudas).
+        if ($user->getAuthScope() !== '{{moduleNameLower}}') {
+            throw ValidationException::withMessages([
+                'email' => ['Credenciales inválidas.'],
+            ]);
+        }
+
+        // TODO: Reemplazar este bloque con el TokenIssuer oficial del paquete.
+        $accessToken = $user->createToken(
+            '{{moduleNameLower}}-access',
+            ['auth_scope' => '{{moduleNameLower}}'],
+            now()->addMinutes(15),
+        );
+
+        return response()->json([
+            'access_token' => $accessToken->plainTextToken,
+            'token_type' => 'Bearer',
+            '{{moduleNameLower}}' => $user->only(['id', 'name', 'email']),
+        ]);
+    }
+
+    /**
+     * POST /api/{{moduleNameLower}}/auth/refresh
+     *
+     * TODO: Validar refresh_token y emitir nuevo access_token manteniendo
+     * el mismo `auth_scope`. NO permitir escalación de scope vía refresh.
+     */
+    public function refresh(Request $request): JsonResponse
+    {
+        return response()->json([
+            'error' => 'not_implemented',
+            'hint' => 'Replace with TokenIssuer::refresh($refreshToken, "{{moduleNameLower}}")',
+        ], 501);
+    }
+
+    /**
+     * POST /api/{{moduleNameLower}}/auth/logout
+     * Revoca el access token actual. NO revoca otros tokens del mismo user.
+     */
+    public function logout(Request $request): JsonResponse
+    {
+        $request->user()->currentAccessToken()->delete();
+
+        return response()->json(['message' => 'Sesión cerrada.']);
+    }
+
+    /**
+     * GET /api/{{moduleNameLower}}/auth/me
+     */
+    public function me(Request $request): JsonResponse
+    {
+        return response()->json($request->user()->only(['id', 'name', 'email']));
+    }
+
+    /**
+     * POST /api/{{moduleNameLower}}/auth/forgot
+     *
+     * TODO: Generar token, persistir en `{{moduleNameLower}}_password_reset_tokens`,
+     * enviar email con link al frontend (configurar queue / mail).
+     */
+    public function forgot(Request $request): JsonResponse
+    {
+        return response()->json([
+            'message' => 'Si el email existe, recibirás un enlace para reset.',
+        ]);
+    }
+
+    /**
+     * POST /api/{{moduleNameLower}}/auth/reset
+     *
+     * TODO: Validar token + nueva contraseña, hashear, actualizar,
+     * invalidar tokens activos del user.
+     */
+    public function reset(Request $request): JsonResponse
+    {
+        return response()->json([
+            'error' => 'not_implemented',
+            'hint' => 'Validate token from {{moduleNameLower}}_password_reset_tokens and update user password',
+        ], 501);
+    }
+}

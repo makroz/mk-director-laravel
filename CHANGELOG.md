@@ -5,6 +5,53 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`php artisan mk:make:auth-user {Scope}`** — scaffolder de un scope de
+  autenticación MK completo. Cierra el gap entre la doc
+  (`docs/guides/AUTH.md` § "Generating a new scope") y el código: el
+  comando se documentaba desde 1.0.0 pero no existía en `src/`.
+  Genera: `Models/{Scope}.php` (extends `AuthUser` con
+  `setAuthScope` en constructor), migration con `auth_scope` indexado,
+  `Http/Controllers/AuthController.php` (login/refresh/logout/me/forgot/reset
+  como skeleton con TODOs), `Http/Routes/api.php` con
+  `prefix('api/{scope}/auth')` + `mk.auth:{scope}` middleware, y
+  `{Scope}ServiceProvider` auto-registrado en `bootstrap/providers.php`
+  (Laravel 11+) o `config/app.php` (Laravel 10).
+  El command **NO** modifica `config/auth.php` del consumer (decisión
+  consciente, least surprise): imprime los snippets a agregar
+  (guard + provider).
+  Stubs: `src/Stubs/auth-user.{model,migration,auth-controller,routes,service-provider}.stub`.
+  Spec: MK-LAR-1.0.2 / MK-LAR-1.0.6.
+  Diff: `src/Console/Commands/MakeAuthUserCommand.php` (nuevo, 256 líneas).
+  Tests: `tests/Unit/Console/MakeAuthUserCommandTest.php` (10 casos),
+  `tests/Unit/MakeAuthUserCommandRegisteredTest.php` (2 casos).
+
+### Fixed (R-NEW-001 compliant)
+
+- **`config/mk_director.php` `auth` block ya no rompe DDD.**
+  Antes:
+  - `'user_model' => \App\Models\User::class` — hardcodeaba el modelo
+    default de Laravel, que rompe MME (los modelos viven en
+    `App\Modules\<Scope>\Models\<Scope>`, no en `App\Models\*`).
+  - `'default_user_type' => env('MK_AUTH_DEFAULT_USER_TYPE', 'App\\Modules\\Admin\\Models\\Admin')` —
+    asumía que el consumer tiene un módulo Admin, lo que rompe DDD
+    (el paquete no debe conocer los módulos del consumer).
+  Después: ambos leen de `env(...)` con default `null`. El consumer los
+  define en su propio `config/mk_director.php` publicado, después de
+  generar un scope con `mk:make:auth-user {Scope}`.
+  Diff: `config/mk_director.php`.
+  Test: `tests/Unit/MkDirectorConfigDefaultsTest.php` (4 casos).
+
+### Docs
+
+- The `auth` block del config ya no se etiqueta como `Experimental` —
+  el command existe, la migración `auth_users` está consolidada, y
+  `AUTH.md` documenta el flujo. El paquete deja de marcarse a sí
+  mismo como experimental.
+
 ## [1.2.2-rc1] - 2026-06-18
 
 Hardening sprint on top of `1.2.0-rc1`. Closes 6 of the 35 Medium/Low

@@ -4,36 +4,52 @@ declare(strict_types=1);
 
 namespace Mk\Director;
 
-use Illuminate\Support\ServiceProvider;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Route;
+use Illuminate\Support\ServiceProvider;
+use Mk\Director\Auth\AuthServiceProvider;
+use Mk\Director\Console\Commands\GenerateDocsCommand;
+use Mk\Director\Console\Commands\LintBoundariesCommand;
+use Mk\Director\Console\Commands\MakeAuthUserCommand;
+use Mk\Director\Console\Commands\MakeDTOCommand;
+use Mk\Director\Console\Commands\MakeModuleCommand;
+use Mk\Director\Console\Commands\MakeServiceCommand;
+use Mk\Director\Console\Commands\MkCheckCommand;
+use Mk\Director\Console\Commands\MkUpdateCommand;
+use Mk\Director\Console\Commands\SecurityLintCommand;
+use Mk\Director\Controllers\OpenApiController;
+use Mk\Director\Managers\PluginManager;
+use Mk\Director\Tenancy\TenantContext;
+use Mk\Director\Tenancy\TenantResolver;
 
 class MkServiceProvider extends ServiceProvider
 {
     public function register()
     {
-        $this->mergeConfigFrom(__DIR__ . '/../config/mk_director.php', 'mk_director');
+        $this->mergeConfigFrom(__DIR__.'/../config/mk_director.php', 'mk_director');
 
         // MK-Director Plugin Manager
-        $this->app->singleton(\Mk\Director\Managers\PluginManager::class, function ($app) {
-            return new \Mk\Director\Managers\PluginManager();
+        $this->app->singleton(PluginManager::class, function ($app) {
+            return new PluginManager;
         });
 
         // Auth subsystem (Mk\Director\Auth\AuthServiceProvider)
-        $this->app->register(\Mk\Director\Auth\AuthServiceProvider::class);
+        $this->app->register(AuthServiceProvider::class);
 
         // Tenancy subsystem — opt-in. The TenantContext is a
         // singleton so the same instance is shared by the
         // middleware (writer) and the trait (reader).
-        $this->app->singleton(\Mk\Director\Tenancy\TenantContext::class);
+        $this->app->singleton(TenantContext::class);
     }
 
     public function boot()
     {
         // Load the package's Auth migrations so the abilities / roles /
         // admins tables are available to every project.
-        $this->loadMigrationsFrom(__DIR__ . '/Auth/Database/Migrations');
+        $this->loadMigrationsFrom(__DIR__.'/Auth/Database/Migrations');
 
         $this->registerTenantMiddleware();
 
@@ -44,8 +60,8 @@ class MkServiceProvider extends ServiceProvider
         // a buggy TenantContext cannot break the response pipeline.
         $this->app->terminating(function () {
             try {
-                if ($this->app->resolved(\Mk\Director\Tenancy\TenantContext::class)) {
-                    $this->app->make(\Mk\Director\Tenancy\TenantContext::class)->flush();
+                if ($this->app->resolved(TenantContext::class)) {
+                    $this->app->make(TenantContext::class)->flush();
                 }
             } catch (\Throwable) {
                 // ignore — never let a flush failure break the response
@@ -54,18 +70,19 @@ class MkServiceProvider extends ServiceProvider
 
         if ($this->app->runningInConsole()) {
             $this->publishes([
-                __DIR__ . '/../config/mk_director.php' => config_path('mk_director.php'),
+                __DIR__.'/../config/mk_director.php' => config_path('mk_director.php'),
             ], 'mk-config');
 
             $this->commands([
-                \Mk\Director\Console\Commands\MkCheckCommand::class,
-                \Mk\Director\Console\Commands\MakeModuleCommand::class,
-                \Mk\Director\Console\Commands\MakeServiceCommand::class,
-                \Mk\Director\Console\Commands\MakeDTOCommand::class,
-                \Mk\Director\Console\Commands\GenerateDocsCommand::class,
-                \Mk\Director\Console\Commands\LintBoundariesCommand::class,
-                \Mk\Director\Console\Commands\SecurityLintCommand::class,
-                \Mk\Director\Console\Commands\MkUpdateCommand::class,
+                MkCheckCommand::class,
+                MakeModuleCommand::class,
+                MakeServiceCommand::class,
+                MakeDTOCommand::class,
+                MakeAuthUserCommand::class,
+                GenerateDocsCommand::class,
+                LintBoundariesCommand::class,
+                SecurityLintCommand::class,
+                MkUpdateCommand::class,
             ]);
         }
 
@@ -85,9 +102,9 @@ class MkServiceProvider extends ServiceProvider
      */
     protected function registerTenantMiddleware(): void
     {
-        /** @var \Illuminate\Routing\Router $router */
+        /** @var Router $router */
         $router = $this->app['router'];
-        $router->pushMiddlewareToGroup('api', \Mk\Director\Tenancy\TenantResolver::class);
+        $router->pushMiddlewareToGroup('api', TenantResolver::class);
     }
 
     /**
@@ -96,9 +113,9 @@ class MkServiceProvider extends ServiceProvider
     protected function registerOpenApiRoutes()
     {
         // En un entorno de producción B2B se leería desde la config. Por defecto expuestos bajo /mk/
-        \Illuminate\Support\Facades\Route::group(['prefix' => 'mk'], function () {
-            \Illuminate\Support\Facades\Route::get('openapi.json', [\Mk\Director\Controllers\OpenApiController::class, 'spec'])->name('mk.openapi.spec');
-            \Illuminate\Support\Facades\Route::get('docs', [\Mk\Director\Controllers\OpenApiController::class, 'docs'])->name('mk.openapi.docs');
+        Route::group(['prefix' => 'mk'], function () {
+            Route::get('openapi.json', [OpenApiController::class, 'spec'])->name('mk.openapi.spec');
+            Route::get('docs', [OpenApiController::class, 'docs'])->name('mk.openapi.docs');
         });
     }
 
@@ -122,7 +139,7 @@ class MkServiceProvider extends ServiceProvider
      */
     protected function registerGlobalCacheListener()
     {
-        if (!config('mk_director.features.auto_cache', false)) {
+        if (! config('mk_director.features.auto_cache', false)) {
             return;
         }
 
@@ -151,7 +168,7 @@ class MkServiceProvider extends ServiceProvider
             // 2. Only act on writes (INSERT / UPDATE / DELETE).
             if (preg_match('/(update|delete|insert\s+into)\s+`?(\w+)`?/i', $query->sql, $matches)) {
                 $table = $matches[2];
-                Cache::tags([$table . '_all'])->flush();
+                Cache::tags([$table.'_all'])->flush();
 
                 if (config('mk_director.debug', false)) {
                     Log::info("MK-Director: Cache flushed for table [{$table}] due to write operation.");
