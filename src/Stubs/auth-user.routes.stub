@@ -14,7 +14,13 @@ use Illuminate\Support\Facades\Route;
  * docs/guides/AUTH.md § "The 4 defense layers against cross-scope mix-up").
  */
 
-Route::prefix('{{moduleNameLower}}/auth')->group(function () {
+// Prefix includes `api/` because Laravel 11+ `loadRoutesFrom` from a
+// ServiceProvider does NOT inherit the `apiPrefix` configured in
+// `bootstrap/app.php` — that only applies to the central `routes/api.php`.
+// Bug 1.3.0-003: the prefix used to be `{{moduleNameLower}}/auth`, which
+// produced `/admin/auth/login` while the AuthController docblock, the
+// command output, and CHANGELOG 1.3.0 all advertised `/api/admin/auth/login`.
+Route::prefix('api/{{moduleNameLower}}/auth')->group(function () {
     // ── Públicas ────────────────────────────────────────────────────
     Route::post('login', [AuthController::class, 'login']);
     Route::post('refresh', [AuthController::class, 'refresh']);
