@@ -40,23 +40,21 @@ Después de publicar la configuración (`php artisan vendor:publish --tag=mk-con
 
 ---
 
-## ⚡ 3. Creando un Módulo con `CRUDSmart`
+## ⚡ 3. Creando un Módulo con `SmartController`
 
-La forma más rápida de crear un CRUD completo es usar el trait `CRUDSmart` en tu controlador.
+La forma más rápida de crear un CRUD completo es extender `SmartController` y declarar la configuración del módulo en `$mkConfig`.
 
 ### Ejemplo de Controlador:
 ```php
 namespace App\Modules\Surveys\Controllers;
 
-use Mk\Director\Controllers\BaseController;
-use Mk\Director\Traits\CRUDSmart;
+use Mk\Director\Controllers\SmartController;
 use App\Modules\Surveys\Models\Survey;
 use App\Modules\Surveys\Services\SurveyService;
+use App\Modules\Surveys\Resources\SurveyResource;
 
-class SurveyController extends BaseController
+class SurveyController extends SmartController
 {
-    use CRUDSmart;
-
     protected array $mkConfig = [
         'model'      => Survey::class,      // Modelo Eloquent
         'service'    => SurveyService::class, // (Opcional) Lógica de negocio (hooks)
@@ -70,6 +68,8 @@ class SurveyController extends BaseController
     ];
 }
 ```
+
+> 💡 **Cómo funciona**: `SmartController` ya incluye el trait `CRUDSmart`, que lee `$mkConfig` y ejecuta el CRUD completo. Los plugins (`MkAuditLoggerPlugin`, `MkMultiTenantPlugin`) detectan automáticamente los `SmartController` y hookan el ciclo de vida (audit log, multi-tenancy) sin código extra. El scaffolder `mk:module` genera exactamente este esqueleto.
 
 ### 3.1 Parámetros Disponibles en `$mkConfig`
 
