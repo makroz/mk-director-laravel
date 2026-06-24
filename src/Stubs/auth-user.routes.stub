@@ -1,0 +1,29 @@
+<?php
+
+declare(strict_types=1);
+
+use App\Modules\{{ModuleName}}\Http\Controllers\AuthController;
+use Illuminate\Support\Facades\Route;
+
+/**
+ * Rutas del scope `{{moduleNameLower}}` — generadas por
+ * `php artisan mk:make:auth-user {{ModuleName}}`.
+ *
+ * Las rutas protegidas usan `mk.auth:{{moduleNameLower}}` (del paquete) que
+ * valida en 3 capas que el token pertenece al scope correcto (ver
+ * docs/guides/AUTH.md § "The 4 defense layers against cross-scope mix-up").
+ */
+
+Route::prefix('{{moduleNameLower}}/auth')->group(function () {
+    // ── Públicas ────────────────────────────────────────────────────
+    Route::post('login', [AuthController::class, 'login']);
+    Route::post('refresh', [AuthController::class, 'refresh']);
+    Route::post('forgot', [AuthController::class, 'forgot']);
+    Route::post('reset', [AuthController::class, 'reset']);
+
+    // ── Protegidas (auth: scope) ────────────────────────────────────
+    Route::middleware('mk.auth:{{moduleNameLower}}')->group(function () {
+        Route::post('logout', [AuthController::class, 'logout']);
+        Route::get('me', [AuthController::class, 'me']);
+    });
+});

@@ -1,0 +1,42 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Models;
+
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
+use Mk\Director\Auth\Models\AuthUser;
+
+/**
+ * {{ModuleName}} — modelo concreto de un scope de autenticación MK.
+ *
+ * Extiende {@see AuthUser} (abstract) y se ata al scope '{{moduleNameLower}}'.
+ * La capa 1 del modelo de seguridad es la columna `auth_scope` (Capa 1,
+ * ver docs/guides/AUTH.md § "The 4 defense layers against cross-scope mix-up").
+ *
+ * Cada scope concreto vive en su propio bounded context
+ * (App\Modules\{{ModuleName}}) — la MME rule (R-MK-001) prohíbe
+ * importar este modelo desde otros módulos. Si necesitás datos
+ * del {{ModuleName}} desde otro módulo, exponé una interface en
+ * `App\Modules\{{ModuleName}}\Api\` y consumila.
+ */
+class {{ModuleName}} extends AuthUser
+{
+    use HasUuids;
+
+    /**
+     * Tabla propia del scope. NO compartir con `auth_users` —
+     * cada scope es un bounded context con su propia tabla.
+     */
+    protected $table = '{{moduleNamePluralLower}}';
+
+    /**
+     * El scope se ata al instanciar el modelo. Esto garantiza que
+     * `getAuthScope()` nunca devuelva null (Capa 1: auth_scope indexado).
+     */
+    public function __construct(array $attributes = [])
+    {
+        parent::__construct($attributes);
+        $this->setAuthScope('{{moduleNameLower}}');
+    }
+}
