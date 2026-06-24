@@ -5,6 +5,49 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2] - 2026-06-24
+
+Documentation-only patch. No PHP code changes, no public API change, no
+behavior change. The package version is bumped to keep the convention
+that every tag in the changelog has a corresponding release.
+
+### Fixed
+
+- **`README.md` — "Magic CRUD Controller" reference was outdated.** The
+  feature list pointed at `Mk\Director\Controllers\Controller` (the
+  template-method base), but the actual "Magic CRUD" implementation is
+  `SmartController` (with the `CRUDSmart` trait). The feature is now
+  described accurately: declarative ABM via `extends SmartController`
+  + `$mkConfig`, with automatic plugin instrumentation.
+
+- **`DEVELOPER_GUIDE.md` §3 — example was using the manual pattern.**
+  The example showed `class SurveyController extends BaseController
+  { use CRUDSmart; ... }`, which works but is the verbose way (the
+  dev has to remember to add the trait manually). The modern,
+  scaffolder-generated way is `class SurveyController extends
+  SmartController` (the trait is already on the parent). The example
+  is now aligned with what `mk:module` actually generates and what
+  the `mk-director-laravel` skill documents.
+
+### Notes for consumers
+
+- Zero impact on existing projects. The `Controller` (template method)
+  and `BaseController` classes are still available; this PR only
+  modernizes the documentation examples.
+- The `mk-director-laravel` skill at
+  `.makromania/agency/skills/mk-director-laravel/SKILL.md` was
+  audited and was already correct (uses `SmartController`).
+- The mk-director monorepo guides
+  (`docs/MIGRATION_GUIDE.md`, `docs/API_REFERENCE_LARAVEL.md`,
+  `docs/guides/CREATE_MODULE.md`, `docs/guides/GETTING_STARTED.md`,
+  `docs/guides/AUTH.md`, `docs/guides/MULTI_TENANT.md`) were audited
+  and were already correct (no changes needed).
+
+### Test coverage
+
+- No new tests — these are documentation-only changes.
+- Defensive run of the full Pest suite: 267 passed, 0 failed.
+
 ## [1.3.1] - 2026-06-24
 
 Patch release. Fixes three real bugs in the `php artisan mk:make:auth-user {Scope}`

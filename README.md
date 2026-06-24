@@ -15,7 +15,7 @@ El motor de backend de MK-Director. Ofrece una capa de abstracción potente para
 
 - **Model & Builder**: Soporte nativo para `cacheGet()`, `cacheFirst()` y `cacheFind()`.
 - **Auto-Cache Plugin**: Flushing automático de tags de cache al detectar operaciones de escritura en la DB.
-- **Magic CRUD Controller**: Implementa un ABM completo heredando de `Mk\Director\Controllers\Controller`.
+- **Magic CRUD (SmartController)**: ABM declarativo extendiendo `Mk\Director\Controllers\SmartController` y configurando `$mkConfig`. Los plugins (`MkAuditLoggerPlugin`, `MkMultiTenantPlugin`) hookan automáticamente. El scaffolder `mk:module` lo genera por default.
 - **List & Search Managers**: Parsing de strings complejos para búsquedas relacionales y joins dinámicos.
 - **MME (MVC Modular Encapsulated)**: ModuleLoader auto-registra módulos, comunicación inter-módulo solo vía API pública.
 - **Auth + RBAC**: Sistema completo con abilities, roles, scopes y middleware `MkAbility`.
