@@ -18,6 +18,8 @@ use Mk\Director\Console\Commands\MakeDTOCommand;
 use Mk\Director\Console\Commands\MakeModuleCommand;
 use Mk\Director\Console\Commands\MakeServiceCommand;
 use Mk\Director\Console\Commands\MkCheckCommand;
+use Mk\Director\Console\Commands\MkSkillDeployCommand;
+use Mk\Director\Console\Commands\MkSkillListCommand;
 use Mk\Director\Console\Commands\MkUpdateCommand;
 use Mk\Director\Console\Commands\SecurityLintCommand;
 use Mk\Director\Controllers\OpenApiController;
@@ -83,6 +85,8 @@ class MkServiceProvider extends ServiceProvider
                 LintBoundariesCommand::class,
                 SecurityLintCommand::class,
                 MkUpdateCommand::class,
+                MkSkillListCommand::class,
+                MkSkillDeployCommand::class,
             ]);
         }
 

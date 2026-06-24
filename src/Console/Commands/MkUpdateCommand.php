@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace Mk\Director\Console\Commands;
 
+use Composer\InstalledVersions;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
-use Composer\InstalledVersions;
+use Illuminate\Support\Facades\Schema;
 use Symfony\Component\Process\Process;
 
 class MkUpdateCommand extends Command
@@ -43,8 +43,9 @@ class MkUpdateCommand extends Command
         if ($this->option('dry-run')) {
             $this->comment("\n[Simulación] Se omitirá la descarga e instalación.");
         } else {
-            if (!$this->confirm('¿Querés actualizar?', true)) {
-                $this->comment("Actualización cancelada por el usuario.");
+            if (! $this->confirm('¿Querés actualizar?', true)) {
+                $this->comment('Actualización cancelada por el usuario.');
+
                 return 0;
             }
             $this->runComposerUpdate();
@@ -52,14 +53,14 @@ class MkUpdateCommand extends Command
 
         // Re-read installed version after possible update
         $newVersion = $this->getInstalledVersion();
-        
+
         if ($oldVersion !== $newVersion && $newVersion !== 'unknown' && $oldVersion !== 'unknown') {
             $this->info("📈 Transición de versión: {$oldVersion} -> {$newVersion}");
         } else {
             $this->info("✅ Versión del paquete: {$newVersion} (sin cambios).");
             if ($latestVersion !== 'unknown' && version_compare(ltrim($newVersion, 'v'), ltrim($latestVersion, 'v'), '<')) {
                 $this->warn("⚠️  ADVERTENCIA: La versión instalada ({$newVersion}) sigue siendo menor que la última disponible ({$latestVersion}).");
-                $this->warn("Esto puede deberse a la caché de Composer o CDN.");
+                $this->warn('Esto puede deberse a la caché de Composer o CDN.');
                 $this->comment("Sugerencia: Ejecutá 'composer clear-cache' y volvé a correr 'php artisan mk:update'.");
             }
         }
@@ -68,8 +69,8 @@ class MkUpdateCommand extends Command
         $this->runDatabaseMigrationsPipeline();
 
         // 2. Ejecutar las migraciones estándar de Laravel
-        if (!$this->option('dry-run')) {
-            $this->info("Corriendo migraciones pendientes de Laravel...");
+        if (! $this->option('dry-run')) {
+            $this->info('Corriendo migraciones pendientes de Laravel...');
             $this->call('migrate');
         }
 
@@ -80,7 +81,44 @@ class MkUpdateCommand extends Command
         $this->info("\nRunning final health check...");
         $this->call('mk:status');
 
+        // 5. Sugerir deploy de skills nuevas (R-NEW-001 cross-cutting)
+        $this->promptForSkillDeploy();
+
         $this->info("🏁 Proceso de actualización finalizado.\n");
+    }
+
+    /**
+     * Sugiere al dev deployar las skills nuevas del ecosistema. Es opt-in
+     * (pregunta al usuario) y no invasivo: si no quiere, no hace nada.
+     *
+     * Este paso se agregó en el sprint skill:deploy (2026-06-24) para
+     * mantener sincronizadas las skills que la agencia publica con las
+     * que el proyecto tiene deployadas. Sin este paso, las skills
+     * quedan en la agencia pero las IAs que trabajan en el proyecto
+     * no las ven.
+     */
+    protected function promptForSkillDeploy(): void
+    {
+        if ($this->option('dry-run')) {
+            return;
+        }
+
+        $this->newLine();
+        if (! $this->confirm('¿Querés revisar y deployar las skills nuevas del ecosistema MK?', false)) {
+            return;
+        }
+
+        $this->call('mk:skill:list');
+
+        $this->newLine();
+        if ($this->confirm('¿Deployar todas las skills que aún no estén en este proyecto?', false)) {
+            // Listamos la salida anterior con mk:skill:list y, en una
+            // segunda pasada, deployamos las que estén disponibles en la
+            // agencia. La heurística es simple: el dev confirma.
+            $this->info('Para deployar skills individualmente:');
+            $this->line('  php artisan mk:skill:deploy {nombre}');
+            $this->line('O consultá `php artisan mk:skill:list --help` para opciones de filtrado.');
+        }
     }
 
     /**
@@ -95,6 +133,7 @@ class MkUpdateCommand extends Command
         } catch (\Throwable) {
             // fallback
         }
+
         return 'unknown';
     }
 
@@ -109,11 +148,13 @@ class MkUpdateCommand extends Command
                 $data = $response->json();
                 $items = $data['packages']['makroz/director-laravel'] ?? [];
                 $versions = array_column($items, 'version');
+
                 return $this->getLatestStableVersion($versions);
             }
         } catch (\Throwable) {
             // silent fallback
         }
+
         return 'unknown';
     }
 
@@ -136,6 +177,7 @@ class MkUpdateCommand extends Command
         usort($stableVersions, function ($a, $b) {
             $normA = ltrim($a, 'v');
             $normB = ltrim($b, 'v');
+
             return version_compare($normA, $normB);
         });
 
@@ -153,7 +195,7 @@ class MkUpdateCommand extends Command
             // Usamos Symfony Process nativo en Laravel/Illuminate
             $process = new Process(['composer', 'update', 'makroz/director-laravel']);
             $process->setTimeout(300); // 5 minutos de tiempo de espera
-            
+
             $process->start();
 
             $this->output->write('Descargando y actualizando dependencias... ');
@@ -164,14 +206,14 @@ class MkUpdateCommand extends Command
             $this->line('');
 
             if ($process->isSuccessful()) {
-                $this->info("✅ Composer se ejecutó correctamente.");
+                $this->info('✅ Composer se ejecutó correctamente.');
             } else {
-                $this->error("❌ Error al ejecutar composer update:");
+                $this->error('❌ Error al ejecutar composer update:');
                 $this->line($process->getErrorOutput());
                 $this->line($process->getOutput());
             }
         } catch (\Throwable $e) {
-            $this->error("❌ No se pudo ejecutar composer de forma automática: " . $e->getMessage());
+            $this->error('❌ No se pudo ejecutar composer de forma automática: '.$e->getMessage());
             $this->comment("Por favor, corre 'composer update makroz/director-laravel' manualmente en tu terminal.");
         }
     }
@@ -181,16 +223,18 @@ class MkUpdateCommand extends Command
      */
     protected function runDatabaseMigrationsPipeline()
     {
-        $this->info("Verificando estado del esquema de base de datos...");
+        $this->info('Verificando estado del esquema de base de datos...');
 
-        if (!Schema::hasTable('auth_users')) {
+        if (! Schema::hasTable('auth_users')) {
             $this->info("La tabla 'auth_users' no existe aún. Las migraciones se crearán con el último formato directamente.");
+
             return;
         }
 
         $idColumn = $this->getColumnInfo('auth_users', 'id');
-        if (!$idColumn) {
+        if (! $idColumn) {
             $this->error("La columna 'id' no fue encontrada en la tabla 'auth_users'.");
+
             return;
         }
 
@@ -198,27 +242,29 @@ class MkUpdateCommand extends Command
         $isUuid = ($type === 'uuid') || (str_contains($type, 'char') && ($idColumn['length'] ?? 0) === 36);
 
         if ($isUuid) {
-            $this->info("✅ La base de datos ya utiliza el esquema UUID (v1.2+).");
+            $this->info('✅ La base de datos ya utiliza el esquema UUID (v1.2+).');
+
             return;
         }
 
         if (str_contains($type, 'int')) {
-            $this->warn("⚠️ DETECTADO: El esquema de base de datos actual es v1.1 (BIGINT id).");
+            $this->warn('⚠️ DETECTADO: El esquema de base de datos actual es v1.1 (BIGINT id).');
             $this->warn("Es necesario migrar 'auth_users.id' a UUID (CHAR 36) para la v1.2.");
-            $this->error("🚨 ADVERTENCIA: Esta migración es IRREVERSIBLE y reescribirá la columna de claves primarias.");
+            $this->error('🚨 ADVERTENCIA: Esta migración es IRREVERSIBLE y reescribirá la columna de claves primarias.');
 
             if ($this->option('dry-run')) {
-                $this->comment("[Simulación] Se ejecutaría la migración a UUID.");
+                $this->comment('[Simulación] Se ejecutaría la migración a UUID.');
+
                 return;
             }
 
-            if (!$this->confirm('¿Tenés un backup completo y actualizado de tu base de datos?', false)) {
-                $this->error("Actualización cancelada. Por favor, realizá un backup antes de continuar.");
+            if (! $this->confirm('¿Tenés un backup completo y actualizado de tu base de datos?', false)) {
+                $this->error('Actualización cancelada. Por favor, realizá un backup antes de continuar.');
                 exit(1);
             }
 
-            if (!$this->confirm('¿Confirmás que querés proceder con la migración a UUID de auth_users.id?', false)) {
-                $this->comment("Actualización cancelada.");
+            if (! $this->confirm('¿Confirmás que querés proceder con la migración a UUID de auth_users.id?', false)) {
+                $this->comment('Actualización cancelada.');
                 exit(1);
             }
 
@@ -233,7 +279,7 @@ class MkUpdateCommand extends Command
      */
     protected function executeUuidMigration()
     {
-        $this->comment("Ejecutando migración de BIGINT a UUID...");
+        $this->comment('Ejecutando migración de BIGINT a UUID...');
 
         $connection = DB::connection();
         $driver = $connection->getDriverName();
@@ -241,8 +287,8 @@ class MkUpdateCommand extends Command
         try {
             DB::transaction(function () use ($connection, $driver) {
                 // Paso 1: Agregar columna temporal id_uuid
-                if (!Schema::hasColumn('auth_users', 'id_uuid')) {
-                    $connection->statement("ALTER TABLE `auth_users` ADD COLUMN `id_uuid` CHAR(36) NULL");
+                if (! Schema::hasColumn('auth_users', 'id_uuid')) {
+                    $connection->statement('ALTER TABLE `auth_users` ADD COLUMN `id_uuid` CHAR(36) NULL');
                 }
 
                 // Paso 2: Generar UUIDs para filas existentes
@@ -251,26 +297,26 @@ class MkUpdateCommand extends Command
 
                 // Paso 3: Dropear la clave primaria anterior y columna
                 if ($driver === 'mysql') {
-                    $connection->statement("ALTER TABLE `auth_users` DROP PRIMARY KEY");
+                    $connection->statement('ALTER TABLE `auth_users` DROP PRIMARY KEY');
                 }
-                $connection->statement("ALTER TABLE `auth_users` DROP COLUMN `id`");
+                $connection->statement('ALTER TABLE `auth_users` DROP COLUMN `id`');
 
                 // Paso 4: Renombrar id_uuid a id
                 if ($driver === 'mysql') {
-                    $connection->statement("ALTER TABLE `auth_users` CHANGE COLUMN `id_uuid` `id` CHAR(36) NOT NULL");
+                    $connection->statement('ALTER TABLE `auth_users` CHANGE COLUMN `id_uuid` `id` CHAR(36) NOT NULL');
                 } else {
-                    $connection->statement("ALTER TABLE `auth_users` RENAME COLUMN `id_uuid` TO `id`");
-                    $connection->statement("ALTER TABLE `auth_users` ALTER COLUMN `id` SET NOT NULL");
+                    $connection->statement('ALTER TABLE `auth_users` RENAME COLUMN `id_uuid` TO `id`');
+                    $connection->statement('ALTER TABLE `auth_users` ALTER COLUMN `id` SET NOT NULL');
                 }
 
                 // Paso 5: Agregar restricción de clave primaria
-                $connection->statement("ALTER TABLE `auth_users` ADD PRIMARY KEY (`id`)");
+                $connection->statement('ALTER TABLE `auth_users` ADD PRIMARY KEY (`id`)');
             });
 
-            $this->info("✅ Migración de base de datos a UUID completada con éxito.");
+            $this->info('✅ Migración de base de datos a UUID completada con éxito.');
         } catch (\Throwable $e) {
-            $this->error("❌ ERROR durante la migración a UUID: " . $e->getMessage());
-            $this->error("Restaurá tu base de datos a partir del backup antes de intentar de nuevo.");
+            $this->error('❌ ERROR durante la migración a UUID: '.$e->getMessage());
+            $this->error('Restaurá tu base de datos a partir del backup antes de intentar de nuevo.');
             exit(1);
         }
     }
@@ -295,10 +341,10 @@ class MkUpdateCommand extends Command
 
                 $content = File::get($file->getRealPath());
                 if (str_contains($content, 'use HasTenantScope')) {
-                    if (!str_contains($content, '$usesTenant') && !str_contains($content, 'protected static bool $usesTenant')) {
+                    if (! str_contains($content, '$usesTenant') && ! str_contains($content, 'protected static bool $usesTenant')) {
                         $className = $this->getClassNameFromFile($file->getRealPath(), $content);
                         $this->warn("⚠️  [Riesgo Tenancy] El modelo '{$className}' usa HasTenantScope pero no define \$usesTenant.");
-                        $this->line("    -> En v1.2+ el tenant es opt-in. Para mantener el comportamiento anterior, agrega: protected static bool \$usesTenant = true;");
+                        $this->line('    -> En v1.2+ el tenant es opt-in. Para mantener el comportamiento anterior, agrega: protected static bool $usesTenant = true;');
                         $hasWarnings = true;
                     }
                 }
@@ -317,14 +363,14 @@ class MkUpdateCommand extends Command
                 $content = File::get($file->getRealPath());
                 if (preg_match('/mk\.ability\s*:\s*[\'"]\s*[\'"]/i', $content) || str_contains($content, "mk.ability:''") || str_contains($content, 'mk.ability:""')) {
                     $this->error("❌ [Error Middleware] Uso de mk.ability sin permisos asociados en {$file->getRelativePathname()}.");
-                    $this->line("    -> Esto provocará un error HTTP 500 en v1.2+. Especificá al menos una habilidad.");
+                    $this->line('    -> Esto provocará un error HTTP 500 en v1.2+. Especificá al menos una habilidad.');
                     $hasWarnings = true;
                 }
             }
         }
 
-        if (!$hasWarnings) {
-            $this->info("✅ No se detectaron incompatibilidades o riesgos en el código fuente.");
+        if (! $hasWarnings) {
+            $this->info('✅ No se detectaron incompatibilidades o riesgos en el código fuente.');
         }
     }
 
@@ -338,7 +384,8 @@ class MkUpdateCommand extends Command
             $namespace = $matches[1];
         }
         $class = str_replace('.php', '', basename($path));
-        return $namespace ? $namespace . '\\' . $class : $class;
+
+        return $namespace ? $namespace.'\\'.$class : $class;
     }
 
     /**
@@ -361,6 +408,7 @@ class MkUpdateCommand extends Command
                 return null;
             }
             $row = (array) $rows[0];
+
             return [
                 'type' => strtolower((string) ($row['data_type'] ?? '')),
                 'length' => isset($row['char_length']) ? (int) $row['char_length'] : null,
@@ -378,6 +426,7 @@ class MkUpdateCommand extends Command
                 return null;
             }
             $row = (array) $rows[0];
+
             return [
                 'type' => strtolower((string) ($row['data_type'] ?? '')),
                 'length' => isset($row['character_maximum_length']) ? (int) $row['character_maximum_length'] : null,
