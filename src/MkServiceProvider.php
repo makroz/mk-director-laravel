@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 use Mk\Director\Auth\AuthServiceProvider;
+use Mk\Director\Console\Commands\AuthCreateSuperAdminCommand;
 use Mk\Director\Console\Commands\GenerateDocsCommand;
 use Mk\Director\Console\Commands\LintBoundariesCommand;
 use Mk\Director\Console\Commands\MakeAuthUserCommand;
@@ -87,6 +88,7 @@ class MkServiceProvider extends ServiceProvider
                 MkUpdateCommand::class,
                 MkSkillListCommand::class,
                 MkSkillDeployCommand::class,
+                AuthCreateSuperAdminCommand::class,
             ]);
         }
 
