@@ -29,6 +29,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Tests: `tests/Unit/Console/MakeAuthUserCommandTest.php` (10 casos),
   `tests/Unit/MakeAuthUserCommandRegisteredTest.php` (2 casos).
 
+- **`php artisan mk:skill:list`** — lista las skills disponibles para
+  el ecosistema MK-Director. Escanea tres ubicaciones: paquete,
+  agencia (`~/.mavis/agents/main/skills` + `.makromania/agency/skills`),
+  y locales (`.makromania/agency/skills` + `.agents/skills` del
+  proyecto actual). Muestra una tabla con `Name / Source / Deployed /
+  Path`. Read-only, no toca archivos. Útil como punto de partida
+  antes de `mk:skill:deploy`. Diff:
+  `src/Console/Commands/MkSkillListCommand.php`. Test:
+  `tests/Unit/Console/MkSkillListCommandTest.php` (6 casos).
+
+- **`php artisan mk:skill:deploy {nombre?}`** — deploya una skill al
+  proyecto actual. Es **asistente, no invasivo**: no toca config,
+  no registra providers, no modifica composer. Solo copia
+  `SKILL.md` a la ubicación autodetectada y agrega/actualiza la
+  sección `## Skills deployadas` en `AGENTS.md` (idempotente: si la
+  skill ya está listada, no duplica; si `AGENTS.md` no existe, lo
+  crea con un template mínimo).
+  Fuentes de la skill (en orden de prioridad):
+  1. `~/.mavis/agents/main/skills/{nombre}/SKILL.md` (Mavis agent)
+  2. `.makromania/agency/skills/{nombre}/SKILL.md` (agencia del workspace)
+  3. `src/Skills/{nombre}/SKILL.md` (futuro: paquete)
+  Destino (en orden de prioridad):
+  1. `--to=` explícito del usuario
+  2. `.makromania/agency/skills/` si existe
+  3. `.agents/skills/` si existe
+  4. Prompt al usuario con default `.makromania/agency/skills/`
+  Flags: `--to=` para forzar destino, `--dry-run` para simular.
+  Diff: `src/Console/Commands/MkSkillDeployCommand.php`. Test:
+  `tests/Unit/Console/MkSkillDeployCommandTest.php` (7 casos).
+
+### Changed
+
+- **`php artisan mk:update`** — agrega un step opt-in al final del
+  flujo que sugiere al dev revisar y deployar skills nuevas del
+  ecosistema. Solo dispara si la respuesta a "¿Querés revisar y
+  deployar las skills nuevas del ecosistema MK?" es positiva, y
+  se salta en `--dry-run`. Implementado como
+  `promptForSkillDeploy()` en `MkUpdateCommand`. Diff:
+  `src/Console/Commands/MkUpdateCommand.php`. Test:
+  `tests/Unit/MkSkillCommandsTest.php` (4 casos).
+
 ### Fixed (R-NEW-001 compliant)
 
 - **`config/mk_director.php` `auth` block ya no rompe DDD.**
