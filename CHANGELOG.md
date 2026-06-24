@@ -59,6 +59,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Diff: `src/Console/Commands/MkSkillDeployCommand.php`. Test:
   `tests/Unit/Console/MkSkillDeployCommandTest.php` (7 casos).
 
+- **`php artisan mk:auth:create-super-admin`** — crea el primer usuario
+  super-admin del scope "admin". El command se documentaba en
+  `docs/GETTING_STARTED.md` desde 1.0.0 pero nunca se implementó;
+  el audit 2026-06-24 cerró ese gap.
+  Comportamiento:
+  - Pregunta email, name, password (con confirmación). Acepta
+    `--email=`, `--name=`, `--password=` para skip prompts en CI.
+  - Valida formato de email (FILTER_VALIDATE_EMAIL) y longitud
+    mínima de password (>= 8 chars).
+  - Falla rápido con mensaje accionable si la clase
+    `App\Modules\Admin\Models\Admin` no existe (le dice al dev que
+    corra `mk:make:auth-user Admin` primero).
+  - Es idempotente: re-correr con el mismo email sale con success
+    y un warning, sin duplicar el row.
+  - Asigna el role "super-admin" (auto-creado si no existe, con
+    guard = auth_scope del user = "admin").
+  - Asigna la ability `*` como grant directo (path `ability_user`)
+    para que el super-admin no dependa de un seeder adicional.
+  Diff: `src/Console/Commands/AuthCreateSuperAdminCommand.php`
+  (nuevo, ~150 líneas). Test:
+  `tests/Unit/Console/AuthCreateSuperAdminCommandTest.php` (7 casos).
+
 ### Changed
 
 - **`php artisan mk:update`** — agrega un step opt-in al final del
