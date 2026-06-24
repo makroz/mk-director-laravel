@@ -161,7 +161,13 @@ class MakeAuthUserCommand extends Command
 
     protected function registerServiceProvider(string $scope): void
     {
-        $providerClass = "App\\Modules\\{$scope}\\{$scope}ServiceProvider::class";
+        // The provider lives at app/Modules/{Scope}/Providers/{Scope}ServiceProvider.php
+        // (see auth-user.service-provider.stub), so the FQCN must include the
+        // `Providers\` subnamespace. Bug 1.3.0-001: this used to emit
+        // `App\Modules\{Scope}\{Scope}ServiceProvider` (missing the
+        // subnamespace) which made `bootstrap/providers.php` reference a
+        // class Laravel could not resolve — the module loaded zero routes.
+        $providerClass = "App\\Modules\\{$scope}\\Providers\\{$scope}ServiceProvider::class";
 
         // Laravel 11+ — bootstrap/providers.php
         $bootstrapPath = base_path('bootstrap/providers.php');

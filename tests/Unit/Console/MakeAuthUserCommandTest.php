@@ -99,6 +99,43 @@ test('mk:make:auth-user command auto-registers the ServiceProvider in Laravel 11
     expect($source)->toContain("base_path('bootstrap/providers.php')");
 });
 
+test('mk:make:auth-user command builds the ServiceProvider FQCN with the Providers subnamespace (bug 1.3.0-001)', function () {
+    // The provider is generated at app/Modules/{Scope}/Providers/{Scope}ServiceProvider.php
+    // (see auth-user.service-provider.stub) — so the FQCN written into
+    // bootstrap/providers.php MUST include the `Providers\` subnamespace.
+    // The previous version omitted it, producing
+    // `App\Modules\{Scope}\{Scope}ServiceProvider::class` which Laravel
+    // could not resolve and the module loaded zero routes.
+    $source = commandSource();
+
+    // The file source contains literal `\\` (two backslash characters) inside
+    // a PHP double-quoted string. In a single-quoted PHP literal, `\\` is
+    // an escape for one `\`, so we need FOUR backslashes in source to
+    // produce TWO backslashes in the runtime string.
+    $correctFqn = 'App\\\\Modules\\\\{$scope}\\\\Providers\\\\{$scope}ServiceProvider::class';
+    $brokenFqn = 'App\\\\Modules\\\\{$scope}\\\\{$scope}ServiceProvider::class';
+
+    expect($source)->toContain($correctFqn);
+    expect($source)->not->toContain($brokenFqn);
+});
+
+test('mk:make:auth-user package does NOT ship a hardcoded create_admins_table migration (bug 1.3.0-002)', function () {
+    // The package used to ship `2026_06_10_000006_create_admins_table.php`
+    // as a leftover from the original Admin scope. Combined with the
+    // scaffolder's own migration (which also creates the `admins` table
+    // for any scope called `admin`), this caused `php artisan migrate`
+    // to fail with "Table 'admins' already exists".
+    //
+    // The scaffolder is the canonical source for the scope's table —
+    // the hardcoded migration was deleted in 1.3.1.
+    $migrationsDir = packageRoot().'/src/Auth/Database/Migrations';
+    $hardcoded = $migrationsDir.'/2026_06_10_000006_create_admins_table.php';
+    expect(file_exists($hardcoded))->toBeFalse(
+        "Hardcoded admins migration must be removed from the package. ".
+        "The scaffolder (auth-user.migration.stub) is the canonical source."
+    );
+});
+
 // ── Model stub ──────────────────────────────────────────────────────────
 
 test('auth-user model stub extends AuthUser and pins auth_scope in the constructor', function () {
@@ -146,7 +183,13 @@ test('auth-user auth-controller stub mentions TokenIssuer for the dev to wire up
 test('auth-user routes stub uses mk.auth:{scope} middleware for protected endpoints', function () {
     $source = stubSource('auth-user.routes.stub');
 
-    expect($source)->toContain("prefix('{{moduleNameLower}}/auth')");
+    // Bug 1.3.0-003 fix: routes must be prefixed with `api/` because
+    // Laravel 11+ `loadRoutesFrom` from a ServiceProvider does NOT
+    // inherit the `apiPrefix` from `bootstrap/app.php` (that only
+    // applies to the central `routes/api.php`). The AuthController
+    // docblock, the command's success output, and CHANGELOG 1.3.0
+    // all advertised `/api/{scope}/auth/*`; the stub now matches.
+    expect($source)->toContain("prefix('api/{{moduleNameLower}}/auth')");
     expect($source)->toContain("'mk.auth:{{moduleNameLower}}'");
     expect($source)->toContain('Route::post(\'login\'');
     expect($source)->toContain('Route::post(\'refresh\'');

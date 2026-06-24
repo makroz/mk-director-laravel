@@ -5,6 +5,75 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-06-24
+
+Patch release. Fixes three real bugs in the `php artisan mk:make:auth-user {Scope}`
+scaffolder that were reported by the RETO project (the first real-world consumer
+of v1.3.0) immediately after release. None of the fixes change the public API
+or the command signature — the generated module is functionally identical,
+just correct out of the box.
+
+### Fixed
+
+- **ServiceProvider FQCN was missing the `Providers\` subnamespace** (bug
+  1.3.0-001). `MakeAuthUserCommand::registerServiceProvider()` used to write
+  `App\Modules\{Scope}\{Scope}ServiceProvider::class` into
+  `bootstrap/providers.php`, but the stub generates
+  `App\Modules\{Scope}\Providers\{Scope}ServiceProvider` (with the
+  subnamespace). Result: Laravel could not resolve the class, the module
+  silently failed to load, and `route:list` showed zero routes for the
+  scope. The FQCN is now built with the correct subnamespace. The previous
+  bug is pinned by a new source-parsing test
+  (`MakeAuthUserCommandTest::test(...builds the ServiceProvider FQCN with
+  the Providers subnamespace...)`) that asserts both the new form is
+  present and the old form is absent.
+
+- **Hardcoded `create_admins_table` migration duplicated the scaffolder's
+  output** (bug 1.3.0-002). The package used to ship
+  `src/Auth/Database/Migrations/2026_06_10_000006_create_admins_table.php`
+  as a leftover from the original Admin scope, and `MkServiceProvider::boot()`
+  auto-loaded it via `loadMigrationsFrom`. When a consumer ran
+  `php artisan mk:make:auth-user Admin` and then `php artisan migrate`,
+  both the package's migration and the scaffolder's generated migration
+  tried to create the `admins` table, producing a "Table 'admins' already
+  exists" failure. The hardcoded file has been removed: the scaffolder is
+  the canonical source for the scope's table. Existing consumers that
+  already ran the hardcoded migration keep the entry in their
+  `migrations` table and the table itself; subsequent `migrate` calls
+  skip the now-missing file. Pinned by
+  `MakeAuthUserCommandTest::test(...does NOT ship a hardcoded
+  create_admins_table migration...)`.
+
+- **Routes stub produced paths without the `api/` prefix** (bug
+  1.3.0-003). `auth-user.routes.stub` used to generate
+  `Route::prefix('{{moduleNameLower}}/auth')`, producing
+  `/admin/auth/login` — but the `AuthController` docblock, the
+  scaffolder's success output, and the CHANGELOG entry for 1.3.0 all
+  advertised `/api/admin/auth/login`. Root cause: Laravel 11+
+  `loadRoutesFrom` from a ServiceProvider does NOT inherit the
+  `apiPrefix` configured in `bootstrap/app.php` (that only applies to
+  the central `routes/api.php`). The stub now emits
+  `Route::prefix('api/{{moduleNameLower}}/auth')`. The existing test
+  that asserted the old (broken) prefix has been updated to match
+  the correct behavior.
+
+### Test coverage
+
+- 2 new tests in `MakeAuthUserCommandTest` (one pins the correct
+  FQCN, one pins the absence of the hardcoded migration).
+- 1 updated test in `MakeAuthUserCommandTest` (the routes prefix
+  expectation, which used to encode the bug as the "expected"
+  behavior).
+
+### Notes for consumers
+
+- The fixes apply to fresh runs of `php artisan mk:make:auth-user`.
+  Consumers that already applied manual workarounds (such as RETO,
+  which fixed the FQCN in `bootstrap/providers.php` by hand and
+  deleted the scaffolder's duplicate migration) are unaffected —
+  their workarounds remain valid; the fix simply removes the
+  requirement for those workarounds on future consumers.
+
 ## [1.3.0] - 2026-06-24
 
 This release closes the audit-driven gap on auth scaffolding (PRs #7,
