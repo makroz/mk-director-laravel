@@ -178,6 +178,58 @@ test('auth-user auth-controller stub mentions TokenIssuer for the dev to wire up
     expect($source)->toContain('TokenIssuer');
 });
 
+test('auth-user auth-controller stub extends BaseController (bug 1.4.0-001)', function () {
+    // Bug 1.4.0-001: the previous stub extended
+    // `Illuminate\Routing\Controller` (Laravel stock) instead of the
+    // package's `BaseController`. As a result, the generated
+    // AuthController did NOT get:
+    //   - the standard `{success, message, data, debugMsg}` envelope
+    //   - `autoTransform()` (Model → API Resource transparent)
+    //   - `getDebugData()` (EXPLAIN gated by role)
+    //   - plugin instrumentation (audit log, multi-tenancy)
+    // The fix: extend `Mk\Director\Controllers\BaseController`.
+    $source = stubSource('auth-user.auth-controller.stub');
+
+    expect($source)->toContain('use Mk\\Director\\Controllers\\BaseController;');
+    expect($source)->toContain('class AuthController extends BaseController');
+    // And explicitly must NOT extend Laravel's stock Controller.
+    expect($source)->not->toContain('use Illuminate\\Routing\\Controller;');
+});
+
+test('auth-user auth-controller stub uses sendResponse / sendError envelope (bug 1.4.0-002)', function () {
+    // Bug 1.4.0-002: the previous stub used `response()->json([...])`
+    // for all 6 endpoints, producing 6 different ad-hoc shapes.
+    // The fix: use `BaseController::sendResponse()` and
+    // `BaseController::sendError()` for the standard envelope.
+    $source = stubSource('auth-user.auth-controller.stub');
+
+    // Must use the package envelope helpers
+    expect($source)->toContain('$this->sendResponse(');
+    expect($source)->toContain('$this->sendError(');
+
+    // The login / refresh / logout / me / forgot / reset methods must
+    // route through sendResponse or sendError — NOT raw response()->json
+    // inside the AuthController's own methods.
+    expect($source)->not->toContain('response()->json(');
+});
+
+test('auth-user auth-controller stub uses TokenIssuer::issueAccessToken in login (bug 1.4.0-003)', function () {
+    // Bug 1.4.0-003: the previous stub used `$user->createToken(...)`
+    // directly, bypassing the package's `TokenIssuer` service. The
+    // package's TokenIssuer handles:
+    //   - the `auth_scope` ability baking
+    //   - the configurable TTLs (`mk_director.auth.ttl.*`)
+    //   - the token naming convention
+    // The fix: route token issuance through `TokenIssuer::issueAccessToken`.
+    $source = stubSource('auth-user.auth-controller.stub');
+
+    expect($source)->toContain('use Mk\\Director\\Auth\\Services\\TokenIssuer;');
+    expect($source)->toContain('new TokenIssuer()');
+    expect($source)->toContain('->issueAccessToken(');
+    // And the previous raw Sanctum call must be gone.
+    expect($source)->not->toContain("\$user->createToken(");
+});
+
 // ── Routes stub ─────────────────────────────────────────────────────────
 
 test('auth-user routes stub uses mk.auth:{scope} middleware for protected endpoints', function () {
