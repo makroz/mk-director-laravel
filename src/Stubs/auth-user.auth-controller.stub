@@ -7,17 +7,28 @@ namespace App\Modules\{{ModuleName}}\Http\Controllers;
 use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Validation\ValidationException;
+use Mk\Director\Auth\Services\TokenIssuer;
+use Mk\Director\Controllers\BaseController;
 
 /**
  * AuthController del scope `{{moduleNameLower}}`.
  *
  * Skeleton con la forma del flow MK-Director. Los métodos login / refresh
- * / forgot / reset son TODO — la implementación real vive en el consumer
- * (suele usar Mk\Director\Auth\Services\TokenIssuer para emitir pares
- * access+refresh con la ability `auth_scope: {{moduleNameLower}}`).
+ * / forgot / reset son TODO — la implementación real vive en el consumer.
+ *
+ * Extiende `BaseController` (no `Illuminate\Routing\Controller`) para tener:
+ *   - Envelope JSON estándar del paquete: `sendResponse()` /
+ *     `sendError()` (con `{success, message, data, debugMsg}`).
+ *   - `autoTransform()` para que el método `me` aplique API Resources si
+ *     el modelo declara `$apiResource`.
+ *   - `getDebugData()` para EXPLAIN gated por role (R2-010).
+ *   - Plugin instrumentation automática (audit log, multi-tenancy) si
+ *     el consumer tiene `MkAuditLoggerPlugin` o `MkMultiTenantPlugin`.
+ *
+ * Los tokens se emiten vía `Mk\Director\Auth\Services\TokenIssuer`, que
+ * maneja el `auth_scope` en las abilities y los TTLs configurables
+ * (`mk_director.auth.ttl.access_seconds` / `refresh_seconds`).
  *
  * Endpoints (públicos salvo que se indique):
  *   POST   /api/{{moduleNameLower}}/auth/login    — email + password → tokens
@@ -28,16 +39,22 @@ use Illuminate\Validation\ValidationException;
  *   GET    /api/{{moduleNameLower}}/auth/me       — usuario actual (auth:{{moduleNameLower}})
  *
  * Rutas generadas en `app/Modules/{{ModuleName}}/Http/Routes/api.php`.
+ *
+ * BC note (1.4.0): las responses ahora usan el envelope estándar del
+ * paquete (`{success, message, data, debugMsg}`). Los responses ad-hoc
+ * de v1.3.x (`{access_token, token_type, '{scope}' => $user}`) ahora
+ * viven dentro de `data`. Ver CHANGELOG 1.4.0 para el detalle.
  */
-class AuthController extends Controller
+class AuthController extends BaseController
 {
     /**
      * POST /api/{{moduleNameLower}}/auth/login
      *
-     * TODO: Reemplazar con TokenIssuer::issue($user, '{{moduleNameLower}}')
-     * para emitir access_token (15 min) + refresh_token (7 días) con la
-     * ability `auth_scope: {{moduleNameLower}}`. Ver
-     * `Mk\Director\Auth\Services\TokenIssuer` en el paquete.
+     * Implementación de referencia con `TokenIssuer` y envelope estándar.
+     * El consumer puede:
+     *   - Inyectar `TokenIssuer` por constructor (recomendado para tests).
+     *   - Mantener la instanciación inline (más simple, menos testeable).
+     *   - Sumar validaciones custom en `beforeLogin()` (override hook).
      */
     public function login(Request $request): JsonResponse
     {
@@ -49,47 +66,49 @@ class AuthController extends Controller
         /** @var {{ModuleName}}|null $user */
         $user = {{ModuleName}}::where('email', $credentials['email'])->first();
 
-        if (! $user || ! Hash::check($credentials['password'], $user->password)) {
-            throw ValidationException::withMessages([
-                'email' => ['Credenciales inválidas.'],
-            ]);
-        }
-
         // Capa 1: el scope del token DEBE coincidir con el scope del user
         // (Capa 3 AuthScopeResolver lo valida en cada request, pero acá
         // también cortamos por las dudas).
-        if ($user->getAuthScope() !== '{{moduleNameLower}}') {
-            throw ValidationException::withMessages([
-                'email' => ['Credenciales inválidas.'],
-            ]);
+        if (! $user
+            || ! Hash::check($credentials['password'], $user->password)
+            || $user->getAuthScope() !== '{{moduleNameLower}}'
+        ) {
+            return $this->sendError(
+                'Credenciales inválidas.',
+                ['email' => ['Credenciales inválidas.']],
+                422,
+            );
         }
 
-        // TODO: Reemplazar este bloque con el TokenIssuer oficial del paquete.
-        $accessToken = $user->createToken(
-            '{{moduleNameLower}}-access',
-            ['auth_scope' => '{{moduleNameLower}}'],
-            now()->addMinutes(15),
-        );
+        $tokenIssuer = new TokenIssuer();
+        $accessToken = $tokenIssuer->issueAccessToken($user);
+        $refreshToken = $tokenIssuer->issueRefreshToken($user);
 
-        return response()->json([
+        return $this->sendResponse([
             'access_token' => $accessToken->plainTextToken,
+            'refresh_token' => $refreshToken,
             'token_type' => 'Bearer',
+            'expires_in' => config('mk_director.auth.ttl.access_seconds', 15 * 60),
             '{{moduleNameLower}}' => $user->only(['id', 'name', 'email']),
-        ]);
+        ], 'Login exitoso');
     }
 
     /**
      * POST /api/{{moduleNameLower}}/auth/refresh
      *
-     * TODO: Validar refresh_token y emitir nuevo access_token manteniendo
-     * el mismo `auth_scope`. NO permitir escalación de scope vía refresh.
+     * TODO: Validar refresh_token (Sanctum `PersonalAccessToken` lookup
+     * con `id|plaintext` parsing — Sanctum v4 ya no tiene
+     * `Sanctum::findToken()`), emitir nuevo access_token con el mismo
+     * `auth_scope`, opcionalmente rotar el refresh_token. NO permitir
+     * escalación de scope vía refresh.
      */
     public function refresh(Request $request): JsonResponse
     {
-        return response()->json([
-            'error' => 'not_implemented',
-            'hint' => 'Replace with TokenIssuer::refresh($refreshToken, "{{moduleNameLower}}")',
-        ], 501);
+        return $this->sendError(
+            'not_implemented',
+            ['hint' => 'Implementar con TokenIssuer + Sanctum v4 id|plaintext token parsing'],
+            501,
+        );
     }
 
     /**
@@ -100,15 +119,18 @@ class AuthController extends Controller
     {
         $request->user()->currentAccessToken()->delete();
 
-        return response()->json(['message' => 'Sesión cerrada.']);
+        return $this->sendResponse(true, 'Sesión cerrada.');
     }
 
     /**
      * GET /api/{{moduleNameLower}}/auth/me
+     *
+     * El envelope estándar envuelve al user en `data`. Si el modelo
+     * declara `$apiResource`, `autoTransform()` lo aplica transparentemente.
      */
     public function me(Request $request): JsonResponse
     {
-        return response()->json($request->user()->only(['id', 'name', 'email']));
+        return $this->sendResponse($request->user());
     }
 
     /**
@@ -119,9 +141,14 @@ class AuthController extends Controller
      */
     public function forgot(Request $request): JsonResponse
     {
-        return response()->json([
-            'message' => 'Si el email existe, recibirás un enlace para reset.',
-        ]);
+        $request->validate(['email' => ['required', 'email']]);
+
+        // TODO: dispatch email con token. Por ahora response estándar.
+
+        return $this->sendResponse(
+            null,
+            'Si el email existe, recibirás un enlace para reset.',
+        );
     }
 
     /**
@@ -132,9 +159,10 @@ class AuthController extends Controller
      */
     public function reset(Request $request): JsonResponse
     {
-        return response()->json([
-            'error' => 'not_implemented',
-            'hint' => 'Validate token from {{moduleNameLower}}_password_reset_tokens and update user password',
-        ], 501);
+        return $this->sendError(
+            'not_implemented',
+            ['hint' => 'Validate token from {{moduleNameLower}}_password_reset_tokens and update user password'],
+            501,
+        );
     }
 }
