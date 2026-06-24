@@ -5,7 +5,13 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.3.0] - 2026-06-24
+
+This release closes the audit-driven gap on auth scaffolding (PRs #7,
+#8, #9 of this repo, plus PRs #36, #37, #38 of the monorepo). The
+package is now feature-complete on the auth front: every scope
+scaffolder, the skill deploy flow, the super-admin creator, and the
+hardened config block all ship together.
 
 ### Added
 
@@ -114,6 +120,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   el command existe, la migración `auth_users` está consolidada, y
   `AUTH.md` documenta el flujo. El paquete deja de marcarse a sí
   mismo como experimental.
+- Monorepo companion PRs: #36 (`mk:make:auth-user` doc), #37
+  (`mk-update` npm doc + drift fixes), #38 (replace Tinker snippet
+  in `GETTING_STARTED.md`).
+
+## [Unreleased]
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+### Security
 
 ## [1.2.2-rc1] - 2026-06-18
 
