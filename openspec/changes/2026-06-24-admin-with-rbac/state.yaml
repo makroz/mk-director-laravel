@@ -1,11 +1,11 @@
-version: 4
+version: 5
 sprint: 2026-06-24-admin-with-rbac
 parent_sprint: 2026-06-24-dogfooding-model
 rule: R-G-033-A
 r_id: R-PKG-008
 opened: 2026-06-24
-closed: null
-status: implementation-done + docs-synced (T1.1-T1.5 cerradas; T2 blocked on R-PKG-007/009/010 + v1.5.0; PR pendiente)
+closed: 2026-06-25
+status: closed (tagged v1.5.0-rc1 + Packagist published; 3 PRs merged; T2 ready to start)
 branch:
   monorepo: makromania/260624-2150--admin-with-rbac (sub_repo branch; docs y skills usan ramas paralelas makromania/260624-2359--r-pkg-008-*)
   sub_repo: makromania/260624-2150--admin-with-rbac (created 2026-06-24T22:29-04:00, session mvs_95e8aa6d93e044668b22f0250005c334)
@@ -188,10 +188,13 @@ risk_register:
     mitigation: "Branches paralelas con naming convention: makromania/260624-2150--admin-with-rbac (packagist) + makromania/260624-2359--r-pkg-008-{docs,skills}-sync (monorepo + docs sub-repo + skills). Mario aprueba los 3 PRs coordinadamente."
 
 next_action:
-  - ✅ T1.1-T1.5 cerradas en sesión 3 (commit 18f9210 + 3b813e9 + 7be56f6 + fb8d8c4).
-  - ⏸️ Wait for Mario sign-off antes de abrir PRs:
-    - PR #1: packagist (mk-director-laravel) branch makromania/260624-2150--admin-with-rbac → origin/dev, label v1.5.0-rc1
-    - PR #2: MK-Director (monorepo docs) branch makromania/260624-2359--r-pkg-008-docs-sync → dev
-    - PR #3: humandirector (skills) branch makromania/260624-2359--r-pkg-008-skills-sync → main/dev (decidir)
-  - T2.1 (RETO replace custom Admin module) is BLOCKED on R-PKG-007/009/010 + this R-PKG-008 merged + v1.5.0-rc1 published.
+  - ✅ T1.1-T1.5 cerradas en sesión 3 (commits 18f9210 + 3b813e9 + 7be56f6 + fb8d8c4).
+  - ✅ 3 PRs mergeados en sesión 4 (2026-06-25):
+    - PR #14 makroz/mk-director-laravel → dev (merged 04:30:44Z, commit 67bed3c4075f)
+    - PR #41 makroz/MK-Director → dev (merged 04:31:36Z, commit ea2b65052bc9)
+    - PR #13 mariogfos/humandirector → dev (merged 04:32:03Z, commit aa02ab018396)
+  - ✅ Tag v1.5.0-rc1 pusheado (reference 67bed3c4075f), Packagist published 04:34:00Z.
+  - ✅ Sprint CERRADO (state.yaml v5).
+  - ⏸️ T2.1 (RETO retrofit) is NOW READY (was BLOCKED on v1.5.0 published). RETO's kanban: pueden bumpear cuando quieran (preferentemente esperar v1.5.0 GA, no rc1).
+  - 📌 Branch makromania/260624-2150--admin-with-rbac queda FROZEN como historical ref de v1.5.0-rc1 (NO borrar — alinea con R-G-006 convention).
 
