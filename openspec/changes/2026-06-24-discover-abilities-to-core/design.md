@@ -34,19 +34,27 @@ implementation track breakdown, and `state.yaml` for the triage rationale.
 
 ## Architecture Decisions
 
-### Decision D1 — Source of truth = `discoverAbilities()` on module providers (vs. reflection over controllers)
+### Decision D1 — Source of truth: HYBRID (provider primary, attribute + docblock as fallback ONLY when provider absent)
 
-| Aspect | **Chosen: consume provider** | Alternative: re-parse controllers / models |
-|---|---|---|
-| Single source of truth | One list per module (provider's `discoverAbilities()` array). Tests, Gate::define, and DB rows all read from it. | Two sources (controller reflection + provider) that must stay in sync — drift risk. |
-| Reuses R-PKG-008 | ✅ Consumes the array that `provider-rbac.stub` already returns. Zero new content for `--with-rbac` modules. | Would need a separate parser duplicating the 15 abilities. |
-| BC for pre-1.5.0 apps | App that did NOT use `--with-rbac` has no `discoverAbilities()`. Fallback chain: provider → attribute → docblock. | Would force every pre-1.5.0 app to migrate to `--with-rbac` first. |
-| Test ergonomics | Mock the provider with a fixture returning `[...abilities]` — trivial. | Reflection-based parser needs fixture PHP files + namespace setup. |
-| Computed cost | O(n) over the provider's array (typically 10-30 abilities). | O(n × methods) over controllers with docblock parsing per method. |
+| Aspect | **Chosen: hybrid — provider OR (attributes + docblock), NOT both** | Alternative: chain (combine all sources) | Alternative: reflection only |
+|---|---|---|---|
+| When provider implements `discoverAbilities()` | ✅ Use ONLY the provider array. Attributes/docblocks ignored. | Combine (drift risk if names diverge). | Ignore provider, re-parse. |
+| When provider does NOT implement it | Fallback to union of attributes + docblocks. | Same. | Same. |
+| Single source of truth per module | One source per module — never mixed. | Multiple sources combined at runtime. | Always one (reflection). |
+| Reuses R-PKG-008 | ✅ Consumes the array `provider-rbac.stub` returns. | Same. | Would need a separate parser. |
+| BC for pre-1.5.0 apps | App without `discoverAbilities()` falls back to attribute/docblock parsing. | Same. | Same. |
 
-**Choice**: **consume provider** as the primary source. This is
-non-negotiable: R-PKG-008's provider already returns the exact list we need,
-and re-parsing would create a second source of truth that can drift.
+**Choice** (Mario sign-off 2026-06-25, Q1=hybrid): **provider if present, else
+attributes + docblocks combined, NEVER mix**. The fallback path
+(attribute + docblock union) only activates when the provider is absent
+or doesn't implement `discoverAbilities()`. Rationale: when an app has
+migrated to `--with-rbac`, the provider is the canonical declaration —
+mixing attributes on top would risk silent drift. The fallback path is
+for pre-1.5.0 apps that don't yet use `--with-rbac`.
+
+This is a refinement of my original D1 recommendation (which proposed a
+chain). Mario's hybrid preference is cleaner: exactly one source per
+module, no risk of double-listing.
 
 ### Decision D2 — PHP 8.4 attribute as primary source, docblock as fallback
 
@@ -66,19 +74,48 @@ needed beyond the constructor). The constructor accepts
 `@mk-ability`, NOT `@ability` — the `mk-` prefix avoids collision with
 other tools like ApiGen).
 
-### Decision D3 — `--dry-run` default (safety), `--force` opt-in
+### Decision D3 — Interactive prompt with CI escape hatch (Mario sign-off, Q3)
 
-| Aspect | **Chosen: dry-run default + force opt-in** | Alternative: write by default + `--dry-run` flag | Alternative: interactive prompt |
-|---|---|---|---|
-| Default safety | No DB writes unless explicitly opted in. | First-time run accidentally inserts rows. | Prompts block CI/CD pipelines. |
-| RETO BC | RETO's orphan command had no `--dry-run` default — always wrote. Migration to v1.5.0 requires opt-in (`--force`). | RETO migration is silent (no behavior change). | RETO pipeline would hang on prompt. |
-| Discoverable behavior | CI can run `mk:discover-abilities --json` to lint the discoverable list without side effects. | CI must guard against accidental writes via separate flag. | CI scripts need `--no-interaction` plus extra flags. |
-| Predictability | Two states: dry-run (read) or write (force). | Three: read, write, dry-run-on-write. | Depends on stdin availability. |
+| Mode | Behavior |
+|---|---|
+| **Interactive (default)** | `$this->confirm('¿Escribir las abilities a la tabla {scope}_abilities? [y/N]')`. User types y/n. Default answer is **No**. |
+| **`--force` flag** | Skip prompt. Always write. Used by humans who already know what they want, and by sandbox scripts that pass it explicitly. |
+| **`--dry-run` flag** | Skip prompt. Never write. Used by humans previewing, and by CI linters with `--json`. |
+| **`--no-interaction` (Laravel global flag)** | Auto-supplied by CI / scheduled commands. Laravel's `confirm()` returns false under `--no-interaction`. Combined with `--force`, writes happen. Without `--force`, nothing happens. |
 
-**Choice**: **dry-run default, `--force` opt-in**. Matches the principle
-of least surprise (running a command does not mutate state unless you
-explicitly ask). `--json` outputs the would-be inserts as JSON for
-machine consumption (CI linting, dashboards).
+**Choice** (Mario sign-off 2026-06-25, Q3=interactive): **interactive
+prompt with safety net**. The prompt defaults to **No** (must type `y` to
+confirm). This is the explicit "are you sure?" gate Mario wants — humans
+running it locally see the prompt; CI pipelines pass `--force` to skip.
+Laravel's `--no-interaction` global flag means a non-interactive run
+without `--force` is a safe no-op (prompt returns false → nothing
+happens).
+
+This is a refinement of my original D3 recommendation (dry-run default).
+Mario prefers the interactive confirmation gate over a default-deny
+because it surfaces intent at the moment of execution rather than via
+flag archaeology. The trade-off (potential CI hang) is mitigated by
+the `--no-interaction` semantics baked into Artisan.
+
+Implementation sketch:
+
+```php
+$shouldWrite = false;
+if ($this->option('dry-run')) {
+    $shouldWrite = false;
+} elseif ($this->option('force')) {
+    $shouldWrite = true;
+} else {
+    $shouldWrite = $this->confirm(
+        "¿Escribir las abilities a la tabla {$scope}_abilities?",
+        false  // default = No
+    );
+}
+if (!$shouldWrite) {
+    $this->info('DRY-RUN: no se escribió nada.');
+    return self::SUCCESS;
+}
+```
 
 ### Decision D4 — Auto-register on boot when `mk_director.features.auto_discover_abilities = true`
 
@@ -239,10 +276,20 @@ These are NOT modified in this sprint — they already exist from R-PKG-008:
 ```php
 protected $signature = 'mk:discover-abilities
                         {--module=* : Scope(s) a procesar. Vacío = todos los módulos}
-                        {--dry-run : Preview sin escribir a DB (default: true si no se pasa --force)}
-                        {--force : Escribir/actualizar filas en {scope}_abilities}
+                        {--dry-run : Preview sin escribir a DB (skip prompt, never write)}
+                        {--force : Escribir/actualizar filas en {scope}_abilities (skip prompt, always write)}
                         {--json : Output en JSON en vez de tabla humana}';
 ```
+
+Behavior matrix:
+
+| `--dry-run` | `--force` | TTY? | Result |
+|---|---|---|---|
+| ✓ | ✗ | * | No writes. Print preview. |
+| ✗ | ✓ | * | Writes. No prompt. |
+| ✗ | ✗ | TTY | Prompt "¿Escribir? [y/N]". Default No. |
+| ✗ | ✗ | no-TTY (CI) | No writes (Laravel `confirm()` returns false under `--no-interaction`). |
+| ✓ | ✓ | * | Last-flag-wins or explicit error? Decision: error "No combines --dry-run y --force". |
 
 ### `Ability` attribute
 
@@ -280,50 +327,59 @@ class PostController
 }
 ```
 
-### Auto-discovery algorithm (pseudocode)
+### Auto-discovery algorithm (pseudocode — D1 hybrid semantics)
 
 ```php
 $scope = $this->resolveScope($moduleArg);          // 'admin'
 $abilities = collect();
+$sourceUsed = null;
 
-// 1. Provider source (preferred).
+// 1. Provider source (preferred) — IF present, attributes/docblocks are IGNORED.
 $providerClass = "App\\Modules\\{$module}\\Providers\\{$module}ModuleServiceProvider";
 if (class_exists($providerClass) && method_exists($providerClass, 'discoverAbilities')) {
-    $abilities = $abilities->merge(
-        app($providerClass)->discoverAbilities()
-    );
+    $abilities = collect(app($providerClass)->discoverAbilities())
+        ->map(fn(string $name) => ['name' => $name, 'description' => null]);
+    $sourceUsed = 'provider';
 }
 
-// 2. Attribute source (PHP 8.4+).
-foreach ($this->findControllerClasses($module) as $class) {
-    $reflection = new ReflectionClass($class);
-    foreach ($reflection->getMethods() as $method) {
-        foreach ($method->getAttributes(Ability::class) as $attr) {
-            $instance = $attr->newInstance();
-            $abilities->push(['name' => $instance->name, 'description' => $instance->description]);
+// 2. Fallback: attributes + docblocks combined (only if NO provider).
+if ($sourceUsed === null) {
+    foreach ($this->findControllerClasses($module) as $class) {
+        $reflection = new ReflectionClass($class);
+        foreach ($reflection->getMethods() as $method) {
+            // 2a. Attribute (preferred when in fallback path).
+            foreach ($method->getAttributes(Ability::class) as $attr) {
+                $instance = $attr->newInstance();
+                $abilities->push(['name' => $instance->name, 'description' => $instance->description]);
+            }
+            // 2b. Docblock (additional, when in fallback path).
+            $doc = $method->getDocComment();
+            if ($doc && preg_match('/@mk-ability\s+([a-z0-9._*-]+)(?:\s+(.+))?/i', $doc, $m)) {
+                $abilities->push(['name' => $m[1], 'description' => $m[2] ?? null]);
+            }
         }
     }
+    $abilities = $abilities->unique('name')->values();
+    $sourceUsed = 'attribute+docblock';
 }
 
-// 3. Docblock source (fallback).
-foreach ($this->findControllerClasses($module) as $class) {
-    $reflection = new ReflectionClass($class);
-    foreach ($reflection->getMethods() as $method) {
-        $doc = $method->getDocComment();
-        if ($doc && preg_match('/@mk-ability\s+([a-z0-9._*-]+)(?:\s+(.+))?/i', $doc, $m)) {
-            $abilities->push(['name' => $m[1], 'description' => $m[2] ?? null]);
-        }
-    }
-}
+// 3. Decide whether to write.
+$shouldWrite = match (true) {
+    $this->option('dry-run') => false,
+    $this->option('force')   => true,
+    default                  => $this->confirm(
+        "¿Escribir las abilities a la tabla {$scope}_abilities?",
+        false  // default = No
+    ),
+};
 
-$abilities = $abilities->unique('name')->values();
-
-if (!$isDryRun && !$isForce) {
-    $this->warn('DRY-RUN: pasando --force para escribir.');
+if (!$shouldWrite) {
+    $this->info("DRY-RUN ({$sourceUsed}): no se escribió nada.");
+    $this->previewAbilities($abilities, $scope);
     return self::SUCCESS;
 }
 
-// UPSERT (idempotent).
+// 4. UPSERT (idempotente).
 DB::table("{$scope}_abilities")->upsert(
     $abilities->map(fn($a) => [
         'name' => $a['name'],
@@ -334,6 +390,8 @@ DB::table("{$scope}_abilities")->upsert(
     ['name'],                                  // unique key
     ['description', 'updated_at']             // columns to update on conflict
 );
+
+$this->info("{$sourceUsed}: {$abilities->count()} abilities upserted en {$scope}_abilities.");
 ```
 
 ---
@@ -382,19 +440,22 @@ existing app. Enable explicitly via `mk_director.features.auto_discover_abilitie
 
 ---
 
-## Open Questions (need Mario sign-off)
+## Open Questions (CLOSED 2026-06-25, Mario sign-off)
 
-- [ ] **Q1**: Confirm source-of-truth = `discoverAbilities()` on provider (D1).
-      **Recommended**: YES. R-PKG-008 already exposes this array; consuming it
-      avoids drift. Fallback to attributes/docblocks for pre-1.5.0 apps.
-- [ ] **Q2**: Confirm PHP 8.4 attribute as primary, docblock as fallback (D2).
-      **Recommended**: YES. Attribute is type-safe, IDE-friendly, and
-      O(1) via Reflection. Docblock fallback supports pre-8.4 apps
-      without forcing a PHP upgrade.
-- [ ] **Q3**: Confirm dry-run default with `--force` opt-in (D3).
-      **Recommended**: YES. Principle of least surprise — running the
-      command should not mutate state unless explicitly asked. CI can
-      run `--json` to lint without writes.
+- [x] **Q1** — Source-of-truth: **HYBRID** (provider primario, attribute+docblock como fallback ÚNICO cuando no hay provider).
+      **Mario's choice**: hybrid (Q1 option 3). Rationale: una sola fuente por módulo, sin riesgo de drift. Cuando el provider implementa `discoverAbilities()`, los attributes/docblocks se IGNORAN. El fallback (attribute + docblock combinados) solo activa cuando el provider no está.
+- [x] **Q2** — Attribute primary + docblock fallback: **CONFIRMED**.
+      **Mario's choice**: attr-primary (Q2 option 1). Rationale: type-safe, O(1) via Reflection, IDE-friendly. Docblock fallback para apps pre-8.4.
+- [x] **Q3** — Interactive prompt con `--force` skip + `--dry-run` skip + `--no-interaction` safety: **CONFIRMED**.
+      **Mario's choice**: interactive (Q3 option 3). Implementation: `$this->confirm(..., false)` con escape hatch via `--no-interaction` (Laravel global flag → confirm retorna false → safe no-op). CI pipelines pasan `--force` para skip.
+
+## Decisions matrix (final)
+
+| Q | Decision | Trade-off | Mitigation |
+|---|---|---|---|
+| Q1 | Hybrid: provider OR (attribute+docblock), never both | Falls back to reflection when provider missing | Fixture-only tests cover both paths |
+| Q2 | PHP 8.4 attribute primary | Forces PHP 8.4+ for attribute use | Docblock fallback keeps 8.1+ apps working |
+| Q3 | Interactive prompt with CI escape hatch | Could hang in old CI without `--no-interaction` | Document `--no-interaction` behavior; CI scripts pass `--force` |
 
 ---
 

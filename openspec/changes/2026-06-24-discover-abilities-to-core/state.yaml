@@ -1,17 +1,33 @@
-version: 2
+version: 3
 sprint: 2026-06-24-discover-abilities-to-core
 parent_sprint: 2026-06-24-dogfooding-model
 rule: R-G-033-A (criterio genérico)
 r_id: R-PKG-007
 opened: 2026-06-24
 closed: null
-status: design (triage closed GO 2026-06-25, design in flight)
+status: design (triage GO + design sign-off 2026-06-25, impl pending)
 branch:
   monorepo: makromania/260624-2140--discover-abilities-to-core
   sub_repo: makromania/260624-2140--discover-abilities-to-core
 base_commit:
   sub_repo: origin/dev @ v1.5.0-rc1 (609b912, post-R-PKG-008 closure)
-target_release: v1.5.0-rc1 (consume abilities del R-PKG-008 provider) OR v1.6.0-rc1 (si rompe BC en MakeModuleCommand output)
+target_release: v1.5.0-rc1 (consume abilities del R-PKG-008 provider)
+
+design_signoff:
+  date: 2026-06-25
+  by: Mario
+  q1_source_of_truth:
+    decision: HYBRID
+    meaning: provider primario; attribute+docblock como fallback ÚNICO cuando provider ausente
+    rationale: una sola fuente por módulo, sin drift
+  q2_attribute_docblock:
+    decision: ATTR_PRIMARY
+    meaning: PHP 8.4 attribute primary; docblock fallback para pre-8.4
+    rationale: type-safe + O(1) Reflection + IDE-friendly
+  q3_dry_run_default:
+    decision: INTERACTIVE_PROMPT
+    meaning: $this->confirm(...) con default false; --force skip; --no-interaction safe no-op
+    rationale: prompt explícito en el momento de ejecución, CI pasa --force
 
 source_feature:
   location: projects/reto/reto-api/app/Modules/Admin/Console/Commands/DiscoverAbilitiesCommand.php
@@ -74,8 +90,23 @@ triage_checklist:
   decision: GO (cumple R-G-033-A, va al paquete)
 
 in_flight:
-  - T0.1.b — design.md en draft (~300 LOC, ADRs D1-D5 + Q1-Q3)
-  - Sign-off pendiente de Mario en Q1-Q3 antes de T1.x
+  - T1.1 — src/Console/Commands/DiscoverAbilitiesCommand.php + register en MkServiceProvider
+  - T1.2 — src/Auth/Attributes/Ability.php (atributo PHP 8.4)
+  - T1.3 — Auto-register en boot() cuando config('mk_director.features.auto_discover_abilities')
+  - T1.4 — Tests Pest verdes (~10+ casos: provider consume, attribute, docblock fallback, --force, --dry-run, scope detection, UPSERT idempotente)
+  - T1.5 — R-G-032 sync (16 locations: CHANGELOG + DEVELOPER_GUIDE + README + skill index + reference 08 + docs/guides + otros)
+
+closed_signoffs:
+  - id: D1-rpkg007
+    decision: HYBRID source (provider OR attribute+docblock, never both)
+    rationale: Mario prefiere una sola fuente por módulo
+    applies_to: design.md D1, impl T1.1 algorithm step 1-2
+  - id: D2-rpkg007
+    decision: PHP 8.4 attribute primary, docblock fallback
+    applies_to: design.md D2, impl T1.2
+  - id: D3-rpkg007
+    decision: Interactive prompt with --force / --dry-run / --no-interaction escape hatches
+    applies_to: design.md D3, impl T1.1 handle() flow
 
 findings:
   closing:
