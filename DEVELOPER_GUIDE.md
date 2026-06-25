@@ -316,6 +316,97 @@ Ejemplos:
 
 ---
 
+## ⚙️ 3.7. Login field configurable (`--login-field=<campo>`)
+
+`mk:make:auth-user` ahora soporta campos de login no-email. Útil para:
+
+| País/vertical | Campo | Ejemplo |
+|---|---|---|
+| Bolivia | `ci` | Cédula de identidad (RETO Bolivia) |
+| Genérico | `phone` | Teléfono como login |
+| Genérico | `username` | Username en vez de email |
+| Genérico | `documento` | Número de documento |
+
+### Uso
+
+```bash
+# Default (BC): email — comportamiento idéntico a v1.4.0
+php artisan mk:make:auth-user Admin
+
+# Campo custom
+php artisan mk:make:auth-user Admin --login-field=ci
+php artisan mk:make:auth-user Member --login-field=phone
+```
+
+### Qué cambia cuando pasás `--login-field=ci`
+
+1. **Model stub** (`app/Modules/{Scope}/Models/{Scope}.php`):
+   ```php
+   protected string $loginField = 'ci';
+
+   protected $fillable = [
+       'name',
+       'ci',                     // ← en lugar de 'email'
+       'password',
+       'auth_scope',
+       'client_id',
+   ];
+
+   protected $casts = [           // ← sin 'email_verified_at'
+       'password' => 'hashed',
+   ];
+   ```
+
+2. **Migration stub** (`..._create_{scope}s_table.php`):
+   ```php
+   $table->string('ci')->unique();        // ← en lugar de 'email'
+   // (NO se genera email_verified_at)
+   ```
+
+3. **AuthController stub**: validación `['required', 'string']`
+   (en lugar de `['required', 'email']`) y lookup `where('ci', ...)`
+   (en lugar de `where('email', ...)`).
+
+### Config global
+
+`mk_director.auth.login_field` (env `MK_LOGIN_FIELD`, default `email`):
+
+```php
+// config/mk_director.php
+'auth' => [
+    'login_field' => env('MK_LOGIN_FIELD', 'email'),
+],
+```
+
+### Constraints (R-PKG-009 D1-D6)
+
+- **D1**: Solo string fields. NO int, json, composite.
+- **D2**: Default `email` (BC). Sin flag, idéntico a v1.4.0.
+- **D3**: Columna DB = nombre del campo (`ci`, NO `login_field`).
+- **D4**: Validación mínima. Consumer customiza vía `LoginRequest` override.
+- **D5**: `MustVerifyEmail` interface solo se importa cuando loginField=email.
+- **D6**: `AuthUser::scopeWhereLoginField($value)` para queries dinámicas.
+
+### Queries dinámicas agnósticas
+
+```php
+// Default email: WHERE email = ?
+Admin::query()->whereLoginField('admin@example.com')->first();
+
+// Override ci: WHERE ci = ?
+class AdminReto extends AuthUser {
+    protected string $loginField = 'ci';
+}
+AdminReto::query()->whereLoginField('1234567')->first();
+```
+
+### Spec
+
+- Spec: `openspec/changes/2026-06-24-auth-user-login-field/proposal.md`
+- Design: `openspec/changes/2026-06-24-auth-user-login-field/design.md`
+
+---
+
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)
 
 Tanto para **Next.js** como para **React Native**, el consumo de listas es estandarizado mediante parámetros URL:

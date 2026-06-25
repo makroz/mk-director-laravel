@@ -123,6 +123,65 @@ method.
 - Design: `openspec/changes/2026-06-24-discover-abilities-to-core/design.md`
 - Tasks: `openspec/changes/2026-06-24-discover-abilities-to-core/tasks.md`
 
+## [1.5.0-rc3] - 2026-06-25
+
+Release candidate. **Configurable login field** for `mk:make:auth-user`:
+the new `--login-field=<campo>` flag lets consumers authenticate with
+non-email identifiers (CI for Bolivia, phone, username, documento, etc.)
+without hardcoding the column.
+
+### Added
+
+- **`php artisan mk:make:auth-user {Scope} --login-field=<campo>`**:
+  - **Default `email`** (BC con v1.4.0 — comportamiento idéntico sin flag).
+  - **String-only fields** (D1): valida `[a-zA-Z_][a-zA-Z0-9_]*`. Empty
+    o ausente → fallback a `email`.
+  - **Columna DB = nombre del campo** (D3): `--login-field=ci` genera
+    `$table->string('ci')->unique()`, NO `login_field` o `email`.
+  - **Validación mínima** (D4): `required|string` cuando loginField != email
+    (consumer customiza vía LoginRequest override).
+  - **`MustVerifyEmail` interface** (D5): solo se implementa cuando loginField
+    es `email` (subclases con `ci`/`phone` lo heredan del AuthUser base pero
+    el cast de `email_verified_at` se omite).
+- **`AuthUser` base agnóstico**:
+  - Nueva property `$loginField` (default `email`).
+  - Nuevo método `getLoginField(): string`.
+  - Nuevo local scope `scopeWhereLoginField(Builder $query, string $value): Builder`
+    (D6 — permite queries dinámicas agnósticas al campo).
+  - Docblock ya NO hardcodea `@property string $email` (regresión cubierta
+    por `AuthUserDocblockTest`).
+- **Config**: `mk_director.auth.login_field` (env `MK_LOGIN_FIELD`, default `email`).
+- **Stubs actualizados**: `auth-user.model.stub`, `auth-user.migration.stub`,
+  `auth-user.auth-controller.stub` ahora son parametrizados con `{{loginField}}`
+  + placeholders condicionales para BC con v1.4.0.
+
+### Compatibility
+
+- **BC preservada**: sin flag, `mk:make:auth-user Admin` genera idéntico a v1.4.0.
+- 316/316 tests verde, 0 regresiones.
+
+### Examples
+
+```bash
+# Default (BC): email
+php artisan mk:make:auth-user Admin
+
+# Bolivia: cédula de identidad
+php artisan mk:make:auth-user Admin --login-field=ci
+
+# Genérico: phone
+php artisan mk:make:auth-user Member --login-field=phone
+
+# Genérico: username
+php artisan mk:make:auth-user Customer --login-field=username
+```
+
+### Spec
+
+- Spec: `openspec/changes/2026-06-24-auth-user-login-field/proposal.md`
+- Design: `openspec/changes/2026-06-24-auth-user-login-field/design.md`
+- Tasks: `openspec/changes/2026-06-24-auth-user-login-field/tasks.md`
+
 ---
 
 ## [1.4.0] - 2026-06-24
