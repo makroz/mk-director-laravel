@@ -79,6 +79,36 @@ class MakeAuthUserCommand extends Command
             return self::FAILURE;
         }
 
+        // Placeholders condicionales (R-PKG-009 D5).
+        //
+        // Nota sobre `MustVerifyEmail`: el AuthUser base YA implementa esa interface
+        // (línea 41 de AuthUser.php), por lo que la subclase NO necesita re-implementarla.
+        // Para `loginField != email`, igual la hereda pero queda como interface "muerto"
+        // (no se usa). Esto es preferible a sacarla del base (sería BC-breaking).
+        //
+        // El import `use Illuminate\Contracts\Auth\MustVerifyEmail` solo se incluye
+        // cuando `loginField=email` para evitar lint warnings de import no usado.
+        $isEmail = $loginField === 'email';
+        $extraReplacements = [
+            '{{emailVerifiedAtColumn}}' => $isEmail
+                ? "\$table->timestamp('email_verified_at')->nullable();\n            "
+                : '',
+            // Cast entry SIN trailing whitespace. El stub del model tiene el
+            // `\n        'password'` después. Si loginField=email, queda
+            // `[\n        'email_verified_at' => 'datetime',\n        'password'...`.
+            // Si no es email, queda `[\n        'password'...` (line vacía al ppio).
+            // Trim final se hace en generateStub() si es necesario.
+            '{{emailVerifiedAtCastEntry}}' => $isEmail
+                ? "        'email_verified_at' => 'datetime',\n"
+                : '',
+            '{{mustVerifyEmailUse}}' => $isEmail
+                ? "use Illuminate\\Contracts\\Auth\\MustVerifyEmail;\n"
+                : '',
+            '{{loginFieldValidationRule}}' => $isEmail
+                ? "['required', 'email']"
+                : "['required', 'string']",
+        ];
+
         $this->info("🔐 Generando scope de autenticación MK: {$scope}");
 
         $basePath = app_path("Modules/{$scope}");
@@ -107,9 +137,9 @@ class MakeAuthUserCommand extends Command
         $this->info('📄 Generando archivos desde stubs:');
 
         // Capa Auth
-        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.model.stub', 'Models', "{$scope}.php");
-        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.migration.stub', 'Database/Migrations', $this->migrationFilename($scopePlural));
-        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.auth-controller.stub', 'Http/Controllers', 'AuthController.php');
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.model.stub', 'Models', "{$scope}.php", $extraReplacements);
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.migration.stub', 'Database/Migrations', $this->migrationFilename($scopePlural), $extraReplacements);
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.auth-controller.stub', 'Http/Controllers', 'AuthController.php', $extraReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.routes.stub', 'Http/Routes', 'api.php');
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.service-provider.stub', 'Providers', "{$scope}ServiceProvider.php");
 
@@ -145,6 +175,7 @@ class MakeAuthUserCommand extends Command
         string $stubName,
         string $folder,
         string $fileName,
+        array $extraReplacements = [],
     ): void {
         $stubPath = __DIR__.'/../../Stubs/'.$stubName;
 
@@ -160,6 +191,12 @@ class MakeAuthUserCommand extends Command
         $content = str_replace('{{moduleNamePluralLower}}', $scopePlural, $content);
         $content = str_replace('{{loginField}}', $loginField, $content);
         $content = str_replace('{{migrationDate}}', now()->format('Y_m_d_His'), $content);
+
+        // Placeholders condicionales (R-PKG-009). Si el stub no usa alguno,
+        // el str_replace no hace nada (string vacío o key ausente).
+        foreach ($extraReplacements as $placeholder => $value) {
+            $content = str_replace($placeholder, $value, $content);
+        }
 
         $targetPath = app_path("Modules/{$scope}/{$folder}/{$fileName}");
         File::put($targetPath, $content);
