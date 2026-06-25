@@ -51,23 +51,30 @@ class MakeAuthUserCommand extends Command
      *
      * @var string
      */
-    protected $signature = 'mk:make:auth-user {scope : Nombre del scope en StudlyCase singular (Ej: Member, Customer, Partner)}';
+    protected $signature = 'mk:make:auth-user {scope : Nombre del scope en StudlyCase singular (Ej: Member, Customer, Partner)} {--login-field=email : Campo usado para login (default: email). BC: si no se pasa, idéntico a v1.4.0. Valores comunes: email, ci, phone, username, documento.}';
 
     /**
      * The console command description.
      *
      * @var string
      */
-    protected $description = 'Genera un scope de autenticación MK completo: Model (extends AuthUser), migration con auth_scope, AuthController (login/refresh/logout/me/forgot/reset), routes y ServiceProvider auto-registrado.';
+    protected $description = 'Genera un scope de autenticación MK completo: Model (extends AuthUser), migration con auth_scope, AuthController (login/refresh/logout/me/forgot/reset), routes y ServiceProvider auto-registrado. Use --login-field=<field> para campos no-email (RETO: ci, genéricos: phone, username, etc.).';
 
     public function handle(): int
     {
         $scope = Str::studly($this->argument('scope'));
         $scopeLower = Str::snake($scope);
         $scopePlural = Str::plural($scopeLower);
+        $loginField = $this->resolveLoginField((string) $this->option('login-field'));
 
         if ($scope === '') {
             $this->error('El nombre del scope no puede estar vacío.');
+
+            return self::FAILURE;
+        }
+
+        if ($loginField === null) {
+            $this->error('El campo de login debe ser un identificador no-vacío (letras, números, guión bajo).');
 
             return self::FAILURE;
         }
@@ -100,11 +107,11 @@ class MakeAuthUserCommand extends Command
         $this->info('📄 Generando archivos desde stubs:');
 
         // Capa Auth
-        $this->generateStub($scope, $scopeLower, $scopePlural, 'auth-user.model.stub', 'Models', "{$scope}.php");
-        $this->generateStub($scope, $scopeLower, $scopePlural, 'auth-user.migration.stub', 'Database/Migrations', $this->migrationFilename($scopePlural));
-        $this->generateStub($scope, $scopeLower, $scopePlural, 'auth-user.auth-controller.stub', 'Http/Controllers', 'AuthController.php');
-        $this->generateStub($scope, $scopeLower, $scopePlural, 'auth-user.routes.stub', 'Http/Routes', 'api.php');
-        $this->generateStub($scope, $scopeLower, $scopePlural, 'auth-user.service-provider.stub', 'Providers', "{$scope}ServiceProvider.php");
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.model.stub', 'Models', "{$scope}.php");
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.migration.stub', 'Database/Migrations', $this->migrationFilename($scopePlural));
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.auth-controller.stub', 'Http/Controllers', 'AuthController.php');
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.routes.stub', 'Http/Routes', 'api.php');
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.service-provider.stub', 'Providers', "{$scope}ServiceProvider.php");
 
         $this->newLine();
         $this->info('🔌 Auto-registrando ServiceProvider:');
@@ -112,7 +119,7 @@ class MakeAuthUserCommand extends Command
 
         $this->newLine();
         $this->info("✅ Scope {$scope} generado con el estándar MK-Director:");
-        $this->line("   • Model:        app/Modules/{$scope}/Models/{$scope}.php (extends AuthUser)");
+        $this->line("   • Model:        app/Modules/{$scope}/Models/{$scope}.php (extends AuthUser, loginField={$loginField})");
         $this->line("   • Migration:    app/Modules/{$scope}/Database/Migrations/{$this->migrationFilename($scopePlural)}");
         $this->line("   • AuthCtrl:     app/Modules/{$scope}/Http/Controllers/AuthController.php");
         $this->line("   • Routes:       /api/{$scopeLower}/auth/{login,refresh,logout,me,forgot,reset}");
@@ -120,7 +127,7 @@ class MakeAuthUserCommand extends Command
 
         // Imprimir snippets a mano (no modificar config/auth.php automáticamente)
         $this->newLine();
-        $this->printAuthConfigSnippets($scope, $scopeLower, $scopePlural);
+        $this->printAuthConfigSnippets($scope, $scopeLower, $scopePlural, $loginField);
 
         return self::SUCCESS;
     }
@@ -134,6 +141,7 @@ class MakeAuthUserCommand extends Command
         string $scope,
         string $scopeLower,
         string $scopePlural,
+        string $loginField,
         string $stubName,
         string $folder,
         string $fileName,
@@ -150,6 +158,7 @@ class MakeAuthUserCommand extends Command
         $content = str_replace('{{ModuleName}}', $scope, $content);
         $content = str_replace('{{moduleNameLower}}', $scopeLower, $content);
         $content = str_replace('{{moduleNamePluralLower}}', $scopePlural, $content);
+        $content = str_replace('{{loginField}}', $loginField, $content);
         $content = str_replace('{{migrationDate}}', now()->format('Y_m_d_His'), $content);
 
         $targetPath = app_path("Modules/{$scope}/{$folder}/{$fileName}");
@@ -157,6 +166,32 @@ class MakeAuthUserCommand extends Command
 
         $displayName = ! empty($folder) ? "{$folder}/{$fileName}" : $fileName;
         $this->line("   ✅ {$displayName}");
+    }
+
+    /**
+     * Resuelve y valida el campo de login pasado via --login-field.
+     *
+     * Reglas (R-PKG-009 D1+D4):
+     *   - Solo letras, números y guión bajo. NO espacios, NO guiones.
+     *   - Vacío o ausente → default `email` (BC con v1.4.0).
+     *   - El stub de model decide si implementar `MustVerifyEmail` según el campo.
+     *
+     * @return string|null Nombre del campo validado, o null si inválido.
+     */
+    protected function resolveLoginField(string $raw): ?string
+    {
+        $field = trim($raw);
+
+        if ($field === '') {
+            return 'email';
+        }
+
+        // Solo identificador PHP-style (sin guión, espacio, caracteres especiales).
+        if (! preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $field)) {
+            return null;
+        }
+
+        return $field;
     }
 
     protected function registerServiceProvider(string $scope): void
@@ -208,8 +243,12 @@ class MakeAuthUserCommand extends Command
      * Decisión consciente: el command no modifica config/auth.php del consumer
      * porque ese archivo es del proyecto y editarlo programáticamente es invasivo.
      * El dev revisa, ajusta scopes, y pega.
+     *
+     * @param  string  $loginField  Nombre del campo de login (email, ci, phone, etc.).
+     *                              Se incluye en el comentario para que el dev sepa
+     *                              que la columna se llama igual al campo.
      */
-    protected function printAuthConfigSnippets(string $scope, string $scopeLower, string $scopePlural): void
+    protected function printAuthConfigSnippets(string $scope, string $scopeLower, string $scopePlural, string $loginField = 'email'): void
     {
         $modelClass = "App\\Modules\\{$scope}\\Models\\{$scope}::class";
 
