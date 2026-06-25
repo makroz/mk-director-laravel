@@ -1,0 +1,63 @@
+version: 1
+sprint: 2026-06-24-auth-controller-rbac-stub
+parent_sprint: 2026-06-24-dogfooding-model
+rule: R-G-033-A
+r_id: R-PKG-010
+opened: 2026-06-24
+closed: null
+status: design
+branch:
+  monorepo: makromania/260624-2210--auth-controller-rbac-stub (a crear)
+  sub_repo: makromania/260624-2210--auth-controller-rbac-stub (a crear)
+base_commit:
+  sub_repo: origin/dev @ v1.4.0
+target_release: v1.5.0-rc1
+
+source_feature:
+  location: projects/reto/reto-api/app/Modules/Admin/Http/Controllers/AuthController.php
+  loc: 322 (vs sandbox 187 — el de RETO tiene RBAC integration manual)
+  written_against: makroz/director-laravel v1.3.0 (pre-1.4.0)
+
+triage_checklist:
+  R-G-033-A-1_≥_2_dominios:
+    answer: SÍ
+    rationale: "Cualquier app con RBAC necesita ability checks en endpoints de auth (especialmente /me, /logout)."
+  R-G-033-A-2_testeable_sin_RETO:
+    answer: SÍ
+    rationale: "Los ability checks se pueden testear con Mockery + Auth::user() override."
+  R-G-033-A-3_doc_sin_RETO:
+    answer: SÍ
+    rationale: "Documentable como 'RBAC integration en AuthController' sin mencionar RETO."
+  decision: GO
+
+in_flight: []
+
+findings:
+  closing:
+    - id: R-PKG-010
+      title: AuthController stub (v1.4.0) no integra RBAC. Debe venir con ability checks por default.
+
+design_questions:
+  - Q1: ¿RBAC integration se aplica automáticamente a TODOS los endpoints auth o solo a /me y /logout?
+    recommendation: /me y /logout (los privados). /login, /refresh, /forgot, /reset son públicos.
+  - Q2: ¿Ability checks se hardcodean o se configuran?
+    recommendation: Configurables via `mk_director.auth.abilities.{endpoint}` array.
+  - Q3: ¿Audit log de login attempts?
+    recommendation: SÍ. Si MkAuditLoggerPlugin está activo, cada login (success/fail) se loggea automáticamente.
+  - Q4: ¿Rate limiting?
+    recommendation: Aplicar `throttle:5,1` a /login por default, configurable.
+
+risk_register:
+  - R-RISK-PKG-010-001: "Performance: ability checks en cada request a /me"
+    mitigation: "Cachear abilities del user en memoria durante el request (RbacService::userAbilities() con cache TTL)."
+  - R-RISK-PKG-010-002: "BC con v1.4.0: consumidores que asumen AuthController sin ability checks"
+    mitigation: "Default behavior es SIN ability checks (backward compatible). Habilitar via flag `mk_director.auth.rbac_enabled = true` o `--with-rbac` en mk:make:auth-user."
+
+depends_on:
+  - R-PKG-009 (login-field configurable — debe estar mergeado primero)
+  - R-PKG-008 (mk:module --with-rbac — opcional pero sinergia)
+
+next_action:
+  - Diseñar config `mk_director.auth.abilities.{endpoint}`.
+  - Modificar stub `auth-user.auth-controller.stub` para incluir middleware de abilities.
+  - Tests Pest con RBAC habilitado y deshabilitado.

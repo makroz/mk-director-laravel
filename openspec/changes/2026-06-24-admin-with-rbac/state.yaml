@@ -1,0 +1,69 @@
+version: 1
+sprint: 2026-06-24-admin-with-rbac
+parent_sprint: 2026-06-24-dogfooding-model
+rule: R-G-033-A
+r_id: R-PKG-008
+opened: 2026-06-24
+closed: null
+status: design
+branch:
+  monorepo: makromania/260624-2150--admin-with-rbac (a crear)
+  sub_repo: makromania/260624-2150--admin-with-rbac (a crear)
+base_commit:
+  sub_repo: origin/dev @ v1.4.0
+target_release: v1.5.0-rc1
+
+source_features:
+  - location: projects/reto/reto-api/app/Modules/Admin/Http/Controllers/AdminController.php
+    loc: 157
+  - location: projects/reto/reto-api/app/Modules/Admin/Http/Controllers/RoleController.php
+    loc: 104
+  - location: projects/reto/reto-api/app/Modules/Admin/Http/Controllers/AbilityController.php
+    loc: 101
+  - location: projects/reto/reto-api/app/Modules/Admin/Models/Admin.php
+    loc: 200 (con profile fields custom)
+  - location: projects/reto/reto-api/app/Modules/Admin/Services/AdminService.php
+    loc: 164 (RBAC integration manual)
+  - location: projects/reto/reto-api/database/migrations/*_add_profile_fields_to_admins_table.php
+    loc: 62 (custom fields)
+  total_loc_in_retos_admin_module: ~1200 (controllers + service + repos + tests asociados)
+  status: NO mergeado (rama huérfana makromania/260624-0511--admin-module)
+
+triage_checklist:
+  R-G-033-A-1_≥_2_dominios:
+    answer: SÍ
+    rationale: "Cualquier app multi-tenant con RBAC necesita Admin + Role + Ability. Patrón estándar de identity management."
+  R-G-033-A-2_testeable_sin_RETO:
+    answer: SÍ
+    rationale: "El scaffolder genera código boilerplate testeable. RBAC integration se prueba con fixtures."
+  R-G-033-A-3_doc_sin_RETO:
+    answer: SÍ
+    rationale: "Documentable como 'mk:module {Name} --with-rbac' sin asumir dominio."
+  decision: GO (cumple R-G-033-A, va al paquete)
+
+in_flight: []
+
+findings:
+  closing:
+    - id: R-PKG-008
+      title: mk:module necesita flag --with-rbac para generar Admin + Role + Ability + pivot tables
+
+design_questions:
+  - Q1: ¿El flag --with-rbac genera los 3 modelos + controllers + migrations, o hookea un módulo existente?
+    options:
+      - A: Generar todo de cero con `mk:module Admin --with-rbac`
+      - B: Hook sobre módulo existente: `mk:module Admin --add-rbac`
+    recommendation: A (más limpio, no requiere módulo pre-existente).
+  - Q2: ¿Los profile fields custom (62 LOC de migration) son parte de --with-rbac o un flag separado?
+    recommendation: Flag separado `--profile-fields=name,phone,avatar` o config posterior. R-PKG-009 cubre auth-user, R-PKG-008 cubre RBAC.
+  - Q3: ¿El AuthController de admin se genera como parte de --with-rbac?
+    recommendation: NO. --with-rbac asume que el usuario autenticado YA tiene un scope. AuthController es de mk:make:auth-user (separado).
+
+risk_register:
+  - R-RISK-PKG-008-001: "Conflicto entre flag --with-rbac y --profile-fields (overlapping)"
+    mitigation: "Flags ortogonales. --with-rbac genera RBAC, --profile-fields agrega campos al model. Combinables."
+
+next_action:
+  - Diseñar API del flag `--with-rbac`.
+  - Diseñar stubs para Admin/Role/Ability/AbilityRole/UserRole.
+  - Decidir si genera auth controller o no.

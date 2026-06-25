@@ -1,0 +1,62 @@
+version: 1
+sprint: 2026-06-24-retrofit-reto-admin-module
+parent_sprint: 2026-06-24-dogfooding-model
+rule: R-G-033-D (workflow iterativo)
+r_id: R-RET-001
+opened: 2026-06-24
+closed: null
+status: blocked (espera R-PKG-007/008/009/010 mergeados)
+branch:
+  monorepo: makromania/260624-2220--retrofit-reto-admin-module (a crear, post-bloqueo)
+  sub_repo: N/A (este sprint es de RETO, no del paquete)
+base_commit:
+  reto_api: origin/dev (branch makromania/260624-1605--bump-director-1.3.1)
+target_release: bumpear `mariogfos/reto` a makroz/director-laravel v1.5.0+
+
+orphan_branch_to_close:
+  branch: makromania/260624-0511--admin-module
+  loc: 5019 (43 archivos, +5019/-41)
+  written_against: makroz/director-laravel v1.3.0 (pre-1.4.0)
+  decision: NO MERGEAR — reemplazar por este sprint
+  rationale: "Código pre-1.4.0, no usa skills nuevas (mk-director-laravel/SKILL.md indexed + R-G-032 + R-MK-001 estricto), no cumple R-G-033."
+
+depends_on:
+  hard:
+    - R-PKG-007 (DiscoverAbilitiesCommand) — merged + published en v1.5.0+
+    - R-PKG-008 (mk:module --with-rbac) — merged + published en v1.5.0+
+    - R-PKG-009 (mk:make:auth-user --login-field) — merged + published en v1.5.0+
+    - R-PKG-010 (AuthController --with-auth-rbac) — merged + published en v1.5.0+
+  soft:
+    - Skill `mk-director-laravel/SKILL.md` actualizada con R-G-033
+    - Documentación de v1.5.0 publicada
+
+in_flight: []
+
+findings:
+  closing:
+    - id: R-RET-001
+      title: RETO módulo Admin (rama huérfana makromania/260624-0511--admin-module) debe rehacerse con skills 1.4.0+ + sub-changes del paquete
+
+approach:
+  phase_1_release_blocked:
+    duration: "hasta que R-PKG-007/008/009/010 cierren"
+    work: "ninguno — RETO espera releases del paquete"
+  phase_2_retrofit:
+    duration: "sprint posterior a v1.5.0 publish"
+    work: "rehacer módulo Admin de RETO con base v1.5.0 + skills nuevas"
+  phase_3_migrate:
+    duration: "mismo sprint que phase_2"
+    work: "RETO bumpea composer a makroz/director-laravel:^1.5.0 + smoke test"
+
+risk_register:
+  - R-RISK-RET-001-001: "Trabajo duplicado: el branch huérfano tiene 5019 LOC que se pueden perder"
+    mitigation: "Inventariar el branch huérfano ANTES de cerrar. Identificar lógica RETO-only que vale la pena preservar. Documentar en `inventory.md`."
+  - R-RISK-RET-001-002: "Las profile fields custom de RETO no están cubiertas por --profile-fields"
+    mitigation: "Si el flag no se agrega en v1.5.0, RETO agrega los fields via override del model después de scaffoldear."
+
+next_action:
+  - INMEDIATO (este sprint): Inventariar rama huérfana `makromania/260624-0511--admin-module`.
+  - Crear `inventory.md` con 4 tiers (boilerplate regenerable / lógica única / docs / tests).
+  - Diseñar sprint de retrofit con base en el inventario.
+  - ESPERAR a que R-PKG-007/008/009/010 cierren.
+  - Cuando v1.5.0+ esté publicado: ejecutar retrofit.

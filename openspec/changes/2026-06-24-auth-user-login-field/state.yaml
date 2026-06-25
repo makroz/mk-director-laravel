@@ -1,0 +1,59 @@
+version: 1
+sprint: 2026-06-24-auth-user-login-field
+parent_sprint: 2026-06-24-dogfooding-model
+rule: R-G-033-A
+r_id: R-PKG-009
+opened: 2026-06-24
+closed: null
+status: design
+branch:
+  monorepo: makromania/260624-2200--auth-user-login-field (a crear)
+  sub_repo: makromania/260624-2200--auth-user-login-field (a crear)
+base_commit:
+  sub_repo: origin/dev @ v1.4.0
+target_release: v1.5.0-rc1
+
+source_feature:
+  location: projects/reto/reto-api/app/Modules/Admin/Models/Admin.php
+  current_implementation: "Admin usa `email` para login pero RETO Bolivia necesita `ci` (cédula de identidad)"
+  required_change: "Campo de login configurable: email, ci, phone, username, documento, custom"
+
+triage_checklist:
+  R-G-033-A-1_≥_2_dominios:
+    answer: SÍ
+    rationale: "Cualquier app multi-país o multi-vertical necesita campos de login distintos. Email no es universal (Bolivia usa CI, India usa Aadhaar, USA usa SSN, China usa身份证)."
+  R-G-033-A-2_testeable_sin_RETO:
+    answer: SÍ
+    rationale: "El cambio es en el scaffolder + AuthUser base. Tests con fixtures de varios campos."
+  R-G-033-A-3_doc_sin_RETO:
+    answer: SÍ
+    rationale: "Documentable como 'campo de login configurable' sin mencionar Bolivia/ci."
+  decision: GO
+
+in_flight: []
+
+findings:
+  closing:
+    - id: R-PKG-009
+      title: mk:make:auth-user hardcodea `email` como campo de login. Debe ser configurable.
+
+design_questions:
+  - Q1: ¿Campo único (--login-field=ci) o múltiples (--login-fields=email,ci)?
+    options:
+      - A: Campo único (más simple, cubre 80%)
+      - B: Múltiples con fallback (más complejo, soporta "login con email o CI")
+    recommendation: A para v1.5.0. B se puede agregar en v1.6.0 si RETO lo pide.
+  - Q2: ¿El campo se llama igual en la DB? (columna `ci` varchar unique)
+    recommendation: SÍ — el scaffolder genera la columna con el nombre del campo.
+  - Q3: ¿Login request valida formato del campo?
+    recommendation: Validación mínima (required, string). Formato específico (regex para CI, email format para email) es responsabilidad del consumer.
+
+risk_register:
+  - R-RISK-PKG-009-001: "BC para consumers existentes que asumen email"
+    mitigation: "Default sigue siendo email. Si el consumer no pasa --login-field, comportamiento idéntico a v1.4.0."
+
+next_action:
+  - Diseñar flag --login-field=<field>.
+  - Modificar MakeAuthUserCommand para aceptar el flag.
+  - Modificar AuthUser base para que use el campo configurable.
+  - Modificar LoginRequest stub.

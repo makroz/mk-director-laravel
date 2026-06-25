@@ -1,0 +1,51 @@
+version: 1
+sprint: 2026-06-24-discover-abilities-to-core
+parent_sprint: 2026-06-24-dogfooding-model
+rule: R-G-033-A (criterio genérico)
+r_id: R-PKG-007
+opened: 2026-06-24
+closed: null
+status: triage
+branch:
+  monorepo: makromania/260624-2140--discover-abilities-to-core (a crear)
+  sub_repo: makromania/260624-2140--discover-abilities-to-core (a crear)
+base_commit:
+  sub_repo: origin/dev @ v1.4.0 (f647339b1c90139d32e2a6150c76c05afc835c8f)
+target_release: v1.5.0-rc1 (post-triage + impl)
+
+source_feature:
+  location: projects/reto/reto-api/app/Modules/Admin/Console/Commands/DiscoverAbilitiesCommand.php
+  loc: 268
+  written_against: makroz/director-laravel v1.3.0 (pre-1.4.0)
+  status: NO mergeado (rama huérfana makromania/260624-0511--admin-module)
+
+triage_checklist:
+  R-G-033-A-1_≥_2_dominios:
+    answer: TBD (a evaluar)
+    rationale_draft: "Cualquier app con RBAC necesita descubrir abilities desde controllers. Es genérico."
+  R-G-033-A-2_testeable_sin_RETO:
+    answer: TBD
+    rationale_draft: "El comando escanea archivos PHP por patrón → testeable con fixtures locales."
+  R-G-033-A-3_doc_sin_RETO:
+    answer: TBD
+    rationale_draft: "Documentable como 'auto-descubrir abilities' sin mencionar RETO."
+  decision: PENDING (sprint futuro)
+
+in_flight: []
+
+findings:
+  closing:
+    - id: R-PKG-007
+      title: DiscoverAbilitiesCommand debe vivir en el paquete, no en RETO
+      track: triage + impl
+
+risk_register:
+  - id: R-RISK-PKG-007-001
+    description: "El comando de RETO asume estructura app/Modules/{Name}/Http/Controllers/*. Si el paquete usa otro path, hay que generalizar."
+    mitigation: "Usar config mk_director.paths.modules o default sensible (app/Modules). Documentar override."
+
+next_action:
+  - Evaluar el código actual de DiscoverAbilitiesCommand (rama huérfana).
+  - Identificar assumptions RETO-específicas (paths hardcoded, namespaces específicos).
+  - Diseñar API genérica.
+  - Decidir si va al paquete o se queda en RETO (R-G-033-A).
