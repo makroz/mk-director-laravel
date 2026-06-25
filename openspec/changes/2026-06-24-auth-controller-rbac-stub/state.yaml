@@ -1,17 +1,17 @@
-version: 2
+version: 3
 sprint: 2026-06-24-auth-controller-rbac-stub
 parent_sprint: 2026-06-24-dogfooding-model
 rule: R-G-033-A
 r_id: R-PKG-010
 opened: 2026-06-24
-closed: null
-status: implementation-done (T1.1-T1.6 cerradas, 3 PRs coordinados pendientes review Mario)
+closed: 2026-06-25
+status: closed
 branch:
-  packagist: makromania/260625-1445--r-pkg-010-auth-controller-rbac (push OK)
-  monorepo: makromania/260625-1455--r-pkg-010-docs-sync (push OK)
-  skills_repo: makromania/260625-1500--r-pkg-010-skills-sync (push OK)
+  packagist: makromania/260625-1445--r-pkg-010-auth-controller-rbac (MERGED 2026-06-25T19:07:36Z)
+  monorepo: makromania/260625-1455--r-pkg-010-docs-sync (MERGED 2026-06-25T19:08:13Z)
+  skills_repo: makromania/260625-1500--r-pkg-010-skills-sync (MERGED 2026-06-25T19:11:13Z)
 base_commit:
-  packagist: origin/dev @ 3d7fd42 (post-R-PKG-009)
+  packagist: origin/dev @ c32bc59 (squash commit del PR #17)
 target_release: v1.5.0-rc4
 
 source_feature:
@@ -90,9 +90,12 @@ delivery:
       title: "feat(laravel): mk:make:auth-user --with-auth-rbac (R-PKG-010)"
       branch: makromania/260625-1445--r-pkg-010-auth-controller-rbac
       url: https://github.com/makroz/mk-director-laravel/pull/17
-      commits: 6 (atomic: T1.1 command + T1.2 stubs + T1.3 AuthEvent + T1.4 config + T1.5 tests + T1.6 docs)
+      commits: 6 + state.yaml v2 + state.yaml v3 (post-merge closure)
       files_changed: 9 (3 modified + 6 created/NEW)
       loc_added: ~770 (215 command + 40 stubs + 69 AuthEvent + 37 config + 324 tests + 208 docs)
+      merged_at: 2026-06-25T19:07:36Z
+      squash_sha: c32bc59
+      merge_method: squash
     - repo: makroz/MK-Director
       number: 44
       title: "docs(monorepo): sync GETTING_STARTED + AUTH + API_REFERENCE_LARAVEL for --with-auth-rbac (R-PKG-010 T1.6)"
@@ -101,6 +104,9 @@ delivery:
       commits: 1 (atomic: docs sync locations 6-8)
       files_changed: 3 (GETTING_STARTED.md, AUTH.md, API_REFERENCE_LARAVEL.md)
       loc_added: 168
+      merged_at: 2026-06-25T19:08:13Z
+      squash_sha: 14d6bfbd
+      merge_method: squash
     - repo: mariogfos/humandirector
       number: 18
       title: "docs(laravel): mk-director-laravel reference 12-auth-controller-rbac (R-PKG-010)"
@@ -109,6 +115,19 @@ delivery:
       commits: 1 (atomic: skill reference + SKILL.md index update)
       files_changed: 2 (12-auth-controller-rbac.md NEW, SKILL.md MOD)
       loc_added: 326
+      merged_at: 2026-06-25T19:11:13Z
+      squash_sha: 1458a060
+      merge_method: squash
+
+  tag:
+    name: v1.5.0-rc4
+    target: origin/dev @ c32bc59 (squash commit del PR #17)
+    pushed_at: 2026-06-25T19:14:00Z (aprox)
+    annotated: true
+  packagist_publish:
+    verified_via: "composer show makroz/director-laravel --all | head -3"
+    visible: true
+    versions_top: "v1.5.0-rc4, v1.5.0-rc3, v1.5.0-rc2, v1.5.0-rc1, v1.4.0, ..."
 
   tests:
     total_suite: 336
@@ -189,16 +208,55 @@ delivery:
       - RETO es feedback loop, no release driver.
 
 next_action:
-  - INMEDIATO (2026-06-25 14:50): PRs #17, #44, #18 abiertos en GitHub. Esperando review Mario.
-  - PRÓXIMO (post-review): squash-merge de los 3 PRs (consistencia con R-PKG-009).
-  - POST-MERGE: tag v1.5.0-rc4 + push + Packagist publish verification.
-  - CRON: r-pkg-010-pr-watch activo cada 30min (gate discipline: check 3 PRs status, ping Mario si >2h sin review).
-  - POST-CIERRE: actualizar state.yaml → status: closed + memory entry tipo: release.
-  - Cuando Mario apruebe GA v1.5.0: bumpear RETO composer (R-RET-001 phase 2+3).
+  - ✅ 2026-06-25T19:07-19:11Z: 3 PRs squash-merged (Mario).
+  - ✅ 2026-06-25T19:14Z: tag v1.5.0-rc4 pusheado + Packagist publish verificado.
+  - ✅ 2026-06-25T19:14Z: cron r-pkg-010-pr-watch deleted (post-cierre).
+  - ✅ 2026-06-25T19:14Z: Telegram a Mario con "¿Aprobás GA v1.5.0 + bumpear RETO?".
+  - PRÓXIMO SPRINT: R-PKG-011 (a diseñar por Mario según roadmap).
+  - CUANDO Mario apruebe GA v1.5.0: bumpear RETO composer (R-RET-001 phase 2+3) →
+    RETO bumpea a v1.5.0, regenera Admin con --with-rbac + --with-auth-rbac,
+    elimina ~135 LOC de AuthController custom, ejecuta smoke test, reporta feedback.
 
 handoff:
-  file: projects/mk-director/handoff-r-pkg-010.md (a crear post-cierre)
-  prompt_for_next_session: projects/mk-director/prompt-r-pkg-011.md (a crear si hay R-PKG-011)
+  file: projects/mk-director/handoff-r-pkg-010.md (a crear si Mario pide)
+  prompt_for_next_session: projects/mk-director/prompt-r-pkg-011.md (a crear si R-PKG-011 existe)
+  closure_prompt: a la espera de decision Mario sobre GA v1.5.0
+
+closed_signoffs:
+  - id: Q1-rpkg010
+    decision: Ability checks solo en endpoints privados (/me, /logout).
+    rationale: "/login, /refresh, /forgot, /reset son públicos — no requieren check."
+    applies_to: design.md Q1, MakeAuthUserCommand buildRbacReplacements, authorizeAbility()
+  - id: Q2-rpkg010
+    decision: Ability names configurables (no hardcoded).
+    rationale: "Consumer decide naming convention via mk_director.auth.abilities.{endpoint} (default null = sin check)."
+    applies_to: design.md Q2, config/mk_director.php auth.abilities
+  - id: Q3-rpkg010
+    decision: Audit log automatico via MkAuditLoggerPlugin.
+    rationale: "6 tipos de AuthEvent (login.success/failed, logout, refresh.success, password_reset.requested/success). Consumido via listener side consumer."
+    applies_to: design.md Q3, AuthEvent class
+  - id: Q4-rpkg010
+    decision: Rate limit throttle:5,1 default en /login.
+    rationale: "Configurable via mk_director.auth.rate_limits.{endpoint}. Tambien /forgot y /reset con 3,1."
+    applies_to: design.md Q4, auth-user.routes.stub placeholders
+
+findings:
+  closing:
+    - id: R-PKG-010
+      title: AuthController stub (v1.4.0) no integra RBAC. Debe venir con ability checks por default.
+      resolution: '✅ Resuelto — flag --with-auth-rbac opt-in (default BC preservado). 11 placeholders condicionales en auth-user.auth-controller.stub + 3 inline en routes.stub. Default mode (string vacío) = idéntico a v1.5.0-rc3. Sprint cerrado 2026-06-25, tag v1.5.0-rc4 publicado.'
+    - id: GAP-003
+      title: No existe RbacService dedicado
+      rationale: 'La proposal mencionaba crear uno o reusar el de R-PKG-008. Después de investigación, R-PKG-008 NO creó un RbacService singleton (los módulos --with-rbac usan AbilityResolver central). Decisión: NO crear RbacService nuevo. AbilityResolver ya cubre el use case con cache + Sanctum short-circuit. authorizeAbility() helper usa AbilityResolver con fallback a canMk() del trait HasAbilities.'
+      discovered_at: '2026-06-25 (sesión R-PKG-010)'
+      action: 'No action — use AbilityResolver central (R-PKG-007) en su lugar.'
+
+delivery_complete:
+  sprint_closed_at: 2026-06-25
+  release: v1.5.0-rc4
+  packagist: visible
+  ret_bump: DEFERRED (RELEASE_AT_END strategy — bumpear a GA v1.5.0 cuando Mario apruebe)
+  next_milestone: GA v1.5.0 trigger (Mario decision)
 
 cron_watch:
   name: r-pkg-010-pr-watch
