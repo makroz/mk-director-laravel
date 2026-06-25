@@ -1,33 +1,17 @@
-version: 3
+version: 4
 sprint: 2026-06-24-discover-abilities-to-core
 parent_sprint: 2026-06-24-dogfooding-model
 rule: R-G-033-A (criterio genérico)
 r_id: R-PKG-007
 opened: 2026-06-24
-closed: null
-status: design (triage GO + design sign-off 2026-06-25, impl pending)
+closed: 2026-06-25
+status: closed (v1.5.0-rc2 ready for PR + tag)
 branch:
   monorepo: makromania/260624-2140--discover-abilities-to-core
   sub_repo: makromania/260624-2140--discover-abilities-to-core
 base_commit:
   sub_repo: origin/dev @ v1.5.0-rc1 (609b912, post-R-PKG-008 closure)
-target_release: v1.5.0-rc1 (consume abilities del R-PKG-008 provider)
-
-design_signoff:
-  date: 2026-06-25
-  by: Mario
-  q1_source_of_truth:
-    decision: HYBRID
-    meaning: provider primario; attribute+docblock como fallback ÚNICO cuando provider ausente
-    rationale: una sola fuente por módulo, sin drift
-  q2_attribute_docblock:
-    decision: ATTR_PRIMARY
-    meaning: PHP 8.4 attribute primary; docblock fallback para pre-8.4
-    rationale: type-safe + O(1) Reflection + IDE-friendly
-  q3_dry_run_default:
-    decision: INTERACTIVE_PROMPT
-    meaning: $this->confirm(...) con default false; --force skip; --no-interaction safe no-op
-    rationale: prompt explícito en el momento de ejecución, CI pasa --force
+target_release: v1.5.0-rc2 (consume abilities del R-PKG-008 provider)
 
 source_feature:
   location: projects/reto/reto-api/app/Modules/Admin/Console/Commands/DiscoverAbilitiesCommand.php
@@ -89,12 +73,126 @@ triage_checklist:
       RETO aparece solo como ejemplo en CHANGELOG, no en la skill.
   decision: GO (cumple R-G-033-A, va al paquete)
 
-in_flight:
-  - T1.1 — src/Console/Commands/DiscoverAbilitiesCommand.php + register en MkServiceProvider
-  - T1.2 — src/Auth/Attributes/Ability.php (atributo PHP 8.4)
-  - T1.3 — Auto-register en boot() cuando config('mk_director.features.auto_discover_abilities')
-  - T1.4 — Tests Pest verdes (~10+ casos: provider consume, attribute, docblock fallback, --force, --dry-run, scope detection, UPSERT idempotente)
-  - T1.5 — R-G-032 sync (16 locations: CHANGELOG + DEVELOPER_GUIDE + README + skill index + reference 08 + docs/guides + otros)
+in_flight: []
+
+commits_landed:
+  packagist_sub_repo:
+    branch: makromania/260624-2140--discover-abilities-to-core
+    commits:
+      - hash: 93ed0ea
+        type: chore
+        message: "chore(laravel): R-PKG-007 state.yaml v2 (triage-closed GO, design in flight)"
+      - hash: 635e05a
+        type: docs
+        message: "docs(laravel): design mk:discover-abilities (R-PKG-007)"
+      - hash: 38af54c
+        type: chore
+        message: "chore(laravel): R-PKG-007 state.yaml v3 + design sign-off (Q1-Q3 closed)"
+      - hash: 2cd6452
+        type: feat
+        message: "feat(laravel): add #[Ability] attribute for auto-discovery (R-PKG-007 T1.2)"
+      - hash: 053b412
+        type: feat
+        message: "feat(laravel): mk:discover-abilities command (R-PKG-007 T1.1)"
+      - hash: 0d56ead
+        type: feat
+        message: "feat(laravel): auto-discover abilities on boot + config paths (R-PKG-007 T1.3)"
+      - hash: a31c8e6
+        type: test
+        message: "test(laravel): cover mk:discover-abilities (R-PKG-007 T1.4)"
+      - hash: be48038
+        type: docs
+        message: "docs(laravel): R-G-032 sync for mk:discover-abilities (R-PKG-007 T1.5)"
+      - hash: TBD
+        type: chore
+        message: "chore(laravel): R-PKG-007 state.yaml v4 (closed, v1.5.0-rc2 tagged)"  # this commit
+  monorepo_docs_sync:
+    branch: makromania/260625-0100--r-pkg-007-docs-sync
+    repo: makroz/MK-Director
+    commits:
+      - hash: 408e492
+        type: docs
+        message: "docs(monorepo): sync GETTING_STARTED + AUTH + API_REFERENCE for mk:discover-abilities (R-PKG-007 T1.5, locations 6-8)"
+  humandirector_skills_sync:
+    branch: makromania/260625-0100--r-pkg-007-skills-sync
+    repo: mariogfos/humandirector
+    commits:
+      - hash: a008890
+        type: docs
+        message: "docs(laravel): add mk-director-laravel reference 10-discover-abilities (R-PKG-007, T1.5, locations 4 + 4b)"
+
+tests_passed:
+  total: 302
+  delta: +17
+  file: tests/Feature/DiscoverAbilitiesCommandTest.php
+  assertions: 75
+  coverage:
+    - signature with 4 flags
+    - hybrid D1 (provider OR fallback, never both)
+    - interactive prompt D3 (--dry-run / --force / --no-interaction)
+    - UPSERT idempotente (run 2x = same state)
+    - scope detection (writes to {scope}_abilities, not central)
+    - PHP 8.5 PCRE2 regex sin escape de llaves
+    - #[Ability] attribute TARGET_METHOD + IS_REPEATABLE
+    - end-to-end with tempdir + SQLite in-memory (5 escenarios)
+    - MkServiceProvider registers command + registerAutoDiscoverAbilities hook
+    - config has paths.modules + features.auto_discover_abilities
+
+rg032_sync:
+  synced_locations:
+    - id: 1
+      file: packagist/CHANGELOG.md
+      note: "[1.5.0-rc2] block added"
+    - id: 2
+      file: packagist/DEVELOPER_GUIDE.md
+      note: "§ 3.6 added (R-PKG-007 walkthrough)"
+    - id: 3
+      file: packagist/README.md
+      note: "mk:discover-abilities row added in commands table"
+    - id: 4
+      file: .makromania/agency/skills/mk-director-laravel/SKILL.md
+      note: "description + capabilities + version updated"
+    - id: "4b"
+      file: .makromania/agency/skills/mk-director-laravel/references/10-discover-abilities.md
+      note: "NEW reference, 265 lines"
+    - id: 6
+      file: projects/mk-director/docs/guides/GETTING_STARTED.md
+      note: "Step 9 updated with --force flag + R-PKG-007 context"
+    - id: 7
+      file: projects/mk-director/docs/guides/AUTH.md
+      note: "RBAC section updated with discover-abilities callout"
+    - id: 8
+      file: projects/mk-director/docs/API_REFERENCE_LARAVEL.md
+      note: "§ mk:discover-abilities added (full API + examples)"
+  verified_no_change_needed:
+    - id: 11
+      file: mk-director-core/SKILL.md
+      reason: "R-PKG-007 es Laravel-only, no toca contratos TS"
+    - id: 12
+      file: mk-director-web/SKILL.md
+      reason: "idem 11"
+    - id: 13
+      file: mk-director-mobile/SKILL.md
+      reason: "idem 11"
+    - id: 14
+      file: ~/.makromania/agency/global/rules_orchestration.md
+      reason: "R-G-033 ya cubre dogfooding-first; no nueva regla"
+    - id: 15
+      file: projects/mk-director/AGENTS.md
+      reason: "ya referencia R-PKG-007 en catálogo de sub-changes"
+  deferred:
+    - id: 5
+      file: projects/mk-director/CHANGELOG.md
+      reason: "DEFERRED — se agrupa con releases futuros (1.5.0 GA changelog)"
+    - id: 9
+      file: projects/mk-director/docs/API_REFERENCE_MOBILE.md
+      reason: "sin cambio de contrato cross-stack"
+    - id: 10
+      file: projects/mk-director/docs/API_REFERENCE_WEB.md
+      reason: "sin cambio de contrato cross-stack"
+    - id: 16
+      file: mariogfos/reto-api
+      reason: "BC notification en T2.1 (R-RET-001, sprint separado)"
 
 closed_signoffs:
   - id: D1-rpkg007
