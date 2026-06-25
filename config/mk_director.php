@@ -59,6 +59,29 @@ return [
         'search' => env('MK_SEARCH', true),
         'remember_state' => env('MK_REMEMBER_STATE', false),
         'pagination_type' => env('MK_PAGINATION_TYPE', 'length_aware'), // Options: length_aware, cursor
+
+        // R-PKG-007: auto-run `mk:discover-abilities` on every boot.
+        // Solo usar en sandbox/dev. Idempotente (UPSERT), pero agrega overhead.
+        'auto_discover_abilities' => env('MK_AUTO_DISCOVER_ABILITIES', false),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Module Discovery Paths
+    |--------------------------------------------------------------------------
+    |
+    | Path(s) donde viven los módulos del consumer. Usado por:
+    |   - `mk:module` scaffolder para localizar `app/Modules/`.
+    |   - `mk:discover-abilities` (R-PKG-007) para escanear controllers
+    |     y providers cuando el provider NO implementa `discoverAbilities()`.
+    |
+    | Default: `app_path('Modules')` — match la convención generada por
+    | `mk:module {Name}`. Override per-project via `.env`:
+    |   `MK_MODULES_PATH=custom/Modules`
+    | o vía `config/mk_director.php` publicado.
+    */
+    'paths' => [
+        'modules' => env('MK_MODULES_PATH', app_path('Modules')),
     ],
 
     /*

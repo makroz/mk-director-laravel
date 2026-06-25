@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 use Mk\Director\Auth\AuthServiceProvider;
 use Mk\Director\Console\Commands\AuthCreateSuperAdminCommand;
+use Mk\Director\Console\Commands\DiscoverAbilitiesCommand;
 use Mk\Director\Console\Commands\GenerateDocsCommand;
 use Mk\Director\Console\Commands\LintBoundariesCommand;
 use Mk\Director\Console\Commands\MakeAuthUserCommand;
@@ -89,11 +90,50 @@ class MkServiceProvider extends ServiceProvider
                 MkSkillListCommand::class,
                 MkSkillDeployCommand::class,
                 AuthCreateSuperAdminCommand::class,
+                DiscoverAbilitiesCommand::class,
             ]);
         }
 
         $this->registerGlobalCacheListener();
         $this->registerOpenApiRoutes();
+        $this->registerAutoDiscoverAbilities();
+    }
+
+    /**
+     * R-PKG-007 (D4): si `mk_director.features.auto_discover_abilities = true`,
+     * corre `mk:discover-abilities --force --json` después del boot cuando
+     * estamos en consola (sandbox/dev). Idempotente (UPSERT).
+     *
+     * En CI/prod: dejar el flag en `false` (default). El `mk:discover-abilities`
+     * se corre manualmente o como parte del deploy script.
+     */
+    protected function registerAutoDiscoverAbilities(): void
+    {
+        if (! config('mk_director.features.auto_discover_abilities', false)) {
+            return;
+        }
+
+        if (! $this->app->runningInConsole()) {
+            return;
+        }
+
+        // Don't auto-run when the artisan command IS mk:discover-abilities
+        // (avoid infinite recursion when developers run it interactively).
+        if (isset($_SERVER['argv'][1]) && str_starts_with((string) $_SERVER['argv'][1], 'mk:discover-abilities')) {
+            return;
+        }
+
+        try {
+            $exitCode = $this->app->call(DiscoverAbilitiesCommand::class, [
+                '--force' => true,
+                '--json' => true,
+            ]);
+            if ($exitCode !== 0) {
+                Log::warning("MK-Director: auto-discover-abilities exited with code {$exitCode}.");
+            }
+        } catch (Throwable $e) {
+            Log::warning('MK-Director: auto-discover-abilities failed: '.$e->getMessage());
+        }
     }
 
     /**
