@@ -12,6 +12,12 @@ use Illuminate\Support\Facades\Route;
  * Las rutas protegidas usan `mk.auth:{{moduleNameLower}}` (del paquete) que
  * valida en 3 capas que el token pertenece al scope correcto (ver
  * docs/guides/AUTH.md § "The 4 defense layers against cross-scope mix-up").
+ *
+ * R-PKG-010: cuando el scope se genera con `--with-auth-rbac`, los
+ * endpoints públicos (`/login`, `/forgot`, `/reset`) llevan middleware
+ * `throttle:{limit},{minutes}` configurable por
+ * `mk_director.auth.rate_limits.{endpoint}`. Default mode (sin flag):
+ * idéntico a v1.5.0-rc3 (sin rate limit middleware). BC preservada.
  */
 
 // Prefix includes `api/` because Laravel 11+ `loadRoutesFrom` from a
@@ -22,10 +28,10 @@ use Illuminate\Support\Facades\Route;
 // command output, and CHANGELOG 1.3.0 all advertised `/api/admin/auth/login`.
 Route::prefix('api/{{moduleNameLower}}/auth')->group(function () {
     // ── Públicas ────────────────────────────────────────────────────
-    Route::post('login', [AuthController::class, 'login']);
+    Route::post('login', [AuthController::class, 'login']){{rbacLoginThrottle}};
     Route::post('refresh', [AuthController::class, 'refresh']);
-    Route::post('forgot', [AuthController::class, 'forgot']);
-    Route::post('reset', [AuthController::class, 'reset']);
+    Route::post('forgot', [AuthController::class, 'forgot']){{rbacForgotThrottle}};
+    Route::post('reset', [AuthController::class, 'reset']){{rbacResetThrottle}};
 
     // ── Protegidas (auth: scope) ────────────────────────────────────
     Route::middleware('mk.auth:{{moduleNameLower}}')->group(function () {
