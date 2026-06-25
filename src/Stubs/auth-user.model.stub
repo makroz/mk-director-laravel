@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\{{ModuleName}}\Models;
 
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
-use Mk\Director\Auth\Models\AuthUser;
+{{mustVerifyEmailUse}}use Mk\Director\Auth\Models\AuthUser;
 
 /**
  * {{ModuleName}} — modelo concreto de un scope de autenticación MK.
@@ -19,6 +19,10 @@ use Mk\Director\Auth\Models\AuthUser;
  * importar este modelo desde otros módulos. Si necesitás datos
  * del {{ModuleName}} desde otro módulo, exponé una interface en
  * `App\Modules\{{ModuleName}}\Api\` y consumila.
+ *
+ * Login field: `{{loginField}}` (configurable via `--login-field=<campo>` al
+ * ejecutar `php artisan mk:make:auth-user`). Ver docs/API_REFERENCE_LARAVEL.md
+ * § mk:make:auth-user --login-field para casos soportados.
  */
 class {{ModuleName}} extends AuthUser
 {
@@ -29,6 +33,41 @@ class {{ModuleName}} extends AuthUser
      * cada scope es un bounded context con su propia tabla.
      */
     protected $table = '{{moduleNamePluralLower}}';
+
+    /**
+     * Columna usada para login. Configurable via `--login-field=<campo>`.
+     * Default BC: `email`. Otros casos comunes: `ci`, `phone`, `username`.
+     *
+     * Si vas a usar este modelo con login no-email, override también
+     * el cast de `email_verified_at` (eliminado cuando loginField != email)
+     * y NO implementar MustVerifyEmail (override via remove en este stub).
+     */
+    protected string $loginField = '{{loginField}}';
+
+    /**
+     * Columnas asignables en masa. El `auth_scope` por defecto es
+     * `{{moduleNameLower}}`; las subclases (Admin, Member, etc.) lo setean
+     * al crear. `{{loginField}}` es el campo de login (default `email`).
+     *
+     * @var array<int, string>
+     */
+    protected $fillable = [
+        'name',
+        '{{loginField}}',
+        'password',
+        'auth_scope',
+        'client_id',
+    ];
+
+    /**
+     * Casts de atributos. Solo `email_verified_at` se incluye cuando
+     * loginField es `email` (BC); para otros campos, dejar solo `password`.
+     *
+     * @var array<string, string>
+     */
+    protected $casts = [
+{{emailVerifiedAtCastEntry}}        'password' => 'hashed',
+    ];
 
     /**
      * El scope se ata al instanciar el modelo. Esto garantiza que

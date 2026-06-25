@@ -17,6 +17,9 @@ use Mk\Director\Controllers\BaseController;
  * Skeleton con la forma del flow MK-Director. Los métodos login / refresh
  * / forgot / reset son TODO — la implementación real vive en el consumer.
  *
+ * Login field: `{{loginField}}` (configurable via `--login-field=<campo>`).
+ * El validation y el lookup usan este campo en lugar de hardcodear `email`.
+ *
  * Extiende `BaseController` (no `Illuminate\Routing\Controller`) para tener:
  *   - Envelope JSON estándar del paquete: `sendResponse()` /
  *     `sendError()` (con `{success, message, data, debugMsg}`).
@@ -31,9 +34,9 @@ use Mk\Director\Controllers\BaseController;
  * (`mk_director.auth.ttl.access_seconds` / `refresh_seconds`).
  *
  * Endpoints (públicos salvo que se indique):
- *   POST   /api/{{moduleNameLower}}/auth/login    — email + password → tokens
+ *   POST   /api/{{moduleNameLower}}/auth/login    — {{loginField}} + password → tokens
  *   POST   /api/{{moduleNameLower}}/auth/refresh  — refresh_token → access_token
- *   POST   /api/{{moduleNameLower}}/auth/forgot   — enviar email de reset
+ *   POST   /api/{{moduleNameLower}}/auth/forgot   — enviar email de reset (si aplica)
  *   POST   /api/{{moduleNameLower}}/auth/reset    — reset con token
  *   POST   /api/{{moduleNameLower}}/auth/logout   — revoca access (auth:{{moduleNameLower}})
  *   GET    /api/{{moduleNameLower}}/auth/me       — usuario actual (auth:{{moduleNameLower}})
@@ -44,6 +47,10 @@ use Mk\Director\Controllers\BaseController;
  * paquete (`{success, message, data, debugMsg}`). Los responses ad-hoc
  * de v1.3.x (`{access_token, token_type, '{scope}' => $user}`) ahora
  * viven dentro de `data`. Ver CHANGELOG 1.4.0 para el detalle.
+ *
+ * R-PKG-009: si `--login-field != email`, el validation rule es
+ * `required|string` (no `required|email`). El consumer puede override
+ * el LoginRequest para agregar formato específico (regex CI, etc.).
  */
 class AuthController extends BaseController
 {
@@ -59,12 +66,14 @@ class AuthController extends BaseController
     public function login(Request $request): JsonResponse
     {
         $credentials = $request->validate([
-            'email' => ['required', 'email'],
+            '{{loginField}}' => {{loginFieldValidationRule}},
             'password' => ['required', 'string'],
         ]);
 
         /** @var {{ModuleName}}|null $user */
-        $user = {{ModuleName}}::where('email', $credentials['email'])->first();
+        $user = {{ModuleName}}::query()
+            ->where('{{loginField}}', $credentials['{{loginField}}'])
+            ->first();
 
         // Capa 1: el scope del token DEBE coincidir con el scope del user
         // (Capa 3 AuthScopeResolver lo valida en cada request, pero acá
@@ -75,7 +84,7 @@ class AuthController extends BaseController
         ) {
             return $this->sendError(
                 'Credenciales inválidas.',
-                ['email' => ['Credenciales inválidas.']],
+                ['{{loginField}}' => ['Credenciales inválidas.']],
                 422,
             );
         }
@@ -89,7 +98,7 @@ class AuthController extends BaseController
             'refresh_token' => $refreshToken,
             'token_type' => 'Bearer',
             'expires_in' => config('mk_director.auth.ttl.access_seconds', 15 * 60),
-            '{{moduleNameLower}}' => $user->only(['id', 'name', 'email']),
+            '{{moduleNameLower}}' => $user->only(['id', 'name', '{{loginField}}']),
         ], 'Login exitoso');
     }
 
@@ -137,17 +146,19 @@ class AuthController extends BaseController
      * POST /api/{{moduleNameLower}}/auth/forgot
      *
      * TODO: Generar token, persistir en `{{moduleNameLower}}_password_reset_tokens`,
-     * enviar email con link al frontend (configurar queue / mail).
+     * enviar email/notification con link al frontend (configurar queue / mail).
      */
     public function forgot(Request $request): JsonResponse
     {
-        $request->validate(['email' => ['required', 'email']]);
+        $request->validate([
+            '{{loginField}}' => {{loginFieldValidationRule}},
+        ]);
 
-        // TODO: dispatch email con token. Por ahora response estándar.
+        // TODO: dispatch notification con token. Por ahora response estándar.
 
         return $this->sendResponse(
             null,
-            'Si el email existe, recibirás un enlace para reset.',
+            'Si el {{loginField}} existe, recibirás un enlace para reset.',
         );
     }
 
