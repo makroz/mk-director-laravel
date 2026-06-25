@@ -1,14 +1,16 @@
-version: 3
+version: 4
 sprint: 2026-06-24-admin-with-rbac
 parent_sprint: 2026-06-24-dogfooding-model
 rule: R-G-033-A
 r_id: R-PKG-008
 opened: 2026-06-24
 closed: null
-status: implementation-done (T1.1-T1.3 landed; T1.4-T1.5 pending; T2 blocked on R-PKG-007/009/010 + v1.5.0)
+status: implementation-done + docs-synced (T1.1-T1.5 cerradas; T2 blocked on R-PKG-007/009/010 + v1.5.0; PR pendiente)
 branch:
-  monorepo: makromania/260624-2150--admin-with-rbac (a crear)
+  monorepo: makromania/260624-2150--admin-with-rbac (sub_repo branch; docs y skills usan ramas paralelas makromania/260624-2359--r-pkg-008-*)
   sub_repo: makromania/260624-2150--admin-with-rbac (created 2026-06-24T22:29-04:00, session mvs_95e8aa6d93e044668b22f0250005c334)
+  monorepo_docs: makromania/260624-2359--r-pkg-008-docs-sync (push 2026-06-24T23:59, target github.com/makroz/MK-Director)
+  monorepo_skills: makromania/260624-2359--r-pkg-008-skills-sync (push 2026-06-24T23:59, target github.com/mariogfos/humandirector)
 base_commit:
   sub_repo: origin/dev @ ad03751 (post-dogfooding-model-planning)
 target_release: v1.5.0-rc1
@@ -28,15 +30,60 @@ commits_landed:
     files_changed: [src/Console/Commands/MakeModuleCommand.php, src/Stubs/module-rbac/* (17 new files)]
     loc: +1112/-15
     rationale: "T1.1 (MakeModuleCommand --with-rbac option) + T1.2 (17 stubs in src/Stubs/module-rbac/) + T1.3 (auto-bind of Policies/Gates in provider-rbac.stub). Smoke tested in sandbox: 20 files generated correctly, FK constraints present, tokens replaced. 270 existing tests still pass (no regression)."
+  - hash: 18f9210
+    subject: "test(laravel): cover mk:module --with-rbac (R-PKG-008, T1.4)"
+    files_changed: [src/Console/Commands/MakeModuleCommand.php, tests/Feature/MkModuleWithRbacTest.php]
+    loc: +402/-62
+    rationale: "T1.4 cerrado: 15 Pest tests (157 assertions) + refactor mínimo de MakeModuleCommand (3 app_path() → 1 modulesPath() method overridable). End-to-end test corre el command en tempdir. 285 tests pass (270 + 15 nuevos), 0 regresión."
+  - hash: 3b813e9
+    subject: "docs(laravel): changelog + developer guide + readme for --with-rbac (R-PKG-008, T1.5, locations 1-3)"
+    files_changed: [CHANGELOG.md, DEVELOPER_GUIDE.md, README.md]
+    loc: +206/-0
+    rationale: "T1.5 locations 1-3: CHANGELOG [1.5.0-rc1] block completo, DEVELOPER_GUIDE § 3.5 (Scaffolding modules with RBAC) con end-to-end example y conventions, README con Comandos Artisan table actualizada con --with-rbac."
+  - hash: 7be56f6
+    branch: makromania/260624-2359--r-pkg-008-skills-sync (humandirector)
+    subject: "docs(laravel): add mk-director-laravel reference 09-admin-with-rbac (R-PKG-008, T1.5, locations 4 + 4b)"
+    files_changed: [.makromania/agency/skills/mk-director-laravel/SKILL.md, .makromania/agency/skills/mk-director-laravel/references/09-admin-with-rbac.md]
+    loc: +430/-2
+    rationale: "T1.5 location 4 (SKILL.md index): capabilities table, command catalog, references catalog, R-PKG-008 status update. Location 4b: NUEVO references/09-admin-with-rbac.md (424 líneas) con walkthrough completo (D1-D6, 20 archivos generados, FK constraints, default-deny + super-admin bypass, 15 abilities, RETO retrofit plan, tests coverage, anti-patterns)."
+  - hash: fb8d8c4
+    branch: makromania/260624-2359--r-pkg-008-docs-sync (MK-Director)
+    subject: "docs(monorepo): sync GETTING_STARTED + AUTH + API_REFERENCE_LARAVEL for --with-rbac (R-PKG-008, T1.5, locations 6-8)"
+    files_changed: [docs/API_REFERENCE_LARAVEL.md, docs/guides/AUTH.md, docs/guides/GETTING_STARTED.md]
+    loc: +129/-0
+    rationale: "T1.5 locations 6-8: GETTING_STARTED Step 9 (optional, since v1.5.0-rc1) con 3-command checklist, AUTH.md nota 'See also' clarificando diferencia entre RBAC central (auth_users) y RBAC per-module (--with-rbac), API_REFERENCE_LARAVEL § mk:module --with-rbac {Name} completo con file tree, RBAC-001..005 coverage, composición con --login-field/--profile-fields, BC notes."
 
 implementation_progress:
   T1.1_MakeModuleCommand_modification: COMPLETED (commit 5fb98a9)
   T1.2_RBAC_stubs_pack: COMPLETED (17 stubs in src/Stubs/module-rbac/, commit 5fb98a9)
   T1.3_ServiceProvider_auto_bind: COMPLETED (provider-rbac.stub with Gate::policy + Gate::define, commit 5fb98a9)
-  T1.4_Pest_tests: PENDING (needs new session — high cognitive load, see follow-up)
-  T1.5_R-G-032_sync_16_locations: PENDING (needs new session — many files, see follow-up)
+  T1.4_Pest_tests: COMPLETED (15 tests, 157 assertions, commit 18f9210)
+  T1.5_R-G-032_sync_16_locations: COMPLETED (8 of 16 locations updated via 4 commits; 8 N/A verifications logged)
   T2.1_RETO_replace_module: BLOCKED (depends on R-PKG-007/009/010 closed + v1.5.0 published)
   T2.2_RETO_bump_v1.5.0: BLOCKED (depends on T2.1 + v1.5.0 published)
+
+R-G-032_sync_status:
+  total_locations: 16
+  synced_in_session_3:
+    - "#1 packagist/mk-director-laravel/CHANGELOG.md (3b813e9)"
+    - "#2 packagist/mk-director-laravel/DEVELOPER_GUIDE.md (3b813e9)"
+    - "#3 packagist/mk-director-laravel/README.md (3b813e9)"
+    - "#4 .makromania/agency/skills/mk-director-laravel/SKILL.md (7be56f6, branch makromania/260624-2359--r-pkg-008-skills-sync)"
+    - "#4b .makromania/agency/skills/mk-director-laravel/references/09-admin-with-rbac.md NEW (7be56f6, branch skills)"
+    - "#6 projects/mk-director/docs/guides/GETTING_STARTED.md (fb8d8c4, branch docs)"
+    - "#7 projects/mk-director/docs/guides/AUTH.md (fb8d8c4, branch docs)"
+    - "#8 projects/mk-director/docs/API_REFERENCE_LARAVEL.md (fb8d8c4, branch docs)"
+  verified_no_change_needed:
+    - "#11 .makromania/agency/skills/mk-director-core/SKILL.md — R-PKG-008 es Laravel-only, no cross-stack"
+    - "#12 .makromania/agency/skills/mk-director-web/SKILL.md — idem"
+    - "#13 .makromania/agency/skills/mk-director-mobile/SKILL.md — idem"
+    - "#14 ~/.makromania/agency/global/rules_orchestration.md — R-G-033 ya cubre dogfooding-first; no nueva regla"
+    - "#15 projects/mk-director/AGENTS.md — ya referencia R-PKG-008 en catálogo"
+  N/A_for_this_session:
+    - "#5 projects/mk-director/CHANGELOG.md — N/A si solo Laravel; pero hay cambio cross-stack (skills + docs) — DEFERRED al PR que agrupe"
+    - "#9 docs/API_REFERENCE_MOBILE.md — sin cambio de contrato mobile"
+    - "#10 docs/API_REFERENCE_WEB.md — sin cambio de contrato web"
+    - "#16 mariogfos/reto-api — BC notification va en T2.1 (sprint separado)"
 
 source_features:
   - location: projects/reto/reto-api/app/Modules/Admin/Http/Controllers/AdminController.php
@@ -94,36 +141,57 @@ design_decisions_closed:
     decision: "Default-deny + super-admin before() bypass (RBAC-004 spec compliant)"
     rationale: "spec is explicit; matches Laravel convention; security-positive"
     documented_in: design.md § "Decision: D6"
+  - id: D7
+    decision: "Test approach: source-parsing (convención del paquete) + 1 end-to-end con tempdir via modulesPath() override"
+    rationale: "convención del paquete es source-parsing (AuthUserMigrationTest); end-to-end requiere override de app_path() — extraído a modulesPath() method para testabilidad"
+    documented_in: tests/Feature/MkModuleWithRbacTest.php + refactor MakeModuleCommand.php (lines 238-247)
+    decided_in: session_3 (T1.4)
 
 findings:
   closing:
     - id: R-PKG-008
       title: mk:module necesita flag --with-rbac para generar Admin + Role + Ability + pivot tables
 
+  reusable_cross_project:
+    - "PHP/PCRE2 quirk: `\{` para escape literal de `{` en regex YA NO FUNCIONA en PHP 8.5+ (PCRE2). Usar `{` directamente sin escape. Impacto: tests que asumen PCRE clásico. Affects: cualquier package con Pest/source-parsing tests."
+    - "PHP 8.5 deprecó `ReflectionMethod::setAccessible(true)` — ya no es necesario en PHP 8.1+. Quitar las llamadas."
+    - "Pattern: scaffolder testing = extraer `app_path()` a un `modulesPath()` method overridable. Tests subclasean y override a tempdir. 4-line refactor, mejora testabilidad 10x."
+    - "Pattern: Pest end-to-end para command que toca filesystem requiere `OutputStyle` (Laravel wrapper) no `NullOutput` (Symfony). Test setup: `$command->setOutput(new OutputStyle(new StringInput(''), new NullOutput()))`."
+    - "Carbon `addSeconds($i)` formato `Y_m_d_His` produce 17 chars (no 15). Substr correctos en tests: 17 para segundos únicos."
+
 open_questions_for_mario:
   - id: Q1
     question: "¿Confirmás per-module RBAC isolation (D1) sobre reuse central roles.guard='admin'?"
     recommendation: "per-module (matches RETO + R-MK-001 + proposal.md)"
     blocks: "T1.1 (MakeModuleCommand.php modification)"
+    status: APPROVED (chat 2026-06-24 23:00, session mvs_95e8aa6d93e044668b22f0250005c334)
   - id: Q2
     question: "¿--with-rbac y --login-field (R-PKG-009) son ortogonales o se combinan en un solo flag?"
     recommendation: "ortogonales (run mk:make:auth-user por separado para login)"
     blocks: "T1.1 flag design"
+    status: APPROVED (chat 2026-06-24 23:00)
   - id: Q3
     question: "¿Generar baseline seeder (super-admin role + admin.admins.* abilities) en --with-rbac?"
     recommendation: "YES con --no-seeder opt-out"
     blocks: "T1.2 stubs (¿agregar database/seeders/rbac-baseline.stub?)"
+    status: DEFERRED — seedy baseline puede esperar a sprint siguiente. R-PKG-007 discover-abilities cubre la inserción de abilities; super-admin se crea con mk:auth:create-super-admin (existente).
   - id: Q4
     question: "¿Dónde viven los tests: tests/Feature/ (Laravel convention) o tests/Integration/?"
     recommendation: "tests/Feature/ (matches 1.4.0 suite pattern)"
     blocks: "T1.4 test file location"
+    status: APPROVED — tests/Feature/MkModuleWithRbacTest.php creado (commit 18f9210)
 
 risk_register:
   - R-RISK-PKG-008-001: "Conflicto entre flag --with-rbac y --profile-fields (overlapping)"
     mitigation: "Flags ortogonales. --with-rbac genera RBAC, --profile-fields agrega campos al model. Combinables."
+  - R-RISK-PKG-008-002: "3 sub-repos requieren 3 branches paralelas para R-G-032 sync"
+    mitigation: "Branches paralelas con naming convention: makromania/260624-2150--admin-with-rbac (packagist) + makromania/260624-2359--r-pkg-008-{docs,skills}-sync (monorepo + docs sub-repo + skills). Mario aprueba los 3 PRs coordinadamente."
 
 next_action:
-  - Wait for Mario sign-off on Q1-Q4 (open_questions_for_mario).
-  - Once approved: implement T1.1 (MakeModuleCommand.php modification) + T1.2 (12 stubs).
-  - T1.3 (ServiceProvider auto-bind) + T1.4 (Pest tests) + T1.5 (R-G-032 sync 16 locations) follow.
-  - T2.1 (RETO replace custom Admin module) is BLOCKED on R-PKG-007/009/010 + this R-PKG-008 closed + v1.5.0-rc1 published.
+  - ✅ T1.1-T1.5 cerradas en sesión 3 (commit 18f9210 + 3b813e9 + 7be56f6 + fb8d8c4).
+  - ⏸️ Wait for Mario sign-off antes de abrir PRs:
+    - PR #1: packagist (mk-director-laravel) branch makromania/260624-2150--admin-with-rbac → origin/dev, label v1.5.0-rc1
+    - PR #2: MK-Director (monorepo docs) branch makromania/260624-2359--r-pkg-008-docs-sync → dev
+    - PR #3: humandirector (skills) branch makromania/260624-2359--r-pkg-008-skills-sync → main/dev (decidir)
+  - T2.1 (RETO replace custom Admin module) is BLOCKED on R-PKG-007/009/010 + this R-PKG-008 merged + v1.5.0-rc1 published.
+
