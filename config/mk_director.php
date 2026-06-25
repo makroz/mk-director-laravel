@@ -131,6 +131,43 @@ return [
         // El config se usa en `MkAuthenticate` para resolver `auth_identifier`
         // cuando el token no trae ability explícita.
         'login_field' => env('MK_LOGIN_FIELD', 'email'),
+
+        // R-PKG-010: ability checks opcionales en endpoints privados del
+        // AuthController generado con `mk:make:auth-user --with-auth-rbac`.
+        //
+        // Default BC: `null` en TODAS las abilities → no se hace check
+        // (idem v1.4.0 / v1.5.0-rc3 sin --with-auth-rbac).
+        //
+        // Configurar via env o publicando config:
+        //   MK_AUTH_ABILITY_ME=auth.me.read
+        //   MK_AUTH_ABILITY_LOGOUT=auth.logout
+        //
+        // El consumer puede usar cualquier naming convention. Convención
+        // recomendada: `{scope}.{endpoint}.{action}` (ej: `admin.me.read`).
+        //
+        // El ability check usa `Mk\Director\Auth\Services\AbilityResolver`
+        // (existente, con cache por user + Sanctum short-circuit).
+        'abilities' => [
+            'me' => env('MK_AUTH_ABILITY_ME'),
+            'logout' => env('MK_AUTH_ABILITY_LOGOUT'),
+        ],
+
+        // R-PKG-010: rate limits por endpoint público del AuthController.
+        // Aplican via middleware `throttle:{limit},{minutes}` solo cuando
+        // el scope se genera con `--with-auth-rbac`.
+        //
+        // Default seguro:
+        //   login   = 5 attempts / minuto (anti brute-force)
+        //   forgot  = 3 attempts / minuto (anti enumeration)
+        //   reset   = 3 attempts / minuto (anti abuse)
+        //
+        // El consumer puede customizar via env o config publicada.
+        // Rate limit agresivo puede bloquear usuarios reales — tunable.
+        'rate_limits' => [
+            'login' => env('MK_AUTH_RATE_LIMIT_LOGIN', '5,1'),
+            'forgot' => env('MK_AUTH_RATE_LIMIT_FORGOT', '3,1'),
+            'reset' => env('MK_AUTH_RATE_LIMIT_RESET', '3,1'),
+        ],
     ],
 
     /*
