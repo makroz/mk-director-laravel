@@ -26,7 +26,7 @@ use Mk\Director\Controllers\BaseController;
  *     `sendError()` (con `{success, message, data, debugMsg}`).
  *   - `autoTransform()` para que el método `me` aplique API Resources si
  *     el modelo declara `$apiResource`.
- *   - `getDebugData()` para EXPLAIN gated por role (R2-010).
+ *   - `getDebugData()` para EXPLAIN gated by role (R2-010).
  *   - Plugin instrumentation automática (audit log, multi-tenancy) si
  *     el consumer tiene `MkAuditLoggerPlugin` o `MkMultiTenantPlugin`.
  *
@@ -37,10 +37,14 @@ use Mk\Director\Controllers\BaseController;
  * Endpoints (públicos salvo que se indique):
  *   POST   /api/{{moduleNameLower}}/auth/login    — {{loginField}} + password → tokens
  *   POST   /api/{{moduleNameLower}}/auth/refresh  — refresh_token → access_token
+ *   POST   /api/{{moduleNameLower}}/auth/register — crea user con profile fields (si --profile-fields o --verify-email activo)
  *   POST   /api/{{moduleNameLower}}/auth/forgot   — enviar email de reset (si aplica)
  *   POST   /api/{{moduleNameLower}}/auth/reset    — reset con token
+ *   GET    /api/{{moduleNameLower}}/auth/email/verify/{id}/{hash} — verify email (signed URL, si --verify-email activo)
+ *   POST   /api/{{moduleNameLower}}/auth/email/resend — re-envía verification email (si --verify-email activo)
  *   POST   /api/{{moduleNameLower}}/auth/logout   — revoca access (auth:{{moduleNameLower}})
  *   GET    /api/{{moduleNameLower}}/auth/me       — usuario actual (auth:{{moduleNameLower}})
+ *   PATCH  /api/{{moduleNameLower}}/auth/me       — actualiza profile fields (auth:{{moduleNameLower}}, si --profile-fields activo)
  *
  * Rutas generadas en `app/Modules/{{ModuleName}}/Http/Routes/api.php`.
  *
@@ -64,6 +68,16 @@ use Mk\Director\Controllers\BaseController;
  *
  *   Default (sin flag): idéntico a v1.5.0-rc3 — sin RBAC, sin rate
  *   limit, sin audit log. BC preservada.
+ *
+ * R-PKG-011: si el scope se generó con `--profile-fields` o `--verify-email`,
+ * este controller además:
+ *   - Tiene método `register()` que crea user con profile fields (si aplica)
+ *     y dispatch de `Illuminate\Auth\Notifications\VerifyEmail` (si --verify-email).
+ *   - Tiene método `updateProfile()` (PATCH /me) que actualiza profile fields.
+ *   - Tiene métodos `verifyEmail()` + `resendVerification()` (si --verify-email).
+ *
+ *   Default (sin flags): idéntico a v1.5.0-rc4 — sin register, sin PATCH /me,
+ *   sin verify. BC preservada.
  */
 class AuthController extends BaseController
 {
@@ -203,4 +217,5 @@ class AuthController extends BaseController
     }
 
 {{rbacAuthorizeAbilityMethod}}
+{{registerMethod}}{{updateProfileMethod}}{{verifyEmailMethods}}
 }

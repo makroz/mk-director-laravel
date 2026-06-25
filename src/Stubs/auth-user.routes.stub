@@ -18,6 +18,15 @@ use Illuminate\Support\Facades\Route;
  * `throttle:{limit},{minutes}` configurable por
  * `mk_director.auth.rate_limits.{endpoint}`. Default mode (sin flag):
  * idéntico a v1.5.0-rc3 (sin rate limit middleware). BC preservada.
+ *
+ * R-PKG-011: cuando el scope se genera con `--profile-fields` o
+ * `--verify-email`, se agregan endpoints condicionales:
+ *   - `POST /register` (crea user con profile fields, opcionalmente dispatch
+ *     de VerifyEmail notification si `--verify-email` activo).
+ *   - `GET /email/verify/{id}/{hash}` (signed URL, marca email_verified_at).
+ *   - `POST /email/resend` (re-envía notification, throttled 6,1).
+ *   - `PATCH /me` (actualiza profile fields del user autenticado).
+ * Default mode (sin flags): idéntico a v1.5.0-rc4 (sin register, sin verify).
  */
 
 // Prefix includes `api/` because Laravel 11+ `loadRoutesFrom` from a
@@ -30,12 +39,13 @@ Route::prefix('api/{{moduleNameLower}}/auth')->group(function () {
     // ── Públicas ────────────────────────────────────────────────────
     Route::post('login', [AuthController::class, 'login']){{rbacLoginThrottle}};
     Route::post('refresh', [AuthController::class, 'refresh']);
-    Route::post('forgot', [AuthController::class, 'forgot']){{rbacForgotThrottle}};
+    {{registerRoute}}Route::post('forgot', [AuthController::class, 'forgot']){{rbacForgotThrottle}};
     Route::post('reset', [AuthController::class, 'reset']){{rbacResetThrottle}};
-
+{{emailVerifyRoutes}}
     // ── Protegidas (auth: scope) ────────────────────────────────────
-    Route::middleware('mk.auth:{{moduleNameLower}}')->group(function () {
+    Route::middleware('mk.auth:{{moduleNameLower}}'){{verifiedMiddleware}}->group(function () {
         Route::post('logout', [AuthController::class, 'logout']);
         Route::get('me', [AuthController::class, 'me']);
+        {{updateProfileRoute}}
     });
 });

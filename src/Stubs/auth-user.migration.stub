@@ -13,9 +13,14 @@ use Illuminate\Support\Facades\Schema;
  * con la columna `auth_scope` indexada (Capa 1 del modelo de seguridad MK).
  *
  * Columna de login: `{{loginField}}` (configurable via --login-field=<campo>).
- * Si loginField == `email`, también crea `email_verified_at` (MustVerifyEmail BC).
+ * Profile fields: declarados via --profile-fields=<csv> (R-PKG-011), cada uno como
+ * columna string nullable. Solo se generan si el flag está activo.
  *
- * Spec: MK-LAR-1.0.2 / MK-LAR-1.0.6.
+ * Si `--verify-email` está activo, también crea `email_verified_at` (MustVerifyEmail
+ * opt-in via flag). R-PKG-011 ADR-009: antes (R-PKG-009) se creaba siempre que
+ * loginField=email; refactor para opt-in via --verify-email.
+ *
+ * Spec: MK-LAR-1.0.2 / MK-LAR-1.0.6 / MK-LAR-1.5.0-rc5.PF (R-PKG-011).
  */
 return new class extends Migration
 {
@@ -25,7 +30,7 @@ return new class extends Migration
             $table->uuid('id')->primary();
             $table->string('name');
             $table->string('{{loginField}}')->unique();
-            {{emailVerifiedAtColumn}}$table->string('password');
+            {{profileFieldsColumns}}{{emailVerifiedAtColumn}}$table->string('password');
             $table->string('auth_scope')->default('{{moduleNameLower}}')->index();
             $table->rememberToken();
             $table->timestamps();

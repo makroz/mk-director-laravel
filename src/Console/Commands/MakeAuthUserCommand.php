@@ -62,14 +62,16 @@ class MakeAuthUserCommand extends Command
      */
     protected $signature = 'mk:make:auth-user {scope : Nombre del scope en StudlyCase singular (Ej: Member, Customer, Partner)}
         {--login-field=email : Campo usado para login (default: email). BC: si no se pasa, idéntico a v1.4.0. Valores comunes: email, ci, phone, username, documento.}
-        {--with-auth-rbac : Habilita RBAC integration (ability checks en /me y /logout), rate limiting en /login, /forgot, /reset, y audit log via AuthEvent (R-PKG-010). Default BC: false. Configurar abilities + rate_limits en config/mk_director.php.}';
+        {--with-auth-rbac : Habilita RBAC integration (ability checks en /me y /logout), rate limiting en /login, /forgot, /reset, y audit log via AuthEvent (R-PKG-010). Default BC: false. Configurar abilities + rate_limits en config/mk_director.php.}
+        {--profile-fields= : Campos adicionales para el perfil del scope (CSV de identifiers PHP válidos, default: ninguno = BC). Cada field se agrega como columna string nullable en la tabla del scope, en $fillable del modelo, y se expone en /me + PATCH /me + /register. Ortogonal con --login-field y --with-auth-rbac. Ej: --profile-fields=name,dni,phone (R-PKG-011).}
+        {--verify-email : Habilita verificación por email: columna email_verified_at, endpoints /email/verify/{id}/{hash} y /email/resend, dispatch de Illuminate\Auth\Notifications\VerifyEmail en /register. Default BC: false. Aplican cuando --login-field=email (R-PKG-011).}';
 
     /**
      * The console command description.
      *
      * @var string
      */
-    protected $description = 'Genera un scope de autenticación MK completo: Model (extends AuthUser), migration con auth_scope, AuthController (login/refresh/logout/me/forgot/reset), routes y ServiceProvider auto-registrado. Use --login-field=<field> para campos no-email (RETO: ci, genéricos: phone, username, etc.). Use --with-auth-rbac para integrar ability checks, rate limit y audit log (R-PKG-010).';
+    protected $description = 'Genera un scope de autenticación MK completo: Model (extends AuthUser), migration con auth_scope, AuthController (login/refresh/logout/me/forgot/reset), routes y ServiceProvider auto-registrado. Use --login-field=<field> para campos no-email (RETO: ci, genéricos: phone, username, etc.). Use --with-auth-rbac para integrar ability checks, rate limit y audit log (R-PKG-010). Use --profile-fields=<csv> para columnas adicionales del scope (e.g. dni, phone, birthdate). Use --verify-email para habilitar flujo completo de verificación por email (R-PKG-011).';
 
     public function handle(): int
     {
@@ -78,6 +80,8 @@ class MakeAuthUserCommand extends Command
         $scopePlural = Str::plural($scopeLower);
         $loginField = $this->resolveLoginField((string) $this->option('login-field'));
         $withAuthRbac = (bool) $this->option('with-auth-rbac');
+        $profileFields = $this->resolveProfileFields((string) $this->option('profile-fields'), $loginField);
+        $verifyEmailRequested = (bool) $this->option('verify-email');
 
         if ($scope === '') {
             $this->error('El nombre del scope no puede estar vacío.');
@@ -91,16 +95,31 @@ class MakeAuthUserCommand extends Command
             return self::FAILURE;
         }
 
-        // Placeholders condicionales (R-PKG-009 D5).
+        if ($profileFields === null) {
+            // resolveProfileFields() ya imprimió el error específico.
+            return self::FAILURE;
+        }
+
+        // --verify-email solo aplica cuando --login-field=email (no tiene sentido
+        // verificar un campo que no es email). Si se pidió con loginField != email,
+        // log warning y desactivamos (R-PKG-011 ADR-009 simplificación).
+        $isEmail = $loginField === 'email';
+        $verifyEmail = $verifyEmailRequested && $isEmail;
+        if ($verifyEmailRequested && ! $isEmail) {
+            $this->warn("⚠️  --verify-email ignorado: solo aplica cuando --login-field=email (actual: {$loginField}). Si querés verificar {$loginField}, override el AuthController.");
+        }
+
+        // Placeholders condicionales (R-PKG-009 D5 + R-PKG-011 D5).
         //
         // Nota sobre `MustVerifyEmail`: el AuthUser base YA implementa esa interface
         // (línea 41 de AuthUser.php), por lo que la subclase NO necesita re-implementarla.
         // Para `loginField != email`, igual la hereda pero queda como interface "muerto"
         // (no se usa). Esto es preferible a sacarla del base (sería BC-breaking).
         //
-        // El import `use Illuminate\Contracts\Auth\MustVerifyEmail` solo se incluye
-        // cuando `loginField=email` para evitar lint warnings de import no usado.
-        $isEmail = $loginField === 'email';
+        // El import `use Illuminate\Contracts\Auth\MustVerifyEmail` y la columna
+        // `email_verified_at` solo se incluyen cuando `$verifyEmail` está activo
+        // (R-PKG-011 ADR-009). Antes (R-PKG-009) dependía solo de `$isEmail` —
+        // refactor para que sea opt-in via flag.
 
         // Placeholders condicionales (R-PKG-010) para `--with-auth-rbac`.
         //
@@ -129,18 +148,21 @@ class MakeAuthUserCommand extends Command
             ], '');
 
         $loginFieldReplacements = [
-            '{{emailVerifiedAtColumn}}' => $isEmail
+            // R-PKG-011: `email_verified_at` column/cast/import ahora depende de
+            // --verify-email (no solo de $isEmail). R-PKG-009 los activaba siempre
+            // que loginField=email; refactor para opt-in via flag.
+            '{{emailVerifiedAtColumn}}' => $verifyEmail
                 ? "\$table->timestamp('email_verified_at')->nullable();\n            "
                 : '',
             // Cast entry SIN trailing whitespace. El stub del model tiene el
-            // `\n        'password'` después. Si loginField=email, queda
+            // `\n        'password'` después. Si --verify-email, queda
             // `[\n        'email_verified_at' => 'datetime',\n        'password'...`.
-            // Si no es email, queda `[\n        'password'...` (line vacía al ppio).
+            // Si no, queda `[\n        'password'...` (line vacía al ppio).
             // Trim final se hace en generateStub() si es necesario.
-            '{{emailVerifiedAtCastEntry}}' => $isEmail
+            '{{emailVerifiedAtCastEntry}}' => $verifyEmail
                 ? "        'email_verified_at' => 'datetime',\n"
                 : '',
-            '{{mustVerifyEmailUse}}' => $isEmail
+            '{{mustVerifyEmailUse}}' => $verifyEmail
                 ? "use Illuminate\\Contracts\\Auth\\MustVerifyEmail;\n"
                 : '',
             '{{loginFieldValidationRule}}' => $isEmail
@@ -148,7 +170,48 @@ class MakeAuthUserCommand extends Command
                 : "['required', 'string']",
         ];
 
-        $extraReplacements = array_merge($loginFieldReplacements, $rbacReplacements);
+        // Placeholders condicionales R-PKG-011: profile fields per-scope + email verification opt-in.
+        $profileFieldsReplacements = $this->buildProfileFieldsReplacements($profileFields);
+        $verifyEmailReplacements = $this->buildVerifyEmailReplacements($verifyEmail);
+
+        // R-PKG-011: register() y updateProfile() se generan condicionalmente.
+        // - register(): si hay --profile-fields OR --verify-email (necesario para crear user).
+        // - updateProfile(): solo si hay --profile-fields (PATCH /me sin razón si no hay fields custom).
+        $rulesPhp = $profileFieldsReplacements['__rulesPhp__'] ?? '[]';
+        unset($profileFieldsReplacements['__rulesPhp__']);
+
+        if (! empty($profileFields) || $verifyEmail) {
+            $profileFieldsReplacements['{{registerMethod}}'] = $this->buildRegisterMethod(
+                $scope,
+                $scopeLower,
+                $loginField,
+                $rulesPhp,
+                $verifyEmail,
+            );
+            $profileFieldsReplacements['{{registerRoute}}'] = "\n    Route::post('register', [AuthController::class, 'register']);";
+        } else {
+            $profileFieldsReplacements['{{registerMethod}}'] = '';
+            $profileFieldsReplacements['{{registerRoute}}'] = '';
+        }
+
+        if (! empty($profileFields)) {
+            $profileFieldsReplacements['{{updateProfileMethod}}'] = $this->buildUpdateProfileMethod(
+                $scope,
+                $loginField,
+                $rulesPhp,
+            );
+            $profileFieldsReplacements['{{updateProfileRoute}}'] = "\n        Route::patch('me', [AuthController::class, 'updateProfile']);";
+        } else {
+            $profileFieldsReplacements['{{updateProfileMethod}}'] = '';
+            $profileFieldsReplacements['{{updateProfileRoute}}'] = '';
+        }
+
+        $extraReplacements = array_merge(
+            $loginFieldReplacements,
+            $rbacReplacements,
+            $profileFieldsReplacements,
+            $verifyEmailReplacements,
+        );
 
         $this->info("🔐 Generando scope de autenticación MK: {$scope}".($withAuthRbac ? ' (with RBAC)' : ''));
 
@@ -431,6 +494,328 @@ PHP,
             // ── Routes: rate limit en /reset ─────────────────────────────
             '{{rbacResetThrottle}}' => "->middleware('throttle:' . config('mk_director.auth.rate_limits.reset', '3,1'))",
         ];
+    }
+
+    /**
+     * Resuelve y valida los profile fields pasados via --profile-fields.
+     *
+     * Reglas (R-PKG-011 ADR-007 + ADR-008 + REQ-1):
+     *   - Vacío o ausente → [] (BC con v1.5.0-rc4).
+     *   - CSV con PHP identifiers válidos (`/^[a-zA-Z_][a-zA-Z0-9_]*$/`).
+     *   - No duplicados dentro del CSV (fail-fast).
+     *   - No colisión con columnas reservadas (id, password, auth_scope, etc.)
+     *     ni con el login field (que ya tiene su propia columna).
+     *
+     * @param  string  $raw  Input crudo del CSV (puede tener espacios).
+     * @param  string  $loginField  Login field del scope (para detectar colisión).
+     * @return array<int, string>|null Lista de fields limpios, o null si inválido (con error ya impreso).
+     */
+    protected function resolveProfileFields(string $raw, string $loginField): ?array
+    {
+        $raw = trim($raw);
+
+        if ($raw === '') {
+            return []; // BC mode: sin profile fields.
+        }
+
+        $fields = array_values(array_filter(array_map('trim', explode(',', $raw)), static fn ($f) => $f !== ''));
+
+        $reserved = [
+            'id', 'password', 'auth_scope', 'client_id',
+            'remember_token', 'created_at', 'updated_at',
+            'email_verified_at', $loginField,
+        ];
+
+        $seen = [];
+        foreach ($fields as $field) {
+            if (! preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $field)) {
+                $this->error("El campo \"{$field}\" no es un identificador PHP válido (solo letras, números y guión bajo).");
+
+                return null;
+            }
+
+            if (in_array($field, $reserved, true)) {
+                $this->error("Campo \"{$field}\" colisiona con columna reservada o con --login-field={$loginField}.");
+
+                return null;
+            }
+
+            if (isset($seen[$field])) {
+                $this->error("Campo \"{$field}\" duplicado en --profile-fields.");
+
+                return null;
+            }
+
+            $seen[$field] = true;
+        }
+
+        return $fields;
+    }
+
+    /**
+     * Construye los placeholders R-PKG-011 para profile fields + register + PATCH /me.
+     *
+     * Default mode (sin --profile-fields Y sin --verify-email): todos los placeholders
+     * son string vacío → BC preservada con v1.5.0-rc4 (sin register, sin PATCH /me).
+     *
+     * Con `--profile-fields` o `--verify-email`: se genera register (necesario para
+     * crear el user con profile fields o disparar VerifyEmail). PATCH /me solo si
+     * hay profile fields.
+     *
+     * @param  array<int, string>  $fields  Lista de profile fields (puede ser []).
+     * @return array<string, string>
+     */
+    protected function buildProfileFieldsReplacements(array $fields): array
+    {
+        $hasProfile = ! empty($fields);
+
+        if (! $hasProfile) {
+            return [
+                '{{profileFieldsFillableEntries}}' => '',
+                '{{profileFieldsCastEntries}}' => '',
+                '{{profileFieldsColumns}}' => '',
+                '{{profileFieldsDocblock}}' => '',
+                '{{registerRoute}}' => '',
+                '{{registerMethod}}' => '',
+                '{{updateProfileRoute}}' => '',
+                '{{updateProfileMethod}}' => '',
+            ];
+        }
+
+        $fillable = '';
+        $columns = '';
+        $docblock = '';
+        $validationRules = [];
+
+        foreach ($fields as $field) {
+            // $fillable entries: 8 espacios indent + 'name',\n
+            $fillable .= "        '{$field}',\n";
+            // Migration: string nullable. Nullable para que migration corra sobre tablas con data existente.
+            $columns .= "        \$table->string('{$field}')->nullable();\n            ";
+            // Docblock @property entries.
+            $docblock .= " * @property string|null \${$field}\n";
+            // Validation: required|string|max:255 por default (R-PKG-011 ADR-003 + ADR-004).
+            $validationRules[$field] = ['required', 'string', 'max:255'];
+        }
+
+        // Para el método register() y updateProfile(): las reglas se pasan via array.
+        $rulesPhp = $this->phpArrayExport($validationRules);
+
+        return [
+            '{{profileFieldsFillableEntries}}' => $fillable,
+            '{{profileFieldsCastEntries}}' => '', // string no necesita cast explícito
+            '{{profileFieldsColumns}}' => $columns,
+            '{{profileFieldsDocblock}}' => $docblock,
+            '{{registerRoute}}' => "\n    Route::post('register', [AuthController::class, 'register']);",
+            '{{registerMethod}}' => '', // se setea después con scope + loginField
+            '{{updateProfileRoute}}' => "\n        Route::patch('me', [AuthController::class, 'updateProfile']);",
+            '{{updateProfileMethod}}' => '', // se setea después
+            // Stash temporal para setear en handle() con scope/loginField.
+            '__rulesPhp__' => $rulesPhp,
+        ];
+    }
+
+    /**
+     * Construye el código PHP del método `register()` que se inyecta en el stub.
+     *
+     * Default (sin profile fields, sin verify-email): no se genera register()
+     * porque no hay razón de existir (BC con v1.5.0-rc4). Solo se genera cuando
+     * hay profile fields o verify-email activos.
+     *
+     * Output incluye validación, creación de user, login opcional para no requerir
+     * /login post-register, y dispatch de VerifyEmail notification si aplica.
+     */
+    protected function buildRegisterMethod(string $scope, string $scopeLower, string $loginField, string $rulesPhp, bool $verifyEmail): string
+    {
+        $verifyDispatch = $verifyEmail
+            ? "\n        // R-PKG-011: dispatch verification notification (queueable).\n        \$user->sendEmailVerificationNotification();"
+            : '';
+
+        // Render inline (no nowdoc) para que las variables se interpoleen.
+        $code = <<<PHP
+
+    /**
+     * POST /api/{$scopeLower}/auth/register
+     *
+     * Crea un nuevo {$scope} con los profile fields declarados via
+     * `--profile-fields`. Si el scope se generó con `--verify-email`,
+     * dispatch de `Illuminate\\Auth\\Notifications\\VerifyEmail` queueable.
+     *
+     * R-PKG-011: register solo existe si hay `--profile-fields` o `--verify-email`.
+     * Para custom validation (regex CI, date format, etc.), override este método
+     * en la subclase generada.
+     *
+     * BC: NO existe en v1.5.0-rc4 (este método es opt-in via flag).
+     */
+    public function register(\\Illuminate\\Http\\Request \$request): \\Illuminate\\Http\\JsonResponse
+    {
+        \$data = \$request->validate({$rulesPhp});
+
+        /** @var {$scope} \$user */
+        \$user = {$scope}::create(\$data);
+        \$user->setAuthScope('{$scopeLower}');{$verifyDispatch}
+
+        return \$this->sendResponse(
+            \$user->only(['id', 'name', '{$loginField}']),
+            'Registro exitoso. Verificá tu email para activar la cuenta.',
+            201,
+        );
+    }
+
+PHP;
+
+        return $code;
+    }
+
+    /**
+     * Construye el código PHP del método `updateProfile()` que se inyecta en el stub.
+     *
+     * Solo se genera cuando `--profile-fields` está activo. Valida y actualiza
+     * los profile fields del user autenticado.
+     */
+    protected function buildUpdateProfileMethod(string $scope, string $loginField, string $rulesPhp): string
+    {
+        // Render inline (no nowdoc) para que las variables se interpoleen.
+        $code = <<<PHP
+
+    /**
+     * PATCH /api/{$scopeLower}/auth/me
+     *
+     * Actualiza los profile fields del {$scope} autenticado.
+     *
+     * R-PKG-011: solo existe si el scope fue generado con `--profile-fields`.
+     * Para custom validation (regex CI, date format, etc.), override este método
+     * en la subclase generada.
+     *
+     * BC: NO existe en v1.5.0-rc4 (este método es opt-in via flag).
+     */
+    public function updateProfile(\\Illuminate\\Http\\Request \$request): \\Illuminate\\Http\\JsonResponse
+    {
+        \$user = \$request->user();
+        \$data = \$request->validate({$rulesPhp});
+
+        \$user->update(\$data);
+
+        return \$this->sendResponse(
+            \$user->fresh()->only(['id', 'name', '{$loginField}']),
+            'Perfil actualizado.',
+        );
+    }
+
+PHP;
+
+        return $code;
+    }
+
+    /**
+     * Construye los placeholders R-PKG-011 para email verification opt-in.
+     *
+     * Default mode (sin --verify-email): todos string vacío (BC con v1.5.0-rc4).
+     * Con --verify-email: cada placeholder se popula con el código correspondiente
+     * (column, cast, import, routes, methods, middleware).
+     *
+     * @return array<string, string>
+     */
+    protected function buildVerifyEmailReplacements(bool $enabled): array
+    {
+        if (! $enabled) {
+            return [
+                '{{emailVerifyRoutes}}' => '',
+                '{{verifiedMiddleware}}' => '',
+                '{{verifyEmailMethods}}' => '',
+                '{{registerVerifyEmailDispatch}}' => '',
+            ];
+        }
+
+        return [
+            // Routes verify + resend (signed URL para verify, throttle para resend).
+            '{{emailVerifyRoutes}}' => <<<'PHP'
+
+    // ── Email verification (signed URLs) ──────────────────────────
+    Route::get('email/verify/{id}/{hash}', [AuthController::class, 'verifyEmail'])
+        ->middleware('signed')
+        ->name('{{moduleNameLower}}.auth.verify');
+    Route::post('email/resend', [AuthController::class, 'resendVerification'])
+        ->middleware('throttle:6,1')
+        ->middleware('mk.auth:{{moduleNameLower}}');
+PHP,
+            // Middleware 'verified' en el grupo protegido (opcional). Default vacío = sin verificación.
+            // Para activarlo, el consumer puede setear MK_AUTH_VERIFIED_MIDDLEWARE=true en .env.
+            // Por simplicidad v1.5.0-rc5: NO se aplica automáticamente. Consumer override.
+            '{{verifiedMiddleware}}' => '',
+            // Métodos verifyEmail() + resendVerification() en el AuthController.
+            '{{verifyEmailMethods}}' => <<<'PHP'
+
+    /**
+     * GET /api/{{moduleNameLower}}/auth/email/verify/{id}/{hash}
+     *
+     * Marca el email como verificado si la signed URL es válida.
+     *
+     * R-PKG-011: solo existe si el scope fue generado con `--verify-email`.
+     */
+    public function verifyEmail(\Illuminate\Http\Request $request, string $id, string $hash): \Illuminate\Http\JsonResponse
+    {
+        if (! hash_equals((string) $id, (string) $request->user()->getKey())) {
+            return $this->sendError('Invalid verification link.', [], 403);
+        }
+
+        if (! hash_equals(sha1($request->user()->getEmailForVerification()), (string) $hash)) {
+            return $this->sendError('Invalid verification link.', [], 403);
+        }
+
+        if ($request->user()->hasVerifiedEmail()) {
+            return $this->sendResponse(true, 'Email ya verificado.');
+        }
+
+        $request->user()->markEmailAsVerified();
+
+        return $this->sendResponse(true, 'Email verificado exitosamente.');
+    }
+
+    /**
+     * POST /api/{{moduleNameLower}}/auth/email/resend
+     *
+     * Re-envía el email de verificación. Throttled 6,1 por route middleware.
+     *
+     * R-PKG-011: solo existe si el scope fue generado con `--verify-email`.
+     */
+    public function resendVerification(\Illuminate\Http\Request $request): \Illuminate\Http\JsonResponse
+    {
+        if ($request->user()->hasVerifiedEmail()) {
+            return $this->sendError('Email ya verificado.', [], 400);
+        }
+
+        $request->user()->sendEmailVerificationNotification();
+
+        return $this->sendResponse(true, 'Email de verificación re-enviado.');
+    }
+PHP,
+            // Dispatch de VerifyEmail notification en register() (si register existe).
+            // Si no hay register() (default mode), esto queda como string vacío sin efecto.
+            '{{registerVerifyEmailDispatch}}' => <<<'PHP'
+
+        // R-PKG-011: dispatch verification notification (queueable).
+        $user->sendEmailVerificationNotification();
+PHP,
+        ];
+    }
+
+    /**
+     * Helper: exporta un array PHP a string literal para inyectar en stubs.
+     *
+     * Usado por `buildRegisterMethod` y `buildUpdateProfileMethod` para generar
+     * las validation rules. Output: `['name' => ['required', 'string'], ...]`.
+     *
+     * @param  array<string, array<int, string>>  $array
+     */
+    protected function phpArrayExport(array $array): string
+    {
+        $entries = [];
+        foreach ($array as $key => $value) {
+            $entries[] = var_export($key, true).' => ['.implode(', ', array_map(static fn ($v) => var_export($v, true), $value)).']';
+        }
+
+        return '['.implode(', ', $entries).']';
     }
 
     protected function registerServiceProvider(string $scope): void

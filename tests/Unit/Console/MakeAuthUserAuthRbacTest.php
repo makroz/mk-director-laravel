@@ -75,8 +75,10 @@ test('command has buildRbacReplacements() method', function () {
 test('command merges rbacReplacements with loginFieldReplacements via $extraReplacements', function () {
     $source = commandSource010();
 
-    // El handle() hace array_merge entre loginFieldReplacements y rbacReplacements.
-    expect($source)->toContain('array_merge($loginFieldReplacements, $rbacReplacements)');
+    // El handle() hace array_merge que incluye ambos sets (R-PKG-010).
+    // R-PKG-011 extendió a 4 sets pero loginField + rbac siguen presentes
+    // en el mismo array_merge (orden puede variar).
+    expect($source)->toMatch('/array_merge\([^)]*\$loginFieldReplacements[^)]*\$rbacReplacements/s');
 });
 
 // ── Default mode (BC) ──────────────────────────────────────────────────
