@@ -1,0 +1,97 @@
+version: 1
+sprint: 2026-06-25-profile-fields-types
+parent_sprint: 2026-06-25-profile-fields-per-scope
+rule: R-G-033-A
+r_id: R-PKG-012
+opened: 2026-06-25
+status: design
+target_release: v1.6.0-rc1
+
+source_feature:
+  location: projects/reto/reto-api/app/Modules/Member/ (futuro)
+  current_implementation: "Member scope tendrá birthdate (date), active (bool), registered_at (datetime), metadata (json). Sin R-PKG-012, RETO edita manualmente migration + model + validation."
+  required_change: "Extender --profile-fields para aceptar tipos custom via sintaxis key:type."
+
+triage_checklist:
+  R-G-033-A-1_≥_2_dominios:
+    answer: SÍ
+    rationale: "Cualquier app multi-vertical necesita tipos custom. Fintech (KYC dates + amounts), healthcare (medical history dates + booleans), social (bio text + metadata JSON), e-commerce (price decimal + stock int)."
+  R-G-033-A-2_testeable_sin_RETO:
+    answer: SÍ
+    rationale: "Source-parsing tests del command + stubs (mismo patrón que R-PKG-009/010/011)."
+  R-G-033-A-3_doc_sin_RETO:
+    answer: SÍ
+    rationale: "Doc como 'Profile fields with custom types' genérico. RETO solo en 'Dogfooding source' (interno)."
+  decision: GO
+
+in_flight: []
+
+design_questions:
+  - id: D1
+    question: "¿Sintaxis --profile-fields=name:string,birthdate:date (extensión) o --profile-fields-types=... (flag nuevo)?"
+    recommendation: "Extensión de --profile-fields. Default string cuando no se especifica tipo (BC)."
+    resolution: pending (design.md)
+  - id: D2
+    question: "¿Tipos custom comparten flag con --profile-fields o son flags separados?"
+    recommendation: "Mismo flag. Un solo CSV parseado."
+    resolution: pending
+  - id: D3
+    question: "¿Tipos case-sensitive?"
+    recommendation: "Sí, lowercase. String o STRING se rechazan."
+    resolution: pending
+  - id: D4
+    question: "¿Validación de tipos desconocidos?"
+    recommendation: "Fail-fast con error explícito. Lista cerrada: string, text, int, decimal, bool, date, datetime, json."
+    resolution: pending
+  - id: D5
+    question: "¿Decimal con precisión custom?"
+    recommendation: "No en v1.6.0-rc1. Default 8,2. Post-RC si RETO necesita."
+    resolution: pending
+  - id: D6
+    question: "¿JSON como string o como array?"
+    recommendation: "Default array cast (Laravel moderno). Consumer puede override."
+    resolution: pending
+  - id: D7
+    question: "¿Validación runtime por tipo?"
+    recommendation: "Sí, table-driven en register() y updateProfile(). Consumer puede override."
+    resolution: pending
+  - id: D8
+    question: "¿Date / datetime usan 'date' rule o más estricto ('date_format:Y-m-d')?"
+    recommendation: "'date' loose. Consumer puede override para strict format."
+    resolution: pending
+  - id: D9
+    question: "¿Interacción con R-PKG-011 (--profile-fields)?"
+    recommendation: "Extensión backward-compatible. --profile-fields=name,dni (sin tipos) sigue funcionando (default string)."
+    resolution: pending
+  - id: D10
+    question: "¿Interacción con --with-auth-rbac / --login-field / --verify-email?"
+    recommendation: "Totalmente ortogonales. 5 flags combinables."
+    resolution: pending
+
+risk_register:
+  - id: R-RISK-PKG-012-001
+    description: "Tipo desconocido (--profile-fields=name:foo)"
+    mitigation: "Fail-fast en resolveProfileFieldType() con lista cerrada."
+    status: pending
+  - id: R-RISK-PKG-012-002
+    description: "BC break: app que asume --profile-fields solo keys"
+    mitigation: "Extensión backward-compatible (sin : = string)."
+    status: pending
+  - id: R-RISK-PKG-012-003
+    description: "Cast incorrecto (e.g. json como string en lugar de array)"
+    mitigation: "Tests source-parsing pinean cada tipo con su cast específico."
+    status: pending
+  - id: R-RISK-PKG-012-004
+    description: "Validation rule incorrecto (e.g. date como string)"
+    mitigation: "Tests pinean cada tipo con su validation rule."
+    status: pending
+  - id: R-RISK-PKG-012-005
+    description: "Ortogonalidad rota con R-PKG-011 (--profile-fields simple)"
+    mitigation: "Source-parsing test que verifica parsing de ambos formatos."
+    status: pending
+
+next_action:
+  - Decisiones D1-D10 en design.md (con source-parsing en mente).
+  - Implementación T1.1-T1.8 (mismo patrón que R-PKG-011).
+  - 3 PRs coordinados + tag v1.6.0-rc1 post-merge.
+  - Sesión NUEVA (no esta) — esta sesión solo deja el setup (SDD + prompt) y cierra.
