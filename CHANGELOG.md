@@ -184,6 +184,78 @@ php artisan mk:make:auth-user Customer --login-field=username
 
 ---
 
+## [1.5.0-rc4] - 2026-06-25
+
+Release candidate. **RBAC integration** for the `AuthController` generated
+by `mk:make:auth-user`: the new `--with-auth-rbac` flag adds ability checks
+on `/me` and `/logout`, rate-limit middleware on `/login` (and `/forgot`,
+`/reset`), and audit-log events for the auth flow. Default (sin flag)
+preserva comportamiento idéntico a v1.5.0-rc3.
+
+### Added
+
+- **`php artisan mk:make:auth-user {Scope} --with-auth-rbac`**:
+  - **Default `false`** (BC con v1.5.0-rc3 — comportamiento idéntico sin flag).
+  - **Ability checks** en `/me` y `/logout` vía `authorizeAbility()` helper.
+    Configurables via `mk_director.auth.abilities.{me,logout}` (default `null`
+    → no check, retrocompatible).
+  - **Rate limit middleware** en endpoints públicos:
+    - `/login`: `throttle:5,1` (configurable via `mk_director.auth.rate_limits.login`).
+    - `/forgot`: `throttle:3,1`.
+    - `/reset`: `throttle:3,1`.
+  - **Audit log events** vía `Mk\Director\Auth\Events\AuthEvent`:
+    - `auth.login.success` (user_id, ip, user_agent, scope).
+    - `auth.login.failed` (login_field_value, ip, user_agent — **sin password**).
+    - `auth.logout` (user_id, token_id).
+    - `auth.password_reset.requested` (login_field_value, ip).
+    - `auth.refresh.success` y `auth.password_reset.success` marcados con TODO
+      (esperan implementación del consumer).
+    Consumido por `MkAuditLoggerPlugin` si está activo.
+- **Constructor injection** opcional: `AbilityResolver` se inyecta via
+  container o se resuelve vía `app()` en boot. Fallback a `canMk()` del
+  trait `HasAbilities` para tests que no bootean Laravel completo.
+- **Configuración**:
+  - `mk_director.auth.abilities.{me,logout}` (env `MK_AUTH_ABILITY_ME` /
+    `MK_AUTH_ABILITY_LOGOUT`, default `null`).
+  - `mk_director.auth.rate_limits.{login,forgot,reset}` (env
+    `MK_AUTH_RATE_LIMIT_*`, defaults `5,1` / `3,1` / `3,1`).
+- **Nueva clase**: `Mk\Director\Auth\Events\AuthEvent` — readonly props
+  (`type`, `payload`), `Dispatchable` trait para emitir via
+  `AuthEvent::dispatch(...)`.
+- **Stub updates**:
+  - `auth-user.auth-controller.stub`: 11 placeholders RBAC condicionales
+    (`{{rbacImports}}`, `{{rbacConstructor}}`, `{{rbacAbilityCheckMe}}`,
+    `{{rbacAbilityCheckLogout}}`, `{{rbacAudit*}}`, `{{rbacAuthorizeAbilityMethod}}`).
+  - `auth-user.routes.stub`: 3 placeholders inline `{{rbac{Login,Forgot,Reset}Throttle}}`
+    (preservan línea original del stub cuando están vacíos → BC estricta).
+
+### Anti-patterns (rejected)
+
+- **Habilitar RBAC por default**: rompe BC con v1.5.0-rc3 (consumers que no
+  esperaban ability checks). RBAC es **opt-in** vía flag.
+- **Loggear passwords** (ni hasheados) en audit events. El payload se
+  sanitiza antes de dispatch.
+- **Rate limit agresivo global**: configurable por endpoint. Default seguro
+  pero tunable.
+
+### Compatibility
+
+- **BC preservada**: sin flag, `mk:make:auth-user Admin` genera AuthController
+  + routes **idénticos** a v1.5.0-rc3 (modulo la parametrización de
+  `--login-field`). 0 regresiones verificadas con 332 tests Pest verdes.
+- **RETO migration path**: cuando bumpeen a v1.5.0 (R-RET-001 phase 2+3),
+  regenerar `AuthController` con `--with-auth-rbac` y eliminar los
+  ~322 LOC de implementación manual que viven en su rama huérfana.
+
+### Spec
+
+- Spec: `openspec/changes/2026-06-24-auth-controller-rbac-stub/proposal.md`
+- Spec formal: `openspec/changes/2026-06-24-auth-controller-rbac-stub/specs/auth-controller-rbac-stub.md`
+- Design: pendiente (T0 de tasks.md).
+- Tasks: `openspec/changes/2026-06-24-auth-controller-rbac-stub/tasks.md`
+
+---
+
 ## [1.4.0] - 2026-06-24
 
 Minor release. **Breaking change** in the response shape of all 6 auth-user

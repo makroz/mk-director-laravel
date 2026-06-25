@@ -10,6 +10,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Mk\Director\Auth\Services\TokenIssuer;
 use Mk\Director\Controllers\BaseController;
+{{rbacImports}}
 
 /**
  * AuthController del scope `{{moduleNameLower}}`.
@@ -51,9 +52,22 @@ use Mk\Director\Controllers\BaseController;
  * R-PKG-009: si `--login-field != email`, el validation rule es
  * `required|string` (no `required|email`). El consumer puede override
  * el LoginRequest para agregar formato específico (regex CI, etc.).
+ *
+ * R-PKG-010: si el scope se generó con `--with-auth-rbac`, este controller
+ * además:
+ *   - Verifica abilities en `/me` y `/logout` via `authorizeAbility()`,
+ *     configurable por `mk_director.auth.abilities.{endpoint}`.
+ *   - Emite `AuthEvent` en login (success/fail), logout, forgot. Consumido
+ *     por `MkAuditLoggerPlugin` para audit log B2B inmutable.
+ *   - Aplica rate limit middleware (vía routes) en `/login`, `/forgot`,
+ *     `/reset` con defaults `5,1` / `3,1` / `3,1` (configurables).
+ *
+ *   Default (sin flag): idéntico a v1.5.0-rc3 — sin RBAC, sin rate
+ *   limit, sin audit log. BC preservada.
  */
 class AuthController extends BaseController
 {
+{{rbacConstructor}}
     /**
      * POST /api/{{moduleNameLower}}/auth/login
      *
@@ -82,6 +96,7 @@ class AuthController extends BaseController
             || ! Hash::check($credentials['password'], $user->password)
             || $user->getAuthScope() !== '{{moduleNameLower}}'
         ) {
+            {{rbacAuditLoginFailed}}
             return $this->sendError(
                 'Credenciales inválidas.',
                 ['{{loginField}}' => ['Credenciales inválidas.']],
@@ -92,6 +107,8 @@ class AuthController extends BaseController
         $tokenIssuer = new TokenIssuer();
         $accessToken = $tokenIssuer->issueAccessToken($user);
         $refreshToken = $tokenIssuer->issueRefreshToken($user);
+
+        {{rbacAuditLoginSuccess}}
 
         return $this->sendResponse([
             'access_token' => $accessToken->plainTextToken,
@@ -113,6 +130,7 @@ class AuthController extends BaseController
      */
     public function refresh(Request $request): JsonResponse
     {
+        {{rbacAuditRefreshTodo}}
         return $this->sendError(
             'not_implemented',
             ['hint' => 'Implementar con TokenIssuer + Sanctum v4 id|plaintext token parsing'],
@@ -126,7 +144,12 @@ class AuthController extends BaseController
      */
     public function logout(Request $request): JsonResponse
     {
-        $request->user()->currentAccessToken()->delete();
+        {{rbacAbilityCheckLogout}}
+        $user = $request->user();
+        $token = $user->currentAccessToken();
+        $token->delete();
+
+        {{rbacAuditLogout}}
 
         return $this->sendResponse(true, 'Sesión cerrada.');
     }
@@ -139,6 +162,7 @@ class AuthController extends BaseController
      */
     public function me(Request $request): JsonResponse
     {
+        {{rbacAbilityCheckMe}}
         return $this->sendResponse($request->user());
     }
 
@@ -150,11 +174,11 @@ class AuthController extends BaseController
      */
     public function forgot(Request $request): JsonResponse
     {
-        $request->validate([
+        $credentials = $request->validate([
             '{{loginField}}' => {{loginFieldValidationRule}},
         ]);
 
-        // TODO: dispatch notification con token. Por ahora response estándar.
+        {{rbacAuditForgot}}
 
         return $this->sendResponse(
             null,
@@ -170,10 +194,13 @@ class AuthController extends BaseController
      */
     public function reset(Request $request): JsonResponse
     {
+        {{rbacAuditResetTodo}}
         return $this->sendError(
             'not_implemented',
             ['hint' => 'Validate token from {{moduleNameLower}}_password_reset_tokens and update user password'],
             501,
         );
     }
+
+{{rbacAuthorizeAbilityMethod}}
 }

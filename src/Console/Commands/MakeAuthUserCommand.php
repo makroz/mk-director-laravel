@@ -38,6 +38,15 @@ use Mk\Director\Auth\Services\AuthScopeResolver;
  *     se entrega como skeleton con TODOs explícitos. La integración con
  *     `Mk\Director\Auth\Services\TokenIssuer` queda en manos del consumer.
  *
+ * ## Flags
+ *
+ * - `--login-field=<field>` (R-PKG-009): campo usado para login (default `email`).
+ *   Valores comunes: `email`, `ci` (Bolivia), `phone`, `username`, `documento`.
+ *
+ * - `--with-auth-rbac` (R-PKG-010): integra RBAC + rate limit + audit log
+ *   en el AuthController y routes generados. Por defecto el comportamiento
+ *   es idéntico a v1.5.0-rc3 (sin RBAC). El flag es opt-in.
+ *
  * Spec: MK-LAR-1.0.2 / MK-LAR-1.0.6.
  *
  * @see AuthUser
@@ -51,14 +60,16 @@ class MakeAuthUserCommand extends Command
      *
      * @var string
      */
-    protected $signature = 'mk:make:auth-user {scope : Nombre del scope en StudlyCase singular (Ej: Member, Customer, Partner)} {--login-field=email : Campo usado para login (default: email). BC: si no se pasa, idéntico a v1.4.0. Valores comunes: email, ci, phone, username, documento.}';
+    protected $signature = 'mk:make:auth-user {scope : Nombre del scope en StudlyCase singular (Ej: Member, Customer, Partner)}
+        {--login-field=email : Campo usado para login (default: email). BC: si no se pasa, idéntico a v1.4.0. Valores comunes: email, ci, phone, username, documento.}
+        {--with-auth-rbac : Habilita RBAC integration (ability checks en /me y /logout), rate limiting en /login, /forgot, /reset, y audit log via AuthEvent (R-PKG-010). Default BC: false. Configurar abilities + rate_limits en config/mk_director.php.}';
 
     /**
      * The console command description.
      *
      * @var string
      */
-    protected $description = 'Genera un scope de autenticación MK completo: Model (extends AuthUser), migration con auth_scope, AuthController (login/refresh/logout/me/forgot/reset), routes y ServiceProvider auto-registrado. Use --login-field=<field> para campos no-email (RETO: ci, genéricos: phone, username, etc.).';
+    protected $description = 'Genera un scope de autenticación MK completo: Model (extends AuthUser), migration con auth_scope, AuthController (login/refresh/logout/me/forgot/reset), routes y ServiceProvider auto-registrado. Use --login-field=<field> para campos no-email (RETO: ci, genéricos: phone, username, etc.). Use --with-auth-rbac para integrar ability checks, rate limit y audit log (R-PKG-010).';
 
     public function handle(): int
     {
@@ -66,6 +77,7 @@ class MakeAuthUserCommand extends Command
         $scopeLower = Str::snake($scope);
         $scopePlural = Str::plural($scopeLower);
         $loginField = $this->resolveLoginField((string) $this->option('login-field'));
+        $withAuthRbac = (bool) $this->option('with-auth-rbac');
 
         if ($scope === '') {
             $this->error('El nombre del scope no puede estar vacío.');
@@ -89,7 +101,34 @@ class MakeAuthUserCommand extends Command
         // El import `use Illuminate\Contracts\Auth\MustVerifyEmail` solo se incluye
         // cuando `loginField=email` para evitar lint warnings de import no usado.
         $isEmail = $loginField === 'email';
-        $extraReplacements = [
+
+        // Placeholders condicionales (R-PKG-010) para `--with-auth-rbac`.
+        //
+        // Default mode (sin flag): todos los placeholders RBAC son string vacío
+        // → BC preservada con v1.5.0-rc3 (idéntico a la versión sin RBAC).
+        //
+        // Con `--with-auth-rbac`: cada placeholder se popula con el código
+        // correspondiente (ability checks, audit events, rate limit).
+        $rbacReplacements = $withAuthRbac
+            ? $this->buildRbacReplacements($scopeLower, $loginField)
+            : array_fill_keys([
+                '{{rbacImports}}',
+                '{{rbacConstructor}}',
+                '{{rbacAbilityCheckMe}}',
+                '{{rbacAbilityCheckLogout}}',
+                '{{rbacAuditLoginSuccess}}',
+                '{{rbacAuditLoginFailed}}',
+                '{{rbacAuditRefreshTodo}}',
+                '{{rbacAuditLogout}}',
+                '{{rbacAuditForgot}}',
+                '{{rbacAuditResetTodo}}',
+                '{{rbacAuthorizeAbilityMethod}}',
+                '{{rbacLoginThrottle}}',
+                '{{rbacForgotThrottle}}',
+                '{{rbacResetThrottle}}',
+            ], '');
+
+        $loginFieldReplacements = [
             '{{emailVerifiedAtColumn}}' => $isEmail
                 ? "\$table->timestamp('email_verified_at')->nullable();\n            "
                 : '',
@@ -109,7 +148,9 @@ class MakeAuthUserCommand extends Command
                 : "['required', 'string']",
         ];
 
-        $this->info("🔐 Generando scope de autenticación MK: {$scope}");
+        $extraReplacements = array_merge($loginFieldReplacements, $rbacReplacements);
+
+        $this->info("🔐 Generando scope de autenticación MK: {$scope}".($withAuthRbac ? ' (with RBAC)' : ''));
 
         $basePath = app_path("Modules/{$scope}");
 
@@ -140,7 +181,7 @@ class MakeAuthUserCommand extends Command
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.model.stub', 'Models', "{$scope}.php", $extraReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.migration.stub', 'Database/Migrations', $this->migrationFilename($scopePlural), $extraReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.auth-controller.stub', 'Http/Controllers', 'AuthController.php', $extraReplacements);
-        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.routes.stub', 'Http/Routes', 'api.php');
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.routes.stub', 'Http/Routes', 'api.php', $extraReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.service-provider.stub', 'Providers', "{$scope}ServiceProvider.php");
 
         $this->newLine();
@@ -151,9 +192,19 @@ class MakeAuthUserCommand extends Command
         $this->info("✅ Scope {$scope} generado con el estándar MK-Director:");
         $this->line("   • Model:        app/Modules/{$scope}/Models/{$scope}.php (extends AuthUser, loginField={$loginField})");
         $this->line("   • Migration:    app/Modules/{$scope}/Database/Migrations/{$this->migrationFilename($scopePlural)}");
-        $this->line("   • AuthCtrl:     app/Modules/{$scope}/Http/Controllers/AuthController.php");
-        $this->line("   • Routes:       /api/{$scopeLower}/auth/{login,refresh,logout,me,forgot,reset}");
+        $this->line("   • AuthCtrl:     app/Modules/{$scope}/Http/Controllers/AuthController.php".($withAuthRbac ? ' (RBAC enabled)' : ''));
+        $this->line("   • Routes:       /api/{$scopeLower}/auth/{login,refresh,logout,me,forgot,reset}".($withAuthRbac ? ' (rate limited)' : ''));
         $this->line("   • ServiceProv:  app/Modules/{$scope}/Providers/{$scope}ServiceProvider.php");
+
+        if ($withAuthRbac) {
+            $this->newLine();
+            $this->warn('🔐 RBAC integration habilitada. Siguientes pasos:');
+            $this->line('   1. Configurar abilities en config/mk_director.php:');
+            $this->line("      'abilities' => ['me' => 'auth.{$scopeLower}.me', 'logout' => 'auth.{$scopeLower}.logout'],");
+            $this->line('   2. (Opcional) Customizar rate limits via MK_AUTH_RATE_LIMIT_* env vars.');
+            $this->line('   3. (Opcional) Publicar config/mk_director.php si necesitás overrides granulares.');
+            $this->line("   4. Registrar un listener para Mk\\Director\\Auth\\Events\\AuthEvent si querés audit log.");
+        }
 
         // Imprimir snippets a mano (no modificar config/auth.php automáticamente)
         $this->newLine();
@@ -192,7 +243,7 @@ class MakeAuthUserCommand extends Command
         $content = str_replace('{{loginField}}', $loginField, $content);
         $content = str_replace('{{migrationDate}}', now()->format('Y_m_d_His'), $content);
 
-        // Placeholders condicionales (R-PKG-009). Si el stub no usa alguno,
+        // Placeholders condicionales (R-PKG-009 + R-PKG-010). Si el stub no usa alguno,
         // el str_replace no hace nada (string vacío o key ausente).
         foreach ($extraReplacements as $placeholder => $value) {
             $content = str_replace($placeholder, $value, $content);
@@ -229,6 +280,157 @@ class MakeAuthUserCommand extends Command
         }
 
         return $field;
+    }
+
+    /**
+     * Construye los placeholders RBAC (R-PKG-010) cuando `--with-auth-rbac` está activo.
+     *
+     * Cada placeholder se reemplaza por el bloque de código correspondiente:
+     *   - imports adicionales (AbilityResolver, AuthEvent, AuthorizationException)
+     *   - constructor con AbilityResolver inyectado (opcional via container)
+     *   - ability checks en /me y /logout (configurables por endpoint)
+     *   - audit events (AuthEvent::dispatch) en login success/fail, logout, forgot
+     *   - rate limit middleware en /login, /forgot, /reset
+     *   - helper method `authorizeAbility()` que delega a AbilityResolver
+     *
+     * Default values se leen de `config('mk_director.auth.*')` con fallback
+     * seguro (idempotente con valores del package default).
+     *
+     * @return array<string, string>
+     */
+    protected function buildRbacReplacements(string $scopeLower, string $loginField): array
+    {
+        // Login field key for audit event payloads.
+        $loginFieldKey = $loginField; // 'email', 'ci', etc.
+
+        return [
+            // ── Imports adicionales ─────────────────────────────────────
+            '{{rbacImports}}' => "use Illuminate\\Auth\\Access\\AuthorizationException;\n".
+                                 "use Mk\\Director\\Auth\\Events\\AuthEvent;\n".
+                                 "use Mk\\Director\\Auth\\Services\\AbilityResolver;\n",
+
+            // ── Constructor con AbilityResolver inyectado ───────────────
+            '{{rbacConstructor}}' => <<<'PHP'
+    /**
+     * Resolver de abilities (cache + Sanctum short-circuit). Se inyecta
+     * por container o se resuelve via `app()` para mantener compatibilidad
+     * con tests que no bootean Laravel completo.
+     */
+    protected ?AbilityResolver $abilityResolver = null;
+
+    public function __construct(?AbilityResolver $abilityResolver = null)
+    {
+        $this->abilityResolver = $abilityResolver
+            ?? (function_exists('app') ? app(AbilityResolver::class) : null);
+    }
+
+PHP,
+
+            // ── Ability check en /me ────────────────────────────────────
+            '{{rbacAbilityCheckMe}}' => "    \$this->authorizeAbility('me', \$request->user());\n",
+
+            // ── Ability check en /logout ────────────────────────────────
+            '{{rbacAbilityCheckLogout}}' => "    \$this->authorizeAbility('logout', \$user);\n",
+
+            // ── Audit event: login success ──────────────────────────────
+            '{{rbacAuditLoginSuccess}}' => <<<PHP
+        AuthEvent::dispatch('auth.login.success', [
+            'user_id' => \$user->id,
+            'ip' => \$request->ip(),
+            'user_agent' => \$request->userAgent(),
+            'scope' => \$user->getAuthScope(),
+        ]);
+
+PHP,
+
+            // ── Audit event: login failed ───────────────────────────────
+            '{{rbacAuditLoginFailed}}' => <<<PHP
+        AuthEvent::dispatch('auth.login.failed', [
+            'login_field_value' => \$credentials['{$loginFieldKey}'] ?? null,
+            'ip' => \$request->ip(),
+            'user_agent' => \$request->userAgent(),
+        ]);
+
+PHP,
+
+            // ── Audit event: refresh (todo marker) ──────────────────────
+            '{{rbacAuditRefreshTodo}}' => "        // TODO(R-PKG-010): emitir auth.refresh.success cuando la impl del consumer esté lista.\n",
+
+            // ── Audit event: logout ─────────────────────────────────────
+            '{{rbacAuditLogout}}' => <<<'PHP'
+        AuthEvent::dispatch('auth.logout', [
+            'user_id' => $user->id,
+            'token_id' => $token?->id,
+        ]);
+
+PHP,
+
+            // ── Audit event: forgot ─────────────────────────────────────
+            '{{rbacAuditForgot}}' => <<<PHP
+        AuthEvent::dispatch('auth.password_reset.requested', [
+            'login_field_value' => \$credentials['{$loginFieldKey}'] ?? null,
+            'ip' => \$request->ip(),
+        ]);
+
+PHP,
+
+            // ── Audit event: reset (todo marker) ────────────────────────
+            '{{rbacAuditResetTodo}}' => "        // TODO(R-PKG-010): emitir auth.password_reset.success cuando la impl del consumer esté lista.\n",
+
+            // ── authorizeAbility() helper method ────────────────────────
+            '{{rbacAuthorizeAbilityMethod}}' => <<<'PHP'
+
+    /**
+     * Verifica que `$user` tenga la ability configurada para `$endpoint`.
+     *
+     * Config: `mk_director.auth.abilities.{endpoint}`.
+     *   - `null` (default) → no check (modo BC).
+     *   - string (`'auth.me.read'`) → check via AbilityResolver.
+     *
+     * Si la ability es requerida y el user no la tiene, lanza
+     * `AuthorizationException` (HTTP 403 via exception handler de Laravel).
+     *
+     * R-PKG-010 ACR-002.
+     */
+    protected function authorizeAbility(string $endpoint, mixed $user): void
+    {
+        $ability = config("mk_director.auth.abilities.{$endpoint}");
+
+        if ($ability === null || $ability === '') {
+            return; // BC mode: no check.
+        }
+
+        if ($user === null) {
+            throw new AuthorizationException("Missing user for ability check: {$ability}");
+        }
+
+        if ($this->abilityResolver !== null) {
+            if (! $this->abilityResolver->can($user, $ability)) {
+                throw new AuthorizationException("Missing ability: {$ability}");
+            }
+
+            return;
+        }
+
+        // Fallback sin container (unit tests). HasAbilities trait expone
+        // canMk() que también funciona sin AbilityResolver (legacy inline).
+        if (is_callable([$user, 'canMk']) && ! (bool) $user->canMk($ability)) {
+            throw new AuthorizationException("Missing ability: {$ability}");
+        }
+    }
+PHP,
+
+            // ── Routes: rate limit en /login ─────────────────────────────
+            // Inline placeholder: el stub tiene `Route::post('login', ...){{rbacLoginThrottle}};`.
+            // Default: vacío (sin throttle). RBAC: `->middleware('throttle:...')`.
+            '{{rbacLoginThrottle}}' => "->middleware('throttle:' . config('mk_director.auth.rate_limits.login', '5,1'))",
+
+            // ── Routes: rate limit en /forgot ────────────────────────────
+            '{{rbacForgotThrottle}}' => "->middleware('throttle:' . config('mk_director.auth.rate_limits.forgot', '3,1'))",
+
+            // ── Routes: rate limit en /reset ─────────────────────────────
+            '{{rbacResetThrottle}}' => "->middleware('throttle:' . config('mk_director.auth.rate_limits.reset', '3,1'))",
+        ];
     }
 
     protected function registerServiceProvider(string $scope): void
@@ -310,5 +512,9 @@ class MakeAuthUserCommand extends Command
         $this->line('      usando Mk\\Director\\Auth\\Services\\TokenIssuer');
         $this->line('   4. (Opcional) Definí mk_director.auth.user_model si querés que mk-director');
         $this->line('      apunte a este modelo. NO se hace automáticamente — respetar DDD.');
+        if (func_num_args() >= 4) {
+            // Print extra step for RBAC if applicable.
+            // (Detected by checking the actual generated controller contents later.)
+        }
     }
 }

@@ -44,6 +44,7 @@ php artisan migrate
 | `php artisan mk:discover-abilities {--module=*} {--force}` | Auto-pobla `{scope}_abilities` desde el provider del módulo (preferred), atributos PHP 8.4 (`#[\Mk\Director\Auth\Attributes\Ability]`), o docblock (`@mk-ability`). UPSERT idempotente. **Nuevo en v1.5.0-rc2**. |
 | `php artisan mk:make:auth-user {Scope}` | Scaffolding de scope de autenticación con `AuthUser`, `AuthController`, tokens Sanctum. |
 | `php artisan mk:make:auth-user {Scope} --login-field=<campo>` | Variante con campo de login configurable (default `email`). Casos: `ci` (Bolivia), `phone`, `username`, `documento`. **Nuevo en v1.5.0-rc3**. |
+| `php artisan mk:make:auth-user {Scope} --with-auth-rbac` | Variante con RBAC integration: ability checks en `/me` y `/logout`, rate limit en `/login`/`/forgot`/`/reset`, audit events vía `AuthEvent`. Default BC: idéntico a v1.5.0-rc3 sin flag. **Nuevo en v1.5.0-rc4**. |
 | `php artisan mk:lint:boundaries` | Linter de R-MK-001: detecta imports cross-module en código de apps que usan el paquete. Required CI check. |
 | `php artisan mk:discover-abilities` | Auto-descubre abilities de las Policies de un módulo y las inserta en la tabla `{scope}_abilities`. Companion de `--with-rbac`. |
 | `php artisan mk:security-lint` | Auditoría de seguridad: secrets, RBAC, tenant isolation, etc. |
