@@ -1,17 +1,17 @@
-version: 1
+version: 2
 sprint: 2026-06-24-auth-user-login-field
 parent_sprint: 2026-06-24-dogfooding-model
-rule: R-G-033-A
+rule: R-G-033-A (criterio genérico)
 r_id: R-PKG-009
 opened: 2026-06-24
 closed: null
-status: design
+status: in-flight (T1.x implementation)
 branch:
-  monorepo: makromania/260624-2200--auth-user-login-field (a crear)
-  sub_repo: makromania/260624-2200--auth-user-login-field (a crear)
+  monorepo: makromania/260625-1104--r-pkg-009-login-field
+  sub_repo: makromania/260625-1104--r-pkg-009-login-field
 base_commit:
-  sub_repo: origin/dev @ v1.4.0
-target_release: v1.5.0-rc1
+  sub_repo: origin/dev @ 8e41cff (post-R-PKG-007 closure, includes R-PKG-007)
+target_release: v1.5.0-rc3
 
 source_feature:
   location: projects/reto/reto-api/app/Modules/Admin/Models/Admin.php
@@ -21,39 +21,120 @@ source_feature:
 triage_checklist:
   R-G-033-A-1_≥_2_dominios:
     answer: SÍ
-    rationale: "Cualquier app multi-país o multi-vertical necesita campos de login distintos. Email no es universal (Bolivia usa CI, India usa Aadhaar, USA usa SSN, China usa身份证)."
+    rationale: "Cualquier app multi-país o multi-vertical necesita campos de login distintos. Email no es universal (Bolivia usa CI, India usa Aadhaar, USA usa SSN, China usa 身份证)."
   R-G-033-A-2_testeable_sin_RETO:
     answer: SÍ
     rationale: "El cambio es en el scaffolder + AuthUser base. Tests con fixtures de varios campos."
   R-G-033-A-3_doc_sin_RETO:
     answer: SÍ
     rationale: "Documentable como 'campo de login configurable' sin mencionar Bolivia/ci."
-  decision: GO
+  decision: GO (cumple R-G-033-A, va al paquete)
 
-in_flight: []
+in_flight:
+  - T1.1 — Modificar MakeAuthUserCommand con --login-field
+  - T1.2 — Stubs parametrizados (model, migration, auth-controller)
+  - T1.3 — AuthUser base agnóstico ($loginField + scope)
+  - T1.4 — Config mk_director.auth.login_field
+  - T1.5 — Tests Pest (8+ escenarios)
+  - T1.6 — R-G-032 sync (8 locations)
+
+commits_landed:
+  packagist_sub_repo:
+    branch: makromania/260625-1104--r-pkg-009-login-field
+    commits: []
+
+tests_passed:
+  total: 0
+  delta: 0
+  pending:
+    - 8 source-parsing tests (stubs parametrizados con 4 campos)
+    - 3 AuthUser scope tests (default + override + scopeWhereLoginField)
+    - 3 BC verification tests (sin flag = idéntico a v1.4.0)
+
+rg032_sync:
+  synced_locations: []
+  planned:
+    - 1: packagist/CHANGELOG.md (block [1.5.0-rc3])
+    - 2: packagist/DEVELOPER_GUIDE.md (§ 3.7 mk:make:auth-user --login-field walkthrough)
+    - 3: packagist/README.md (commands table update)
+    - 4: .makromania/agency/skills/mk-director-laravel/SKILL.md (description + capabilities + version)
+    - 4b: .makromania/agency/skills/mk-director-laravel/references/11-login-field.md (NEW)
+    - 6: projects/mk-director/docs/guides/GETTING_STARTED.md (step 7 con --login-field mention)
+    - 7: projects/mk-director/docs/guides/AUTH.md (RBAC section + login field callout)
+    - 8: projects/mk-director/docs/API_REFERENCE_LARAVEL.md (§ mk:make:auth-user --login-field)
+  deferred:
+    - 5: projects/mk-director/CHANGELOG.md (DEFERRED — se agrupa con 1.5.0 GA)
+    - 9-10: API_REFERENCE_{MOBILE,WEB}.md (sin cambio cross-stack)
+    - 11-13: core/web/mobile SKILL.md (Laravel-only)
+    - 14: rules_orchestration.md (R-G-033 ya cubre)
+    - 15: projects/mk-director/AGENTS.md (catalogo actualizado implicitamente)
+    - 16: mariogfos/reto-api (BC notification via R-RET-001 cuando rc3 → GA)
+
+closed_signoffs:
+  - id: D1-rpkg009
+    decision: Campo string only (no int, json, composite)
+    rationale: Otros tipos requieren diferente pipeline hashing/validation. Out of scope v1.5.0.
+    applies_to: design.md D1, MakeAuthUserCommand validation
+  - id: D2-rpkg009
+    decision: Default `email` (BC con v1.4.0)
+    rationale: Consumers sin flag generan idéntico a v1.4.0.
+    applies_to: design.md D2, MakeAuthUserCommand default value
+  - id: D3-rpkg009
+    decision: Columna DB = nombre del campo
+    rationale: Queries directos sin indirección via config.
+    applies_to: design.md D3, auth-user.migration.stub
+  - id: D4-rpkg009
+    decision: Validación mínima (required + string)
+    rationale: Agnóstico al dominio. Consumer customiza via override.
+    applies_to: design.md D4, auth-user.auth-controller.stub
+  - id: D5-rpkg009
+    decision: AuthUser base BC, subclase override
+    rationale: AuthUser mantiene `email` + `MustVerifyEmail`. Subclases con `--login-field != email` NO implementan `MustVerifyEmail` (intended).
+    applies_to: design.md D5, AuthUser base + auth-user.model.stub
+  - id: D6-rpkg009
+    decision: `scopeWhereLoginField()` API
+    rationale: Helper recomendado; subclases pueden usar `where($this->loginField, $value)` directo.
+    applies_to: design.md D6, AuthUser base
 
 findings:
   closing:
     - id: R-PKG-009
       title: mk:make:auth-user hardcodea `email` como campo de login. Debe ser configurable.
+    - id: GAP-001
+      title: auth-user.model.stub NO genera $fillable propio
+      rationale: "El stub actual solo genera $table, constructor, y hereda de AuthUser. Para soportar --login-field=ci, el stub debe generar $fillable específico + $loginField + $casts sin email_verified_at. Cambio non-trivial que proposal.md no detalla."
+      discovered_at: "2026-06-25 (sesión R-PKG-009)"
+      action: "T1.2 incluye generación de $fillable, $loginField, $casts, y override de MustVerifyEmail"
 
-design_questions:
-  - Q1: ¿Campo único (--login-field=ci) o múltiples (--login-fields=email,ci)?
-    options:
-      - A: Campo único (más simple, cubre 80%)
-      - B: Múltiples con fallback (más complejo, soporta "login con email o CI")
-    recommendation: A para v1.5.0. B se puede agregar en v1.6.0 si RETO lo pide.
-  - Q2: ¿El campo se llama igual en la DB? (columna `ci` varchar unique)
-    recommendation: SÍ — el scaffolder genera la columna con el nombre del campo.
-  - Q3: ¿Login request valida formato del campo?
-    recommendation: Validación mínima (required, string). Formato específico (regex para CI, email format para email) es responsabilidad del consumer.
+  explicitly_out_of_scope:
+    - id: OOS-RPKG009-001
+      title: "Múltiples campos de login (email O ci)"
+      reason: "Q1 recomendación A. Se puede agregar en v1.6.0 si RETO lo pide."
+    - id: OOS-RPKG009-002
+      title: "Validación de formato específica (regex CI, formato email)"
+      reason: "Consumer customiza via LoginRequest override. D4."
 
 risk_register:
-  - R-RISK-PKG-009-001: "BC para consumers existentes que asumen email"
-    mitigation: "Default sigue siendo email. Si el consumer no pasa --login-field, comportamiento idéntico a v1.4.0."
+  - id: R-RISK-PKG-009-001
+    description: "BC para consumers existentes que asumen email"
+    mitigation: "Default sigue siendo email. Si el consumer no pasa --login-field, comportamiento idéntico a v1.4.0. Smoke test ./vendor/bin/pest debe pasar sin cambios."
+    status: mitigated-by-design (T1.5 BC verification tests)
+  - id: R-RISK-PKG-009-002
+    description: "Subclase con --login-field=ci no implementa MustVerifyEmail"
+    mitigation: "Documentado en D5. Consumer implementa MustVerifyPhone u override si lo necesita."
+    status: mitigated-by-design (D5)
+  - id: R-RISK-PKG-009-003
+    description: "Conflict con R-PKG-007 en MkServiceProvider.php y config/mk_director.php"
+    mitigation: "Branch creada desde origin/dev post-R-PKG-007. Ambos archivos son modificables independientemente."
+    status: mitigated (rama base = 8e41cff post-R-PKG-007)
 
 next_action:
-  - Diseñar flag --login-field=<field>.
-  - Modificar MakeAuthUserCommand para aceptar el flag.
-  - Modificar AuthUser base para que use el campo configurable.
-  - Modificar LoginRequest stub.
+  - Commit `chore(laravel): R-PKG-009 state.yaml v2 + design.md` (este commit).
+  - T1.1 — Modificar MakeAuthUserCommand con option --login-field.
+  - T1.2 — Parametrizar stubs (model, migration, auth-controller).
+  - T1.3 — AuthUser base agnóstico.
+  - T1.4 — Config global.
+  - T1.5 — Tests Pest (8+ escenarios + 3 BC verification).
+  - T1.6 — R-G-032 sync.
+  - Post-sign-off: tag v1.5.0-rc3 + 3 PRs coordinados (packagist + monorepo docs + humandirector skills) + Packagist publish.
+  - RETO notifica (R-RET-001 + R-PKG-009 sprint nuevo).
