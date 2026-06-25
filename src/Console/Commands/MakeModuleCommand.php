@@ -29,16 +29,17 @@ class MakeModuleCommand extends Command
      */
     public function handle()
     {
-        $name       = $this->argument('name');
+        $name = $this->argument('name');
         $moduleName = Str::studly($name);
-        $withRbac   = (bool) $this->option('with-rbac');
+        $withRbac = (bool) $this->option('with-rbac');
 
         $this->info("🚀 Iniciando generación del módulo MK-API: {$moduleName}");
 
-        $basePath = app_path("Modules/{$moduleName}");
+        $basePath = $this->modulesPath($moduleName);
 
         if (File::exists($basePath)) {
             $this->error("El módulo {$moduleName} ya existe en {$basePath}.");
+
             return Command::FAILURE;
         }
 
@@ -81,25 +82,25 @@ class MakeModuleCommand extends Command
         $this->newLine();
         if ($withRbac) {
             $this->info("✅ Módulo {$moduleName} con RBAC triad generado:");
-            $this->line("   • 3 Models    (User, Role, Ability) — tablas `{scope}_users`, `{scope}_roles`, `{scope}_abilities`");
-            $this->line("   • 3 Controllers (CRUD + assignRole/revokeRole/syncAbilities)");
+            $this->line('   • 3 Models    (User, Role, Ability) — tablas `{scope}_users`, `{scope}_roles`, `{scope}_abilities`');
+            $this->line('   • 3 Controllers (CRUD + assignRole/revokeRole/syncAbilities)');
             $this->line("   • 3 Policies  ({$moduleName}Policy, RolePolicy, AbilityPolicy) — default-deny + super-admin bypass");
-            $this->line("   • 1 Service   (RbacService — singleton)");
-            $this->line("   • 5 Migrations con FK constraints");
-            $this->line("   • 1 ServiceProvider con Gate::policy + Gate::define auto-bind");
+            $this->line('   • 1 Service   (RbacService — singleton)');
+            $this->line('   • 5 Migrations con FK constraints');
+            $this->line('   • 1 ServiceProvider con Gate::policy + Gate::define auto-bind');
             $this->newLine();
-            $this->warn("   ⚠️  Próximos pasos:");
-            $this->line("      1. php artisan migrate (corre las 5 migrations en orden)");
+            $this->warn('   ⚠️  Próximos pasos:');
+            $this->line('      1. php artisan migrate (corre las 5 migrations en orden)');
             $this->line("      2. mk:discover-abilities --module={$moduleName} (crea las abilities en la tabla)");
-            $this->line("      3. mk:auth:create-super-admin (bootstrap inicial)");
+            $this->line('      3. mk:auth:create-super-admin (bootstrap inicial)');
         } else {
             $this->info("✅ Módulo {$moduleName} generado con el estándar MK-API:");
-            $this->line("   Flujo: FormRequest → Controller → DTO → Service → Repository → Model → Resource");
+            $this->line('   Flujo: FormRequest → Controller → DTO → Service → Repository → Model → Resource');
             $this->newLine();
-            $this->warn("   ⚠️  Recuerda completar los TODOs en:");
+            $this->warn('   ⚠️  Recuerda completar los TODOs en:');
             $this->line("      - DTOs/{$moduleName}Data.php (propiedades tipadas)");
             $this->line("      - Services/{$moduleName}Service.php (getSearchable, getWith)");
-            $this->line("      - Crear la migración en Database/Migrations/");
+            $this->line('      - Crear la migración en Database/Migrations/');
         }
 
         return Command::SUCCESS;
@@ -111,21 +112,21 @@ class MakeModuleCommand extends Command
     protected function generateStandardPack(string $moduleName): void
     {
         // Capa HTTP
-        $this->generateFile($moduleName, 'controller.stub',           'Controllers',  "{$moduleName}Controller.php");
-        $this->generateFile($moduleName, 'route.stub',                'Routes',       'api.php');
+        $this->generateFile($moduleName, 'controller.stub', 'Controllers', "{$moduleName}Controller.php");
+        $this->generateFile($moduleName, 'route.stub', 'Routes', 'api.php');
 
         // Capa de Dominio
-        $this->generateFile($moduleName, 'model.stub',                'Models',       "{$moduleName}.php");
-        $this->generateFile($moduleName, 'enum.stub',                 'Enums',        "{$moduleName}Status.php");
+        $this->generateFile($moduleName, 'model.stub', 'Models', "{$moduleName}.php");
+        $this->generateFile($moduleName, 'enum.stub', 'Enums', "{$moduleName}Status.php");
 
         // Capa de Datos / Contratos (MK-API Standard)
-        $this->generateFile($moduleName, 'dto.stub',                  'DTOs',         "{$moduleName}Data.php");
-        $this->generateFile($moduleName, 'repository-interface.stub', 'Contracts',    "{$moduleName}RepositoryInterface.php");
-        $this->generateFile($moduleName, 'repository.stub',           'Repositories', "{$moduleName}Repository.php");
-        $this->generateFile($moduleName, 'service.stub',              'Services',     "{$moduleName}Service.php");
+        $this->generateFile($moduleName, 'dto.stub', 'DTOs', "{$moduleName}Data.php");
+        $this->generateFile($moduleName, 'repository-interface.stub', 'Contracts', "{$moduleName}RepositoryInterface.php");
+        $this->generateFile($moduleName, 'repository.stub', 'Repositories', "{$moduleName}Repository.php");
+        $this->generateFile($moduleName, 'service.stub', 'Services', "{$moduleName}Service.php");
 
         // ServiceProvider con binding Interface → Implementation
-        $this->generateFile($moduleName, 'provider.stub',             '',             "{$moduleName}ModuleServiceProvider.php");
+        $this->generateFile($moduleName, 'provider.stub', '', "{$moduleName}ModuleServiceProvider.php");
     }
 
     /**
@@ -147,33 +148,33 @@ class MakeModuleCommand extends Command
      */
     protected function generateRbacPack(string $moduleName): void
     {
-        $moduleNameLower       = Str::snake($moduleName);
+        $moduleNameLower = Str::snake($moduleName);
         $moduleNamePluralLower = Str::plural(Str::snake($moduleName, '-'));
-        $ts                    = now();
-        $stubFolder            = 'module-rbac';
+        $ts = now();
+        $stubFolder = 'module-rbac';
 
         // ─── Models (3) ─────────────────────────────────────────────────────
-        $this->generateFile($moduleName, 'model-user.stub',    'Models', "{$moduleName}.php", $stubFolder);
-        $this->generateFile($moduleName, 'model-role.stub',    'Models', 'Role.php',         $stubFolder);
-        $this->generateFile($moduleName, 'model-ability.stub', 'Models', 'Ability.php',      $stubFolder);
+        $this->generateFile($moduleName, 'model-user.stub', 'Models', "{$moduleName}.php", $stubFolder);
+        $this->generateFile($moduleName, 'model-role.stub', 'Models', 'Role.php', $stubFolder);
+        $this->generateFile($moduleName, 'model-ability.stub', 'Models', 'Ability.php', $stubFolder);
 
         // ─── Controllers (3) ────────────────────────────────────────────────
-        $this->generateFile($moduleName, 'controller-user.stub',    'Controllers', "{$moduleName}Controller.php", $stubFolder);
-        $this->generateFile($moduleName, 'controller-role.stub',    'Controllers', 'RoleController.php',         $stubFolder);
-        $this->generateFile($moduleName, 'controller-ability.stub', 'Controllers', 'AbilityController.php',      $stubFolder);
+        $this->generateFile($moduleName, 'controller-user.stub', 'Controllers', "{$moduleName}Controller.php", $stubFolder);
+        $this->generateFile($moduleName, 'controller-role.stub', 'Controllers', 'RoleController.php', $stubFolder);
+        $this->generateFile($moduleName, 'controller-ability.stub', 'Controllers', 'AbilityController.php', $stubFolder);
 
         // ─── Policies (3) ───────────────────────────────────────────────────
-        $this->generateFile($moduleName, 'policy-user.stub',    'Policies', "{$moduleName}Policy.php", $stubFolder);
-        $this->generateFile($moduleName, 'policy-role.stub',    'Policies', 'RolePolicy.php',         $stubFolder);
-        $this->generateFile($moduleName, 'policy-ability.stub', 'Policies', 'AbilityPolicy.php',      $stubFolder);
+        $this->generateFile($moduleName, 'policy-user.stub', 'Policies', "{$moduleName}Policy.php", $stubFolder);
+        $this->generateFile($moduleName, 'policy-role.stub', 'Policies', 'RolePolicy.php', $stubFolder);
+        $this->generateFile($moduleName, 'policy-ability.stub', 'Policies', 'AbilityPolicy.php', $stubFolder);
 
         // ─── Service (RbacService, reemplaza el service estándar) ───────────
         $this->generateFile($moduleName, 'service-rbac.stub', 'Services', 'RbacService.php', $stubFolder);
 
         // ─── DTO + Repository + Repository Interface (estándar, reusados) ──
-        $this->generateFile($moduleName, 'dto.stub',                  'DTOs',         "{$moduleName}Data.php");
-        $this->generateFile($moduleName, 'repository-interface.stub', 'Contracts',    "{$moduleName}RepositoryInterface.php");
-        $this->generateFile($moduleName, 'repository.stub',           'Repositories', "{$moduleName}Repository.php");
+        $this->generateFile($moduleName, 'dto.stub', 'DTOs', "{$moduleName}Data.php");
+        $this->generateFile($moduleName, 'repository-interface.stub', 'Contracts', "{$moduleName}RepositoryInterface.php");
+        $this->generateFile($moduleName, 'repository.stub', 'Repositories', "{$moduleName}Repository.php");
 
         // ─── Routes (RBAC-specific, reemplaza el route estándar) ────────────
         $this->generateFile($moduleName, 'routes-rbac.stub', 'Routes', 'api.php', $stubFolder);
@@ -188,7 +189,7 @@ class MakeModuleCommand extends Command
             ['stub' => 'migration-role.stub',              'name' => "create_{$moduleNameLower}_roles_table"],
             ['stub' => 'migration-ability.stub',           'name' => "create_{$moduleNameLower}_abilities_table"],
             ['stub' => 'migration-role-user-pivot.stub',   'name' => "create_{$moduleNameLower}_role_user_table"],
-            ['stub' => 'migration-ability-role-pivot.stub','name' => "create_{$moduleNameLower}_ability_role_table"],
+            ['stub' => 'migration-ability-role-pivot.stub', 'name' => "create_{$moduleNameLower}_ability_role_table"],
         ];
         foreach ($migrations as $i => $migration) {
             $tsString = $ts->copy()->addSeconds($i)->format('Y_m_d_His');
@@ -204,15 +205,16 @@ class MakeModuleCommand extends Command
         $bootstrapPath = base_path('bootstrap/providers.php');
         if (File::exists($bootstrapPath)) {
             $content = File::get($bootstrapPath);
-            if (!str_contains($content, $providerClass)) {
+            if (! str_contains($content, $providerClass)) {
                 if (preg_match('/return\s*\[\s*(.*?)\s*\];/s', $content, $matches)) {
-                    $insertTarget = "];";
+                    $insertTarget = '];';
                     $providerLine = "    {$providerClass},";
-                    $newContent   = str_replace($insertTarget, "{$providerLine}\n];", $content);
+                    $newContent = str_replace($insertTarget, "{$providerLine}\n];", $content);
                     File::put($bootstrapPath, $newContent);
-                    $this->info(" - Auto-registrado en bootstrap/providers.php");
+                    $this->info(' - Auto-registrado en bootstrap/providers.php');
                 }
             }
+
             return;
         }
 
@@ -220,45 +222,58 @@ class MakeModuleCommand extends Command
         $configPath = config_path('app.php');
         if (File::exists($configPath)) {
             $content = File::get($configPath);
-            if (!str_contains($content, $providerClass)) {
+            if (! str_contains($content, $providerClass)) {
                 $search = "/*\n         * Application Service Providers...\n         */";
                 if (str_contains($content, $search)) {
-                    $replace    = "/*\n         * Application Service Providers...\n         */\n        {$providerClass},";
+                    $replace = "/*\n         * Application Service Providers...\n         */\n        {$providerClass},";
                     $newContent = str_replace($search, $replace, $content);
                     File::put($configPath, $newContent);
-                    $this->info(" - Auto-registrado en config/app.php");
+                    $this->info(' - Auto-registrado en config/app.php');
                 } else {
                     $this->warn("No se pudo auto-registrar. Agrega manualmente: {$providerClass}");
                 }
             }
+
             return;
         }
     }
 
+    /**
+     * Resuelve la ruta base donde se generan los módulos.
+     *
+     * Por defecto usa `app_path('Modules/...')` (convención Laravel).
+     * Tests pueden override-arlo para apuntar a un tempdir.
+     */
+    protected function modulesPath(string $moduleName = ''): string
+    {
+        return app_path('Modules'.($moduleName !== '' ? "/{$moduleName}" : ''));
+    }
+
     protected function generateFile(string $moduleName, string $stubName, string $folder, string $fileName, ?string $stubFolder = null): void
     {
-        $stubBase = __DIR__ . '/../../Stubs/';
-        $stubPath = $stubBase . ($stubFolder !== null ? $stubFolder . '/' : '') . $stubName;
+        $stubBase = __DIR__.'/../../Stubs/';
+        $stubPath = $stubBase.($stubFolder !== null ? $stubFolder.'/' : '').$stubName;
 
-        if (!File::exists($stubPath)) {
+        if (! File::exists($stubPath)) {
             $this->error("  ❌ Stub no encontrado: {$stubPath}");
+
             return;
         }
 
         $content = File::get($stubPath);
-        $content = str_replace('{{ModuleName}}',            $moduleName,                               $content);
-        $content = str_replace('{{moduleNameLower}}',       Str::snake($moduleName),                   $content);
+        $content = str_replace('{{ModuleName}}', $moduleName, $content);
+        $content = str_replace('{{moduleNameLower}}', Str::snake($moduleName), $content);
         $content = str_replace('{{moduleNamePluralLower}}', Str::plural(Str::snake($moduleName, '-')), $content);
 
-        $targetFolder = app_path("Modules/{$moduleName}");
-        if (!empty($folder)) {
+        $targetFolder = $this->modulesPath($moduleName);
+        if (! empty($folder)) {
             $targetFolder .= "/{$folder}";
         }
 
-        $targetPath  = "{$targetFolder}/{$fileName}";
+        $targetPath = "{$targetFolder}/{$fileName}";
         File::put($targetPath, $content);
 
-        $displayName = !empty($folder) ? "{$folder}/{$fileName}" : $fileName;
+        $displayName = ! empty($folder) ? "{$folder}/{$fileName}" : $fileName;
         $this->line("   ✅ {$displayName}");
     }
 
@@ -274,21 +289,22 @@ class MakeModuleCommand extends Command
      */
     protected function generateMigration(string $moduleName, string $stubName, string $baseFileName, string $timestamp, ?string $stubFolder = null): void
     {
-        $stubBase = __DIR__ . '/../../Stubs/';
-        $stubPath = $stubBase . ($stubFolder !== null ? $stubFolder . '/' : '') . $stubName;
+        $stubBase = __DIR__.'/../../Stubs/';
+        $stubPath = $stubBase.($stubFolder !== null ? $stubFolder.'/' : '').$stubName;
 
-        if (!File::exists($stubPath)) {
+        if (! File::exists($stubPath)) {
             $this->error("  ❌ Stub no encontrado: {$stubPath}");
+
             return;
         }
 
         $content = File::get($stubPath);
-        $content = str_replace('{{ModuleName}}',            $moduleName,                               $content);
-        $content = str_replace('{{moduleNameLower}}',       Str::snake($moduleName),                   $content);
+        $content = str_replace('{{ModuleName}}', $moduleName, $content);
+        $content = str_replace('{{moduleNameLower}}', Str::snake($moduleName), $content);
         $content = str_replace('{{moduleNamePluralLower}}', Str::plural(Str::snake($moduleName, '-')), $content);
-        $content = str_replace('{{migrationDate}}',         $timestamp,                                $content);
+        $content = str_replace('{{migrationDate}}', $timestamp, $content);
 
-        $targetPath = app_path("Modules/{$moduleName}/Database/Migrations/{$timestamp}_{$baseFileName}");
+        $targetPath = $this->modulesPath($moduleName)."/Database/Migrations/{$timestamp}_{$baseFileName}";
         File::put($targetPath, $content);
 
         $this->line("   ✅ Database/Migrations/{$timestamp}_{$baseFileName}");
