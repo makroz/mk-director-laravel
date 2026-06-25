@@ -1,11 +1,11 @@
-version: 3
+version: 4
 sprint: 2026-06-24-retrofit-reto-admin-module
 parent_sprint: 2026-06-24-dogfooding-model
 rule: R-G-033-D (workflow iterativo)
 r_id: R-RET-001
 opened: 2026-06-24
 closed: null
-status: blocked (espera GA v1.5.0 trigger — Mario decision. Lote R-PKG-007+008+009+010 ✅ todos cerrados)
+status: blocked (espera GA v1.5.0 trigger — Mario decision. Lote R-PKG-007+008+009+010+011 ✅ todos cerrados. R-PKG-011 v1.5.0-rc5 published 2026-06-25T23:09Z)
 
 branch:
   monorepo: makromania/260624-2220--retrofit-reto-admin-module (a crear post-GA)
@@ -27,9 +27,10 @@ depends_on:
     - R-PKG-008 (mk:module --with-rbac) — ✅ closed 2026-06-25, v1.5.0-rc1
     - R-PKG-009 (mk:make:auth-user --login-field) — ✅ closed 2026-06-25, v1.5.0-rc3
     - R-PKG-010 (AuthController --with-auth-rbac) — ✅ closed 2026-06-25, v1.5.0-rc4
+    - R-PKG-011 (mk:make:auth-user --profile-fields + --verify-email) — ✅ closed 2026-06-25, v1.5.0-rc5
   soft:
-    - Skill `mk-director-laravel/SKILL.md` actualizada con R-G-033 — ✅ hecho (R-PKG-009 T1.6 + R-PKG-010 T1.6)
-    - Documentación de v1.5.0 publicada — ✅ hecho (8/8 R-G-032 locations sincronizadas para R-PKG-010)
+    - Skill `mk-director-laravel/SKILL.md` actualizada con R-G-033 — ✅ hecho (R-PKG-009/010/011 T1.6/T1.8)
+    - Documentación de v1.5.0 publicada — ✅ hecho (8/8 R-G-032 locations sincronizadas para R-PKG-010/011)
 
 depends_on_progress:
   R-PKG-007_discover_abilities_to_core:
@@ -48,6 +49,11 @@ depends_on_progress:
     state.yaml: packagist/mk-director-laravel/openspec/changes/2026-06-24-auth-controller-rbac-stub/state.yaml
     status: closed 2026-06-25 ✅
     tag: v1.5.0-rc4 (merged 2026-06-25T19:07-19:11Z, PRs #17/#44/#18)
+  R-PKG-011_profile_fields_per_scope:
+    state.yaml: packagist/mk-director-laravel/openspec/changes/2026-06-25-profile-fields-per-scope/state.yaml
+    status: closed 2026-06-25 ✅
+    tag: v1.5.0-rc5 (merged 2026-06-25T23:06-23:08Z, PRs #18/#45/#19)
+    note: "Habilita phase 2+3 de R-RET-001. Permite re-scaffold Admin con --profile-fields=name,dni,phone --verify-email sin código custom."
 
 in_flight: []
 
@@ -55,10 +61,10 @@ release_strategy:
   decision_date: 2026-06-25
   decision_by: Mario (CTO Makromania)
   decision: RELEASE_AT_END
-  summary: "RETO bumpea composer UNA SOLA VEZ cuando el lote R-PKG-007+008+009+010 esté completo (idealmente v1.5.0 GA). NO bumpear entre RCs."
+  summary: "RETO bumpea composer UNA SOLA VEZ cuando el lote R-PKG-007+008+009+010+011 esté completo (idealmente v1.5.0 GA). NO bumpear entre RCs."
   rationale: "Acumular evita churn de versiones, RETO trabaja con versión completa, RETO es feedback loop al final."
   next_milestone: "v1.5.0 GA — cuando Mario apruebe GA, RETO bumpea a v1.5.0 y arranca phase 2+3."
-  current_state: "Lote R-PKG-007/008/009/010 ✅ todos cerrados. R-PKG-010 v1.5.0-rc4 published 2026-06-25. Pendiente: trigger GA v1.5.0 por Mario."
+  current_state: "Lote R-PKG-007/008/009/010/011 ✅ todos cerrados (5 RCs). R-PKG-011 v1.5.0-rc5 published 2026-06-25T23:09Z. Pendiente: trigger GA v1.5.0 por Mario."
 
 findings:
   closing:
@@ -68,8 +74,8 @@ findings:
 
 approach:
   phase_1_release_blocked:
-    duration: "hasta que R-PKG-007/008/009/010 cierren"
-    status: "✅ COMPLETADO 2026-06-25 — lote cerrado"
+    duration: "hasta que R-PKG-007/008/009/010/011 cierren"
+    status: "✅ COMPLETADO 2026-06-25 — lote cerrado (5 RCs)"
     work: "ninguno — RETO esperó releases del paquete"
   phase_2_retrofit:
     duration: "sprint posterior a v1.5.0 GA trigger de Mario"

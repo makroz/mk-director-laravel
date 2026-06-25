@@ -1,16 +1,17 @@
-version: 2
+version: 3
 sprint: 2026-06-25-profile-fields-per-scope
 parent_sprint: 2026-06-24-dogfooding-model
 rule: R-G-033-A
 r_id: R-PKG-011
 opened: 2026-06-25
-status: implementation-done (T0-T1.8 cerradas, 3 PRs coordinados pendientes)
+closed: 2026-06-25
+status: closed
 branch:
-  packagist: makromania/260625-1822--r-pkg-011-profile-fields (pending PR)
-  monorepo: makromania/260625-1845--r-pkg-011-docs-sync (pending PR)
-  skills_repo: makromania/260625-1855--r-pkg-011-skills-sync (pending PR)
+  packagist: makromania/260625-1822--r-pkg-011-profile-fields (MERGED 2026-06-25T23:07:12Z, squash f34a2088)
+  monorepo: makromania/260625-1845--r-pkg-011-docs-sync (MERGED 2026-06-25T23:06:40Z, squash c62a6828)
+  skills_repo: makromania/260625-1855--r-pkg-011-skills-sync (MERGED 2026-06-25T23:08:38Z, squash 67adf17)
 base_commit:
-  packagist: origin/dev @ 3258ebd (post state.yaml v3 R-PKG-010 closure)
+  packagist: origin/dev @ f34a2088 (squash commit del PR #18)
 target_release: v1.5.0-rc5
 
 source_feature:
