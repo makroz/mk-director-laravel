@@ -407,6 +407,141 @@ AdminReto::query()->whereLoginField('1234567')->first();
 
 ---
 
+## ⚙️ 3.8. RBAC integration en AuthController (`--with-auth-rbac`)
+
+`mk:make:auth-user` ahora puede generar un `AuthController` con integración
+RBAC completa: ability checks en endpoints privados, rate-limit en endpoints
+públicos, y audit log automático vía eventos. Default (sin flag) preserva
+el comportamiento idéntico a v1.5.0-rc3.
+
+### Uso
+
+```bash
+# Default (BC): sin RBAC, sin rate limit, sin audit log — idéntico a v1.5.0-rc3
+php artisan mk:make:auth-user Admin
+
+# Habilitar RBAC + rate limit + audit log
+php artisan mk:make:auth-user Admin --with-auth-rbac
+
+# Combinar con --login-field (R-PKG-009)
+php artisan mk:make:auth-user Admin --login-field=ci --with-auth-rbac
+```
+
+### Qué cambia cuando pasás `--with-auth-rbac`
+
+1. **Ability checks en `/me` y `/logout`** vía `authorizeAbility()` helper:
+   ```php
+   public function me(Request $request): JsonResponse
+   {
+       $this->authorizeAbility('me', $request->user());
+       return $this->sendResponse($request->user());
+   }
+
+   public function logout(Request $request): JsonResponse
+   {
+       $this->authorizeAbility('logout', $user);
+       // ...
+   }
+
+   protected function authorizeAbility(string $endpoint, mixed $user): void
+   {
+       $ability = config("mk_director.auth.abilities.{$endpoint}");
+       if ($ability === null || $ability === '') {
+           return; // BC mode: sin check.
+       }
+       if ($user === null || ! $this->abilityResolver->can($user, $ability)) {
+           throw new AuthorizationException("Missing ability: {$ability}");
+       }
+   }
+   ```
+
+2. **Rate limit middleware** en endpoints públicos (vía `routes/api.php`):
+   ```php
+   Route::post('login', [AuthController::class, 'login'])
+       ->middleware('throttle:' . config('mk_director.auth.rate_limits.login', '5,1'));
+   Route::post('forgot', [AuthController::class, 'forgot'])
+       ->middleware('throttle:' . config('mk_director.auth.rate_limits.forgot', '3,1'));
+   Route::post('reset', [AuthController::class, 'reset'])
+       ->middleware('throttle:' . config('mk_director.auth.rate_limits.reset', '3,1'));
+   ```
+
+3. **Audit events** vía `Mk\Director\Auth\Events\AuthEvent`:
+   ```php
+   // Login exitoso:
+   AuthEvent::dispatch('auth.login.success', [
+       'user_id' => $user->id,
+       'ip' => $request->ip(),
+       'user_agent' => $request->userAgent(),
+       'scope' => $user->getAuthScope(),
+   ]);
+
+   // Login fallido:
+   AuthEvent::dispatch('auth.login.failed', [
+       'login_field_value' => $credentials['email'] ?? null,  // NUNCA password
+       'ip' => $request->ip(),
+       'user_agent' => $request->userAgent(),
+   ]);
+
+   // Logout, password_reset.requested también se emiten automáticamente.
+   ```
+
+   Consumido por `MkAuditLoggerPlugin` si está activo.
+
+### Config global
+
+```php
+// config/mk_director.php
+'auth' => [
+    // ... login_field, user_model, default_user_type ...
+    'abilities' => [
+        'me' => env('MK_AUTH_ABILITY_ME'),          // null = sin check (BC)
+        'logout' => env('MK_AUTH_ABILITY_LOGOUT'),  // null = sin check (BC)
+    ],
+    'rate_limits' => [
+        'login' => env('MK_AUTH_RATE_LIMIT_LOGIN', '5,1'),
+        'forgot' => env('MK_AUTH_RATE_LIMIT_FORGOT', '3,1'),
+        'reset' => env('MK_AUTH_RATE_LIMIT_RESET', '3,1'),
+    ],
+],
+```
+
+### Cómo registrar un listener para `AuthEvent`
+
+```php
+// app/Listeners/AuthAuditListener.php
+namespace App\Listeners;
+
+use Mk\Director\Auth\Events\AuthEvent;
+use Illuminate\Support\Facades\Log;
+
+class AuthAuditListener
+{
+    public function handle(AuthEvent $event): void
+    {
+        Log::channel('audit')->info("[{$event->type}]", $event->payload);
+    }
+}
+
+// app/Providers/EventServiceProvider.php
+protected $listen = [
+    AuthEvent::class => [AuthAuditListener::class],
+];
+```
+
+### Anti-patterns (rejected)
+
+- **Habilitar RBAC por default**: rompe BC. El flag es opt-in.
+- **Loggear passwords** (ni hasheados) en audit events — **NUNCA**.
+- **Rate limit muy agresivo** (5/min puede bloquear usuarios reales) —
+  configurable por endpoint via `MK_AUTH_RATE_LIMIT_*`.
+
+### Spec
+
+- Spec: `openspec/changes/2026-06-24-auth-controller-rbac-stub/proposal.md`
+- Spec formal: `openspec/changes/2026-06-24-auth-controller-rbac-stub/specs/auth-controller-rbac-stub.md`
+
+---
+
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)
 
 Tanto para **Next.js** como para **React Native**, el consumo de listas es estandarizado mediante parámetros URL:
