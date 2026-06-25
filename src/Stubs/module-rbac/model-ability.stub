@@ -1,0 +1,42 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+
+/**
+ * Ability — permiso atómico (`{scope}.{resource}.{action}`).
+ *
+ * Generado por `php artisan mk:module {{ModuleName}} --with-rbac`.
+ *
+ * Las abilities se crean/vinculan vía `mk:discover-abilities` (R-PKG-007)
+ * — el `AbilityController` queda read-only por default (ver AbilityPolicy).
+ *
+ * Spec: RBAC-002 (R-PKG-008).
+ */
+class Ability extends Model
+{
+    /** @var string Tabla scope-prefixed (R-D3) */
+    protected $table = '{{moduleNameLower}}_abilities';
+
+    protected $fillable = [
+        'name',
+        'description',
+    ];
+
+    /**
+     * Roles que tienen esta ability. Pivot: `{moduleNameLower}_ability_role`.
+     */
+    public function roles(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            Role::class,
+            '{{moduleNameLower}}_ability_role',
+            'ability_id',
+            'role_id',
+        );
+    }
+}

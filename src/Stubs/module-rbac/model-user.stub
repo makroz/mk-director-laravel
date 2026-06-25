@@ -1,0 +1,102 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Models;
+
+use App\Modules\{{ModuleName}}\Models\Role;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Foundation\Auth\User as Authenticatable;
+use Illuminate\Notifications\Notifiable;
+
+/**
+ * {{ModuleName}} — User model del bounded context RBAC.
+ *
+ * Generado por `php artisan mk:module {{ModuleName}} --with-rbac`.
+ * Extiende `Authenticatable` (NO `Mk\Director\Auth\Models\AuthUser`)
+ * porque es un user INTERNO del módulo, no un scope de autenticación.
+ *
+ * Si necesitás un scope con login propio, ejecutá
+ * `mk:make:auth-user {{ModuleName}}` por separado — eso crea un modelo
+ * DISTINTO que extiende `AuthUser` con `auth_scope`.
+ *
+ * Spec: RBAC-001..005 (R-PKG-008).
+ */
+class {{ModuleName}} extends Authenticatable
+{
+    use HasFactory, Notifiable;
+
+    /** @var string Tabla del bounded context RBAC (scope-prefixed, R-D3) */
+    protected $table = '{{moduleNameLower}}_users';
+
+    protected $fillable = [
+        'name',
+        'email',
+        'password',
+    ];
+
+    protected $hidden = [
+        'password',
+        'remember_token',
+    ];
+
+    protected function casts(): array
+    {
+        return [
+            'email_verified_at' => 'datetime',
+            'password'          => 'hashed',
+        ];
+    }
+
+    /**
+     * Roles del user. Pivot: `{moduleNameLower}_role_user` (FK integrity).
+     */
+    public function roles(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            Role::class,
+            '{{moduleNameLower}}_role_user',
+            'user_id',
+            'role_id',
+        );
+    }
+
+    /**
+     * Chequea si el user tiene un role por nombre o ID.
+     */
+    public function hasRole(string|int $role): bool
+    {
+        if (is_int($role)) {
+            return $this->roles->contains('id', $role);
+        }
+        return $this->roles->contains('name', $role);
+    }
+
+    /**
+     * Chequea si el user tiene una ability directa o vía role.
+     */
+    public function hasAbility(string $ability): bool
+    {
+        return $this->roles
+            ->flatMap->abilities
+            ->pluck('name')
+            ->contains($ability);
+    }
+
+    /**
+     * Asigna un role al user (idempotente).
+     */
+    public function assignRole(Role $role): void
+    {
+        $this->roles()->syncWithoutDetaching([$role->id]);
+    }
+
+    /**
+     * Remueve un role del user.
+     */
+    public function removeRole(Role $role): void
+    {
+        $this->roles()->detach($role->id);
+    }
+}

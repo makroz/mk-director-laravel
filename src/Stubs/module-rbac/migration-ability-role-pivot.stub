@@ -1,0 +1,37 @@
+<?php
+
+declare(strict_types=1);
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+/**
+ * Crea `{moduleNameLower}_ability_role` — pivot con FK constraints
+ * (R-RISK-001, hardening R3-014).
+ *
+ * `cascadeOnDelete()` en ambos lados garantiza que eliminar una ability
+ * o un role limpia automáticamente las filas del pivot.
+ *
+ * Spec: RBAC-003 (R-PKG-008).
+ */
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('{{moduleNameLower}}_ability_role', function (Blueprint $table) {
+            $table->foreignId('ability_id')
+                ->constrained('{{moduleNameLower}}_abilities')
+                ->cascadeOnDelete();
+            $table->foreignId('role_id')
+                ->constrained('{{moduleNameLower}}_roles')
+                ->cascadeOnDelete();
+            $table->primary(['ability_id', 'role_id']);
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('{{moduleNameLower}}_ability_role');
+    }
+};
