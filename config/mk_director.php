@@ -120,6 +120,17 @@ return [
     'auth' => [
         'user_model' => env('MK_AUTH_USER_MODEL'),
         'default_user_type' => env('MK_AUTH_DEFAULT_USER_TYPE'),
+
+        // R-PKG-009: campo de login default para scopes nuevos generados con
+        // `mk:make:auth-user {Scope}`. Default BC: `email`. Otros casos
+        // comunes: `ci` (Bolivia), `phone`, `username`, `documento`.
+        //
+        // NOTA: Este config es el DEFAULT para el scaffolder. Cada subclase
+        // concreta (Admin, Member) puede override `$loginField` en su propio
+        // modelo (via `--login-field=<campo>` al ejecutar mk:make:auth-user).
+        // El config se usa en `MkAuthenticate` para resolver `auth_identifier`
+        // cuando el token no trae ability explícita.
+        'login_field' => env('MK_LOGIN_FIELD', 'email'),
     ],
 
     /*
