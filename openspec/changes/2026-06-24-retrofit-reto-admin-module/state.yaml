@@ -1,11 +1,11 @@
-version: 1
+version: 2
 sprint: 2026-06-24-retrofit-reto-admin-module
 parent_sprint: 2026-06-24-dogfooding-model
 rule: R-G-033-D (workflow iterativo)
 r_id: R-RET-001
 opened: 2026-06-24
 closed: null
-status: blocked (espera R-PKG-007/008/009/010 mergeados)
+status: blocked (espera R-PKG-007/009/010 mergeados — R-PKG-008 ✅ closed 2026-06-25)
 branch:
   monorepo: makromania/260624-2220--retrofit-reto-admin-module (a crear, post-bloqueo)
   sub_repo: N/A (este sprint es de RETO, no del paquete)

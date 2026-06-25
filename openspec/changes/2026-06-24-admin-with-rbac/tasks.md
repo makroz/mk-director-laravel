@@ -91,7 +91,9 @@
 ## Definition of Done
 
 - [x] Flag funciona, genera 17+ archivos (target era 11+, superamos). ✅ `5fb98a9`
-- [ ] Tests Pest verdes (90%+ coverage). ⏳ T1.4
-- [ ] R-G-032 sync completo. ⏳ T1.5
-- [ ] Tag v1.5.0-rc1 + validación RETO. 🚫 T2.1/T2.2
-- [ ] RETO cerró rama huérfana + bumpeó paquete. 🚫 T2.2
+- [x] Tests Pest verdes (90%+ coverage). ✅ `18f9210` — 15 tests, 157 assertions, 285 total pass (270 existing + 15 new), 0 regresión.
+- [x] R-G-032 sync completo. ✅ `3b813e9 + 7be56f6 + fb8d8c4` — 8 of 16 locations synced (CHANGELOG + DEVELOPER_GUIDE + README + SKILL.md + new references/09 + GETTING_STARTED + AUTH + API_REFERENCE_LARAVEL); 5 verified N/A (skills core/web/mobile, rules_orchestration, AGENTS.md); 3 deferred (CHANGELOG monorepo raíz, API_REFERENCE_MOBILE/WEB, RETO BC notif).
+- [x] Tag v1.5.0-rc1 + Packagist publish. ✅ `f78076c` + tag at `67bed3c4075f` — published 2026-06-25T04:34:00+00:00.
+- [x] 3 PRs mergeados. ✅ PR #14 (packagist), #41 (MK-Director docs), #13 (humandirector skills).
+- [x] Sprint cerrado (state.yaml v5). ✅ commit `f78076c` pusheado a dev.
+- [ ] RETO cerró rama huérfana + bumpeó paquete. 🟢 **READY** (T2.1 + T2.2 movidas a sprint separado `2026-06-24-retrofit-reto-admin-module` (R-RET-001), status pasa de BLOCKED a READY ahora que R-PKG-008 está mergeado + v1.5.0-rc1 publicado). Sprint propio cuando RETO arranque.

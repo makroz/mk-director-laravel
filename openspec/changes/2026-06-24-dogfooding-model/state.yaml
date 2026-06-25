@@ -32,7 +32,7 @@ pre_checks_passed:
 in_flight:
   - meta: esperar cierre de los 5 sub-changes para tag final del sprint
   - sub_change_1: 2026-06-24-discover-abilities-to-core (pendiente triage: ¿genérico o RETO-only?)
-  - sub_change_2: 2026-06-24-admin-with-rbac (pendiente diseño de flag --with-rbac)
+  - sub_change_2: 2026-06-24-admin-with-rbac (R-PKG-008) — ✅ **CLOSED** 2026-06-25 (v1.5.0-rc1 tagged + Packagist published; PRs #14, #41, #13 merged)
   - sub_change_3: 2026-06-24-auth-user-login-field (pendiente diseño de campo configurable)
   - sub_change_4: 2026-06-24-auth-controller-rbac-stub (pendiente mejorar stub con RBAC integration)
   - sub_change_5: 2026-06-24-retrofit-reto-admin-module (pendiente releer skills + rehacer módulo)
