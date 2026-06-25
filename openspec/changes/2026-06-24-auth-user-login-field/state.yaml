@@ -1,14 +1,15 @@
-version: 2
+version: 5
 sprint: 2026-06-24-auth-user-login-field
 parent_sprint: 2026-06-24-dogfooding-model
 rule: R-G-033-A (criterio genérico)
 r_id: R-PKG-009
 opened: 2026-06-24
 closed: null
-status: in-flight (T1.x implementation)
+status: implementation-done (T0+T1.1-T1.6 cerradas, 3 PRs coordinados pendientes)
 branch:
-  monorepo: makromania/260625-1104--r-pkg-009-login-field
+  monorepo: makromania/260625-1117--r-pkg-009-docs-sync
   sub_repo: makromania/260625-1104--r-pkg-009-login-field
+  skills_repo: makromania/260625-1115--r-pkg-009-skills-sync
 base_commit:
   sub_repo: origin/dev @ 8e41cff (post-R-PKG-007 closure, includes R-PKG-007)
 target_release: v1.5.0-rc3
@@ -30,45 +31,123 @@ triage_checklist:
     rationale: "Documentable como 'campo de login configurable' sin mencionar Bolivia/ci."
   decision: GO (cumple R-G-033-A, va al paquete)
 
-in_flight:
-  - T1.1 — Modificar MakeAuthUserCommand con --login-field
-  - T1.2 — Stubs parametrizados (model, migration, auth-controller)
-  - T1.3 — AuthUser base agnóstico ($loginField + scope)
-  - T1.4 — Config mk_director.auth.login_field
-  - T1.5 — Tests Pest (8+ escenarios)
-  - T1.6 — R-G-032 sync (8 locations)
+in_flight: []
 
 commits_landed:
   packagist_sub_repo:
     branch: makromania/260625-1104--r-pkg-009-login-field
-    commits: []
+    commits:
+      - hash: 2e24456
+        type: chore
+        message: "chore(laravel): R-PKG-009 state.yaml v2 + design.md"
+      - hash: 1ca3eb3
+        type: feat
+        message: "feat(laravel): mk:make:auth-user --login-field=<field>"
+      - hash: 1795616
+        type: feat
+        message: "feat(laravel): auth-user stubs login-field aware"
+      - hash: 165a4cf
+        type: feat
+        message: "feat(laravel): AuthUser login-field agnostic"
+      - hash: 93b4c31
+        type: chore
+        message: "chore(laravel): add login_field to mk_director config"
+      - hash: 7350a4b
+        type: test
+        message: "test(laravel): cover --login-field in mk:make:auth-user"
+      - hash: 4eecc5e
+        type: docs
+        message: "docs(laravel): sync CHANGELOG + DEVELOPER_GUIDE + README for --login-field (R-PKG-009 T1.6 packagist-side)"
+  monorepo_docs_sync:
+    branch: makromania/260625-1117--r-pkg-009-docs-sync
+    repo: makroz/MK-Director
+    commits:
+      - hash: 8c74bc0
+        type: docs
+        message: "docs(monorepo): sync GETTING_STARTED + AUTH + API_REFERENCE for --login-field (R-PKG-009 T1.6, locations 6-8)"
+  humandirector_skills_sync:
+    branch: makromania/260625-1115--r-pkg-009-skills-sync
+    repo: mariogfos/humandirector
+    commits:
+      - hash: d7043be
+        type: docs
+        message: "docs(laravel): mk-director-laravel reference 11-login-field (R-PKG-009, T1.6, locations 4 + 4b)"
 
 tests_passed:
-  total: 0
-  delta: 0
-  pending:
-    - 8 source-parsing tests (stubs parametrizados con 4 campos)
-    - 3 AuthUser scope tests (default + override + scopeWhereLoginField)
-    - 3 BC verification tests (sin flag = idéntico a v1.4.0)
+  total: 316
+  delta: +13
+  files:
+    - tests/Unit/Console/MakeAuthUserLoginFieldTest.php (8 tests)
+    - tests/Unit/Auth/AuthUserLoginFieldTest.php (5 tests)
+  coverage:
+    - Command signature incluye --login-field=email option
+    - resolveLoginField() valida input (PHP identifier, empty fallback)
+    - $extraReplacements condicionales (5 placeholders: emailVerifiedAtColumn, emailVerifiedAtCastEntry, mustVerifyEmailUse, loginFieldValidationRule)
+    - auth-user.model.stub genera $fillable + $loginField + $casts parametrized
+    - auth-user.migration.stub usa {{loginField}} columna + email_verified_at condicional
+    - auth-user.auth-controller.stub usa {{loginField}} en validation + lookup
+    - BC: default sin flag = idéntico a v1.4.0 (15 unit tests existentes pasan)
+    - AuthUser::$loginField = 'email' property
+    - AuthUser::getLoginField(): string method
+    - AuthUser::scopeWhereLoginField(Builder $query, string $value): Builder method
+    - BC: $fillable + $casts + MustVerifyEmail se preservan en AuthUser base
+    - Docblock NO hardcodea $email (regresión cubierta por AuthUserDocblockTest)
 
 rg032_sync:
-  synced_locations: []
-  planned:
-    - 1: packagist/CHANGELOG.md (block [1.5.0-rc3])
-    - 2: packagist/DEVELOPER_GUIDE.md (§ 3.7 mk:make:auth-user --login-field walkthrough)
-    - 3: packagist/README.md (commands table update)
-    - 4: .makromania/agency/skills/mk-director-laravel/SKILL.md (description + capabilities + version)
-    - 4b: .makromania/agency/skills/mk-director-laravel/references/11-login-field.md (NEW)
-    - 6: projects/mk-director/docs/guides/GETTING_STARTED.md (step 7 con --login-field mention)
-    - 7: projects/mk-director/docs/guides/AUTH.md (RBAC section + login field callout)
-    - 8: projects/mk-director/docs/API_REFERENCE_LARAVEL.md (§ mk:make:auth-user --login-field)
+  synced_locations:
+    - id: 1
+      file: packagist/CHANGELOG.md
+      note: "[1.5.0-rc3] block added con Added/Compatibility/Examples/Spec"
+    - id: 2
+      file: packagist/DEVELOPER_GUIDE.md
+      note: "§ 3.7 Login field configurable walkthrough (R-PKG-009)"
+    - id: 3
+      file: packagist/README.md
+      note: "Comandos table update con --login-field row"
+    - id: 4
+      file: .makromania/agency/skills/mk-director-laravel/SKILL.md
+      note: "description + capacidades + version + catalogo + Siguiente paso"
+    - id: "4b"
+      file: .makromania/agency/skills/mk-director-laravel/references/11-login-field.md
+      note: "NEW reference, ~280 lineas (D1-D6 + casos + queries + BC)"
+    - id: 6
+      file: projects/mk-director/docs/guides/GETTING_STARTED.md
+      note: "Seccion 'Login with a non-email field' con ejemplos Bolivia"
+    - id: 7
+      file: projects/mk-director/docs/guides/AUTH.md
+      note: "Callout al final de RBAC section sobre --login-field"
+    - id: 8
+      file: projects/mk-director/docs/API_REFERENCE_LARAVEL.md
+      note: "Nueva seccion mk:make:auth-user --login-field con tabla comparativa, D1-D6, queries agn osticas, casos de uso, BC verification"
+  verified_no_change_needed:
+    - id: 9
+      file: projects/mk-director/docs/API_REFERENCE_MOBILE.md
+      reason: "Sin cambio cross-stack"
+    - id: 10
+      file: projects/mk-director/docs/API_REFERENCE_WEB.md
+      reason: "Sin cambio cross-stack"
+    - id: 11
+      file: mk-director-core/SKILL.md
+      reason: "R-PKG-009 es Laravel-only, no toca contratos TS"
+    - id: 12
+      file: mk-director-web/SKILL.md
+      reason: "idem 11"
+    - id: 13
+      file: mk-director-mobile/SKILL.md
+      reason: "idem 11"
+    - id: 14
+      file: ~/.makromania/agency/global/rules_orchestration.md
+      reason: "R-G-033 ya cubre dogfooding-first; no nueva regla"
+    - id: 15
+      file: projects/mk-director/AGENTS.md
+      reason: "Ya referencia R-PKG-009 en catalogo de sub-changes"
   deferred:
-    - 5: projects/mk-director/CHANGELOG.md (DEFERRED — se agrupa con 1.5.0 GA)
-    - 9-10: API_REFERENCE_{MOBILE,WEB}.md (sin cambio cross-stack)
-    - 11-13: core/web/mobile SKILL.md (Laravel-only)
-    - 14: rules_orchestration.md (R-G-033 ya cubre)
-    - 15: projects/mk-director/AGENTS.md (catalogo actualizado implicitamente)
-    - 16: mariogfos/reto-api (BC notification via R-RET-001 cuando rc3 → GA)
+    - id: 5
+      file: projects/mk-director/CHANGELOG.md
+      reason: "DEFERRED — se agrupa con 1.5.0 GA"
+    - id: 16
+      file: mariogfos/reto-api
+      reason: "BC notification via R-RET-001 cuando rc3 → GA"
 
 closed_signoffs:
   - id: D1-rpkg009
@@ -89,7 +168,7 @@ closed_signoffs:
     applies_to: design.md D4, auth-user.auth-controller.stub
   - id: D5-rpkg009
     decision: AuthUser base BC, subclase override
-    rationale: AuthUser mantiene `email` + `MustVerifyEmail`. Subclases con `--login-field != email` NO implementan `MustVerifyEmail` (intended).
+    rationale: AuthUser mantiene `email` + `MustVerifyEmail`. Subclases con `--login-field != email` NO importan `MustVerifyEmail` (intended, el cast de email_verified_at se omite via stub).
     applies_to: design.md D5, AuthUser base + auth-user.model.stub
   - id: D6-rpkg009
     decision: `scopeWhereLoginField()` API
@@ -105,6 +184,11 @@ findings:
       rationale: "El stub actual solo genera $table, constructor, y hereda de AuthUser. Para soportar --login-field=ci, el stub debe generar $fillable específico + $loginField + $casts sin email_verified_at. Cambio non-trivial que proposal.md no detalla."
       discovered_at: "2026-06-25 (sesión R-PKG-009)"
       action: "T1.2 incluye generación de $fillable, $loginField, $casts, y override de MustVerifyEmail"
+    - id: GAP-002
+      title: AuthUser base implementa MustVerifyEmail interface
+      rationale: "PHP no permite 'des-implementar' interfaces heredadas. AuthUser mantiene MustVerifyEmail (BC). Subclases con --login-field != email lo heredan como interface 'muerto' (no se usa)."
+      discovered_at: "2026-06-25 (sesión R-PKG-009)"
+      action: "Documentado en D5. Consumer implementa MustVerifyPhone u override si necesita verificación custom."
 
   explicitly_out_of_scope:
     - id: OOS-RPKG009-001
@@ -117,24 +201,21 @@ findings:
 risk_register:
   - id: R-RISK-PKG-009-001
     description: "BC para consumers existentes que asumen email"
-    mitigation: "Default sigue siendo email. Si el consumer no pasa --login-field, comportamiento idéntico a v1.4.0. Smoke test ./vendor/bin/pest debe pasar sin cambios."
-    status: mitigated-by-design (T1.5 BC verification tests)
+    mitigation: "Default sigue siendo email. 15 unit tests existentes pasan sin cambios. 13 nuevos tests cubren --login-field variants."
+    status: mitigated (T1.1 + T1.5 BC verification)
   - id: R-RISK-PKG-009-002
     description: "Subclase con --login-field=ci no implementa MustVerifyEmail"
-    mitigation: "Documentado en D5. Consumer implementa MustVerifyPhone u override si lo necesita."
-    status: mitigated-by-design (D5)
+    mitigation: "Documentado en D5 + GAP-002. AuthUser mantiene interface, subclases con ci/phone lo heredan como 'muerto'. Consumer implementa MustVerifyPhone u override si necesita verificación custom."
+    status: mitigated-by-design (D5 + GAP-002)
   - id: R-RISK-PKG-009-003
     description: "Conflict con R-PKG-007 en MkServiceProvider.php y config/mk_director.php"
-    mitigation: "Branch creada desde origin/dev post-R-PKG-007. Ambos archivos son modificables independientemente."
+    mitigation: "Branch creada desde origin/dev post-R-PKG-007 (8e41cff). Ambos archivos son modificables independientemente. Smoke test 316/316 verde confirma 0 conflicts."
     status: mitigated (rama base = 8e41cff post-R-PKG-007)
 
 next_action:
-  - Commit `chore(laravel): R-PKG-009 state.yaml v2 + design.md` (este commit).
-  - T1.1 — Modificar MakeAuthUserCommand con option --login-field.
-  - T1.2 — Parametrizar stubs (model, migration, auth-controller).
-  - T1.3 — AuthUser base agnóstico.
-  - T1.4 — Config global.
-  - T1.5 — Tests Pest (8+ escenarios + 3 BC verification).
-  - T1.6 — R-G-032 sync.
-  - Post-sign-off: tag v1.5.0-rc3 + 3 PRs coordinados (packagist + monorepo docs + humandirector skills) + Packagist publish.
-  - RETO notifica (R-RET-001 + R-PKG-009 sprint nuevo).
+  - state.yaml v5 (closed, implementation-done) — este commit
+  - Push 3 branches + crear 3 PRs coordinados (packagist + monorepo + humandirector)
+  - Setear cron self-reminder para monitorear CI
+  - Post-merge: tag v1.5.0-rc3 + Packagist publish
+  - RETO notifica (R-RET-001 + R-PKG-009 sprint)
+  - Decisión próximo sprint: R-PKG-010 (AuthController RBAC) o esperar RETO valide rc3
