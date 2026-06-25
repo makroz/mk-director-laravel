@@ -79,6 +79,50 @@ R-RET-001, separate).
 - Design: `openspec/changes/2026-06-24-admin-with-rbac/design.md`
 - Tasks: `openspec/changes/2026-06-24-admin-with-rbac/tasks.md`
 
+## [1.5.0-rc2] - 2026-06-25
+
+Release candidate. **New Artisan command**: `php artisan mk:discover-abilities`
+auto-publishes abilities into `{scope}_abilities` by reading them from the
+module's `ServiceProvider::discoverAbilities()` (consumed when present),
+falling back to PHP 8.4 attributes `#[\Mk\Director\Auth\Attributes\Ability]`
+and docblock `@mk-ability` annotations when the provider doesn't expose the
+method.
+
+### Added
+
+- **`php artisan mk:discover-abilities {--module=*} {--dry-run} {--force} {--json}`**:
+  - **Source-of-truth (D1 hybrid)**: provider primary; attribute + docblock
+    as fallback ONLY when provider absent. Never mix sources within a module.
+  - **PHP 8.4 attribute `#[\Mk\Director\Auth\Attributes\Ability(name, description)`**:
+    repeatable, target METHOD, ideal for typed declaration on controllers.
+  - **Docblock fallback `@mk-ability name|description`**: regex-escape-free
+    (PHP 8.5 PCRE2), supports pre-8.4 apps.
+  - **Write intent (D3)**: interactive `$this->confirm(..., false)` with
+    `--force` skip + `--dry-run` skip + Laravel `--no-interaction` safe
+    no-op (Q3 sign-off).
+  - **Idempotent UPSERT** into `{scope}_abilities` (`{scope}` = snake_case
+    plural of module name, e.g. `admin_abilities`).
+  - **Opt-in auto-register**: `mk_director.features.auto_discover_abilities = true`
+    runs on every boot (sandbox/dev only — off by default).
+  - **Configurable module path**: `mk_director.paths.modules` (default
+    `app_path('Modules')`, env override `MK_MODULES_PATH`).
+- **`src/Auth/Attributes/Ability.php`**: PHP 8.4 attribute,
+  `#[\Attribute(Attribute::TARGET_METHOD | Attribute::IS_REPEATABLE)]`.
+- **Config additions**: `paths.modules`, `features.auto_discover_abilities`.
+
+### Compatibility
+
+- No BC break for existing consumers (command is opt-in).
+- The `--with-rbac` provider from 1.5.0-rc1 is consumed as-is: `mk:module Admin --with-rbac`
+  followed by `mk:discover-abilities --module=admin --force` is the canonical
+  workflow for scaffolding + ability sync.
+
+### Spec
+
+- Spec: `openspec/changes/2026-06-24-discover-abilities-to-core/proposal.md`
+- Design: `openspec/changes/2026-06-24-discover-abilities-to-core/design.md`
+- Tasks: `openspec/changes/2026-06-24-discover-abilities-to-core/tasks.md`
+
 ---
 
 ## [1.4.0] - 2026-06-24

@@ -210,6 +210,112 @@ análisis completo.
 
 ---
 
+### 3.6 Auto-poblar abilities con `mk:discover-abilities` (R-PKG-007)
+
+A partir de **v1.5.0-rc2**, `mk:discover-abilities` lee las abilities
+del provider del módulo (preferred) y las persiste en `{scope}_abilities`
+via UPSERT idempotente. Es el segundo paso del workflow de scaffolding
+RBAC (después de `php artisan migrate`).
+
+#### Source-of-truth: hybrid (D1)
+
+| Provider implementa `discoverAbilities()` | ¿Qué pasa? |
+|---|---|
+| **Sí** | Solo se usan las abilities del provider. Atributos PHP y docblocks se IGNORAN. |
+| **No** | Fallback combinado: atributos PHP 8.4 (`#[\Mk\Director\Auth\Attributes\Ability]`) + docblock (`@mk-ability name|description`). |
+
+Esto evita drift entre abilities en `Gate::define()` (provider) y filas
+en `{scope}_abilities` (DB). El provider es la única fuente por módulo.
+
+#### Atributo PHP 8.4 (primary dentro del fallback)
+
+```php
+use Mk\Director\Auth\Attributes\Ability;
+
+class InvoiceController
+{
+    #[Ability('billing.invoices.list', 'Listar facturas')]
+    public function index() {}
+
+    #[Ability('billing.invoices.create')]
+    public function store() {}
+}
+```
+
+Atributo es repeatable (varios `#[Ability(...)]` apilados en un método).
+Constructor property promotion requiere PHP 8.4+; para apps pre-8.4 usar
+el docblock fallback.
+
+#### Docblock fallback
+
+```php
+/**
+ * Reembolsar una factura.
+ *
+ * @mk-ability billing.invoices.refund Reembolsar factura
+ */
+public function refund() {}
+```
+
+El prefijo `mk-` evita colisión con otros generadores de docs (ApiGen,
+phpDocumentor). Regex escapada correctamente para PHP 8.5+ PCRE2.
+
+#### Uso
+
+```bash
+# Default (interactive prompt: "¿Escribir a {scope}_abilities? [y/N]").
+php artisan mk:discover-abilities --module=admin
+
+# Skip prompt + escribir.
+php artisan mk:discover-abilities --module=admin --force
+
+# Preview sin escribir (también skip prompt).
+php artisan mk:discover-abilities --module=admin --dry-run
+
+# CI-friendly: --force + JSON output.
+php artisan mk:discover-abilities --module=admin --force --json
+
+# Todos los módulos (no --module).
+php artisan mk:discover-abilities --force
+```
+
+#### Write intent (D3 — interactive con escape hatch CI)
+
+| Flags | TTY | Result |
+|---|---|---|
+| `--dry-run` | * | No writes. Imprime preview. |
+| `--force` | * | Writes. No prompt. |
+| Sin flags | TTY | `$this->confirm(..., false)` — default **No**. |
+| Sin flags | no-TTY (CI) | Laravel `--no-interaction` → confirm retorna false → safe no-op. |
+| `--dry-run` + `--force` | * | Error: "No combines --dry-run y --force". |
+
+#### Auto-register en boot (D4)
+
+Setear `mk_director.features.auto_discover_abilities = true` (o env
+`MK_AUTO_DISCOVER_ABILITIES=true`) corre `mk:discover-abilities --force
+--json` automáticamente después del boot del kernel (solo consola).
+Útil en sandbox/dev. **Off por default** — recomendado apagado en prod.
+
+#### Scope detection (D6)
+
+El scope se deriva del nombre del módulo: `Str::snake(Str::plural($name))`.
+Ejemplos:
+- `Admin` → tabla `admin_abilities`
+- `Member` → tabla `member_abilities`
+- `Billing` → tabla `billing_abilities`
+
+#### Spec & tests
+
+- **Spec / Design**: `openspec/changes/2026-06-24-discover-abilities-to-core/`
+- **Tests**: 17 Pest tests en `tests/Feature/DiscoverAbilitiesCommandTest.php`
+  (75 assertions). Cubren: signature con 4 flags, hybrid D1
+  (provider OR fallback, never both), interactive prompt D3,
+  UPSERT idempotente, scope detection, `#[Ability]` attribute
+  TARGET_METHOD + IS_REPEATABLE, PHP 8.5 PCRE2 regex sin escape de
+  llaves, end-to-end con tempdir + SQLite in-memory (5 escenarios).
+
+---
+
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)
 
 Tanto para **Next.js** como para **React Native**, el consumo de listas es estandarizado mediante parámetros URL:

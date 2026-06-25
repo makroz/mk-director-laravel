@@ -1,51 +1,261 @@
-version: 1
+version: 4
 sprint: 2026-06-24-discover-abilities-to-core
 parent_sprint: 2026-06-24-dogfooding-model
 rule: R-G-033-A (criterio genérico)
 r_id: R-PKG-007
 opened: 2026-06-24
-closed: null
-status: triage
+closed: 2026-06-25
+status: closed (v1.5.0-rc2 ready for PR + tag)
 branch:
-  monorepo: makromania/260624-2140--discover-abilities-to-core (a crear)
-  sub_repo: makromania/260624-2140--discover-abilities-to-core (a crear)
+  monorepo: makromania/260624-2140--discover-abilities-to-core
+  sub_repo: makromania/260624-2140--discover-abilities-to-core
 base_commit:
-  sub_repo: origin/dev @ v1.4.0 (f647339b1c90139d32e2a6150c76c05afc835c8f)
-target_release: v1.5.0-rc1 (post-triage + impl)
+  sub_repo: origin/dev @ v1.5.0-rc1 (609b912, post-R-PKG-008 closure)
+target_release: v1.5.0-rc2 (consume abilities del R-PKG-008 provider)
 
 source_feature:
   location: projects/reto/reto-api/app/Modules/Admin/Console/Commands/DiscoverAbilitiesCommand.php
   loc: 268
   written_against: makroz/director-laravel v1.3.0 (pre-1.4.0)
   status: NO mergeado (rama huérfana makromania/260624-0511--admin-module)
+  assumptions_reto_specific:
+    - id: AR-001
+      assumption: "Path hardcoded a app_path('Modules')"
+      action: "Generalizar via config('mk_director.paths.modules', app_path('Modules'))"
+    - id: AR-002
+      assumption: "Namespace hardcoded a App\\Modules\\..."
+      action: "Reflection-based discovery (no asunción de namespace)"
+    - id: AR-003
+      assumption: "Tabla central 'abilities' (no scope-aware)"
+      action: "Scope-aware: {scope}_abilities cuando se opera en módulo, sino tabla central"
+    - id: AR-004
+      assumption: "Command name mk:discover:abilities (2 puntos)"
+      action: "Renombrar a mk:discover-abilities (guión, matches mk:module pattern)"
+    - id: AR-005
+      assumption: "Auto-genera CRUD abilities (view/create/edit/delete + wildcard) por módulo"
+      action: "Opt-in via --with-crud-defaults flag (default false). Default = solo abilities declaradas explícitamente."
+    - id: AR-006
+      assumption: "PHPDoc @ability tag como única fuente"
+      action: "Preferir atributo PHP 8.4 #[\Mk\Director\Auth\Attributes\Ability]. Docblock como fallback para apps pre-8.4."
+    - id: AR-007
+      assumption: "Ability::query()->where()->first() Eloquent lookup"
+      action: "Preferir DB::table('{scope}_abilities')->upsert() (idempotencia nativa, soporta multi-scope en una sola llamada)"
 
 triage_checklist:
   R-G-033-A-1_≥_2_dominios:
-    answer: TBD (a evaluar)
-    rationale_draft: "Cualquier app con RBAC necesita descubrir abilities desde controllers. Es genérico."
+    answer: SÍ
+    rationale: |
+      Cualquier app con RBAC en módulos necesita descubrir abilities declaradas
+      explícitamente en providers/controllers. Dos dominios bounded confirmados:
+        1. mk-director-laravel nativo (cualquier `--with-rbac` module).
+        2. RETO (admin scope con 15 abilities).
+      Además: cualquier consumer futuro que use mk:module --with-rbac también
+      lo necesita (el MakeModuleCommand YA referencia este comando en su
+      output: `mk:discover-abilities --module={$moduleName}`). El
+      scaffolder depende del consumer del command.
   R-G-033-A-2_testeable_sin_RETO:
-    answer: TBD
-    rationale_draft: "El comando escanea archivos PHP por patrón → testeable con fixtures locales."
+    answer: SÍ
+    rationale: |
+      El comando opera sobre:
+        - Archivos PHP (ReflectionClass, attributes, docblocks) → fixture local.
+        - DB tables (UPSERT) → SQLite in-memory via MkLaravelTestCase.
+        - Module providers (boot() + discoverAbilities()) → mockeable con
+          una subclase del provider.
+      No requiere RETO corriendo. Tests Pest usan tempdir + SQLite (patrón
+      heredado de R-PKG-008: modulesPath() override + Capsule::addConnection).
   R-G-033-A-3_doc_sin_RETO:
-    answer: TBD
-    rationale_draft: "Documentable como 'auto-descubrir abilities' sin mencionar RETO."
-  decision: PENDING (sprint futuro)
+    answer: SÍ
+    rationale: |
+      Documentable como "auto-descubrir abilities declaradas en módulos
+      Laravel" sin mencionar RETO. La skill reference se titula
+      `discover-abilities.md` y describe el patrón genérico
+      (provider → discoverAbilities() → UPSERT en {scope}_abilities).
+      RETO aparece solo como ejemplo en CHANGELOG, no en la skill.
+  decision: GO (cumple R-G-033-A, va al paquete)
 
 in_flight: []
+
+commits_landed:
+  packagist_sub_repo:
+    branch: makromania/260624-2140--discover-abilities-to-core
+    commits:
+      - hash: 93ed0ea
+        type: chore
+        message: "chore(laravel): R-PKG-007 state.yaml v2 (triage-closed GO, design in flight)"
+      - hash: 635e05a
+        type: docs
+        message: "docs(laravel): design mk:discover-abilities (R-PKG-007)"
+      - hash: 38af54c
+        type: chore
+        message: "chore(laravel): R-PKG-007 state.yaml v3 + design sign-off (Q1-Q3 closed)"
+      - hash: 2cd6452
+        type: feat
+        message: "feat(laravel): add #[Ability] attribute for auto-discovery (R-PKG-007 T1.2)"
+      - hash: 053b412
+        type: feat
+        message: "feat(laravel): mk:discover-abilities command (R-PKG-007 T1.1)"
+      - hash: 0d56ead
+        type: feat
+        message: "feat(laravel): auto-discover abilities on boot + config paths (R-PKG-007 T1.3)"
+      - hash: a31c8e6
+        type: test
+        message: "test(laravel): cover mk:discover-abilities (R-PKG-007 T1.4)"
+      - hash: be48038
+        type: docs
+        message: "docs(laravel): R-G-032 sync for mk:discover-abilities (R-PKG-007 T1.5)"
+      - hash: TBD
+        type: chore
+        message: "chore(laravel): R-PKG-007 state.yaml v4 (closed, v1.5.0-rc2 tagged)"  # this commit
+  monorepo_docs_sync:
+    branch: makromania/260625-0100--r-pkg-007-docs-sync
+    repo: makroz/MK-Director
+    commits:
+      - hash: 408e492
+        type: docs
+        message: "docs(monorepo): sync GETTING_STARTED + AUTH + API_REFERENCE for mk:discover-abilities (R-PKG-007 T1.5, locations 6-8)"
+  humandirector_skills_sync:
+    branch: makromania/260625-0100--r-pkg-007-skills-sync
+    repo: mariogfos/humandirector
+    commits:
+      - hash: a008890
+        type: docs
+        message: "docs(laravel): add mk-director-laravel reference 10-discover-abilities (R-PKG-007, T1.5, locations 4 + 4b)"
+
+tests_passed:
+  total: 302
+  delta: +17
+  file: tests/Feature/DiscoverAbilitiesCommandTest.php
+  assertions: 75
+  coverage:
+    - signature with 4 flags
+    - hybrid D1 (provider OR fallback, never both)
+    - interactive prompt D3 (--dry-run / --force / --no-interaction)
+    - UPSERT idempotente (run 2x = same state)
+    - scope detection (writes to {scope}_abilities, not central)
+    - PHP 8.5 PCRE2 regex sin escape de llaves
+    - #[Ability] attribute TARGET_METHOD + IS_REPEATABLE
+    - end-to-end with tempdir + SQLite in-memory (5 escenarios)
+    - MkServiceProvider registers command + registerAutoDiscoverAbilities hook
+    - config has paths.modules + features.auto_discover_abilities
+
+rg032_sync:
+  synced_locations:
+    - id: 1
+      file: packagist/CHANGELOG.md
+      note: "[1.5.0-rc2] block added"
+    - id: 2
+      file: packagist/DEVELOPER_GUIDE.md
+      note: "§ 3.6 added (R-PKG-007 walkthrough)"
+    - id: 3
+      file: packagist/README.md
+      note: "mk:discover-abilities row added in commands table"
+    - id: 4
+      file: .makromania/agency/skills/mk-director-laravel/SKILL.md
+      note: "description + capabilities + version updated"
+    - id: "4b"
+      file: .makromania/agency/skills/mk-director-laravel/references/10-discover-abilities.md
+      note: "NEW reference, 265 lines"
+    - id: 6
+      file: projects/mk-director/docs/guides/GETTING_STARTED.md
+      note: "Step 9 updated with --force flag + R-PKG-007 context"
+    - id: 7
+      file: projects/mk-director/docs/guides/AUTH.md
+      note: "RBAC section updated with discover-abilities callout"
+    - id: 8
+      file: projects/mk-director/docs/API_REFERENCE_LARAVEL.md
+      note: "§ mk:discover-abilities added (full API + examples)"
+  verified_no_change_needed:
+    - id: 11
+      file: mk-director-core/SKILL.md
+      reason: "R-PKG-007 es Laravel-only, no toca contratos TS"
+    - id: 12
+      file: mk-director-web/SKILL.md
+      reason: "idem 11"
+    - id: 13
+      file: mk-director-mobile/SKILL.md
+      reason: "idem 11"
+    - id: 14
+      file: ~/.makromania/agency/global/rules_orchestration.md
+      reason: "R-G-033 ya cubre dogfooding-first; no nueva regla"
+    - id: 15
+      file: projects/mk-director/AGENTS.md
+      reason: "ya referencia R-PKG-007 en catálogo de sub-changes"
+  deferred:
+    - id: 5
+      file: projects/mk-director/CHANGELOG.md
+      reason: "DEFERRED — se agrupa con releases futuros (1.5.0 GA changelog)"
+    - id: 9
+      file: projects/mk-director/docs/API_REFERENCE_MOBILE.md
+      reason: "sin cambio de contrato cross-stack"
+    - id: 10
+      file: projects/mk-director/docs/API_REFERENCE_WEB.md
+      reason: "sin cambio de contrato cross-stack"
+    - id: 16
+      file: mariogfos/reto-api
+      reason: "BC notification en T2.1 (R-RET-001, sprint separado)"
+
+closed_signoffs:
+  - id: D1-rpkg007
+    decision: HYBRID source (provider OR attribute+docblock, never both)
+    rationale: Mario prefiere una sola fuente por módulo
+    applies_to: design.md D1, impl T1.1 algorithm step 1-2
+  - id: D2-rpkg007
+    decision: PHP 8.4 attribute primary, docblock fallback
+    applies_to: design.md D2, impl T1.2
+  - id: D3-rpkg007
+    decision: Interactive prompt with --force / --dry-run / --no-interaction escape hatches
+    applies_to: design.md D3, impl T1.1 handle() flow
 
 findings:
   closing:
     - id: R-PKG-007
       title: DiscoverAbilitiesCommand debe vivir en el paquete, no en RETO
-      track: triage + impl
+      track: triage-closed + design-in-flight
+      evidence:
+        - 268 LOC de RETO resuelven un problema genérico (auto-descubrir abilities).
+        - R-PKG-008 ya expone `discoverAbilities()` en provider-rbac.stub (15 abilities).
+        - MakeModuleCommand output referencia `mk:discover-abilities` como next-step obligatorio post-scaffold.
+    - id: D-001-rpkg007
+      title: Source of truth = provider.discoverAbilities(), NO reflection parsing
+      rationale: |
+        El provider-rbac.stub de R-PKG-008 YA implementa discoverAbilities() retornando
+        las 15 abilities explícitas. mk:discover-abilities DEBE consumir este array,
+        no re-parsear controllers. Razón: una sola fuente de verdad evita drift entre
+        abilities en Gate::define() y filas en {scope}_abilities.
+      applies_to: design.md D1, impl T1.1
+
+  explicitly_out_of_scope:
+    - id: OOS-RPKG007-001
+      title: "Reescribir DiscoverAbilitiesCommand de RETO in-place"
+      reason: "RETO retrofit es R-RET-001 (sprint separado, blocked hasta v1.5.0+)."
+    - id: OOS-RPKG007-002
+      title: "Cambiar el sistema de abilities base"
+      reason: "Ya funciona (R3-014 FK hardening cerrado). Solo agregamos discovery."
+    - id: OOS-RPKG007-003
+      title: "UI integration"
+      reason: "El comando es CLI-only. UI de ability management viene de R-PKG-008 (AbilityController).
 
 risk_register:
   - id: R-RISK-PKG-007-001
     description: "El comando de RETO asume estructura app/Modules/{Name}/Http/Controllers/*. Si el paquete usa otro path, hay que generalizar."
     mitigation: "Usar config mk_director.paths.modules o default sensible (app/Modules). Documentar override."
+    status: mitigated-by-design (T0.1.b design.md D5 path resolution)
+  - id: R-RISK-PKG-007-002
+    description: "Multi-scope conflict: ¿cómo detectar si {scope}_abilities existe vs central abilities?"
+    mitigation: "Scope-aware: command mira {scope}_abilities primero; si no existe, fallback a tabla central. Loguear cuál se usó."
+    status: in-design (T0.1.b design.md D6 scope detection)
+  - id: R-RISK-PKG-007-003
+    description: "BC para apps pre-1.5.0 que usaban mk:module sin --with-rbac (no tienen provider con discoverAbilities())."
+    mitigation: "Si el provider no expone discoverAbilities(), fallback a (1) atributos PHP 8.4 en controllers, (2) docblock @ability. Loguear qué source se usó."
+    status: in-design (T0.1.b design.md D7 fallback chain)
+  - id: R-RISK-PKG-007-004
+    description: "RETO ya tiene tabla 'abilities' central usada por mk:make:auth-user (v1.3.x). El nuevo command podría duplicar filas."
+    mitigation: "mk:discover-abilities opera por scope ({scope}_abilities). Tabla central `abilities` solo la toca mk:make:auth-user, NO este command. Documentar scope ownership en DEVELOPER_GUIDE.md."
+    status: mitigated-by-design (T0.1.b design.md D6)
 
 next_action:
-  - Evaluar el código actual de DiscoverAbilitiesCommand (rama huérfana).
-  - Identificar assumptions RETO-específicas (paths hardcoded, namespaces específicos).
-  - Diseñar API genérica.
-  - Decidir si va al paquete o se queda en RETO (R-G-033-A).
+  - T0.1.b — Crear design.md con ADRs D1-D5 + Q1-Q3 para sign-off de Mario.
+  - Commit: `docs(laravel): design mk:discover-abilities (R-PKG-007)`.
+  - Push al cerrar (NO acumular).
+  - Bloquear T1.x hasta Q1-Q3 cerradas.
+  - Post-sign-off: T1.1 (impl) → T1.4 (tests) → T1.5 (R-G-032 sync) → state.yaml v3 (closed).
