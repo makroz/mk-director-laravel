@@ -1,17 +1,23 @@
-version: 1
+version: 2
 sprint: 2026-06-24-admin-with-rbac
 parent_sprint: 2026-06-24-dogfooding-model
 rule: R-G-033-A
 r_id: R-PKG-008
 opened: 2026-06-24
 closed: null
-status: design
+status: design-done
 branch:
   monorepo: makromania/260624-2150--admin-with-rbac (a crear)
-  sub_repo: makromania/260624-2150--admin-with-rbac (a crear)
+  sub_repo: makromania/260624-2150--admin-with-rbac (created 2026-06-24T22:29-04:00, session mvs_95e8aa6d93e044668b22f0250005c334)
 base_commit:
-  sub_repo: origin/dev @ v1.4.0
+  sub_repo: origin/dev @ ad03751 (post-dogfooding-model-planning)
 target_release: v1.5.0-rc1
+commits_landed:
+  - hash: 3b3455e
+    subject: "docs(laravel): design mk:module --with-rbac (R-PKG-008)"
+    files_added: [openspec/changes/2026-06-24-admin-with-rbac/design.md]
+    loc: +503
+    rationale: "design.md created with 6 ADRs, file manifest, stub templates, testing strategy, BC analysis, 4 open questions for Mario sign-off."
 
 source_features:
   - location: projects/reto/reto-api/app/Modules/Admin/Http/Controllers/AdminController.php
@@ -43,27 +49,62 @@ triage_checklist:
 
 in_flight: []
 
+design_decisions_closed:
+  - id: D1
+    decision: "Per-module RBAC triad (NO reuse central roles/abilities)"
+    rationale: "matches RETO orphan branch pattern + R-MK-001 isolation + proposal.md explicit"
+    documented_in: design.md § "Decision: D1"
+  - id: D2
+    decision: "User model extends Illuminate\Foundation\Auth\User, NOT Mk\\Director\\Auth\\Models\\AuthUser"
+    rationale: "proposal.md line 102-103 explicit; auth scope is separate concern (mk:make:auth-user)"
+    documented_in: design.md § "Decision: D2"
+  - id: D3
+    decision: "Pivot naming: {scope}_role_user and {scope}_ability_role (scope-prefixed)"
+    rationale: "avoids R3-014 precedent (FK retrofitted on shared role_user table)"
+    documented_in: design.md § "Decision: D3"
+  - id: D4
+    decision: "Stubs location: src/Stubs/module-rbac/ (NOT src/Console/Stubs/ as tasks.md T0.2 says)"
+    rationale: "verified: existing stub root is src/Stubs/ (controller.stub, model.stub, etc.)"
+    documented_in: design.md § "Decision: D4"
+    follow_up: "tasks.md T0.2 text needs correction in next sprint iteration"
+  - id: D5
+    decision: "Policy auto-binding via Gate::policy() + Gate::define() per ability"
+    rationale: "explicit abilities make R-PKG-007 discover trivial + standard Pest patterns work"
+    documented_in: design.md § "Decision: D5"
+  - id: D6
+    decision: "Default-deny + super-admin before() bypass (RBAC-004 spec compliant)"
+    rationale: "spec is explicit; matches Laravel convention; security-positive"
+    documented_in: design.md § "Decision: D6"
+
 findings:
   closing:
     - id: R-PKG-008
       title: mk:module necesita flag --with-rbac para generar Admin + Role + Ability + pivot tables
 
-design_questions:
-  - Q1: ¿El flag --with-rbac genera los 3 modelos + controllers + migrations, o hookea un módulo existente?
-    options:
-      - A: Generar todo de cero con `mk:module Admin --with-rbac`
-      - B: Hook sobre módulo existente: `mk:module Admin --add-rbac`
-    recommendation: A (más limpio, no requiere módulo pre-existente).
-  - Q2: ¿Los profile fields custom (62 LOC de migration) son parte de --with-rbac o un flag separado?
-    recommendation: Flag separado `--profile-fields=name,phone,avatar` o config posterior. R-PKG-009 cubre auth-user, R-PKG-008 cubre RBAC.
-  - Q3: ¿El AuthController de admin se genera como parte de --with-rbac?
-    recommendation: NO. --with-rbac asume que el usuario autenticado YA tiene un scope. AuthController es de mk:make:auth-user (separado).
+open_questions_for_mario:
+  - id: Q1
+    question: "¿Confirmás per-module RBAC isolation (D1) sobre reuse central roles.guard='admin'?"
+    recommendation: "per-module (matches RETO + R-MK-001 + proposal.md)"
+    blocks: "T1.1 (MakeModuleCommand.php modification)"
+  - id: Q2
+    question: "¿--with-rbac y --login-field (R-PKG-009) son ortogonales o se combinan en un solo flag?"
+    recommendation: "ortogonales (run mk:make:auth-user por separado para login)"
+    blocks: "T1.1 flag design"
+  - id: Q3
+    question: "¿Generar baseline seeder (super-admin role + admin.admins.* abilities) en --with-rbac?"
+    recommendation: "YES con --no-seeder opt-out"
+    blocks: "T1.2 stubs (¿agregar database/seeders/rbac-baseline.stub?)"
+  - id: Q4
+    question: "¿Dónde viven los tests: tests/Feature/ (Laravel convention) o tests/Integration/?"
+    recommendation: "tests/Feature/ (matches 1.4.0 suite pattern)"
+    blocks: "T1.4 test file location"
 
 risk_register:
   - R-RISK-PKG-008-001: "Conflicto entre flag --with-rbac y --profile-fields (overlapping)"
     mitigation: "Flags ortogonales. --with-rbac genera RBAC, --profile-fields agrega campos al model. Combinables."
 
 next_action:
-  - Diseñar API del flag `--with-rbac`.
-  - Diseñar stubs para Admin/Role/Ability/AbilityRole/UserRole.
-  - Decidir si genera auth controller o no.
+  - Wait for Mario sign-off on Q1-Q4 (open_questions_for_mario).
+  - Once approved: implement T1.1 (MakeModuleCommand.php modification) + T1.2 (12 stubs).
+  - T1.3 (ServiceProvider auto-bind) + T1.4 (Pest tests) + T1.5 (R-G-032 sync 16 locations) follow.
+  - T2.1 (RETO replace custom Admin module) is BLOCKED on R-PKG-007/009/010 + this R-PKG-008 closed + v1.5.0-rc1 published.
