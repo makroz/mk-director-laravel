@@ -23,6 +23,17 @@ use Illuminate\Database\Eloquent\Concerns\HasUuids;
  * Login field: `{{loginField}}` (configurable via `--login-field=<campo>` al
  * ejecutar `php artisan mk:make:auth-user`). Ver docs/API_REFERENCE_LARAVEL.md
  * § mk:make:auth-user --login-field para casos soportados.
+ *
+ * Profile fields: declarados via `--profile-fields=<csv>` (R-PKG-011). Cada
+ * field se agrega como columna string nullable en la tabla del scope y como
+ * entry en $fillable. Exposición: /me (GET read), PATCH /me (update),
+ * /register (create). Ver docs/API_REFERENCE_LARAVEL.md § mk:make:auth-user
+ * --profile-fields.
+ *
+ * Email verification: opt-in via `--verify-email` (R-PKG-011). Si está activo,
+ * `email_verified_at` está en $casts y `MustVerifyEmail` interface está importada.
+ * Si no está activo (default), NO hay columna `email_verified_at` y NO hay
+ * verificación (BC con v1.5.0-rc4).
  */
 class {{ModuleName}} extends AuthUser
 {
@@ -44,29 +55,31 @@ class {{ModuleName}} extends AuthUser
      */
     protected string $loginField = '{{loginField}}';
 
-    /**
+{{profileFieldsDocblock}}    /**
      * Columnas asignables en masa. El `auth_scope` por defecto es
      * `{{moduleNameLower}}`; las subclases (Admin, Member, etc.) lo setean
      * al crear. `{{loginField}}` es el campo de login (default `email`).
+     * Profile fields (R-PKG-011) se agregan vía `--profile-fields=<csv>`.
      *
      * @var array<int, string>
      */
     protected $fillable = [
         'name',
         '{{loginField}}',
-        'password',
+{{profileFieldsFillableEntries}}        'password',
         'auth_scope',
         'client_id',
     ];
 
     /**
      * Casts de atributos. Solo `email_verified_at` se incluye cuando
-     * loginField es `email` (BC); para otros campos, dejar solo `password`.
+     * `--verify-email` está activo (R-PKG-011 ADR-009). Para default mode
+     * (sin flag), queda solo `password`.
      *
      * @var array<string, string>
      */
     protected $casts = [
-{{emailVerifiedAtCastEntry}}        'password' => 'hashed',
+{{emailVerifiedAtCastEntry}}{{profileFieldsCastEntries}}        'password' => 'hashed',
     ];
 
     /**

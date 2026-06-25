@@ -540,6 +540,179 @@ protected $listen = [
 - Spec: `openspec/changes/2026-06-24-auth-controller-rbac-stub/proposal.md`
 - Spec formal: `openspec/changes/2026-06-24-auth-controller-rbac-stub/specs/auth-controller-rbac-stub.md`
 
+### 3.9 Profile fields per-scope (`--profile-fields=<csv>`) (R-PKG-011)
+
+Cada scope autenticable (`Admin`, `Member`, `Customer`) puede declarar sus
+propias columnas de perfil via `--profile-fields=<csv>`. Las columnas viven
+**solo en la tabla del scope** (encapsulación MME/R-MK-001) — no se
+comparten entre scopes.
+
+#### Uso
+
+```bash
+# Admin scope: name + dni + phone
+php artisan mk:make:auth-user Admin --profile-fields=name,dni,phone
+
+# Member scope: name + phone + birthdate (independiente del Admin)
+php artisan mk:make:auth-user Member --profile-fields=name,phone,birthdate
+```
+
+#### Qué cambia cuando pasás `--profile-fields`
+
+1. **Migración** (`{timestamp}_create_admins_table.php`):
+   - Columnas `string` nullable para cada field (`dni`, `phone`).
+   - Nullable para que la migration corra sobre tablas con data existente.
+   - Si necesitás `unique()` o tipos custom, override la migration post-generación.
+
+2. **Modelo** (`app/Modules/Admin/Models/Admin.php`):
+   - `$fillable` incluye cada field después del `loginField`.
+   - Docblock con `@property string|null $dni` (autocomplete en IDEs).
+   - Default type: `string`. Sin cast explícito (Laravel auto-castea).
+
+3. **AuthController** (`app/Modules/Admin/Http/Controllers/AuthController.php`):
+   - **NUEVO** método `register(Request $request)`: valida `required|string|max:255`
+     para cada field, crea el `Admin`, setea `authScope`, opcionalmente dispatch
+     de `VerifyEmail` notification (si `--verify-email` activo).
+   - **NUEVO** método `updateProfile(Request $request)`: valida + actualiza
+     profile fields del user autenticado. Llamado vía `PATCH /api/admin/auth/me`.
+
+4. **Routes** (`app/Modules/Admin/Http/Routes/api.php`):
+   - **NUEVO** `Route::post('register', ...)`: crea user.
+   - **NUEVO** `Route::patch('me', ...)`: actualiza profile fields (en grupo protegido).
+
+5. **Endpoints expuestos**:
+   - `GET /api/admin/auth/me` — read (incluye profile fields via `$fillable`).
+   - `PATCH /api/admin/auth/me` — update con validación default.
+   - `POST /api/admin/auth/register` — create con profile fields.
+
+#### Encapsulación (MME/R-MK-001)
+
+Cada scope tiene su propia tabla. No hay leak cross-scope:
+
+```bash
+# Genera tabla `admins` con columnas: id, name, ci, dni, phone, password, auth_scope, ...
+# NO incluye `birthdate` (eso es de Member)
+php artisan mk:make:auth-user Admin --login-field=ci --profile-fields=name,dni,phone
+
+# Genera tabla `members` con columnas: id, name, phone, birthdate, password, auth_scope, ...
+# NO incluye `dni` (eso es de Admin)
+php artisan mk:make:auth-user Member --login-field=email --profile-fields=name,phone,birthdate
+```
+
+`Admin::$fillable = ['name', 'ci', 'dni', 'phone', 'password', 'auth_scope', 'client_id']`
+`Member::$fillable = ['name', 'email', 'phone', 'birthdate', 'password', 'auth_scope', 'client_id']`
+
+#### Custom validation
+
+Para validación custom (regex CI, date format, etc.), override los métodos
+`register()` y `updateProfile()` en el AuthController generado:
+
+```php
+// app/Modules/Admin/Http/Controllers/AuthController.php
+public function register(Request $request): JsonResponse
+{
+    $data = $request->validate([
+        'ci' => ['required', 'string', 'regex:/^[0-9]{6,8}$/'],
+        'phone' => ['required', 'string', 'regex:/^\+591[0-9]{8}$/'], // Bolivia
+        // ... profile fields restantes
+    ]);
+    // ... resto del método
+}
+```
+
+#### Constraints (R-PKG-011 ADR-007 + ADR-008)
+
+- Cada field debe ser PHP identifier válido (`/^[a-zA-Z_][a-zA-Z0-9_]*$/`).
+- No duplicados dentro del CSV (fail-fast).
+- No colisión con columnas reservadas: `id`, `password`, `auth_scope`, `client_id`,
+  `remember_token`, `created_at`, `updated_at`, `email_verified_at`, ni con el
+  `--login-field`.
+- Tipos: en v1.5.0-rc5 todos los profile fields son `string`. Para tipos custom
+  (`date`, `int`, `json`, `file`), usar v1.6.0 con `--profile-fields-types`.
+
+### 3.10 Email verification opt-in (`--verify-email`) (R-PKG-011)
+
+Habilita el flujo completo de verificación por email. Default: sin
+verificación (BC con v1.5.0-rc4).
+
+#### Uso
+
+```bash
+# Solo funciona si --login-field=email (default)
+php artisan mk:make:auth-user Admin --verify-email
+
+# Combo completo (RETO Bolivia)
+php artisan mk:make:auth-user Admin --login-field=ci --with-auth-rbac --profile-fields=name,dni,phone --verify-email
+```
+
+⚠️ `--verify-email` se ignora si `--login-field != email`. El scaffolder
+imprime warning explícito. ADR-009.
+
+#### Qué cambia cuando pasás `--verify-email`
+
+1. **Migración**: columna `email_verified_at` (timestamp nullable).
+2. **Modelo**: cast `'email_verified_at' => 'datetime'` en `$casts`.
+3. **AuthController**: métodos `verifyEmail($id, $hash)` + `resendVerification()`.
+4. **Routes**:
+   - `GET /api/admin/auth/email/verify/{id}/{hash}` (signed URL, marca verificado).
+   - `POST /api/admin/auth/email/resend` (throttle 6,1, auth:admin required).
+5. **Register dispatch**: `register()` envía `Illuminate\Auth\Notifications\VerifyEmail`
+   queueable al crear el user.
+
+#### Flujo de verificación
+
+```
+1. POST /api/admin/auth/register { name, email, password, dni, phone }
+   → 201 + VerifyEmail notification dispatched
+2. User hace click en el email link
+   → GET /api/admin/auth/email/verify/{id}/{hash}  (signed URL)
+   → 200 + email_verified_at = now()
+3. (Opcional) Re-enviar si no llegó:
+   → POST /api/admin/auth/email/resend
+   → throttle 6,1 por user
+```
+
+#### Custom notification template
+
+Para customizar el template del email, override la notification:
+
+```php
+// app/Notifications/CustomVerifyEmail.php
+namespace App\Notifications;
+
+use Illuminate\Auth\Notifications\VerifyEmail as BaseVerifyEmail;
+use Illuminate\Support\Facades\URL;
+
+class CustomVerifyEmail extends BaseVerifyEmail
+{
+    protected function buildMailMessage($url)
+    {
+        return (new \Illuminate\Mail\Message)->view('emails.verify', ['url' => $url]);
+    }
+}
+
+// app/Models/Admin.php
+use App\Notifications\CustomVerifyEmail;
+
+public function sendEmailVerificationNotification()
+{
+    $this->notify(new CustomVerifyEmail);
+}
+```
+
+#### Constraints
+
+- `--verify-email` solo aplica si `--login-field=email`. Si pasás ambos
+  flags con login-field != email, se ignora `--verify-email` con warning.
+- Verification routes (`/email/verify/{id}/{hash}`) usan `signed` middleware
+  (Laravel built-in, previene tampering del hash).
+- Resend route tiene throttle `6,1` por defecto (configurable en routes stub).
+
+#### Spec
+
+- Spec: `openspec/changes/2026-06-25-profile-fields-per-scope/proposal.md`
+- Spec formal: `openspec/changes/2026-06-25-profile-fields-per-scope/specs/profile-fields.md`
+
 ---
 
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)

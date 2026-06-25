@@ -256,6 +256,78 @@ preserva comportamiento idéntico a v1.5.0-rc3.
 
 ---
 
+## [1.5.0-rc5] - 2026-06-25
+
+Minor release. Dos flags opt-in para `php artisan mk:make:auth-user {Scope}`:
+
+1. `--profile-fields=<csv>` — columnas adicionales para el scope (per-scope, no compartidas).
+2. `--verify-email` — flujo completo de verificación por email.
+
+Ambos flags son **opt-in**. Sin ellos, el comportamiento es **idéntico a v1.5.0-rc4** (BC preservada).
+
+### Added
+
+- **`mk:make:auth-user --profile-fields=<csv>`** (R-PKG-011): declarativo de columnas adicionales para el scope. Cada field se genera como columna `string` nullable en la tabla del scope, se incluye en `$fillable` y `$casts` del modelo, y se expone vía:
+  - `GET /api/{scope}/auth/me` (read via `$fillable`)
+  - `PATCH /api/{scope}/auth/me` (update con validación `required|string|max:255` por default)
+  - `POST /api/{scope}/auth/register` (write al crear)
+- **`mk:make:auth-user --verify-email`** (R-PKG-011): habilita el flujo completo de verificación por email:
+  - Columna `email_verified_at` en migration (nullable, opt-in)
+  - Cast `'email_verified_at' => 'datetime'` en `$casts` del modelo (opt-in)
+  - Endpoint `GET /api/{scope}/auth/email/verify/{id}/{hash}` (signed URL)
+  - Endpoint `POST /api/{scope}/auth/email/resend` (throttle 6,1, auth:scope required)
+  - Dispatch de `Illuminate\Auth\Notifications\VerifyEmail` queueable en `register()`
+  - Métodos `verifyEmail()` + `resendVerification()` en el AuthController generado
+- **Refactor de `email_verified_at`**: antes (R-PKG-009) se generaba siempre que `--login-field=email`; ahora depende del flag `--verify-email` (opt-in). R-PKG-011 ADR-009 simplifica la matriz de combinaciones.
+- **Método `register()`** en AuthController: NUEVO endpoint `POST /api/{scope}/auth/register`. Se genera solo si `--profile-fields` o `--verify-email` está activo. BC: NO existe en v1.5.0-rc4.
+
+### Ortogonalidad
+
+Los 4 flags del command son independientes y combinables:
+
+```bash
+# Default (BC con v1.5.0-rc4)
+php artisan mk:make:auth-user Customer
+
+# Solo login field no-email (R-PKG-009)
+php artisan mk:make:auth-user Admin --login-field=ci
+
+# Solo RBAC (R-PKG-010)
+php artisan mk:make:auth-user Admin --with-auth-rbac
+
+# Solo profile fields (R-PKG-011)
+php artisan mk:make:auth-user Admin --profile-fields=name,dni,phone
+
+# Solo email verification (R-PKG-011)
+php artisan mk:make:auth-user Admin --verify-email
+
+# Full combo (RETO Bolivia Admin)
+php artisan mk:make:auth-user Admin --login-field=ci --with-auth-rbac --profile-fields=name,dni,phone --verify-email
+```
+
+### Compatibility
+
+- **BC preservada**: sin `--profile-fields` y sin `--verify-email`, `mk:make:auth-user Admin` genera **exactamente lo mismo** que v1.5.0-rc4. 0 regresiones verificadas con 372 tests Pest verdes (336 baseline + 36 nuevos).
+- **`--verify-email` solo aplica si `--login-field=email`**: si se pide el flag con login-field != email (e.g. `--verify-email --login-field=ci`), el scaffolder ignora `--verify-email` con warning explícito. ADR-009.
+- **Reserved columns**: `--profile-fields` rechaza colisiones con `id`, `password`, `auth_scope`, `client_id`, `remember_token`, `created_at`, `updated_at`, `email_verified_at`, y con el `--login-field` (que ya tiene su propia columna).
+- **Duplicados**: `--profile-fields=name,dni,name` se rechaza fail-fast (no se genera nada).
+- **Tipos**: en v1.5.0-rc5 todos los profile fields son `string`. Tipos custom (`date`, `int`, `json`, `file`) en v1.6.0 con `--profile-fields-types=<key:type,...>`.
+
+### Anti-patterns
+
+- ❌ **No usar `--profile-fields` con columnas reservadas**: `--profile-fields=password` o `--profile-fields=email` (si `--login-field=email`) se rechazan. La razón: colisión con columnas críticas que tienen comportamiento distinto.
+- ❌ **No combinar `--verify-email` con `--login-field != email`**: el flag se ignora silenciosamente. Para casos atípicos (e.g. SMS verification de CI), override el AuthController directamente.
+- ❌ **No usar `--profile-fields` para compartir datos entre scopes**: cada scope tiene su propia tabla y modelo. Para datos compartidos, exponer una `Api\*` interface del scope que los posee (MME/R-MK-001).
+
+### Spec
+
+- Spec: `openspec/changes/2026-06-25-profile-fields-per-scope/proposal.md`
+- Spec formal: `openspec/changes/2026-06-25-profile-fields-per-scope/specs/profile-fields.md`
+- Design: `openspec/changes/2026-06-25-profile-fields-per-scope/design.md`
+- Tasks: `openspec/changes/2026-06-25-profile-fields-per-scope/tasks.md`
+
+---
+
 ## [1.4.0] - 2026-06-24
 
 Minor release. **Breaking change** in the response shape of all 6 auth-user
