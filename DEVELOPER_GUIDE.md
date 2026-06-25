@@ -92,6 +92,124 @@ class SurveyController extends SmartController
 
 ---
 
+### 3.5 Scaffolding modules with RBAC (`--with-rbac`)
+
+A partir de **v1.5.0**, el comando `mk:module` acepta el flag `--with-rbac`
+que genera un trío RBAC completo (User + Role + Ability + 2 pivots + 3
+Policies + RbacService + ServiceProvider con Gate bindings) en un solo paso.
+
+#### Uso
+
+```bash
+php artisan mk:module Admin --with-rbac
+```
+
+Genera **20 archivos** en `app/Modules/Admin/`:
+
+| Carpeta | Archivos | Propósito |
+|---|---|---|
+| `Models/` | `Admin.php`, `Role.php`, `Ability.php` | Eloquent models del scope RBAC |
+| `Http/Controllers/` | `AdminController.php`, `RoleController.php`, `AbilityController.php` | CRUD + acciones custom (`assignRole`, `syncAbilities`) |
+| `Policies/` | `AdminPolicy.php`, `RolePolicy.php`, `AbilityPolicy.php` | Default-deny + `before()` super-admin bypass |
+| `Services/` | `RbacService.php` | Helper: `assignRole`, `syncAbilities`, `userHasAbility` |
+| `Database/Migrations/` | 5 archivos con timestamps secuenciales | 3 entity tables + 2 pivots con FK + `cascadeOnDelete` |
+| `Routes/` | `api.php` | CRUD endpoints para los 3 controllers |
+| `Contracts/`, `DTOs/`, `Repositories/` | (reusados del módulo estándar) | DTO, Repository Interface + Implementation |
+| (raíz del módulo) | `AdminModuleServiceProvider.php` | `Gate::policy()` + `Gate::define()` auto-bind, `RbacService` singleton |
+
+#### Convenciones
+
+- **Naming de tablas**: scope-prefixed — `admin_users`, `admin_roles`,
+  `admin_abilities`, `admin_role_user`, `admin_ability_role` (decisión D3:
+  evita colisión de pivots con otros módulos).
+- **FK constraints**: ambos lados de los pivots tienen
+  `constrained('admin_X')->cascadeOnDelete()` (R-RISK-001, hardening
+  R3-014 — el bug histórico de `role_user` sin FK).
+- **User model**: extiende `Illuminate\Foundation\Auth\User` (NO
+  `Mk\Director\Auth\Models\AuthUser` — decisión D2). Para agregar
+  login al módulo, ejecutá `mk:make:auth-user Admin` **por separado**
+  (R-PKG-009 cubre el flag `--login-field`).
+- **Default-deny**: cada Policy usa `$user->hasAbility('admin.admins.X')`
+  en todos los métodos. `before()` retorna `true` para users con role
+  `super-admin`, `null` para que el chain normal de abilities corra
+  (RBAC-004).
+- **Ability names**: `{scope}.{resource}.{action}` — `admin.admins.view`,
+  `admin.roles.syncAbilities`, `admin.abilities.viewAny`, etc. Total: 15
+  abilities explícitas en `discoverAbilities()` (D5 — fuente de verdad
+  para `mk:discover-abilities` en R-PKG-007).
+
+#### End-to-end example
+
+```bash
+$ php artisan mk:module Admin --with-rbac
+🚀 Iniciando generación del módulo MK-API: Admin
+  📁 Controllers/, Contracts/, DTOs/, Enums/, Models/, ...
+  📄 Generando archivos...
+   ✅ Models/Admin.php
+   ✅ Models/Role.php
+   ✅ Models/Ability.php
+   ✅ Http/Controllers/AdminController.php
+   ... (16 archivos más)
+   ✅ Database/Migrations/2026_06_24_153022_create_admin_users_table.php
+   ... (4 migrations más)
+ - Auto-registrado en bootstrap/providers.php
+
+✅ Módulo Admin con RBAC triad generado:
+   • 3 Models    (User, Role, Ability) — tablas `admin_users`, `admin_roles`, `admin_abilities`
+   • 3 Controllers (CRUD + assignRole/revokeRole/syncAbilities)
+   • 3 Policies  (AdminPolicy, RolePolicy, AbilityPolicy) — default-deny + super-admin bypass
+   • 1 Service   (RbacService — singleton)
+   • 5 Migrations con FK constraints
+   • 1 ServiceProvider con Gate::policy + Gate::define auto-bind
+
+   ⚠️  Próximos pasos:
+      1. php artisan migrate (corre las 5 migrations en orden)
+      2. mk:discover-abilities --module=Admin (crea las abilities en la tabla)
+      3. mk:auth:create-super-admin (bootstrap inicial)
+```
+
+#### Cuándo usar `--with-rbac`
+
+| Situación | Recomendación |
+|---|---|
+| Necesitás roles + abilities para un bounded context (ej: Admin, Member, Vendor) | `mk:module X --with-rbac` |
+| Necesitás un scope de login independiente del RBAC del módulo | `mk:make:auth-user X` (R-PKG-009) **adicional** a `--with-rbac` |
+| Solo necesitás CRUD simple, sin RBAC | `mk:module X` (estándar, sin flag) |
+| Tenés un módulo RBAC custom pre-1.4.0 (ej: rama huérfana de RETO) | Sprint de retrofit: borrar custom, re-generar con `--with-rbac`, portar lógica de negocio sobre los stubs |
+
+#### Composición con otros flags
+
+- `--with-rbac` es **ortogonal** a `--login-field` (R-PKG-009):
+  el primero genera RBAC triad, el segundo agrega login al scope.
+  Corren en comandos separados (`mk:module X --with-rbac` +
+  `mk:make:auth-user X --login-field=ci`).
+- `--with-rbac` es **ortogonal** a `--profile-fields` (futuro): el
+  primero genera los stubs base, el segundo agrega columnas custom al
+  User model (ej: `phone`, `avatar`).
+
+#### ¿Por qué per-module isolation (D1) en vez de reuse central?
+
+La alternativa — reusar las tablas `roles`/`abilities` del package
+central con un `guard='admin'` — acoplaría el RBAC del módulo a las
+tablas de AuthUser. Esto viola el espíritu de **R-MK-001 (MME)** que
+exige bounded contexts aislados. Además, hace que el FK integrity del
+pivot sea imposible: si 2 módulos comparten `role_user`, no podés FK
+a `{scope}_users.id`. Ver `design.md` § "Decision: D1" para el
+análisis completo.
+
+#### Spec & tests
+
+- **Spec**: `RBAC-001..005` en
+  `openspec/changes/2026-06-24-admin-with-rbac/specs/admin-with-rbac.md`
+- **Tests**: 15 Pest tests en `tests/Feature/MkModuleWithRbacTest.php`
+  (157 assertions). Cubren: scaffolding genera 20 archivos, FK
+  constraints con `cascadeOnDelete` en pivots, `Gate::policy` auto-bind,
+  15 abilities via `discoverAbilities()`, default-deny via
+  `hasAbility()` en CRUD, `before()` super-admin bypass, User
+  extiende `Authenticatable` NO `AuthUser`, end-to-end tempdir.
+
+---
+
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)
 
 Tanto para **Next.js** como para **React Native**, el consumo de listas es estandarizado mediante parámetros URL:

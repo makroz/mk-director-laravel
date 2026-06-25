@@ -1,0 +1,52 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+
+/**
+ * Role — agrupa abilities y se asigna a users del scope RBAC.
+ *
+ * Generado por `php artisan mk:module {{ModuleName}} --with-rbac`.
+ *
+ * Spec: RBAC-002 (R-PKG-008).
+ */
+class Role extends Model
+{
+    /** @var string Tabla scope-prefixed (R-D3) */
+    protected $table = '{{moduleNameLower}}_roles';
+
+    protected $fillable = [
+        'name',
+        'description',
+    ];
+
+    /**
+     * Abilities del role. Pivot: `{moduleNameLower}_ability_role`.
+     */
+    public function abilities(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            Ability::class,
+            '{{moduleNameLower}}_ability_role',
+            'role_id',
+            'ability_id',
+        );
+    }
+
+    /**
+     * Users que tienen este role. Pivot: `{moduleNameLower}_role_user`.
+     */
+    public function users(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            {{ModuleName}}::class,
+            '{{moduleNameLower}}_role_user',
+            'role_id',
+            'user_id',
+        );
+    }
+}

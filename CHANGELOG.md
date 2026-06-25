@@ -5,6 +5,82 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0-rc1] - 2026-06-24
+
+Release candidate. **New feature** in the `mk:module` scaffolder: the
+`--with-rbac` flag generates a complete bounded-context RBAC triad
+(User + Role + Ability + 2 pivots + 3 Policies + RbacService +
+ServiceProvider with Gate bindings) in a single command. The triad
+is fully isolated from the package's central `Auth/Models/{Role,Ability}`
+and uses its own migration namespace prefixed by `{moduleNameLower}_`.
+
+### Added
+
+- **`php artisan mk:module {Name} --with-rbac`**: scaffolds a complete
+  RBAC triad per module (D1: per-module isolation, NOT reuse of
+  central `Auth\Models\Role`/`Ability`). Generates 20 files:
+  - 3 Models: `{Name}` (extends `Illuminate\Foundation\Auth\User`, NOT `AuthUser` — D2), `Role`, `Ability`.
+  - 3 Controllers: `{Name}Controller` (CRUD + `assignRole`/`revokeRole`),
+    `RoleController` (CRUD + `syncAbilities`), `AbilityController` (read-only).
+  - 3 Policies: `{Name}Policy`, `RolePolicy`, `AbilityPolicy` — `before()` super-admin
+    bypass + per-method `hasAbility()` checks (default-deny, RBAC-004).
+  - 1 Service: `RbacService` (singleton, bound in ServiceProvider).
+  - 5 Migrations: 3 entity tables (`{scope}_users`, `{scope}_roles`,
+    `{scope}_abilities`) + 2 pivots (`{scope}_role_user`,
+    `{scope}_ability_role`) with **FK constraints + `cascadeOnDelete()`
+    on both columns** (R-RISK-001, hardening R3-014).
+  - 1 ServiceProvider: auto-`Gate::policy()` for 3 models +
+    auto-`Gate::define()` for 15 abilities (D5: explicit abilities
+    make `mk:discover-abilities` — R-PKG-007 — trivial).
+  - 1 Routes file (`Routes/api.php`): CRUD for the 3 controllers +
+    `assignRole` / `revokeRole` / `syncAbilities` actions.
+  - 3 standard reusados: DTO, Repository, RepositoryInterface.
+  - Timestamps secuenciales (`addSeconds($i)`) para evitar colisión
+    de filenames en migrations generadas en el mismo run.
+
+- **Per-module RBAC isolation (D1)**: each `--with-rbac` module gets its
+  own tables. Avoids cross-module state contamination. Aligns with
+  R-MK-001 (MME: bounded contexts must not share DB state).
+
+- **Auto-discover abilities source-of-truth (D5)**: the ServiceProvider
+  exposes `discoverAbilities()` returning 15 explicit ability strings
+  (`{scope}.{resource}.{action}`). `mk:discover-abilities` (R-PKG-007)
+  can use this as the canonical list when seeding the `{scope}_abilities` table.
+
+### Tests (15 new)
+
+- `tests/Feature/MkModuleWithRbacTest.php` — 15 Pest tests, 157 assertions.
+  Coverage: scaffolding generates 20 files, FK constraints in pivots,
+  `Gate::policy` auto-bind for 3 models, 15 abilities via `discoverAbilities()`,
+  default-deny via `hasAbility()` in all 7 CRUD methods, `before()` super-admin
+  bypass, User extends `Authenticatable` NOT `AuthUser`, end-to-end tempdir
+  test that runs the actual command.
+
+### Breaking change
+
+**None for existing consumers.** This release is purely additive: existing
+modules generated without `--with-rbac` see no change. Only RETO's orphan
+branch (`makromania/260624-0511--admin-module`, pre-1.4.0) has a custom RBAC
+module that will be replaced when it bumps to v1.5.0 (planned sprint
+R-RET-001, separate).
+
+### Related sprints
+
+- **R-PKG-007** (`mk:discover-abilities`): consumes the explicit abilities
+  list from `--with-rbac` provider.
+- **R-PKG-009** (`mk:make:auth-user --login-field`): orthogonal flag.
+  Run separately to add login flow to a module that already has RBAC.
+- **R-PKG-010** (`AuthController` RBAC stub): depends on `--with-rbac`
+  for the `Role`/`Ability` models.
+
+### Spec
+
+- Spec: `openspec/changes/2026-06-24-admin-with-rbac/specs/admin-with-rbac.md`
+- Design: `openspec/changes/2026-06-24-admin-with-rbac/design.md`
+- Tasks: `openspec/changes/2026-06-24-admin-with-rbac/tasks.md`
+
+---
+
 ## [1.4.0] - 2026-06-24
 
 Minor release. **Breaking change** in the response shape of all 6 auth-user

@@ -1,0 +1,72 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Services;
+
+use App\Modules\{{ModuleName}}\Models\Ability;
+use App\Modules\{{ModuleName}}\Models\Role;
+use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
+
+/**
+ * RbacService — helper centralizado para RBAC del scope `{{ModuleName}}`.
+ *
+ * Generado por `php artisan mk:module {{ModuleName}} --with-rbac`.
+ * Se bindea como singleton en `{Name}ModuleServiceProvider::register()`.
+ *
+ * Spec: RBAC-005 (R-PKG-008).
+ */
+class RbacService
+{
+    /**
+     * Asigna un role a un user (idempotente — no duplica).
+     */
+    public function assignRole({{ModuleName}} $user, Role $role): void
+    {
+        $user->assignRole($role);
+    }
+
+    /**
+     * Revoca un role de un user (no-op si no lo tenía).
+     */
+    public function revokeRole({{ModuleName}} $user, Role $role): void
+    {
+        $user->removeRole($role);
+    }
+
+    /**
+     * Sincroniza (reemplaza) las abilities de un role a partir de nombres.
+     * Las abilities se buscan por `name` en la tabla `{scope}_abilities`.
+     * Las abilities que NO existan se IGNORAN (no se crean — usar
+     * `mk:discover-abilities` para crearlas).
+     */
+    public function syncAbilities(Role $role, array $abilityNames): void
+    {
+        $abilityIds = Ability::whereIn('name', $abilityNames)->pluck('id');
+        $role->abilities()->sync($abilityIds);
+    }
+
+    /**
+     * Asocia una ability específica a un role (idempotente).
+     */
+    public function giveAbilityToRole(Role $role, Ability $ability): void
+    {
+        $role->abilities()->syncWithoutDetaching([$ability->id]);
+    }
+
+    /**
+     * Quita una ability de un role (no-op si no la tenía).
+     */
+    public function revokeAbilityFromRole(Role $role, Ability $ability): void
+    {
+        $role->abilities()->detach($ability->id);
+    }
+
+    /**
+     * Chequea si un user tiene una ability (vía sus roles).
+     */
+    public function userHasAbility({{ModuleName}} $user, string $ability): bool
+    {
+        return $user->hasAbility($ability);
+    }
+}

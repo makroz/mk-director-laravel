@@ -1,0 +1,53 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Policies;
+
+use App\Modules\{{ModuleName}}\Models\Role;
+use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
+
+/**
+ * RolePolicy — autorización para CRUD de roles + syncAbilities.
+ *
+ * Generado por `php artisan mk:module {{ModuleName}} --with-rbac`.
+ *
+ * Spec: RBAC-004 (R-PKG-008).
+ */
+class RolePolicy
+{
+    public function before({{ModuleName}} $user, string $ability): ?bool
+    {
+        return $user->hasRole('super-admin') ? true : null;
+    }
+
+    public function viewAny({{ModuleName}} $user): bool
+    {
+        return $user->hasAbility('{{moduleNameLower}}.roles.viewAny');
+    }
+
+    public function view({{ModuleName}} $user, Role $role): bool
+    {
+        return $user->hasAbility('{{moduleNameLower}}.roles.view');
+    }
+
+    public function create({{ModuleName}} $user): bool
+    {
+        return $user->hasAbility('{{moduleNameLower}}.roles.create');
+    }
+
+    public function update({{ModuleName}} $user, Role $role): bool
+    {
+        return $user->hasAbility('{{moduleNameLower}}.roles.update');
+    }
+
+    public function delete({{ModuleName}} $user, Role $role): bool
+    {
+        return $user->hasAbility('{{moduleNameLower}}.roles.delete');
+    }
+
+    public function syncAbilities({{ModuleName}} $user): bool
+    {
+        return $user->hasAbility('{{moduleNameLower}}.roles.syncAbilities');
+    }
+}

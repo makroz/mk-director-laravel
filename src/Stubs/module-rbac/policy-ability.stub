@@ -1,0 +1,56 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Policies;
+
+use App\Modules\{{ModuleName}}\Models\Ability;
+use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
+
+/**
+ * AbilityPolicy — READ-ONLY por default.
+ *
+ * Generado por `php artisan mk:module {{ModuleName}} --with-rbac`.
+ *
+ * `create`, `update` y `delete` retornan `false` siempre (default-deny).
+ * Solo el role `super-admin` puede escribir (vía `before()` bypass).
+ *
+ * Las abilities se gestionan vía:
+ *   - `mk:discover-abilities` (R-PKG-007) — auto-descubrir desde controllers
+ *   - `RoleController::syncAbilities` — vincular a un role
+ *
+ * Spec: RBAC-004 (R-PKG-008).
+ */
+class AbilityPolicy
+{
+    public function before({{ModuleName}} $user, string $ability): ?bool
+    {
+        return $user->hasRole('super-admin') ? true : null;
+    }
+
+    public function viewAny({{ModuleName}} $user): bool
+    {
+        return $user->hasAbility('{{moduleNameLower}}.abilities.viewAny');
+    }
+
+    public function view({{ModuleName}} $user, Ability $ability): bool
+    {
+        return $user->hasAbility('{{moduleNameLower}}.abilities.view');
+    }
+
+    public function create({{ModuleName}} $user): bool
+    {
+        // Default-deny: solo super-admin (via before bypass).
+        return false;
+    }
+
+    public function update({{ModuleName}} $user, Ability $ability): bool
+    {
+        return false;
+    }
+
+    public function delete({{ModuleName}} $user, Ability $ability): bool
+    {
+        return false;
+    }
+}

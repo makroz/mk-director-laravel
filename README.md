@@ -16,6 +16,7 @@ El motor de backend de MK-Director. Ofrece una capa de abstracción potente para
 - **Model & Builder**: Soporte nativo para `cacheGet()`, `cacheFirst()` y `cacheFind()`.
 - **Auto-Cache Plugin**: Flushing automático de tags de cache al detectar operaciones de escritura en la DB.
 - **Magic CRUD (SmartController)**: ABM declarativo extendiendo `Mk\Director\Controllers\SmartController` y configurando `$mkConfig`. Los plugins (`MkAuditLoggerPlugin`, `MkMultiTenantPlugin`) hookan automáticamente. El scaffolder `mk:module` lo genera por default.
+- **RBAC scaffolder (`mk:module --with-rbac`)**: genera un trío RBAC completo (User + Role + Ability + 2 pivots con FK + 3 Policies + RbacService + ServiceProvider con Gate bindings) en un solo comando. Por-módulo, scope-aislado. Ver [DEVELOPER_GUIDE.md § 3.5](DEVELOPER_GUIDE.md#-35-scaffolding-modules-with-rbac---with-rbac).
 - **List & Search Managers**: Parsing de strings complejos para búsquedas relacionales y joins dinámicos.
 - **MME (MVC Modular Encapsulated)**: ModuleLoader auto-registra módulos, comunicación inter-módulo solo vía API pública.
 - **Auth + RBAC**: Sistema completo con abilities, roles, scopes y middleware `MkAbility`.
@@ -33,6 +34,17 @@ php artisan vendor:publish --tag=mk-config
 php artisan vendor:publish --tag=mk-migrations
 php artisan migrate
 ```
+
+## Comandos Artisan
+
+| Comando | Descripción |
+|---|---|
+| `php artisan mk:module {Name}` | Scaffolding de módulo CRUD estándar (Controller, Model, Service, Repository, DTO, etc.). |
+| `php artisan mk:module {Name} --with-rbac` | Scaffolding de módulo **con trío RBAC completo** (User + Role + Ability + 2 pivots + 3 Policies + RbacService + ServiceProvider con Gate bindings). Genera 20 archivos. **Nuevo en v1.5.0**. |
+| `php artisan mk:make:auth-user {Scope}` | Scaffolding de scope de autenticación con `AuthUser`, `AuthController`, tokens Sanctum. |
+| `php artisan mk:lint:boundaries` | Linter de R-MK-001: detecta imports cross-module en código de apps que usan el paquete. Required CI check. |
+| `php artisan mk:discover-abilities` | Auto-descubre abilities de las Policies de un módulo y las inserta en la tabla `{scope}_abilities`. Companion de `--with-rbac`. |
+| `php artisan mk:security-lint` | Auditoría de seguridad: secrets, RBAC, tenant isolation, etc. |
 
 ## Configuración
 

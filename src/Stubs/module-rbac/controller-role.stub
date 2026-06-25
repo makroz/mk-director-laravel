@@ -1,0 +1,58 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Controllers;
+
+use App\Modules\{{ModuleName}}\Models\Role;
+use App\Modules\{{ModuleName}}\Services\RbacService;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Mk\Director\Controllers\SmartController;
+
+/**
+ * RoleController — CRUD estándar + sincronización de abilities.
+ *
+ * Generado por `php artisan mk:module {{ModuleName}} --with-rbac`.
+ *
+ * Spec: RBAC-001, RBAC-005 (R-PKG-008).
+ */
+class RoleController extends SmartController
+{
+    protected array $mkConfig = [
+        'model'           => Role::class,
+        'service'         => RbacService::class,
+        'searchable'      => ['name', 'description'],
+        'with'            => ['abilities', 'users'],
+        'allowedIncludes' => ['abilities', 'users'],
+        'features'        => [
+            'auto_cache'    => true,
+            'remember_state' => true,
+        ],
+    ];
+
+    /**
+     * PUT /api/{{moduleNameLower}}-roles/{id}/abilities
+     * Body: `{ "abilities": ["admin.admins.view", "admin.admins.create", ...] }`
+     * Sincroniza (reemplaza) las abilities del role. Autorizado por `RolePolicy::syncAbilities`.
+     */
+    public function syncAbilities(int $id, Request $request, RbacService $rbac): JsonResponse
+    {
+        $role = Role::findOrFail($id);
+
+        $this->authorize('syncAbilities', $role);
+
+        $abilityNames = $request->validate([
+            'abilities'   => ['required', 'array'],
+            'abilities.*' => ['required', 'string'],
+        ])['abilities'];
+
+        $rbac->syncAbilities($role, $abilityNames);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Abilities sincronizadas.',
+            'data'    => $role->fresh()->load('abilities'),
+        ]);
+    }
+}
