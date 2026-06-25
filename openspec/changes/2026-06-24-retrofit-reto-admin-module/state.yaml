@@ -1,13 +1,14 @@
-version: 2
+version: 3
 sprint: 2026-06-24-retrofit-reto-admin-module
 parent_sprint: 2026-06-24-dogfooding-model
 rule: R-G-033-D (workflow iterativo)
 r_id: R-RET-001
 opened: 2026-06-24
 closed: null
-status: blocked (espera R-PKG-007/009/010 mergeados — R-PKG-008 ✅ closed 2026-06-25)
+status: blocked (espera GA v1.5.0 trigger — Mario decision. Lote R-PKG-007+008+009+010 ✅ todos cerrados)
+
 branch:
-  monorepo: makromania/260624-2220--retrofit-reto-admin-module (a crear, post-bloqueo)
+  monorepo: makromania/260624-2220--retrofit-reto-admin-module (a crear post-GA)
   sub_repo: N/A (este sprint es de RETO, no del paquete)
 base_commit:
   reto_api: origin/dev (branch makromania/260624-1605--bump-director-1.3.1)
@@ -22,41 +23,77 @@ orphan_branch_to_close:
 
 depends_on:
   hard:
-    - R-PKG-007 (DiscoverAbilitiesCommand) — merged + published en v1.5.0+
-    - R-PKG-008 (mk:module --with-rbac) — merged + published en v1.5.0+
-    - R-PKG-009 (mk:make:auth-user --login-field) — merged + published en v1.5.0+
-    - R-PKG-010 (AuthController --with-auth-rbac) — merged + published en v1.5.0+
+    - R-PKG-007 (DiscoverAbilitiesCommand) — ✅ closed 2026-06-25, v1.5.0-rc2
+    - R-PKG-008 (mk:module --with-rbac) — ✅ closed 2026-06-25, v1.5.0-rc1
+    - R-PKG-009 (mk:make:auth-user --login-field) — ✅ closed 2026-06-25, v1.5.0-rc3
+    - R-PKG-010 (AuthController --with-auth-rbac) — ✅ closed 2026-06-25, v1.5.0-rc4
   soft:
-    - Skill `mk-director-laravel/SKILL.md` actualizada con R-G-033
-    - Documentación de v1.5.0 publicada
+    - Skill `mk-director-laravel/SKILL.md` actualizada con R-G-033 — ✅ hecho (R-PKG-009 T1.6 + R-PKG-010 T1.6)
+    - Documentación de v1.5.0 publicada — ✅ hecho (8/8 R-G-032 locations sincronizadas para R-PKG-010)
+
+depends_on_progress:
+  R-PKG-007_discover_abilities_to_core:
+    state.yaml: packagist/mk-director-laravel/openspec/changes/2026-06-24-discover-abilities-to-core/state.yaml
+    status: closed
+    tag: v1.5.0-rc2 (merged 2026-06-25, PRs #15/#42/#14)
+  R-PKG-008_admin_with_rbac:
+    state.yaml: packagist/mk-director-laravel/openspec/changes/2026-06-24-admin-with-rbac/state.yaml
+    status: closed
+    tag: v1.5.0-rc1 (merged 2026-06-24, PRs #14 monorepo + counterpart)
+  R-PKG-009_auth_user_login_field:
+    state.yaml: packagist/mk-director-laravel/openspec/changes/2026-06-24-auth-user-login-field/state.yaml
+    status: closed 2026-06-25
+    tag: v1.5.0-rc3 (merged 2026-06-25, PRs #16/#43/#15 humandirector)
+  R-PKG-010_auth_controller_rbac_stub:
+    state.yaml: packagist/mk-director-laravel/openspec/changes/2026-06-24-auth-controller-rbac-stub/state.yaml
+    status: closed 2026-06-25 ✅
+    tag: v1.5.0-rc4 (merged 2026-06-25T19:07-19:11Z, PRs #17/#44/#18)
 
 in_flight: []
+
+release_strategy:
+  decision_date: 2026-06-25
+  decision_by: Mario (CTO Makromania)
+  decision: RELEASE_AT_END
+  summary: "RETO bumpea composer UNA SOLA VEZ cuando el lote R-PKG-007+008+009+010 esté completo (idealmente v1.5.0 GA). NO bumpear entre RCs."
+  rationale: "Acumular evita churn de versiones, RETO trabaja con versión completa, RETO es feedback loop al final."
+  next_milestone: "v1.5.0 GA — cuando Mario apruebe GA, RETO bumpea a v1.5.0 y arranca phase 2+3."
+  current_state: "Lote R-PKG-007/008/009/010 ✅ todos cerrados. R-PKG-010 v1.5.0-rc4 published 2026-06-25. Pendiente: trigger GA v1.5.0 por Mario."
 
 findings:
   closing:
     - id: R-RET-001
       title: RETO módulo Admin (rama huérfana makromania/260624-0511--admin-module) debe rehacerse con skills 1.4.0+ + sub-changes del paquete
+      status: "Pendiente — bloqueado esperando GA v1.5.0 trigger de Mario"
 
 approach:
   phase_1_release_blocked:
     duration: "hasta que R-PKG-007/008/009/010 cierren"
-    work: "ninguno — RETO espera releases del paquete"
+    status: "✅ COMPLETADO 2026-06-25 — lote cerrado"
+    work: "ninguno — RETO esperó releases del paquete"
   phase_2_retrofit:
-    duration: "sprint posterior a v1.5.0 publish"
+    duration: "sprint posterior a v1.5.0 GA trigger de Mario"
+    status: "⏳ PENDING"
     work: "rehacer módulo Admin de RETO con base v1.5.0 + skills nuevas"
   phase_3_migrate:
     duration: "mismo sprint que phase_2"
-    work: "RETO bumpea composer a makroz/director-laravel:^1.5.0 + smoke test"
+    status: "⏳ PENDING"
+    work: "RETO bumpea composer a makroz/director-laravel:^1.5.0 + smoke test + reportar feedback"
 
 risk_register:
   - R-RISK-RET-001-001: "Trabajo duplicado: el branch huérfano tiene 5019 LOC que se pueden perder"
     mitigation: "Inventariar el branch huérfano ANTES de cerrar. Identificar lógica RETO-only que vale la pena preservar. Documentar en `inventory.md`."
   - R-RISK-RET-001-002: "Las profile fields custom de RETO no están cubiertas por --profile-fields"
     mitigation: "Si el flag no se agrega en v1.5.0, RETO agrega los fields via override del model después de scaffoldear."
+  - R-RISK-RET-001-003: "GA trigger timing — Mario puede decidir esperar más RCs antes de GA v1.5.0"
+    mitigation: "Si Mario pide esperar R-PKG-011+, este sprint R-RET-001 sigue blocked. No hay SLA — Mario controla timing."
 
 next_action:
-  - INMEDIATO (este sprint): Inventariar rama huérfana `makromania/260624-0511--admin-module`.
-  - Crear `inventory.md` con 4 tiers (boilerplate regenerable / lógica única / docs / tests).
-  - Diseñar sprint de retrofit con base en el inventario.
-  - ESPERAR a que R-PKG-007/008/009/010 cierren.
-  - Cuando v1.5.0+ esté publicado: ejecutar retrofit.
+  - ⏸️ PENDING Mario decision: trigger GA v1.5.0 (bumpear RETO composer).
+  - Cuando GA trigger:
+    - INMEDIATO: bumpear RETO composer `composer require makroz/director-laravel:^1.5.0`.
+    - Inventariar rama huérfana `makromania/260624-0511--admin-module` ANTES de cerrar.
+    - Crear `inventory.md` con 4 tiers (boilerplate regenerable / lógica única / docs / tests).
+    - Diseñar sprint de retrofit con base en el inventario.
+    - Ejecutar retrofit + smoke test + reportar feedback.
+  - Si Mario pide esperar R-PKG-011+: este sprint sigue blocked, NO bumpear RETO.
