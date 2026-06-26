@@ -64,11 +64,16 @@ trait HasAbilities
         // Filtramos a las abilities conectadas a través de roles del user.
         $userKey = $this->getKey();
 
+        // R-PKG-015 BUG-NEW-08: el código anterior referenciaba la tabla `abilities`
+        // desde un whereColumn sin joinearla explícitamente. MySQL/MariaDB lo toleraban
+        // (optimizador), pero PostgreSQL rompía con SQLSTATE 42P01
+        // ("missing FROM-clause entry for table 'abilities'"). Fix: join explícito
+        // a `abilities` dentro de la subquery para que el plan sea portable cross-engine.
         $relation->whereExists(function ($query) use ($userKey) {
             $query->select(\DB::raw(1))
                 ->from('ability_role')
                 ->join('role_user', 'role_user.role_id', '=', 'ability_role.role_id')
-                ->whereColumn('ability_role.ability_id', 'abilities.id')
+                ->join('abilities', 'abilities.id', '=', 'ability_role.ability_id')
                 ->where('role_user.user_id', '=', $userKey);
         });
 

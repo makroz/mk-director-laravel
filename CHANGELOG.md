@@ -5,6 +5,47 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0-rc5] - 2026-06-26
+
+### Added
+
+- **`php artisan mk:fix:sanctum-uuids` command** (R-PKG-015 BUG-NEW-09). Helper que parchea automáticamente la migration `create_personal_access_tokens_table` cambiando `$table->morphs('tokenable')` por `$table->uuidMorphs('tokenable')`. Necesario cuando el consumer usa `HasUuids` en sus modelos `AuthUser`. Idempotente (no-op si ya está parcheada). Soporta `--dry-run`. Detecta la migration buscando `*_create_personal_access_tokens_table.php` en `database/migrations/`.
+- **`mk:discover-abilities` lee `$mkConfig` de `SmartController`** (R-PKG-015 OBS-NEW-01). Ahora, además de atributos `#[Ability]` y docblocks `@mk-ability`, el command inspecciona el `protected array $mkConfig = [...]` de los controllers que extienden `SmartController` y genera abilities CRUD estándar del estilo `{scope}.{model}.{verb}` (e.g. `admin.admins.viewAny`). Sin esto, los controllers generados por `mk:make:auth-user --with-crud` no tenían abilities detectables automáticamente.
+- **Override de `roles()` y `directAbilities()` con FKs explícitas** (R-PKG-015 BUG-NEW-06). Cuando el scaffolder se ejecuta con `--with-crud`, el modelo generado incluye overrides de `roles()` y `directAbilities()` con FK explícita `user_id` (no inferida del nombre del modelo) y `wherePivot('user_type', static::class)` para mantener el polimorfismo MME (R-MK-001). Sin esto, `syncRoles()`, `assignRoles()`, `syncDirectAbilities()` explotaban con `no such column: role_user.admin_id` en cualquier consumer MME (tablas por scope).
+- **Sanctum installation check en output de scaffolder** (R-PKG-015 BUG-NEW-10). `mk:make:auth-user` ahora detecta si `laravel/sanctum` está instalado y avisa al consumer con `composer require laravel/sanctum:^4.3` + `php artisan install:api` + (si usa UUID) `php artisan mk:fix:sanctum-uuids`. Sin esto, el módulo crasheaba con `Trait "Laravel\Sanctum\HasApiTokens" not found` al primer request.
+- **13 audit tests de regresión** (R-PKG-015 R-G-032). Nuevo `tests/Feature/AuthUserFeedbackAuditTest.php` con source-parsing + reflection tests para pinear los 11 bugs + 2 obs de fase 2 (feedback RETO sobre v1.6.0-rc4). Cada bug tiene un test que falla si el bug vuelve.
+
+### Fixed
+
+- **BUG-NEW-01**: `AuthController::login()` response mal armada. La coma `,` después de `$base` quedaba AFUERA del `array_merge`, generando que PHP interpretara el sub-array como sibling del array padre (key `0` en el JSON response). Front esperaba `admin.roles`/`admin.abilities` y recibía `admin` con `{id, name}` + key `0` separada. **Fix**: sub-array `['roles' => ..., 'abilities' => ...]` ahora es siempre el ÚLTIMO argumento DENTRO del `array_merge(...)` (o concatenado con `+` cuando no hay profile fields).
+- **BUG-NEW-02**: Placeholder `{{loginField}}` no se reemplazaba en el array_merge del login response. El command pasaba el placeholder literal al stub porque `buildLoginResponseArray()` se ejecutaba ANTES del `str_replace('{{loginField}}', $loginField, ...)` en `generateStub()`. **Fix**: la función ahora recibe `$loginField` resuelto como parámetro y emite el valor directo.
+- **BUG-NEW-03**: `AdminRolesSeeder` setea `'module' => '{scope}'` en `abilities`, pero la tabla `abilities` del paquete solo tiene `id, name, description, timestamps`. **Fix**: stub del seeder ya no setea `module`. Si el consumer quiere `module`, agrega migration custom.
+- **BUG-NEW-04**: `AdminRolesSeeder` setea `'description' => '...'` en `roles`, pero la tabla `roles` del paquete solo tiene `id, name, guard, timestamps`. **Fix**: stub del seeder ya no setea `description` en roles (mantiene solo `guard`).
+- **BUG-NEW-05 (CRITICAL)**: `mk:make:auth-user --with-crud` no importaba `AdminController`, `RoleController`, `AbilityController` en `routes/api.php`. Sin los `use` statements, las 14 rutas CRUD no cargaban (`ReflectionException: Class "AdminController" does not exist`). **Fix**: `auth-user.routes.with-crud.stub` ahora incluye los 3 imports al inicio del bloque.
+- **BUG-NEW-06**: Ver `Added` arriba (overrides FK explícitas). Sin esto, los endpoints `assignRoles`, `assignDirectAbilities`, `syncRoles`, `syncRoleAbilities` explotaban en consumers MME.
+- **BUG-NEW-07 (BREAKING for MME consumers)**: Migration `2026_06_18_000001_add_fk_role_user_to_auth_users` agrega FK hardcoded `role_user.user_id → auth_users.id`. Asumía que TODOS los users viven en `auth_users`, lo cual NO es válido para consumers MME (R-MK-001) que usan tablas por scope (`admins`, `members`, etc.). **Fix**: la migration se ELIMINA del paquete. Consumers que ya la aplicaron con v1.6.0-rc4 deben `ALTER TABLE role_user DROP CONSTRAINT role_user_user_id_foreign;` antes de upgrade (RETO clean rebuild desde 0 esquiva esto). Si necesitan la FK a su tabla custom, agregan migration propia.
+- **BUG-NEW-08 (CRITICAL, cross-engine)**: `HasAbilities::abilities()` generaba SQL inválido en PostgreSQL: `whereColumn('ability_role.ability_id', 'abilities.id')` referencia la tabla `abilities` sin joinearla explícitamente. MySQL/MariaDB lo tolera (optimizador), PostgreSQL rompe con `SQLSTATE 42P01: missing FROM-clause entry for table "abilities"`. Efecto: `login()` y `me()` retornaban `"abilities": []` en Postgres, y `GET /api/admins` explotaba al eager-load `abilities`. **Fix**: `->join('abilities', 'abilities.id', '=', 'ability_role.ability_id')` explícito dentro del `whereExists`. SQL portable cross-engine.
+- **BUG-NEW-09**: Ver `Added` arriba (`mk:fix:sanctum-uuids`).
+- **BUG-NEW-10**: Ver `Added` arriba (Sanctum installation check).
+- **BUG-NEW-11 (BUG-02 regression)**: `buildProfileFieldsReplacements()` generaba docblock con `* @property` mal indentado (1 espacio en vez de 5) y sin header descriptivo. Resultado: cuando había `--profile-fields`, el modelo generado tenía docblock suelto (`/**\n * @property...\n */\n/**\n * Columnas asignables...\n */`) que confundía IDEs y PHPStan. **Fix**: 5 espacios de indentación para alinear con `     *` + header "Profile fields per-scope (R-PKG-011)." + cierre con `\n     */\n`.
+
+### Changed
+
+- **Migration `2026_06_18_000001_add_fk_role_user_to_auth_users.php` removida** (R-PKG-015 BUG-NEW-07). Consumers que ya la aplicaron deben hacer `down()` manual o `ALTER TABLE` antes de upgrade. Ver `Migration desde v1.6.0-rc4` abajo.
+- **`buildLoginResponseArray()` signature cambiada** (R-PKG-015 BUG-NEW-01+02). Antes: `buildLoginResponseArray(array $profileFieldsRaw)`. Ahora: `buildLoginResponseArray(array $profileFieldsRaw, string $loginField)`. Es método `protected` interno del command, no afecta API pública.
+
+### Migration desde v1.6.0-rc4
+
+- **BREAKING para consumers MME que aplicaron la FK en rc4**: ejecutar ANTES de `composer update`:
+  ```sql
+  ALTER TABLE role_user DROP CONSTRAINT role_user_user_id_foreign;
+  ALTER TABLE ability_user DROP CONSTRAINT ability_user_user_id_foreign;
+  -- Mantener role_user.role_id → roles.id y ability_user.ability_id → abilities.id
+  ```
+  Consumers con clean rebuild desde 0 (RETO fase 3+) NO necesitan esto.
+- **Para consumers con UUIDs**: después de `php artisan install:api`, correr `php artisan mk:fix:sanctum-uuids` ANTES de `php artisan migrate`.
+- **Sin acción** para el resto (todos los demás fixes son BC-clean additive).
+
 ## [1.6.0-rc4] - 2026-06-26
 
 ### Added

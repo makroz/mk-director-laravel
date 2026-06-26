@@ -32,14 +32,17 @@ class {{ModuleName}}RolesSeeder extends Seeder
         // ── super-admin ─────────────────────────────────────────────────
         $superAdmin = Role::query()->updateOrCreate(
             ['name' => 'super-admin'],
-            ['guard' => $scope, 'description' => 'Acceso total al sistema (bypass RBAC).'],
+            // R-PKG-015 BUG-NEW-04: la tabla `roles` del paquete solo tiene `id, name,
+            // guard, timestamps`. NO tiene `description`. Quitamos del stub. Si el
+            // consumer quiere `description`, agrega una migration custom al paquete.
+            ['guard' => $scope],
         );
         $this->attachAbility($superAdmin, '*', 'Wildcard: todas las abilities.');
 
         // ── admin ───────────────────────────────────────────────────────
         $admin = Role::query()->updateOrCreate(
             ['name' => 'admin'],
-            ['guard' => $scope, 'description' => 'CRUD completo sobre '.$resource.'.'],
+            ['guard' => $scope],
         );
         foreach (['viewAny', 'view', 'create', 'update', 'delete'] as $action) {
             $this->attachAbility($admin, "{$scope}.{$resource}.{$action}", ucfirst($action).' '.$resource.'.');
@@ -48,7 +51,7 @@ class {{ModuleName}}RolesSeeder extends Seeder
         // ── editor ──────────────────────────────────────────────────────
         $editor = Role::query()->updateOrCreate(
             ['name' => 'editor'],
-            ['guard' => $scope, 'description' => 'View + update (no delete ni create).'],
+            ['guard' => $scope],
         );
         foreach (['viewAny', 'view', 'update'] as $action) {
             $this->attachAbility($editor, "{$scope}.{$resource}.{$action}", ucfirst($action).' '.$resource.'.');
@@ -57,7 +60,7 @@ class {{ModuleName}}RolesSeeder extends Seeder
         // ── viewer ──────────────────────────────────────────────────────
         $viewer = Role::query()->updateOrCreate(
             ['name' => 'viewer'],
-            ['guard' => $scope, 'description' => 'Solo lectura.'],
+            ['guard' => $scope],
         );
         foreach (['viewAny', 'view'] as $action) {
             $this->attachAbility($viewer, "{$scope}.{$resource}.{$action}", ucfirst($action).' '.$resource.'.');
@@ -71,7 +74,10 @@ class {{ModuleName}}RolesSeeder extends Seeder
     {
         $ability = Ability::query()->updateOrCreate(
             ['name' => $name],
-            ['description' => $description, 'module' => '{{moduleNameLower}}'],
+            // R-PKG-015 BUG-NEW-03: la tabla `abilities` del paquete solo tiene
+            // `id, name, description, timestamps`. NO tiene `module`. Quitamos del
+            // stub. Si el consumer quiere `module`, agrega una migration custom.
+            ['description' => $description],
         );
 
         DB::table('ability_role')->updateOrInsert(
