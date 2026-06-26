@@ -57,9 +57,9 @@ depends_on_progress:
     note: "Habilita phase 2+3 de R-RET-001. Permite re-scaffold Admin con --profile-fields=name,dni,phone --verify-email sin código custom."
   R-PKG-012_profile_fields_types:
     state.yaml: packagist/mk-director-laravel/openspec/changes/2026-06-25-profile-fields-types/state.yaml
-    status: closed 2026-06-26 ✅
-    tag: v1.6.0-rc1 (Mario pusheó contra 15cdc9e pre-audit-fixes 2026-06-25T20:30Z. Pendiente decision naming post audit 2026-06-25T20:36 — force update rc1 vs bumpear rc2.)
-    note: "Habilita Member scope con tipos custom (birthdate:date, active:bool, registered_at:datetime, metadata:json). Permite RETO Bolivia Member scope sin código custom. Audit pre-tag descubrió 3 bugs pre-existentes R-PKG-011 absorbidos en e1fd107."
+    status: closed 2026-06-25 ✅
+    tag: v1.6.0-rc2 (bumpeado 2026-06-25T20:46:32Z contra origin/dev @ 808279d post-audit-fixes. v1.6.0-rc1 deleted pre-audit-fixes — Opción B según Mario Telegram.)
+    note: "Habilita Member scope con tipos custom (birthdate:date, active:bool, registered_at:datetime, metadata:json). Permite RETO Bolivia Member scope sin código custom. Audit pre-tag descubrió 3 bugs pre-existentes R-PKG-011 absorbidos en e1fd107. v1.6.0-rc2 incluye los fixes."
     tag: v1.6.0-rc1 (merged 2026-06-26T00:15-00:17Z, PRs #19 packagist / #46 monorepo / #20 humandirector)
     note: "Extensión BC de --profile-fields con sintaxis key:type. Habilita Member scope de RETO con tipos custom: birthdate:date, active:bool, registered_at:datetime, metadata:json — sin override manual en migration/model."
 

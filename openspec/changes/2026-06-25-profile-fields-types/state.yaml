@@ -1,4 +1,4 @@
-version: 3
+version: 4
 sprint: 2026-06-25-profile-fields-types
 parent_sprint: 2026-06-25-profile-fields-per-scope
 rule: R-G-033-A
@@ -6,7 +6,7 @@ r_id: R-PKG-012
 opened: 2026-06-25
 closed: 2026-06-25
 status: closed
-target_release: v1.6.0-rc1 (Mario ya pusheó el tag pre-audit-fixes contra 15cdc9e, pendiente decision naming post audit)
+target_release: v1.6.0-rc2 (tagged 2026-06-25T20:46:32Z against origin/dev @ 808279d post-audit-fixes. v1.6.0-rc1 deleted pre-audit-fixes.)
 
 source_feature:
   location: projects/reto/reto-api/app/Modules/Member/ (futuro)
