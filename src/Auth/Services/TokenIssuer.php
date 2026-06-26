@@ -16,6 +16,7 @@ use Laravel\Sanctum\NewAccessToken;
  * API:
  *  - issueAccessToken(user, abilities): emite solo el access token.
  *  - issueRefreshToken(user): emite solo el refresh token.
+ *  - rotateRefreshToken(refreshToken, expectedScope): valida + rota refresh (R-PKG-014).
  *
  * - Access token: TTL corto (15 min por defecto), lleva `auth_scope` del
  *   usuario en su lista de abilities (JSON serializable) más las
@@ -25,6 +26,10 @@ use Laravel\Sanctum\NewAccessToken;
  * Configuración de TTLs (vía `mk_director.auth.ttl.*`):
  *  - `access_seconds`  → default 15 * 60
  *  - `refresh_seconds` → default 7 * 24 * 60 * 60
+ *
+ * Configuración de rotación (vía `mk_director.auth.refresh.*`):
+ *  - `rotate_on_refresh` → default false. Si true, el refresh_token se
+ *    invalida después de cada uso (más seguro, recomendado para B2B).
  *
  * Los TTLs también se pueden pasar por constructor (útil para tests).
  */
@@ -128,6 +133,87 @@ class TokenIssuer
         }
 
         return null;
+    }
+
+    /**
+     * Valida un refresh token y emite uno nuevo access token (con refresh opcional).
+     *
+     * R-PKG-014 BUG-07 fix: implementación completa con Sanctum v4 `id|plaintext` parsing.
+     *
+     * Pipeline:
+     *   1. Parsear `<id>|<plaintext>` (RefreshTokenParser).
+     *   2. Buscar `personal_access_tokens` por `id`.
+     *   3. Hash comparar `plaintext` contra `token` (Sanctum v4 hashea el token con Hash::make()).
+     *   4. Validar que el token no expiró.
+     *   5. Validar que el scope del token coincide con `$expectedScope` (defense-in-depth).
+     *   6. Cargar el `tokenable` (user).
+     *   7. Emitir nuevo access token con abilities del user.
+     *   8. Si `mk_director.auth.refresh.rotate_on_refresh` es true, invalidar el viejo
+     *      refresh token y emitir uno nuevo. Si no, mantener el viejo.
+     *
+     * @param  string  $refreshToken  El `<id>|<plaintext>` recibido del cliente.
+     * @param  string  $expectedScope  Scope que el AuthController declara para esta ruta
+     *                                  (e.g. `admin`). Previene escalación de scope vía refresh.
+     * @return array{access_token: string, refresh_token: string, user_id: string}
+     *
+     * @throws InvalidRefreshTokenException Si el token es malformado, no existe, expiró,
+     *                                      o el scope no coincide.
+     */
+    public function rotateRefreshToken(string $refreshToken, string $expectedScope): array
+    {
+        $parser = new RefreshTokenParser();
+        [$tokenId, $plaintext] = $parser->parse($refreshToken);
+
+        $tokenModel = \Laravel\Sanctum\PersonalAccessToken::query()->find($tokenId);
+        if (! $tokenModel) {
+            throw InvalidRefreshTokenException::notFound();
+        }
+
+        // Sanctum v4 hashea con Hash::make() (bcrypt). Comparar.
+        if (! \Illuminate\Support\Facades\Hash::check($plaintext, $tokenModel->token)) {
+            throw InvalidRefreshTokenException::hashMismatch();
+        }
+
+        // Validar expiración.
+        if ($tokenModel->expires_at !== null && $tokenModel->expires_at->isPast()) {
+            throw InvalidRefreshTokenException::expired();
+        }
+
+        // Validar scope (defense-in-depth: el scope del token debe coincidir con el esperado).
+        $tokenScope = self::extractScopeFromAbilities($tokenModel->abilities ?? []);
+        if ($tokenScope !== $expectedScope) {
+            throw InvalidRefreshTokenException::scopeMismatch($expectedScope, $tokenScope ?? 'null');
+        }
+
+        // Cargar el user asociado al token.
+        $user = $tokenModel->tokenable;
+        if (! $user) {
+            throw InvalidRefreshTokenException::notFound();
+        }
+
+        // Emitir nuevo access token.
+        $newAccess = $this->issueAccessToken($user);
+
+        // Decidir rotación del refresh token.
+        $rotateOnRefresh = (bool) $this->readConfigInt(
+            'mk_director.auth.refresh.rotate_on_refresh',
+            0,
+        );
+
+        if ($rotateOnRefresh) {
+            // Rotar: borrar el viejo, emitir uno nuevo.
+            $tokenModel->delete();
+            $newRefreshPlaintext = $this->issueRefreshToken($user);
+        } else {
+            // Mantener el viejo (BC default).
+            $newRefreshPlaintext = $refreshToken;
+        }
+
+        return [
+            'access_token' => $newAccess->plainTextToken,
+            'refresh_token' => $newRefreshPlaintext,
+            'user_id' => (string) $user->getAuthIdentifier(),
+        ];
     }
 
     private function accessTtl(): int

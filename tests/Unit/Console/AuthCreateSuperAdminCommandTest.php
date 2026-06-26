@@ -77,10 +77,12 @@ test('mk:auth:create-super-admin is idempotent on duplicate email', function () 
     expect($source)->toContain('No se creó nada');
 });
 
-test('mk:auth:create-super-admin assigns the super-admin role with guard=admin', function () {
+test('mk:auth:create-super-admin assigns role via iteration loop (R-PKG-014 MEJORA-04)', function () {
     $source = createSuperAdminSource();
 
-    expect($source)->toContain("assignRole('super-admin')");
+    // R-PKG-014 MEJORA-04: ahora itera sobre $rolesToSeed para soportar --roles=csv.
+    // Default BC: solo super-admin. Verificamos que llama assignRole dinámicamente.
+    expect($source)->toMatch('/\$admin->assignRole\(\$roleName\)/');
     // The role's guard is the user's auth_scope ('admin'), enforced by
     // HasRoles::assignRole when the role doesn't exist yet.
     expect($source)->toContain('guard');
@@ -89,7 +91,9 @@ test('mk:auth:create-super-admin assigns the super-admin role with guard=admin',
 test('mk:auth:create-super-admin grants the * ability as a direct grant', function () {
     $source = createSuperAdminSource();
 
-    expect($source)->toContain("giveAbilityTo('*')");
+    // R-PKG-014 MEJORA-04: itera sobre roleAbilitiesMap y otorga cada ability.
+    expect($source)->toMatch('/foreach\s*\(\s*\$roleAbilitiesMap\[\$roleName\]\s+as\s+\$ability\)/');
+    expect($source)->toMatch('/\$admin->giveAbilityTo\(\$ability\)/');
     // It prints a canMk('*') check in the success table so the dev
     // sees that the super-admin contract holds.
     expect($source)->toContain("canMk('*')");
