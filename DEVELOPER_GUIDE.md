@@ -715,6 +715,157 @@ public function sendEmailVerificationNotification()
 
 ---
 
+### 3.11 Profile fields con tipos custom (`--profile-fields=key:type,...`) (R-PKG-012)
+
+Extensión backward-compatible de `--profile-fields` (R-PKG-011) que permite
+declarar el tipo de cada profile field. En v1.5.0-rc5 todos los profile
+fields eran `string`; en v1.6.0-rc1 hay 8 tipos soportados.
+
+#### Sintaxis
+
+```bash
+# v1.5.0-rc5 (BC): todos string
+php artisan mk:make:auth-user Admin --profile-fields=name,dni,phone
+
+# v1.6.0-rc1: tipos custom con key:type
+php artisan mk:make:auth-user Admin \
+  --profile-fields=name:string,birthdate:date,age:int,biography:text,active:bool
+
+# Mixed: default string cuando no se especifica tipo
+php artisan mk:make:auth-user Admin --profile-fields=name,age:int,active:bool
+```
+
+#### Tabla de tipos (8 tipos, lista cerrada)
+
+| Tipo | Migration column | Model cast | Validation rule |
+|---|---|---|---|
+| `string` (default BC) | `string` | (sin cast) | `['required', 'string', 'max:255']` |
+| `text` | `text` | (sin cast) | `['required', 'string']` |
+| `int` | `integer` | `'integer'` | `['required', 'integer']` |
+| `decimal` | `decimal(8,2)` | `'decimal:2'` | `['required', 'numeric']` |
+| `bool` | `boolean` | `'boolean'` | `['required', 'boolean']` |
+| `date` | `date` | `'date'` | `['required', 'date']` |
+| `datetime` | `dateTime` | `'datetime'` | `['required', 'date']` |
+| `json` | `json` | `'array'` | `['required', 'array']` |
+
+#### Ejemplo end-to-end
+
+```bash
+php artisan mk:make:auth-user Member \
+  --login-field=email \
+  --with-auth-rbac \
+  --profile-fields=name:string,phone:string,birthdate:date,active:bool,registered_at:datetime,metadata:json
+```
+
+Output:
+
+```php
+// app/Modules/Member/Database/Migrations/YYYY_MM_DD_HHMMSS_create_members_table.php
+Schema::create('members', function (Blueprint $table): void {
+    $table->uuid('id')->primary();
+    $table->string('name');
+    $table->string('email')->unique();
+    // ── Profile fields (R-PKG-012 con tipos custom) ──────
+    $table->string('phone')->nullable();
+    $table->date('birthdate')->nullable();
+    $table->boolean('active')->nullable();
+    $table->dateTime('registered_at')->nullable();
+    $table->json('metadata')->nullable();
+
+    $table->string('password');
+    $table->string('auth_scope')->default('member')->index();
+    $table->rememberToken();
+    $table->timestamps();
+});
+```
+
+```php
+// app/Modules/Member/Models/Member.php — $casts
+protected $casts = [
+    'birthdate' => 'date',
+    'active' => 'boolean',
+    'registered_at' => 'datetime',
+    'metadata' => 'array',  // Laravel moderno usa 'array' para JSON
+    'password' => 'hashed',
+];
+```
+
+```php
+// app/Modules/Member/Http/Controllers/AuthController.php — register()
+public function register(Request $request): JsonResponse
+{
+    $data = $request->validate([
+        'name' => ['required', 'string', 'max:255'],
+        'email' => ['required', 'string', 'max:255'],
+        'phone' => ['required', 'string', 'max:255'],
+        'birthdate' => ['required', 'date'],
+        'active' => ['required', 'boolean'],
+        'registered_at' => ['required', 'date'],
+        'metadata' => ['required', 'array'],
+        'password' => ['required', 'string', 'min:8'],
+    ]);
+    // ...
+}
+```
+
+#### Ortogonalidad con otros flags
+
+R-PKG-012 es extensión pura de R-PKG-011. No cambia comportamiento de:
+`--login-field`, `--with-auth-rbac`, `--verify-email`. Las 16 (2⁴)
+combinaciones de los 4 flags + 8 tipos = 32 combinaciones posibles.
+Todas válidas (excepto `--verify-email` con `--login-field != email`,
+R-PKG-011 ADR-009).
+
+#### Consumer override
+
+Si necesitás validación custom (regex CI, date format estricto, decimal
+precision custom, etc.), override `register()` o `updateProfile()` en
+el AuthController generado:
+
+```php
+// app/Modules/Member/Http/Controllers/AuthController.php
+public function register(Request $request): JsonResponse
+{
+    $data = $request->validate([
+        'birthdate' => ['required', 'date_format:Y-m-d'],  // strict format
+        'metadata' => ['required', 'array'],
+        // ... override el resto según necesidad
+    ]);
+    // ... resto de la lógica
+}
+```
+
+#### Constraints
+
+- **Tipos case-sensitive** (lowercase only): `String`, `STRING`, `sTrInG`
+  se rechazan. No normalización implícita.
+- **Lista cerrada**: tipos no en la tabla (e.g. `varchar`, `enum`, `file`)
+  se rechazan fail-fast con error listando los 8 tipos válidos.
+- **BC preservada**: `--profile-fields=name,dni` (sin tipos) se interpreta
+  como `name:string,dni:string`. Output idéntico a v1.5.0-rc5.
+- **`decimal` con precisión default `(8,2)`**: no custom precision en
+  v1.6.0-rc1 (post-RC si RETO necesita).
+- **`json` cast como `array`** (Laravel moderno): `'metadata' => 'array'`,
+  NO `'metadata' => 'json'`. Consumer puede override si quiere string.
+- **`date`/`datetime` validation loose**: acepta múltiples formatos
+  (`Y-m-d`, `Y-m-d H:i:s`, ISO 8601). Para strict format, override.
+
+#### Out of scope v1.6.0-rc1
+
+- `file` / `avatar`: storage uploads (S3/R2 pluggable) → R-PKG-013+.
+- `enum`: Laravel 11+ `Rule::enum()`, requiere análisis MME → R-PKG-014+.
+- `decimal` con precisión custom (`decimal:10,4`): post-RC si RETO necesita.
+- `uuid` / `ulid`: PKs custom → R-PKG-015+ (ortogonal, separado).
+- Tipos array indexados (`int[]`, `string[]`): no es caso de uso común.
+
+#### Spec
+
+- Spec: `openspec/changes/2026-06-25-profile-fields-types/proposal.md`
+- Spec formal: `openspec/changes/2026-06-25-profile-fields-types/specs/profile-fields-types.md`
+- Design: `openspec/changes/2026-06-25-profile-fields-types/design.md`
+
+---
+
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)
 
 Tanto para **Next.js** como para **React Native**, el consumo de listas es estandarizado mediante parámetros URL:

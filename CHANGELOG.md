@@ -5,6 +5,101 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0-rc1] - 2026-06-25
+
+Release candidate. **Extensión backward-compatible** de `--profile-fields` en
+`php artisan mk:make:auth-user {Scope}`: sintaxis `key[:type]` para declarar
+tipos custom (más allá de `string` que era el único tipo en v1.5.0-rc5).
+
+### Added
+
+- **Sintaxis `key:type` en `--profile-fields=<csv>`** (R-PKG-012): cada item del
+  CSV puede ser `key` (sin tipo, default `string`) o `key:type` (tipo explícito).
+  Sin `:` = `string` (BC con R-PKG-011). Tipos case-sensitive (lowercase only).
+- **8 tipos soportados** en v1.6.0-rc1 (lista cerrada):
+
+  | Tipo | Migration column | Model cast | Validation rule |
+  |---|---|---|---|
+  | `string` (default, BC) | `string` | (sin cast) | `['required', 'string', 'max:255']` |
+  | `text` | `text` | (sin cast) | `['required', 'string']` |
+  | `int` | `integer` | `'integer'` | `['required', 'integer']` |
+  | `decimal` | `decimal(8,2)` | `'decimal:2'` | `['required', 'numeric']` |
+  | `bool` | `boolean` | `'boolean'` | `['required', 'boolean']` |
+  | `date` | `date` | `'date'` | `['required', 'date']` |
+  | `datetime` | `dateTime` | `'datetime'` | `['required', 'date']` |
+  | `json` | `json` | `'array'` | `['required', 'array']` |
+
+- **Constante `PROFILE_FIELD_TYPES`** en `MakeAuthUserCommand`: tabla cerrada
+  con 8 tipos y sus configs (column_method, column_args, cast, validation).
+  Reutilizable desde otros commands si en el futuro se necesita.
+
+### Ortogonalidad
+
+R-PKG-012 es extensión de R-PKG-011. Combinable con todos los flags existentes:
+
+```bash
+# v1.5.0-rc5 (BC): todos string
+php artisan mk:make:auth-user Admin --profile-fields=name,dni,phone
+
+# v1.6.0-rc1 (NEW): tipos custom
+php artisan mk:make:auth-user Admin \
+  --profile-fields=name:string,birthdate:date,age:int,biography:text,active:bool
+
+# Mixed (con y sin tipo): default string cuando no se especifica tipo
+php artisan mk:make:auth-user Admin --profile-fields=name,age:int,active:bool
+
+# RETO Bolivia Member scope (futuro, post-GA)
+php artisan mk:make:auth-user Member \
+  --login-field=email \
+  --with-auth-rbac \
+  --profile-fields=name:string,phone:string,birthdate:date,active:bool,registered_at:datetime,metadata:json
+```
+
+Los 5 flags del command siguen siendo combinables:
+`--login-field`, `--with-auth-rbac`, `--profile-fields` (con o sin tipos),
+`--verify-email`. Sin interacción inesperada entre ellos.
+
+### Compatibility
+
+- **BC con R-PKG-011 preservada**: `--profile-fields=name,dni,phone` (sin
+  tipos) se interpreta como `name:string,dni:string,phone:string`. Output
+  **idéntico** a v1.5.0-rc5. 0 regresiones verificadas con 411 tests Pest
+  verdes (372 baseline + 39 nuevos).
+- **Default mode preservado**: sin `--profile-fields`, comportamiento idéntico
+  a v1.5.0-rc5 (sin profile fields, sin register method).
+- **Tipos desconocidos → fail-fast**: `--profile-fields=name:foo` se rechaza
+  con error explícito listando los 8 tipos válidos. No fail-silent.
+- **Tipos case-sensitive**: `String`, `STRING`, `sTrInG` se rechazan (solo
+  lowercase). No normalización implícita.
+- **Out of scope v1.6.0-rc1**: `file`/`avatar` (storage uploads, R-PKG-013+),
+  `enum` (Laravel 11+ `Rule::enum()`, R-PKG-014+), `decimal` con precisión
+  custom (`decimal:10,4`, post-RC si RETO necesita), `uuid`/`ulid`,
+  `int[]`/`string[]`.
+
+### Anti-patterns
+
+- ❌ **No usar `--profile-fields=name:foo`**: tipo no en lista cerrada se
+  rechaza con error. Tipos válidos: `string, text, int, decimal, bool, date,
+  datetime, json`.
+- ❌ **No usar `--profile-fields=name:String`**: case incorrecto se rechaza.
+  Solo lowercase.
+- ❌ **No usar `--profile-fields=email:date --login-field=email`**: colisión
+  con login field sigue siendo rechazada por R-PKG-011 (regla preservada).
+- ❌ **No usar tipos para compartir datos entre scopes**: cada scope tiene su
+  propia tabla y modelo. Para datos compartidos, exponer `Api\*` interface
+  del scope que los posee (MME/R-MK-001).
+- ❌ **No esperar validación strict format para `date`/`datetime`**: el rule
+  es `['required', 'date']` loose (acepta múltiples formatos). Para strict
+  format (`Y-m-d` o ISO 8601), override `register()`/`updateProfile()` en el
+  AuthController generado.
+
+### Spec
+
+- Proposal: `openspec/changes/2026-06-25-profile-fields-types/proposal.md`
+- Spec formal: `openspec/changes/2026-06-25-profile-fields-types/specs/profile-fields-types.md`
+- Design: `openspec/changes/2026-06-25-profile-fields-types/design.md`
+- Tasks: `openspec/changes/2026-06-25-profile-fields-types/tasks.md`
+
 ## [1.5.0-rc1] - 2026-06-24
 
 Release candidate. **New feature** in the `mk:module` scaffolder: the

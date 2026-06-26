@@ -56,6 +56,70 @@ use Mk\Director\Auth\Services\AuthScopeResolver;
 class MakeAuthUserCommand extends Command
 {
     /**
+     * Tabla cerrada de tipos soportados en `--profile-fields=<csv>` (R-PKG-012).
+     *
+     * Cada tipo define:
+     *   - `column_method`: nombre del método Blueprint (string, text, integer, decimal, boolean, date, dateTime, json).
+     *   - `column_args`: argumentos extra para el método (e.g. [8, 2] para decimal precision).
+     *   - `cast`: entry de `$casts` en el model (null = sin cast, Laravel default).
+     *   - `validation`: rules que se inyectan en `register()` y `updateProfile()` del AuthController.
+     *
+     * Lista cerrada pineada (ADR-004). Tipos case-sensitive (lowercase only, ADR-003).
+     *
+     * Spec: MK-LAR-1.6.0-rc1.PFT.
+     */
+    public const PROFILE_FIELD_TYPES = [
+        'string' => [
+            'column_method' => 'string',
+            'column_args' => [],
+            'cast' => null,
+            'validation' => ['required', 'string', 'max:255'],
+        ],
+        'text' => [
+            'column_method' => 'text',
+            'column_args' => [],
+            'cast' => null,
+            'validation' => ['required', 'string'],
+        ],
+        'int' => [
+            'column_method' => 'integer',
+            'column_args' => [],
+            'cast' => 'integer',
+            'validation' => ['required', 'integer'],
+        ],
+        'decimal' => [
+            'column_method' => 'decimal',
+            'column_args' => [8, 2],
+            'cast' => 'decimal:2',
+            'validation' => ['required', 'numeric'],
+        ],
+        'bool' => [
+            'column_method' => 'boolean',
+            'column_args' => [],
+            'cast' => 'boolean',
+            'validation' => ['required', 'boolean'],
+        ],
+        'date' => [
+            'column_method' => 'date',
+            'column_args' => [],
+            'cast' => 'date',
+            'validation' => ['required', 'date'],
+        ],
+        'datetime' => [
+            'column_method' => 'dateTime',
+            'column_args' => [],
+            'cast' => 'datetime',
+            'validation' => ['required', 'date'],
+        ],
+        'json' => [
+            'column_method' => 'json',
+            'column_args' => [],
+            'cast' => 'array',
+            'validation' => ['required', 'array'],
+        ],
+    ];
+
+    /**
      * The name and signature of the console command.
      *
      * @var string
@@ -63,7 +127,7 @@ class MakeAuthUserCommand extends Command
     protected $signature = 'mk:make:auth-user {scope : Nombre del scope en StudlyCase singular (Ej: Member, Customer, Partner)}
         {--login-field=email : Campo usado para login (default: email). BC: si no se pasa, idéntico a v1.4.0. Valores comunes: email, ci, phone, username, documento.}
         {--with-auth-rbac : Habilita RBAC integration (ability checks en /me y /logout), rate limiting en /login, /forgot, /reset, y audit log via AuthEvent (R-PKG-010). Default BC: false. Configurar abilities + rate_limits en config/mk_director.php.}
-        {--profile-fields= : Campos adicionales para el perfil del scope (CSV de identifiers PHP válidos, default: ninguno = BC). Cada field se agrega como columna string nullable en la tabla del scope, en $fillable del modelo, y se expone en /me + PATCH /me + /register. Ortogonal con --login-field y --with-auth-rbac. Ej: --profile-fields=name,dni,phone (R-PKG-011).}
+        {--profile-fields= : Campos adicionales para el perfil del scope (CSV con sintaxis key[:type], default: ninguno = BC). Cada field se agrega como columna del tipo correspondiente en la tabla del scope, en $fillable del modelo, y se expone en /me + PATCH /me + /register. Sin tipo = string (BC con R-PKG-011). Tipos soportados: string, text, int, decimal, bool, date, datetime, json (R-PKG-012). Ortogonal con --login-field, --with-auth-rbac y --verify-email. Ej: --profile-fields=name,birthdate:date,age:int (R-PKG-011 + R-PKG-012).}
         {--verify-email : Habilita verificación por email: columna email_verified_at, endpoints /email/verify/{id}/{hash} y /email/resend, dispatch de Illuminate\Auth\Notifications\VerifyEmail en /register. Default BC: false. Aplican cuando --login-field=email (R-PKG-011).}';
 
     /**
@@ -499,16 +563,22 @@ PHP,
     /**
      * Resuelve y valida los profile fields pasados via --profile-fields.
      *
-     * Reglas (R-PKG-011 ADR-007 + ADR-008 + REQ-1):
+     * Sintaxis extendida (R-PKG-012):
+     *   - `key` (sin tipo) → default `string` (BC con R-PKG-011).
+     *   - `key:type` → tipo explícito (tipos válidos en `PROFILE_FIELD_TYPES`).
+     *
+     * Reglas (R-PKG-011 ADR-007 + ADR-008 + REQ-1 + R-PKG-012 ADR-001..ADR-009):
      *   - Vacío o ausente → [] (BC con v1.5.0-rc4).
      *   - CSV con PHP identifiers válidos (`/^[a-zA-Z_][a-zA-Z0-9_]*$/`).
      *   - No duplicados dentro del CSV (fail-fast).
      *   - No colisión con columnas reservadas (id, password, auth_scope, etc.)
      *     ni con el login field (que ya tiene su propia columna).
+     *   - Tipos case-sensitive (lowercase only). `String`, `STRING`, `sTrInG` se rechazan.
+     *   - Tipo desconocido → fail-fast con lista de tipos válidos.
      *
      * @param  string  $raw  Input crudo del CSV (puede tener espacios).
      * @param  string  $loginField  Login field del scope (para detectar colisión).
-     * @return array<int, string>|null Lista de fields limpios, o null si inválido (con error ya impreso).
+     * @return array<string, string>|null Mapa key => type (type siempre presente, default `string`), o null si inválido.
      */
     protected function resolveProfileFields(string $raw, string $loginField): ?array
     {
@@ -518,7 +588,7 @@ PHP,
             return []; // BC mode: sin profile fields.
         }
 
-        $fields = array_values(array_filter(array_map('trim', explode(',', $raw)), static fn ($f) => $f !== ''));
+        $items = array_values(array_filter(array_map('trim', explode(',', $raw)), static fn ($f) => $f !== ''));
 
         $reserved = [
             'id', 'password', 'auth_scope', 'client_id',
@@ -526,27 +596,44 @@ PHP,
             'email_verified_at', $loginField,
         ];
 
-        $seen = [];
-        foreach ($fields as $field) {
-            if (! preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $field)) {
-                $this->error("El campo \"{$field}\" no es un identificador PHP válido (solo letras, números y guión bajo).");
+        $fields = [];
+        foreach ($items as $item) {
+            if (str_contains($item, ':')) {
+                [$key, $type] = explode(':', $item, 2);
+                $key = trim($key);
+                $type = trim($type);
+
+                // Validación fail-fast: tipo debe estar en la lista cerrada.
+                if (! array_key_exists($type, self::PROFILE_FIELD_TYPES)) {
+                    $validTypes = implode(', ', array_keys(self::PROFILE_FIELD_TYPES));
+                    $this->error("El tipo \"{$type}\" no está soportado. Tipos válidos: {$validTypes}.");
+
+                    return null;
+                }
+            } else {
+                $key = trim($item);
+                $type = 'string'; // BC default (R-PKG-011 + R-PKG-012 ADR-009).
+            }
+
+            if (! preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $key)) {
+                $this->error("El campo \"{$key}\" no es un identificador PHP válido (solo letras, números y guión bajo).");
 
                 return null;
             }
 
-            if (in_array($field, $reserved, true)) {
-                $this->error("Campo \"{$field}\" colisiona con columna reservada o con --login-field={$loginField}.");
+            if (in_array($key, $reserved, true)) {
+                $this->error("Campo \"{$key}\" colisiona con columna reservada o con --login-field={$loginField}.");
 
                 return null;
             }
 
-            if (isset($seen[$field])) {
-                $this->error("Campo \"{$field}\" duplicado en --profile-fields.");
+            if (isset($fields[$key])) {
+                $this->error("Campo \"{$key}\" duplicado en --profile-fields.");
 
                 return null;
             }
 
-            $seen[$field] = true;
+            $fields[$key] = $type;
         }
 
         return $fields;
@@ -562,7 +649,10 @@ PHP,
      * crear el user con profile fields o disparar VerifyEmail). PATCH /me solo si
      * hay profile fields.
      *
-     * @param  array<int, string>  $fields  Lista de profile fields (puede ser []).
+     * R-PKG-012: cada field tiene un tipo (default `string`). El column method,
+     * cast entry, y validation rule se derivan de `PROFILE_FIELD_TYPES[$type]`.
+     *
+     * @param  array<string, string>  $fields  Mapa key => type (type siempre presente, default `string`).
      * @return array<string, string>
      */
     protected function buildProfileFieldsReplacements(array $fields): array
@@ -585,17 +675,32 @@ PHP,
         $fillable = '';
         $columns = '';
         $docblock = '';
+        $castEntries = '';
         $validationRules = [];
 
-        foreach ($fields as $field) {
+        foreach ($fields as $key => $type) {
+            $config = self::PROFILE_FIELD_TYPES[$type];
+
             // $fillable entries: 8 espacios indent + 'name',\n
-            $fillable .= "        '{$field}',\n";
-            // Migration: string nullable. Nullable para que migration corra sobre tablas con data existente.
-            $columns .= "        \$table->string('{$field}')->nullable();\n            ";
-            // Docblock @property entries.
-            $docblock .= " * @property string|null \${$field}\n";
-            // Validation: required|string|max:255 por default (R-PKG-011 ADR-003 + ADR-004).
-            $validationRules[$field] = ['required', 'string', 'max:255'];
+            $fillable .= "        '{$key}',\n";
+
+            // Migration column: usa column_method + column_args (e.g. decimal('x', 8, 2)).
+            $args = empty($config['column_args'])
+                ? ''
+                : ', '.implode(', ', $config['column_args']);
+            $columns .= "        \$table->{$config['column_method']}('{$key}'{$args})->nullable();\n            ";
+
+            // Docblock @property typed (phpstan-style hint).
+            $phpType = $this->profileFieldPhpType($type);
+            $docblock .= " * @property {$phpType} \${$key}\n";
+
+            // Cast entry (solo si no es null — string/text no necesitan cast).
+            if ($config['cast'] !== null) {
+                $castEntries .= "        '{$key}' => '{$config['cast']}',\n";
+            }
+
+            // Validation rule del tipo (table-driven, R-PKG-012 ADR-007).
+            $validationRules[$key] = $config['validation'];
         }
 
         // Para el método register() y updateProfile(): las reglas se pasan via array.
@@ -603,7 +708,7 @@ PHP,
 
         return [
             '{{profileFieldsFillableEntries}}' => $fillable,
-            '{{profileFieldsCastEntries}}' => '', // string no necesita cast explícito
+            '{{profileFieldsCastEntries}}' => $castEntries,
             '{{profileFieldsColumns}}' => $columns,
             '{{profileFieldsDocblock}}' => $docblock,
             '{{registerRoute}}' => "\n    Route::post('register', [AuthController::class, 'register']);",
@@ -613,6 +718,26 @@ PHP,
             // Stash temporal para setear en handle() con scope/loginField.
             '__rulesPhp__' => $rulesPhp,
         ];
+    }
+
+    /**
+     * Mapea un tipo de profile field a su PHP type hint para docblocks @property.
+     *
+     * Spec: R-PKG-012 ADR-006 (json → array cast), ADR-007 (validation table-driven).
+     *
+     * @return string PHP type hint (e.g. `string|null`, `int|null`, `\Carbon\Carbon|null`).
+     */
+    protected function profileFieldPhpType(string $type): string
+    {
+        return match ($type) {
+            'string', 'text' => 'string|null',
+            'int' => 'int|null',
+            'decimal' => 'float|null',
+            'bool' => 'bool|null',
+            'date', 'datetime' => '\\Carbon\\Carbon|null',
+            'json' => 'array|null',
+            default => 'mixed',
+        };
     }
 
     /**
