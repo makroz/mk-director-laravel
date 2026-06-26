@@ -406,7 +406,7 @@ php artisan mk:make:auth-user Admin --login-field=ci --with-auth-rbac --profile-
 - **`--verify-email` solo aplica si `--login-field=email`**: si se pide el flag con login-field != email (e.g. `--verify-email --login-field=ci`), el scaffolder ignora `--verify-email` con warning explícito. ADR-009.
 - **Reserved columns**: `--profile-fields` rechaza colisiones con `id`, `password`, `auth_scope`, `client_id`, `remember_token`, `created_at`, `updated_at`, `email_verified_at`, y con el `--login-field` (que ya tiene su propia columna).
 - **Duplicados**: `--profile-fields=name,dni,name` se rechaza fail-fast (no se genera nada).
-- **Tipos**: en v1.5.0-rc5 todos los profile fields son `string`. Tipos custom (`date`, `int`, `json`, `file`) en v1.6.0 con `--profile-fields-types=<key:type,...>`.
+- **Tipos**: en v1.5.0-rc5 todos los profile fields son `string`. Tipos custom (`date`, `int`, `decimal`, `bool`, `datetime`, `json`, `text`) en v1.6.0-rc1 con `--profile-fields=key:type,...` (sintaxis extendida en el mismo flag, default `string` cuando no se especifica tipo).
 
 ### Anti-patterns
 

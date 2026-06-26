@@ -128,7 +128,7 @@ class MakeAuthUserCommand extends Command
         {--login-field=email : Campo usado para login (default: email). BC: si no se pasa, idéntico a v1.4.0. Valores comunes: email, ci, phone, username, documento.}
         {--with-auth-rbac : Habilita RBAC integration (ability checks en /me y /logout), rate limiting en /login, /forgot, /reset, y audit log via AuthEvent (R-PKG-010). Default BC: false. Configurar abilities + rate_limits en config/mk_director.php.}
         {--profile-fields= : Campos adicionales para el perfil del scope (CSV con sintaxis key[:type], default: ninguno = BC). Cada field se agrega como columna del tipo correspondiente en la tabla del scope, en $fillable del modelo, y se expone en /me + PATCH /me + /register. Sin tipo = string (BC con R-PKG-011). Tipos soportados: string, text, int, decimal, bool, date, datetime, json (R-PKG-012). Ortogonal con --login-field, --with-auth-rbac y --verify-email. Ej: --profile-fields=name,birthdate:date,age:int (R-PKG-011 + R-PKG-012).}
-        {--verify-email : Habilita verificación por email: columna email_verified_at, endpoints /email/verify/{id}/{hash} y /email/resend, dispatch de Illuminate\Auth\Notifications\VerifyEmail en /register. Default BC: false. Aplican cuando --login-field=email (R-PKG-011).}';
+        {--verify-email : Habilita verificación por email: columna email_verified_at, endpoints /email/verify/<id>/<hash> y /email/resend, dispatch de Illuminate\Auth\Notifications\VerifyEmail en /register. Default BC: false. Aplican cuando --login-field=email (R-PKG-011).}';
 
     /**
      * The console command description.
@@ -261,6 +261,7 @@ class MakeAuthUserCommand extends Command
         if (! empty($profileFields)) {
             $profileFieldsReplacements['{{updateProfileMethod}}'] = $this->buildUpdateProfileMethod(
                 $scope,
+                $scopeLower,
                 $loginField,
                 $rulesPhp,
             );
@@ -591,7 +592,7 @@ PHP,
         $items = array_values(array_filter(array_map('trim', explode(',', $raw)), static fn ($f) => $f !== ''));
 
         $reserved = [
-            'id', 'password', 'auth_scope', 'client_id',
+            'id', 'name', 'password', 'auth_scope', 'client_id',
             'remember_token', 'created_at', 'updated_at',
             'email_verified_at', $loginField,
         ];
@@ -798,7 +799,7 @@ PHP;
      * Solo se genera cuando `--profile-fields` está activo. Valida y actualiza
      * los profile fields del user autenticado.
      */
-    protected function buildUpdateProfileMethod(string $scope, string $loginField, string $rulesPhp): string
+    protected function buildUpdateProfileMethod(string $scope, string $scopeLower, string $loginField, string $rulesPhp): string
     {
         // Render inline (no nowdoc) para que las variables se interpoleen.
         $code = <<<PHP
