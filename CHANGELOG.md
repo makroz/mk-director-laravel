@@ -5,6 +5,29 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0-rc3] - 2026-06-26
+
+### Changed
+
+- **`php artisan mk:update` ahora lista TODAS las versiones superiores a la instalada, incluyendo pre-releases** (R-PKG-013). Bug fix: el filtro previo `/^v?\d+\.\d+\.\d+$/` ocultaba cualquier versión con sufijo (`-rc1`, `-rc2`, `-beta`, `-alpha`). Si estabas en `v1.3.1`, el command decía "última disponible: v1.4.0" cuando `v1.6.0-rc2` ya estaba en Packagist. Ahora:
+  - Lista todas las versiones publicadas en Packagist que son mayores a la instalada.
+  - Las presenta en un menú navegable con flechas del teclado (Symfony `choice()`), sin necesidad de flags (`--include-rc`, `--channel=`, etc.).
+  - El usuario elige con ↑↓ + Enter. Por default, la primera opción es la versión más alta disponible (sea RC o estable).
+  - Markers visuales: `⭐ (última estable)` y `🧪 (pre-release)` para distinguir.
+  - Una vez elegida, ejecuta `composer require makroz/director-laravel:vX.Y.Z` (en lugar del `composer update` genérico de antes) para garantizar la versión exacta.
+
+### Migration desde v1.6.0-rc1 / rc2
+
+- **Sin acción requerida.** El comportamiento cambia solo para devs que corren `php artisan mk:update`. Los que ya están en la última versión verán el nuevo output ("X versiones disponibles para actualizar") pero ningún cambio real.
+- Si tenés scripts CI que pinean `composer update makroz/director-laravel`, ahora deberías pinear `composer require makroz/director-laravel:vX.Y.Z` para reproducibilidad. (Esto era implícitamente cierto antes también — `composer update` sin constraint puede moverse a versiones inesperadas.)
+
+### Spec
+
+- Sprint: `openspec/changes/2026-06-26-mk-update-interactive/`
+- Bug original detectado por Mario en RETO (corriendo `mk:update` desde `v1.3.1`, vio "última v1.4.0" ignorando `v1.6.0-rc2`).
+
+---
+
 ## [1.6.0-rc1] - 2026-06-25
 
 Release candidate. **Extensión backward-compatible** de `--profile-fields` en
