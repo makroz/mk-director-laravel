@@ -1,11 +1,11 @@
-version: 4
+version: 5
 sprint: 2026-06-24-retrofit-reto-admin-module
 parent_sprint: 2026-06-24-dogfooding-model
 rule: R-G-033-D (workflow iterativo)
 r_id: R-RET-001
 opened: 2026-06-24
 closed: null
-status: blocked (espera GA v1.5.0 trigger — Mario decision. Lote R-PKG-007+008+009+010+011 ✅ todos cerrados. R-PKG-011 v1.5.0-rc5 published 2026-06-25T23:09Z)
+status: blocked (espera GA v1.5.0 trigger — Mario decision. Lote R-PKG-007+008+009+010+011+012 ✅ todos cerrados. R-PKG-012 v1.6.0-rc1 published 2026-06-26T00:19Z)
 
 branch:
   monorepo: makromania/260624-2220--retrofit-reto-admin-module (a crear post-GA)
@@ -28,6 +28,7 @@ depends_on:
     - R-PKG-009 (mk:make:auth-user --login-field) — ✅ closed 2026-06-25, v1.5.0-rc3
     - R-PKG-010 (AuthController --with-auth-rbac) — ✅ closed 2026-06-25, v1.5.0-rc4
     - R-PKG-011 (mk:make:auth-user --profile-fields + --verify-email) — ✅ closed 2026-06-25, v1.5.0-rc5
+    - R-PKG-012 (mk:make:auth-user --profile-fields=key:type) — ✅ closed 2026-06-26, v1.6.0-rc1
   soft:
     - Skill `mk-director-laravel/SKILL.md` actualizada con R-G-033 — ✅ hecho (R-PKG-009/010/011 T1.6/T1.8)
     - Documentación de v1.5.0 publicada — ✅ hecho (8/8 R-G-032 locations sincronizadas para R-PKG-010/011)
@@ -54,6 +55,13 @@ depends_on_progress:
     status: closed 2026-06-25 ✅
     tag: v1.5.0-rc5 (merged 2026-06-25T23:06-23:08Z, PRs #18/#45/#19)
     note: "Habilita phase 2+3 de R-RET-001. Permite re-scaffold Admin con --profile-fields=name,dni,phone --verify-email sin código custom."
+  R-PKG-012_profile_fields_types:
+    state.yaml: packagist/mk-director-laravel/openspec/changes/2026-06-25-profile-fields-types/state.yaml
+    status: closed 2026-06-26 ✅
+    tag: v1.6.0-rc1 (Mario pusheó contra 15cdc9e pre-audit-fixes 2026-06-25T20:30Z. Pendiente decision naming post audit 2026-06-25T20:36 — force update rc1 vs bumpear rc2.)
+    note: "Habilita Member scope con tipos custom (birthdate:date, active:bool, registered_at:datetime, metadata:json). Permite RETO Bolivia Member scope sin código custom. Audit pre-tag descubrió 3 bugs pre-existentes R-PKG-011 absorbidos en e1fd107."
+    tag: v1.6.0-rc1 (merged 2026-06-26T00:15-00:17Z, PRs #19 packagist / #46 monorepo / #20 humandirector)
+    note: "Extensión BC de --profile-fields con sintaxis key:type. Habilita Member scope de RETO con tipos custom: birthdate:date, active:bool, registered_at:datetime, metadata:json — sin override manual en migration/model."
 
 in_flight: []
 
@@ -61,10 +69,10 @@ release_strategy:
   decision_date: 2026-06-25
   decision_by: Mario (CTO Makromania)
   decision: RELEASE_AT_END
-  summary: "RETO bumpea composer UNA SOLA VEZ cuando el lote R-PKG-007+008+009+010+011 esté completo (idealmente v1.5.0 GA). NO bumpear entre RCs."
+  summary: "RETO bumpea composer UNA SOLA VEZ cuando el lote R-PKG-007+008+009+010+011+012 esté completo (idealmente v1.5.0 GA O v1.6.0 GA si Mario aprueba continuar). NO bumpear entre RCs."
   rationale: "Acumular evita churn de versiones, RETO trabaja con versión completa, RETO es feedback loop al final."
-  next_milestone: "v1.5.0 GA — cuando Mario apruebe GA, RETO bumpea a v1.5.0 y arranca phase 2+3."
-  current_state: "Lote R-PKG-007/008/009/010/011 ✅ todos cerrados (5 RCs). R-PKG-011 v1.5.0-rc5 published 2026-06-25T23:09Z. Pendiente: trigger GA v1.5.0 por Mario."
+  next_milestone: "GA trigger — Mario decide si v1.5.0 GA ahora (con R-PKG-012 ya en rc1, RETO bumpearía a ^1.5.0 y haría retrofit del Admin) O si esperar v1.6.0 GA (más features acumulados)."
+  current_state: "Lote R-PKG-007/008/009/010/011/012 ✅ todos cerrados (6 RCs en 3 sprints). R-PKG-012 v1.6.0-rc1 published 2026-06-26T00:19Z. Pendiente: trigger GA + decisión RETO bump target (^1.5.0 vs ^1.6.0) por Mario."
 
 findings:
   closing:
@@ -74,32 +82,36 @@ findings:
 
 approach:
   phase_1_release_blocked:
-    duration: "hasta que R-PKG-007/008/009/010/011 cierren"
-    status: "✅ COMPLETADO 2026-06-25 — lote cerrado (5 RCs)"
+    duration: "hasta que R-PKG-007/008/009/010/011/012 cierren"
+    status: "✅ COMPLETADO 2026-06-26 — lote cerrado (6 RCs en 3 sprints)"
     work: "ninguno — RETO esperó releases del paquete"
   phase_2_retrofit:
-    duration: "sprint posterior a v1.5.0 GA trigger de Mario"
-    status: "⏳ PENDING"
-    work: "rehacer módulo Admin de RETO con base v1.5.0 + skills nuevas"
+    duration: "sprint posterior a GA trigger de Mario (v1.5.0 GA O v1.6.0 GA según decisión)"
+    status: "⏳ PENDING — Mario decide bump target"
+    work: "rehacer módulo Admin de RETO con base v1.5.0+ (o v1.6.0+) + skills nuevas"
   phase_3_migrate:
     duration: "mismo sprint que phase_2"
     status: "⏳ PENDING"
-    work: "RETO bumpea composer a makroz/director-laravel:^1.5.0 + smoke test + reportar feedback"
+    work: "RETO bumpea composer a makroz/director-laravel:^1.5.0 (o ^1.6.0) + smoke test + reportar feedback"
 
 risk_register:
   - R-RISK-RET-001-001: "Trabajo duplicado: el branch huérfano tiene 5019 LOC que se pueden perder"
     mitigation: "Inventariar el branch huérfano ANTES de cerrar. Identificar lógica RETO-only que vale la pena preservar. Documentar en `inventory.md`."
   - R-RISK-RET-001-002: "Las profile fields custom de RETO no están cubiertas por --profile-fields"
     mitigation: "Si el flag no se agrega en v1.5.0, RETO agrega los fields via override del model después de scaffoldear."
-  - R-RISK-RET-001-003: "GA trigger timing — Mario puede decidir esperar más RCs antes de GA v1.5.0"
-    mitigation: "Si Mario pide esperar R-PKG-011+, este sprint R-RET-001 sigue blocked. No hay SLA — Mario controla timing."
+  - R-RISK-RET-001-003: "GA trigger timing — Mario puede decidir esperar más RCs antes de GA v1.5.0 o v1.6.0"
+    mitigation: "Si Mario pide esperar más RCs (e.g. R-PKG-013 file/avatar), este sprint R-RET-001 sigue blocked. No hay SLA — Mario controla timing. Alternativamente, bumpear RETO a ^1.5.0 (sin tipos custom) ahora y bumpear a ^1.6.0 después si GA se retrasa."
 
 next_action:
-  - ⏸️ PENDING Mario decision: trigger GA v1.5.0 (bumpear RETO composer).
-  - Cuando GA trigger:
-    - INMEDIATO: bumpear RETO composer `composer require makroz/director-laravel:^1.5.0`.
+  - ⏸️ PENDING Mario decision: trigger GA (v1.5.0 o v1.6.0) + bump target para RETO composer.
+  - Opciones que Mario tiene:
+    - A) Trigger v1.5.0 GA ahora → bumpear RETO a ^1.5.0 → fase 2+3 con --profile-fields (sin tipos custom). Pros: desbloquea RETO rápido. Contras: pierde tipos custom (Member scope con birthdate/active/metadata requeriría override manual hasta bumpear a ^1.6.0).
+    - B) Trigger v1.6.0 GA → bumpear RETO a ^1.6.0 → fase 2+3 con tipos custom completos. Pros: feature completa. Contras: esperar más antes de desbloquear RETO.
+    - C) Bumpear RETO a ^1.5.0 ahora (sin GA) y bumpear a ^1.6.0 después → fase 2 con --profile-fields básico, fase 3+ con tipos custom. Pros: gradual. Contras: doble churn RETO.
+  - Cuando decisión tomada:
+    - Si GA trigger: bumpear RETO composer (`composer require makroz/director-laravel:^X.Y.Z`).
     - Inventariar rama huérfana `makromania/260624-0511--admin-module` ANTES de cerrar.
     - Crear `inventory.md` con 4 tiers (boilerplate regenerable / lógica única / docs / tests).
     - Diseñar sprint de retrofit con base en el inventario.
     - Ejecutar retrofit + smoke test + reportar feedback.
-  - Si Mario pide esperar R-PKG-011+: este sprint sigue blocked, NO bumpear RETO.
+  - Si Mario pide esperar más RCs: este sprint sigue blocked, NO bumpear RETO.

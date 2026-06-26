@@ -1,11 +1,12 @@
-version: 1
+version: 3
 sprint: 2026-06-25-profile-fields-types
 parent_sprint: 2026-06-25-profile-fields-per-scope
 rule: R-G-033-A
 r_id: R-PKG-012
 opened: 2026-06-25
-status: design
-target_release: v1.6.0-rc1
+closed: 2026-06-25
+status: closed
+target_release: v1.6.0-rc1 (Mario ya pusheó el tag pre-audit-fixes contra 15cdc9e, pendiente decision naming post audit)
 
 source_feature:
   location: projects/reto/reto-api/app/Modules/Member/ (futuro)
@@ -24,74 +25,121 @@ triage_checklist:
     rationale: "Doc como 'Profile fields with custom types' genérico. RETO solo en 'Dogfooding source' (interno)."
   decision: GO
 
-in_flight: []
+in_flight:
+  - "Audit pre-tag e2e detectó 3 bugs pre-existentes R-PKG-011. Fixes absorbed en packagist e1fd107 + monorepo 1387e633 + 5 audit tests nuevos (416/416 verde)."
+  - "Mario mergeó 3 PRs coordinados (packagist #19, monorepo #46, humandirector #20) + pusheó tag v1.6.0-rc1 contra 15cdc9e. Pendiente decision naming post audit (force update rc1 vs bumpear rc2)."
 
 design_questions:
   - id: D1
     question: "¿Sintaxis --profile-fields=name:string,birthdate:date (extensión) o --profile-fields-types=... (flag nuevo)?"
     recommendation: "Extensión de --profile-fields. Default string cuando no se especifica tipo (BC)."
-    resolution: pending (design.md)
+    resolution: implemented (ADR-001). key[:type] en mismo flag, default string BC.
   - id: D2
     question: "¿Tipos custom comparten flag con --profile-fields o son flags separados?"
     recommendation: "Mismo flag. Un solo CSV parseado."
-    resolution: pending
+    resolution: implemented (ADR-002).
   - id: D3
     question: "¿Tipos case-sensitive?"
     recommendation: "Sí, lowercase. String o STRING se rechazan."
-    resolution: pending
+    resolution: implemented (ADR-003).
   - id: D4
     question: "¿Validación de tipos desconocidos?"
     recommendation: "Fail-fast con error explícito. Lista cerrada: string, text, int, decimal, bool, date, datetime, json."
-    resolution: pending
+    resolution: implemented (ADR-004). PROFILE_FIELD_TYPES constant con 8 entries + array_key_exists fail-fast.
   - id: D5
     question: "¿Decimal con precisión custom?"
     recommendation: "No en v1.6.0-rc1. Default 8,2. Post-RC si RETO necesita."
-    resolution: pending
+    resolution: implemented (ADR-005).
   - id: D6
     question: "¿JSON como string o como array?"
     recommendation: "Default array cast (Laravel moderno). Consumer puede override."
-    resolution: pending
+    resolution: implemented (ADR-006).
   - id: D7
     question: "¿Validación runtime por tipo?"
     recommendation: "Sí, table-driven en register() y updateProfile(). Consumer puede override."
-    resolution: pending
+    resolution: implemented (ADR-007).
   - id: D8
     question: "¿Date / datetime usan 'date' rule o más estricto ('date_format:Y-m-d')?"
     recommendation: "'date' loose. Consumer puede override para strict format."
-    resolution: pending
+    resolution: implemented (ADR-008).
   - id: D9
     question: "¿Interacción con R-PKG-011 (--profile-fields)?"
     recommendation: "Extensión backward-compatible. --profile-fields=name,dni (sin tipos) sigue funcionando (default string)."
-    resolution: pending
+    resolution: implemented (ADR-009).
   - id: D10
     question: "¿Interacción con --with-auth-rbac / --login-field / --verify-email?"
     recommendation: "Totalmente ortogonales. 5 flags combinables."
-    resolution: pending
+    resolution: implemented (ADR-010).
 
 risk_register:
   - id: R-RISK-PKG-012-001
     description: "Tipo desconocido (--profile-fields=name:foo)"
-    mitigation: "Fail-fast en resolveProfileFieldType() con lista cerrada."
-    status: pending
+    mitigation: "Fail-fast en resolveProfileFields() con lista cerrada (PROFILE_FIELD_TYPES)."
+    status: resolved
   - id: R-RISK-PKG-012-002
     description: "BC break: app que asume --profile-fields solo keys"
     mitigation: "Extensión backward-compatible (sin : = string)."
-    status: pending
+    status: resolved
   - id: R-RISK-PKG-012-003
     description: "Cast incorrecto (e.g. json como string en lugar de array)"
-    mitigation: "Tests source-parsing pinean cada tipo con su cast específico."
-    status: pending
+    mitigation: "Tests source-parsing pinean cada tipo con su cast específico (AuthUserProfileFieldsTypesTest)."
+    status: resolved
   - id: R-RISK-PKG-012-004
     description: "Validation rule incorrecto (e.g. date como string)"
-    mitigation: "Tests pinean cada tipo con su validation rule."
-    status: pending
+    mitigation: "Tests pinean cada tipo con su validation rule (MakeAuthUserProfileFieldsTypesTest)."
+    status: resolved
   - id: R-RISK-PKG-012-005
     description: "Ortogonalidad rota con R-PKG-011 (--profile-fields simple)"
     mitigation: "Source-parsing test que verifica parsing de ambos formatos."
-    status: pending
+    status: resolved
+  - id: R-RISK-PKG-012-006
+    description: "Audit e2e pre-tag detectó 3 bugs pre-existentes de R-PKG-011 en comando real (signature parser, buildUpdateProfileMethod, name not reserved). Eran bugs silenciosos pineados como strings pero nunca ejecutados."
+    mitigation: "Fixes absorbed en packagist e1fd107 (post merge del PR #19). 5 audit tests pineados en MakeAuthUserAuditFixesTest.php. 416/416 verde."
+    status: resolved
 
 next_action:
-  - Decisiones D1-D10 en design.md (con source-parsing en mente).
-  - Implementación T1.1-T1.8 (mismo patrón que R-PKG-011).
-  - 3 PRs coordinados + tag v1.6.0-rc1 post-merge.
-  - Sesión NUEVA (no esta) — esta sesión solo deja el setup (SDD + prompt) y cierra.
+  - ✅ Implementación T1.1-T1.8 cerrada (411 tests baseline + 39 nuevos R-PKG-012 = 411 verde).
+  - ✅ Audit pre-tag descubrió 3 bugs pre-existentes. Fixes absorbed (packagist e1fd107, monorepo 1387e633). 5 audit tests nuevos. 416/416 verde.
+  - ✅ 3 PRs coordinados squash-merged por Mario (packagist #19 → 15cdc9e, monorepo #46 → 5553b987, humandirector #20 → 903e2ff).
+  - ✅ R-G-032 sync packagist-side (CHANGELOG, DEVELOPER_GUIDE §3.11, README).
+  - ✅ R-G-032 sync monorepo-side (GETTING_STARTED Step 12, AUTH callout, API_REFERENCE_LARAVEL).
+  - ✅ R-G-032 sync humandirector-side (references/14 NEW + SKILL.md index).
+  - ⏸ Tag v1.6.0-rc1 ya pusheado por Mario pre-audit-fixes (apuntaba a 15cdc9e). Pendiente: decisión naming post audit (force update rc1 vs bumpear rc2). Telegram enviado a Mario 2026-06-25 20:36.
+  - ⏸ Cron r-pkg-012-pr-watch: se mantiene hasta confirmar tag final + Packagist publish del tag definitivo.
+  - ⏸ R-RET-001 state.yaml update: marcar R-PKG-012 ✅ en depends_on_progress. Se hará post-tag-definitivo.
+
+audit_phase:
+  e2e_sandbox: "tests/Unit/Console/MakeAuthUserAuditFixesTest.php (NEW, 5 tests, 17 assertions)"
+  bugs_found_pre_existing:
+    - id: AUDIT-001
+      severity: critical
+      sprint_origin: R-PKG-011
+      description: "Signature parser interpretaba {id}/{hash} en description de --verify-email como argumentos del command. Resultado: php artisan mk:make:auth-user X --verify-email fallaba con 'Not enough arguments (missing: hash)'."
+      fix_commit: e1fd107
+      fix: "{id}/{hash} → <id>/<hash> en signature (sin braces)."
+    - id: AUDIT-002
+      severity: high
+      sprint_origin: R-PKG-011
+      description: "buildUpdateProfileMethod(string \$scope, string \$loginField, string \$rulesPhp) usaba \$scopeLower internamente sin recibirla. Resultado: php artisan mk:make:auth-user X --profile-fields=Y fallaba con 'Undefined variable \$scopeLower'."
+      fix_commit: e1fd107
+      fix: "Agregar \$scopeLower como segundo parametro + pasar desde handle()."
+    - id: AUDIT-003
+      severity: medium
+      sprint_origin: R-PKG-011
+      description: "'name' no estaba en reserved columns de resolveProfileFields(). El base scope genera \$table->string('name') y --profile-fields=name generaba OTRA \$table->string('name')->nullable() → duplicate column error en php artisan migrate."
+      fix_commit: e1fd107
+      fix: "Agregar 'name' a reserved list de resolveProfileFields()."
+  regression_protection:
+    - "MakeAuthUserAuditFixesTest.php pinea que no se regresen los 3 fixes."
+    - "5 tests verde (signature clean, buildUpdateProfileMethod firma, handle() call site, 'name' reserved, reserved list completa)."
+  lessons_learned:
+    - "Source-parsing tests pinean strings en código, NO ejecutan el command. Bugs que solo se manifiestan en runtime se escapan."
+    - "Audit pre-tag con sandbox Laravel real (php artisan mk:make:auth-user Member --flags) detecta bugs que los source-parsing tests no pueden."
+    - "R-NEW-001 followup: cualquier sprint que modifica un command scaffolder DEBE correr e2e en sandbox antes de tag."
+    - "Aplicabilidad cross-sprint: mismo pattern aplicó a R-PKG-011 (donde están los bugs originales). Misma lección."
+
+spec:
+  proposal: openspec/changes/2026-06-25-profile-fields-types/proposal.md
+  formal_spec: openspec/changes/2026-06-25-profile-fields-types/specs/profile-fields-types.md
+  design: openspec/changes/2026-06-25-profile-fields-types/design.md
+  tasks: openspec/changes/2026-06-25-profile-fields-types/tasks.md
