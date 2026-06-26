@@ -1,0 +1,122 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Repositories;
+
+use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
+use App\Modules\{{ModuleName}}\Repositories\Contracts\{{ModuleName}}RepositoryInterface;
+use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Mk\Director\Auth\Models\Ability;
+use Mk\Director\Auth\Models\Role;
+
+/**
+ * Implementación del Repository de {{ModuleName}} users.
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ *
+ * Encapsula todas las queries + side effects (storage cleanup, sync).
+ * El Service es thin, pero el Repository concentra la lógica de persistencia
+ * para que el Service sea fácil de testear.
+ */
+class {{ModuleName}}Repository implements {{ModuleName}}RepositoryInterface
+{
+    public function paginate(array $filters): LengthAwarePaginator
+    {
+        $query = {{ModuleName}}::query()->with(['roles', 'directAbilities']);
+
+        if (! empty($filters['search'])) {
+            $search = (string) $filters['search'];
+            $query->where(function (Builder $q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                    ->orWhere('full_name', 'like', "%{$search}%")
+                    ->orWhere('email', 'like', "%{$search}%")
+                    ->orWhere('ci', 'like', "%{$search}%");
+            });
+        }
+
+        if (isset($filters['is_active'])) {
+            $query->where('is_active', (bool) $filters['is_active']);
+        }
+
+        if (! empty($filters['role_ids'])) {
+            $roleIds = (array) $filters['role_ids'];
+            $query->whereHas('roles', fn (Builder $q) => $q->whereIn('roles.id', $roleIds));
+        }
+
+        $perPage = (int) ($filters['per_page'] ?? 15);
+        $perPage = max(1, min($perPage, 100));
+
+        return $query->orderByDesc('created_at')->paginate($perPage);
+    }
+
+    public function findById(string $id, array $with = []): ?{{ModuleName}}
+    {
+        $query = {{ModuleName}}::query();
+
+        if (! empty($with)) {
+            $query->with($with);
+        }
+
+        return $query->find($id);
+    }
+
+    public function create(array $data): {{ModuleName}}
+    {
+        return DB::transaction(function () use ($data) {
+            /** @var {{ModuleName}} ${{moduleNameLower}} */
+            ${{moduleNameLower}} = {{ModuleName}}::create($data);
+            ${{moduleNameLower}}->setAuthScope('{{moduleNameLower}}');
+
+            return ${{moduleNameLower}};
+        });
+    }
+
+    public function update({{ModuleName}} ${{moduleNameLower}}, array $data): {{ModuleName}}
+    {
+        return DB::transaction(function () use (${{moduleNameLower}}, $data) {
+            ${{moduleNameLower}}->update($data);
+
+            return ${{moduleNameLower}}->fresh();
+        });
+    }
+
+    public function delete({{ModuleName}} ${{moduleNameLower}}): bool
+    {
+        return DB::transaction(function () use (${{moduleNameLower}}) {
+            // Limpia la foto del storage si existe.
+            if (! empty(${{moduleNameLower}}->photo_path)) {
+                Storage::disk(config('mk_director.storage.disk', 'public'))
+                    ->delete(${{moduleNameLower}}->photo_path);
+            }
+
+            // Limpia tokens + pivots.
+            ${{moduleNameLower}}->tokens()->delete();
+            ${{moduleNameLower}}->roles()->detach();
+            ${{moduleNameLower}}->directAbilities()->detach();
+
+            return ${{moduleNameLower}}->delete();
+        });
+    }
+
+    public function syncRoles({{ModuleName}} ${{moduleNameLower}}, array $roleNames): {{ModuleName}}
+    {
+        $roles = Role::query()->whereIn('name', $roleNames)->get();
+
+        ${{moduleNameLower}}->roles()->sync($roles->pluck('id')->all());
+
+        return ${{moduleNameLower}}->fresh(['roles']);
+    }
+
+    public function syncDirectAbilities({{ModuleName}} ${{moduleNameLower}}, array $abilityNames): {{ModuleName}}
+    {
+        $abilities = Ability::query()->whereIn('name', $abilityNames)->get();
+
+        ${{moduleNameLower}}->directAbilities()->sync($abilities->pluck('id')->all());
+
+        return ${{moduleNameLower}}->fresh(['directAbilities']);
+    }
+}

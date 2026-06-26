@@ -1,0 +1,81 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Database\Seeders;
+
+use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\DB;
+use Mk\Director\Auth\Models\Ability;
+use Mk\Director\Auth\Models\Role;
+
+/**
+ * Seeder de roles predefinidos del scope `{{moduleNameLower}}`.
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ *
+ * Crea 4 roles con jerarquía:
+ *   - super-admin: ability `*` (bypass total)
+ *   - admin: CRUD completo sobre {{moduleNamePluralLower}}
+ *   - editor: view + update (no delete ni create)
+ *   - viewer: solo view
+ *
+ * Override este seeder para customizar la jerarquía de roles.
+ */
+class {{ModuleName}}RolesSeeder extends Seeder
+{
+    public function run(): void
+    {
+        $scope = '{{moduleNameLower}}';
+        $resource = '{{moduleNamePluralLower}}';
+
+        // ── super-admin ─────────────────────────────────────────────────
+        $superAdmin = Role::query()->updateOrCreate(
+            ['name' => 'super-admin'],
+            ['guard' => $scope, 'description' => 'Acceso total al sistema (bypass RBAC).'],
+        );
+        $this->attachAbility($superAdmin, '*', 'Wildcard: todas las abilities.');
+
+        // ── admin ───────────────────────────────────────────────────────
+        $admin = Role::query()->updateOrCreate(
+            ['name' => 'admin'],
+            ['guard' => $scope, 'description' => 'CRUD completo sobre '.$resource.'.'],
+        );
+        foreach (['viewAny', 'view', 'create', 'update', 'delete'] as $action) {
+            $this->attachAbility($admin, "{$scope}.{$resource}.{$action}", ucfirst($action).' '.$resource.'.');
+        }
+
+        // ── editor ──────────────────────────────────────────────────────
+        $editor = Role::query()->updateOrCreate(
+            ['name' => 'editor'],
+            ['guard' => $scope, 'description' => 'View + update (no delete ni create).'],
+        );
+        foreach (['viewAny', 'view', 'update'] as $action) {
+            $this->attachAbility($editor, "{$scope}.{$resource}.{$action}", ucfirst($action).' '.$resource.'.');
+        }
+
+        // ── viewer ──────────────────────────────────────────────────────
+        $viewer = Role::query()->updateOrCreate(
+            ['name' => 'viewer'],
+            ['guard' => $scope, 'description' => 'Solo lectura.'],
+        );
+        foreach (['viewAny', 'view'] as $action) {
+            $this->attachAbility($viewer, "{$scope}.{$resource}.{$action}", ucfirst($action).' '.$resource.'.');
+        }
+    }
+
+    /**
+     * Helper: crea la ability si no existe y la vincula al role via `ability_role` pivot.
+     */
+    protected function attachAbility(Role $role, string $name, ?string $description = null): void
+    {
+        $ability = Ability::query()->updateOrCreate(
+            ['name' => $name],
+            ['description' => $description, 'module' => '{{moduleNameLower}}'],
+        );
+
+        DB::table('ability_role')->updateOrInsert(
+            ['role_id' => $role->id, 'ability_id' => $ability->id],
+        );
+    }
+}

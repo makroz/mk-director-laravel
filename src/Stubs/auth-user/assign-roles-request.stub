@@ -1,0 +1,37 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Mk\Director\Auth\Models\Role;
+
+/**
+ * Validación para asignar roles (por nombre) a un {{ModuleName}}.
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ *
+ * Roles vienen por NOMBRE (no ID) — más portable y friendly para el frontend.
+ * Se validan contra los roles existentes en `mk_director`.
+ */
+class AssignRolesRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function rules(): array
+    {
+        $existingRoleNames = Role::query()->pluck('name')->all();
+
+        return [
+            'roles' => ['required', 'array'],
+            'roles.*' => ['string', 'in:'.implode(',', $existingRoleNames)],
+        ];
+    }
+}
