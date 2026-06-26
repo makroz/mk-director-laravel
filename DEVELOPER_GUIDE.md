@@ -982,6 +982,96 @@ Una vez elegida la versión:
 
 ---
 
+### 3.13 R-PKG-015 feedback fixes (`--with-crud` hardening + Sanctum UUID helper + FK migration removal)
+
+> **Sprint**: `makromania/260626-1845--r-pkg-015-feedback-fixes-v1.6.0-rc5`
+> **Trigger**: feedback RETO fase 2 sobre `v1.6.0-rc4` (11 bugs + 2 obs).
+> **Tag**: `v1.6.0-rc5` (acumulación RELEASE_AT_END, NO bumpear RETO).
+
+Esta sección cubre los 3 cambios estructurales del sprint R-PKG-015.
+
+#### 3.13.1 `mk:make:auth-user --with-crud` — fixes del feedback RETO
+
+El flag `--with-crud` (introducido en v1.6.0-rc4) ahora incluye los siguientes hardening:
+
+- **Overrides de `roles()` y `directAbilities()` con FKs explícitas** (BUG-NEW-06). El modelo generado incluye métodos `roles()` y `directAbilities()` con FK explícita `user_id` y `wherePivot('user_type', static::class)`. Sin esto, los endpoints `assignRoles`, `assignDirectAbilities`, `syncRoles`, `syncRoleAbilities` explotaban con `no such column: role_user.admin_id` en cualquier consumer MME (tablas por scope).
+- **`use` statements en routes** (BUG-NEW-05). El stub `auth-user.routes.with-crud.stub` ahora importa `AdminController`, `RoleController`, `AbilityController` al inicio del bloque. Sin esto, las 14 rutas CRUD no cargaban (`ReflectionException: Class "AdminController" does not exist`).
+- **Seeder sin columnas fantasma** (BUG-NEW-03, BUG-NEW-04). El `AdminRolesSeeder` ya no setea `'module' => '...'` en `abilities` ni `'description' => '...'` en `roles`. Las migrations del paquete solo definen `id, name, [description en abilities], guard, timestamps` — sin columnas extra.
+
+**Ejemplo**:
+```bash
+php artisan mk:make:auth-user Admin --with-crud --profile-fields="full_name,!ci,phone"
+```
+
+#### 3.13.2 `mk:fix:sanctum-uuids` — helper para parchar la migration de Sanctum
+
+> **Nuevo en v1.6.0-rc5** (R-PKG-015 BUG-NEW-09).
+
+Laravel Sanctum 4 publica por default la migration `create_personal_access_tokens_table` con `$table->morphs('tokenable')` (columnas `unsignedBigInteger`). Esto es **incompatible** con consumers que usan el trait `HasUuids` en sus modelos de AuthUser (RETO Bolivia, proyectos multi-tenant con UUIDs).
+
+**Síntoma sin este fix**:
+```
+SQLSTATE[22P02]: Invalid text representation
+invalid input syntax for type bigint: "019f05cf-417e-7018-aa28-3f4cf4f10c0d"
+```
+
+**Uso**:
+```bash
+# Después de php artisan install:api, ANTES de php artisan migrate:
+php artisan mk:fix:sanctum-uuids
+
+# Dry-run (solo mostrar qué se cambiaría):
+php artisan mk:fix:sanctum-uuids --dry-run
+```
+
+**Idempotente**: si la migration ya está parcheada (`uuidMorphs`), el command no hace nada. Si la migration no existe, sugiere `composer require laravel/sanctum:^4.3` + `php artisan install:api` primero.
+
+**⚠️ Importante**: si ya corriste `php artisan migrate` antes del fix, la tabla `personal_access_tokens` tiene columnas bigint. Necesitás `migrate:fresh` (destructivo) o una migration custom que altere las columnas a string.
+
+#### 3.13.3 FK polimórfica `role_user.user_id → auth_users.id` — BREAKING para consumers MME
+
+> **BREAKING en v1.6.0-rc5** (R-PKG-015 BUG-NEW-07).
+
+La migration `2026_06_18_000001_add_fk_role_user_to_auth_users.php` (introducida en v1.2.2 hardening) **se elimina del paquete** en esta versión. Asumía que TODOS los users viven en `auth_users`, lo cual NO es válido para consumers MME (R-MK-001) que usan tablas por scope.
+
+**¿Por qué se elimina en vez de configurar?** Bajo R-G-033 ("BC no sagrado mientras RETO migre en mismo sprint") + RELEASE_AT_END (1 solo consumer activo, RETO clean rebuild desde 0), eliminar es más sano que agregar un config flag que solo un consumer va a usar.
+
+**Migración para consumers que aplicaron esta FK en v1.6.0-rc4** (ejecutar ANTES de `composer update`):
+```sql
+ALTER TABLE role_user DROP CONSTRAINT role_user_user_id_foreign;
+ALTER TABLE ability_user DROP CONSTRAINT ability_user_user_id_foreign;
+-- Mantener role_user.role_id → roles.id (sí aplica)
+-- Mantener ability_user.ability_id → abilities.id (sí aplica)
+```
+
+Consumers con clean rebuild desde 0 (RETO fase 3+) NO necesitan esto — la nueva DB no tendrá la FK aplicada.
+
+Si el consumer necesita la FK a su tabla custom, agrega una migration propia:
+```php
+Schema::table('role_user', function (Blueprint $t) {
+    $t->foreign('user_id')->references('id')->on('admins')->cascadeOnDelete();
+});
+```
+
+#### 3.13.4 `HasAbilities::abilities()` — SQL Postgres-compatible
+
+> **Fix en v1.6.0-rc5** (R-PKG-015 BUG-NEW-08).
+
+La subquery de `whereExists` ahora hace `->join('abilities', 'abilities.id', '=', 'ability_role.ability_id')` explícito. Antes referenciaba `abilities.id` vía `whereColumn` sin joinear, lo cual MySQL/MariaDB toleraban pero PostgreSQL rompía con `SQLSTATE 42P01`.
+
+**Síntoma sin este fix**:
+- `login()` y `me()` retornaban `"abilities": []` en Postgres.
+- `GET /api/admins` explotaba al eager-load `abilities`.
+
+Con el fix, el SQL es portable cross-engine (MySQL, MariaDB, PostgreSQL, SQLite).
+
+#### Spec
+
+- Sprint: `makromania/260626-1845--r-pkg-015-feedback-fixes-v1.6.0-rc5` (en `projects/mk-director/packagist/mk-director-laravel/`).
+- Tests: 13 Pest tests source-parsing + reflection en `tests/Feature/AuthUserFeedbackAuditTest.php` (53 assertions, todos verde).
+
+---
+
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)
 
 Tanto para **Next.js** como para **React Native**, el consumo de listas es estandarizado mediante parámetros URL:

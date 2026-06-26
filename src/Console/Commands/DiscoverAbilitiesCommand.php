@@ -141,6 +141,33 @@ class DiscoverAbilitiesCommand extends Command
         } else {
             // Fallback: atributos PHP + docblock combinados.
             $abilities = $this->discoverAbilitiesFromAttributesAndDocblocks($moduleInfo);
+
+            // R-PKG-015 OBS-NEW-01: además leer `$mkConfig` de los SmartController
+            // del módulo y generar abilities CRUD estándar del estilo
+            // `{scope}.{model}.{verb}` (e.g. `admin.admins.viewAny`).
+            //
+            // Por qué: cuando el scaffolder genera el CRUD via `--with-crud`, los
+            // controllers (AdminController, RoleController, AbilityController)
+            // extienden `SmartController` y exponen `$mkConfig['model']`, pero NO
+            // tienen `#[Ability]` attributes ni `@mk-ability` docblocks. Sin este
+            // path, el fallback no descubre nada y `mk:discover-abilities` reporta
+            // "No se descubrieron abilities." (lo que RETO observó).
+            //
+            // Merge con dedup por name: si un controller ya tiene un attribute
+            // con la misma ability, gana el attribute (viene primero en el array).
+            $mkConfigAbilities = $this->discoverAbilitiesFromMkConfig($moduleInfo, $moduleName);
+            foreach ($mkConfigAbilities as $mkAbility) {
+                $alreadyExists = false;
+                foreach ($abilities as $existing) {
+                    if ($existing['name'] === $mkAbility['name']) {
+                        $alreadyExists = true;
+                        break;
+                    }
+                }
+                if (! $alreadyExists) {
+                    $abilities[] = $mkAbility;
+                }
+            }
         }
 
         // Determine action.
@@ -425,6 +452,85 @@ class DiscoverAbilitiesCommand extends Command
             $moduleInfo['classes'],
             static fn (string $class): bool => str_contains($class, '\\Http\\Controllers\\') && str_ends_with($class, 'Controller')
         ));
+    }
+
+    /**
+     * Descubre abilities desde `$mkConfig` de los `SmartController` del módulo (R-PKG-015 OBS-NEW-01).
+     *
+     * Para cada controller que extienda `SmartController` y declare `$mkConfig['model']`,
+     * genera las 5 abilities CRUD estándar con naming `{scope}.{model}.{verb}`:
+     *   - `{scope}.{model}.viewAny`
+     *   - `{scope}.{model}.view`
+     *   - `{scope}.{model}.create`
+     *   - `{scope}.{model}.update`
+     *   - `{scope}.{model}.delete`
+     *
+     * Scope: derivado del nombre del módulo (`Admin` → `admin`).
+     * Resource (modelo): derivado del FQCN en `$mkConfig['model']`
+     *   (`App\Modules\Admin\Models\Admin` → `admins`).
+     *
+     * Si el controller NO extiende `SmartController` o no tiene `$mkConfig['model']`,
+     * se ignora silenciosamente (otros paths pueden haber encontrado abilities).
+     *
+     * @param  array{path: string, classes: array<int, string>}  $moduleInfo
+     * @param  string  $moduleName  Nombre del módulo (e.g. `Admin`).
+     * @return array<int, array{name: string, description: ?string}>
+     */
+    private function discoverAbilitiesFromMkConfig(array $moduleInfo, string $moduleName): array
+    {
+        $abilities = [];
+        $scope = Str::snake($moduleName);
+
+        $smartControllerClass = \Mk\Director\Controllers\SmartController::class;
+
+        foreach ($this->findControllerClasses($moduleInfo) as $class) {
+            try {
+                $reflection = new ReflectionClass($class);
+            } catch (Throwable) {
+                continue;
+            }
+
+            if (! $reflection->isSubclassOf($smartControllerClass)) {
+                continue;
+            }
+
+            if (! $reflection->hasProperty('mkConfig')) {
+                continue;
+            }
+
+            try {
+                $property = $reflection->getProperty('mkConfig');
+                $defaults = $property->getDefaultValue();
+            } catch (Throwable) {
+                continue;
+            }
+
+            if (! is_array($defaults) || empty($defaults['model'])) {
+                continue;
+            }
+
+            $modelClass = $defaults['model'];
+            if (! is_string($modelClass) || ! class_exists($modelClass)) {
+                continue;
+            }
+
+            try {
+                $modelReflection = new ReflectionClass($modelClass);
+                $resource = Str::snake(Str::plural($modelReflection->getShortName()));
+            } catch (Throwable) {
+                continue;
+            }
+
+            // Generar las 5 abilities CRUD estándar.
+            foreach (['viewAny', 'view', 'create', 'update', 'delete'] as $verb) {
+                $abilities[] = [
+                    'name' => "{$scope}.{$resource}.{$verb}",
+                    'description' => ucfirst($verb).' '.$resource.'.',
+                ];
+            }
+        }
+
+        return $abilities;
     }
 
     /**

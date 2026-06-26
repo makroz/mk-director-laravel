@@ -259,7 +259,11 @@ class MakeAuthUserCommand extends Command
                 : "['required', 'string']",
             // R-PKG-014 BUG-05: login() response incluye profile fields + roles + abilities.
             // Construido dinámicamente según si hay o no --profile-fields.
-            '{{loginResponseArray}}' => $this->buildLoginResponseArray($profileFieldsRaw),
+            // R-PKG-015 BUG-NEW-01+02: pasar $loginField resuelto (no el placeholder
+            // {{loginField}}) y armar la estructura de array_merge correctamente para
+            // que las keys 'roles'/'abilities' queden DENTRO de 'admin', no como
+            // siblings con key numérica.
+            '{{loginResponseArray}}' => $this->buildLoginResponseArray($profileFieldsRaw, $loginField),
         ];
 
         // Placeholders condicionales R-PKG-011: profile fields per-scope + email verification opt-in.
@@ -271,6 +275,14 @@ class MakeAuthUserCommand extends Command
         // Default mode: nada. --with-crud: agregar use HasFactory, trait HasFactory,
         // y override newFactory() que apunta a la factory DDD generada por
         // admin-factory.stub.
+        //
+        // R-PKG-015 BUG-NEW-06: cuando --with-crud está activo, también generar
+        // overrides de `roles()` y `directAbilities()` con FKs explícitas. Sin
+        // esto, Eloquent infiere `admin_id` del nombre del modelo y la pivot
+        // `role_user` usa `user_id` → `SQLSTATE: no such column: role_user.admin_id`.
+        // El polimorfismo via `wherePivot('user_type', static::class)` mantiene
+        // la MME (R-MK-001): cada scope tiene su propio modelo, pero comparte
+        // las pivots globales del paquete.
         $factoryReplacements = [
             '{{factoryHasFactoryUse}}' => $withCrud
                 ? "use Illuminate\\Database\\Eloquent\\Factories\\HasFactory;\n"
@@ -290,6 +302,57 @@ class MakeAuthUserCommand extends Command
     protected static function newFactory(): {$scope}Factory
     {
         return {$scope}Factory::new();
+    }
+PHP
+                : '',
+            // R-PKG-015 BUG-NEW-06: FK override para `roles()`.
+            // Default: vacío (sin override). --with-crud: override con FK explícita.
+            '{{rolesRelationOverride}}' => $withCrud
+                ? <<<PHP
+
+    /**
+     * Override de `roles()` del trait HasRoles (R-PKG-015 BUG-NEW-06).
+     *
+     * Eloquent infiere la foreign key pivot del nombre del modelo (`admin_id`
+     * para `App\Modules\Admin\Models\Admin`), pero la pivot `role_user` del
+     * paquete usa `user_id`. Sin este override, `syncRoles()` y `assignRoles()`
+     * explotan con `no such column: role_user.admin_id`.
+     *
+     * El `wherePivot('user_type', static::class)` mantiene el polimorfismo: la
+     * pivot es global pero cada modelo concreto filtra por su FQCN, respetando
+     * MME (R-MK-001) sin necesidad de tablas separadas por scope.
+     */
+    public function roles(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
+    {
+        return \$this->belongsToMany(
+            \Mk\Director\Auth\Models\Role::class,
+            'role_user',
+            'user_id',
+            'role_id',
+        )->wherePivot('user_type', static::class)->withTimestamps();
+    }
+PHP
+                : '',
+            // R-PKG-015 BUG-NEW-06: FK override para `directAbilities()`.
+            // Default: vacío. --with-crud: override con FK explícita.
+            '{{directAbilitiesRelationOverride}}' => $withCrud
+                ? <<<PHP
+
+    /**
+     * Override de `directAbilities()` del trait HasAbilities (R-PKG-015 BUG-NEW-06).
+     *
+     * Idem rationale que `roles()`: la pivot `ability_user` usa `user_id` pero
+     * Eloquent inferiría `admin_id` del nombre del modelo. Sin este override,
+     * `syncDirectAbilities()` y `assignDirectAbilities()` explotan.
+     */
+    public function directAbilities(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
+    {
+        return \$this->belongsToMany(
+            \Mk\Director\Auth\Models\Ability::class,
+            'ability_user',
+            'user_id',
+            'ability_id',
+        )->wherePivot('user_type', static::class)->withTimestamps();
     }
 PHP
                 : '',
@@ -387,6 +450,12 @@ PHP
         // ── BUG-10 fix (R-PKG-014): check storage:link si disk=public ───
         $this->checkStorageLink();
 
+        // ── BUG-NEW-10 fix (R-PKG-015): check Sanctum instalado ───────────
+        // AuthController y AuthUser del paquete usan `HasApiTokens` trait de
+        // Sanctum. Si el consumer no lo tiene instalado, el módulo crashea al
+        // primer request. Verificamos + avisamos + sugerimos el comando de fix.
+        $this->checkSanctumInstalled();
+
         // ── MEJORA-03 (R-PKG-014): auto-corrrer mk:discover-abilities con --with-auth-rbac ──
         if ($withAuthRbac) {
             $this->newLine();
@@ -458,6 +527,65 @@ PHP
         $this->newLine();
         $this->warn('⚠️  BUG-10: storage:link no ejecutado. Si usás photo_path en --profile-fields,');
         $this->line('   ejecutá `php artisan storage:link` o configurá `mk_director.storage.disk` con otro disk.');
+    }
+
+    /**
+     * BUG-NEW-10 fix (R-PKG-015): verifica que `laravel/sanctum` esté instalado.
+     *
+     * El paquete usa `HasApiTokens` de Sanctum en `AuthUser` y emite tokens vía
+     * `Mk\Director\Auth\Services\TokenIssuer`. Si el consumer no tiene Sanctum
+     * instalado, el módulo crashea al primer request con
+     * `Trait "Laravel\Sanctum\HasApiTokens" not found`.
+     *
+     * Además, si el consumer usa `HasUuids`, la migration default de Sanctum
+     * (con `morphs()` bigint) va a romper al insertar el primer token
+     * (SQLSTATE 22P02). Sugerimos correr `mk:fix:sanctum-uuids` después de
+     * `php artisan install:api`.
+     *
+     * Warn no fatal — el consumer puede usar otro package de tokens.
+     */
+    protected function checkSanctumInstalled(): void
+    {
+        // Verificar si Sanctum está cargado. `class_exists` funciona porque
+        // Composer autoload ya está activo en consola.
+        if (class_exists(\Laravel\Sanctum\HasApiTokens::class)) {
+            // Sanctum instalado. Verificar si la migration usa uuidMorphs (R-PKG-015 BUG-NEW-09).
+            $migrationsPath = function_exists('database_path') ? database_path('migrations') : null;
+            if ($migrationsPath !== null && is_dir($migrationsPath)) {
+                $needsUuidFix = false;
+                foreach (glob($migrationsPath.'/*_create_personal_access_tokens_table.php') ?: [] as $migrationFile) {
+                    $content = file_get_contents($migrationFile);
+                    if (str_contains($content, "\$table->morphs('tokenable')")
+                        && ! str_contains($content, "\$table->uuidMorphs('tokenable')")) {
+                        $needsUuidFix = true;
+                        break;
+                    }
+                }
+                if ($needsUuidFix) {
+                    $this->newLine();
+                    $this->warn('⚠️  BUG-NEW-09: tu migration de Sanctum usa `morphs()` (bigint).');
+                    $this->line('   Si tu modelo AuthUser usa `HasUuids` (UUID en `$table->id`),');
+                    $this->line('   corré:');
+                    $this->line('     php artisan mk:fix:sanctum-uuids');
+                    $this->line('   ANTES de `php artisan migrate`.');
+                }
+            }
+
+            return;
+        }
+
+        $this->newLine();
+        $this->warn('⚠️  BUG-NEW-10: `laravel/sanctum` no está instalado en este proyecto.');
+        $this->line('   El paquete `makroz/director-laravel` usa `HasApiTokens` de Sanctum');
+        $this->line('   para emitir access/refresh tokens. Sin Sanctum, el módulo crashea');
+        $this->line('   con `Trait "Laravel\\Sanctum\\HasApiTokens" not found`.');
+        $this->newLine();
+        $this->line('   Instalá Sanctum manualmente:');
+        $this->line('     composer require laravel/sanctum:^4.3');
+        $this->line('     php artisan install:api --no-interaction');
+        $this->newLine();
+        $this->line('   O, si tu modelo AuthUser usa UUIDs, agregá este paso extra:');
+        $this->line('     php artisan mk:fix:sanctum-uuids');
     }
 
     /**
@@ -740,31 +868,55 @@ PHP
     /**
      * Construye el array_merge dinámico para el response de login() (R-PKG-014 BUG-05).
      *
-     * Sin profile fields: array_merge([id,name,login], [roles, abilities])
-     * Con profile fields: array_merge([id,name,login], $user->only([profile fields]), [roles, abilities])
+     * Sin profile fields: `$user->only([id, name, login]) + ['roles' => ..., 'abilities' => ...]`
+     * Con profile fields: `array_merge($user->only([id, name, login]), $user->only([profile fields]), ['roles' => ..., 'abilities' => ...])`
+     *
+     ** R-PKG-015 BUG-NEW-01: el `,` después de `$base` quedaba AFUERA del `array_merge`
+     * en la versión anterior, generando que PHP interpretara el sub-array como un
+     * sibling del array padre (key `0`). Ahora el `['roles' => ..., 'abilities' => ...]`
+     * queda SIEMPRE como último argumento del `array_merge` (DENTRO de los paréntesis)
+     * — o como `+` cuando no hay profile fields, para mantener el shape consistente.
+     *
+     * R-PKG-015 BUG-NEW-02: el placeholder `{{loginField}}` se generaba literal porque
+     * esta función se ejecuta ANTES del `str_replace('{{loginField}}', $loginField, ...)`
+     * en `generateStub()`. Fix: pasar `$loginField` ya resuelto y emitir el valor directo.
      *
      * Output es PHP válido listo para inyectar en el stub.
      */
-    protected function buildLoginResponseArray(array $profileFieldsRaw): string
+    protected function buildLoginResponseArray(array $profileFieldsRaw, string $loginField): string
     {
-        $base = "['id', 'name', '{{loginField}}']";
+        $baseFields = "['id', 'name', '{$loginField}']";
 
         if (empty($profileFieldsRaw)) {
-            $base = "\$user->only({$base})";
+            // Sin profile fields: `$user->only([id, name, login]) + ['roles' => ..., 'abilities' => ...]`
+            $profileKeys = [];
         } else {
-            $base = "\$user->only({$base})";
+            // Con profile fields: `array_merge($user->only([id, name, login]), $user->only([profile fields]), ['roles' => ..., 'abilities' => ...])`
             $profileKeys = array_keys($profileFieldsRaw);
-            $profileArray = "['".implode("', '", $profileKeys)."']";
-            $base = "array_merge(\$user->only(['id', 'name', '{{loginField}}']), \$user->only({$profileArray}))";
         }
 
-        return "{$base}, [\n"
+        // R-PKG-015 BUG-NEW-01: el sub-array de roles/abilities DEBE estar DENTRO
+        // del array_merge como último argumento (precedido por `, `, no por `)`).
+        $subArray = "[\n"
             ."            'roles' => \$user->roles->map(fn (\$r) => ['id' => \$r->id, 'name' => \$r->name]),\n"
             ."            'abilities' => \$user->abilities->pluck('name')\n"
             ."                ->merge(\$user->directAbilities->pluck('name'))\n"
             ."                ->unique()\n"
             ."                ->values(),\n"
             .'        ]';
+
+        if (empty($profileKeys)) {
+            // Sin profile fields: usar `+` para preservar keys de $user->only si coinciden
+            // (prácticamente imposible porque solo emitimos id/name/loginField, pero es
+            // defensivo). Más limpio que `array_merge` con un solo argumento.
+            return "\$user->only({$baseFields}) + {$subArray}";
+        }
+
+        // Con profile fields: array_merge(..., ..., [...]) — el sub-array es el último
+        // argumento DENTRO de los paréntesis. NO usar `{$baseExpression}, {$subArray}`
+        // porque eso dejaría `, [...]` AFUERA del array_merge (el bug original).
+        $profileFieldsArray = "['".implode("', '", $profileKeys)."']";
+        return "array_merge(\$user->only({$baseFields}), \$user->only({$profileFieldsArray}), {$subArray})";
     }
 
 /**
@@ -930,10 +1082,14 @@ PHP
 PHP,
 
             // ── Ability check en /me ────────────────────────────────────
-            '{{rbacAbilityCheckMe}}' => "    \$this->authorizeAbility('me', \$request->user());\n",
+            // R-PKG-015 OBS-NEW-02: indentación correcta (8 espacios, no 4).
+            // El stub ya provee 8 espacios antes del placeholder; emitimos 0
+            // adicionales para que el código quede alineado con el resto del método.
+            '{{rbacAbilityCheckMe}}' => "        \$this->authorizeAbility('me', \$request->user());\n",
 
             // ── Ability check en /logout ────────────────────────────────
-            '{{rbacAbilityCheckLogout}}' => "    \$this->authorizeAbility('logout', \$user);\n",
+            // R-PKG-015 OBS-NEW-02: idem.
+            '{{rbacAbilityCheckLogout}}' => "        \$this->authorizeAbility('logout', \$user);\n",
 
             // ── Audit event: login success ──────────────────────────────
             '{{rbacAuditLoginSuccess}}' => <<<PHP
@@ -1235,8 +1391,14 @@ PHP,
             // R-PKG-014 BUG-02 fix: emite bloque completo /** ... */ cuando hay
             // profile fields. El stub antes tenía `/**` después del placeholder,
             // lo que resultaba en docblock suelto.
+            //
+            // R-PKG-015 BUG-NEW-11 fix: indentación de 5 espacios para alinear
+            // con `     *` del docblock. La versión anterior emitía 1 espacio
+            // (` * @property`) que resultaba en docblock desalineado y confuso
+            // para IDEs/PHPStan. También se agregó el header descriptivo
+            // "Profile fields per-scope." en el wrapper del docblock.
             $phpType = $this->profileFieldPhpType($type);
-            $docblock .= " * @property {$phpType} \${$key}\n";
+            $docblock .= "     * @property {$phpType} \${$key}\n";
 
             // Cast entry (solo si no es null — string/text no necesitan cast).
             if ($config['cast'] !== null) {
@@ -1255,8 +1417,15 @@ PHP,
 
         // R-PKG-014 BUG-02 fix: envolver el docblock en /** ... */ para que el
         // stub no genere un docblock suelto.
+        // R-PKG-015 BUG-NEW-11 fix: agregar header "Profile fields per-scope."
+        // descriptivo + alineación correcta de `     *` (5 espacios) + cerrar
+        // con newline antes del `*/`.
         if (! empty($docblock)) {
-            $docblock = "/**\n{$docblock} */\n    ";
+            $docblock = "    /**\n"
+                ."     * Profile fields per-scope (R-PKG-011).\n"
+                ."     *\n"
+                .$docblock
+                ."     */\n";
         }
 
         // Para el método register() y updateProfile(): las reglas se pasan via array.

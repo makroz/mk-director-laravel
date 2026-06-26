@@ -86,18 +86,26 @@ test('BUG-01 fix: stub logout() lookup del user ANTES del authorizeAbility place
     expect($command)->toContain('authorizeAbility(\'logout\', \$user)');
 });
 
-// ── BUG-02: model docblock completo ──────────────────────────────────────
+// ── BUG-02 + R-PKG-015 BUG-NEW-11: model docblock completo ─────────────
 
-test('BUG-02 fix: model docblock se emite como bloque completo, no suelto', function () {
+test('BUG-02 + R-PKG-015 BUG-NEW-11: model docblock se emite como bloque /** ... */ completo con header', function () {
     $stub = modelStub014();
 
     // El stub tiene el placeholder {{profileFieldsDocblock}}.
     expect($stub)->toContain('{{profileFieldsDocblock}}');
 
-    // Verificar que el command emite el bloque /** ... */ cuando hay profile fields.
-    // El código del command tiene la línea exacta: $docblock = "/**\n{$docblock} */\n    ";
+    // R-PKG-015 BUG-NEW-11: el command ahora emite un bloque docblock con
+    //   - header "Profile fields per-scope (R-PKG-011)."
+    //   - líneas de @property indentadas con 5 espacios (alineadas con `     *`)
+    //   - cierre con `\n     */\n` (newline antes del */)
     $command = commandSource014();
-    expect($command)->toMatch('/\$docblock\s*=\s*"\/\*\*\\\\n\{\$docblock\}\s*\*\//');
+
+    // Header descriptivo agregado.
+    expect($command)->toContain('Profile fields per-scope (R-PKG-011)')
+        // Cierre correcto con `     */` + literal `\n` (2 chars) al final del string.
+        ->and($command)->toContain('     */\\n')
+        // @property lines con 5 espacios de indentación (alineadas con `     *`).
+        ->and($command)->toContain('     * @property');
 });
 
 // ── BUG-03: profile fields nullable default + --profile-fields-required ──

@@ -96,4 +96,5 @@ class {{ModuleName}} extends AuthUser
         $this->setAuthScope('{{moduleNameLower}}');
     }
 {{factoryNewFactoryMethod}}
+{{rolesRelationOverride}}{{directAbilitiesRelationOverride}}
 }

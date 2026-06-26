@@ -1,6 +1,15 @@
-// ── CRUD endpoints del scope `{{moduleNameLower}}` (R-PKG-014 BUG-08/MEJORA-02) ──
+<?php
+
+// ── CRUD endpoints del scope `{{moduleNameLower}}` (R-PKG-014 BUG-08/MEJORA-02 + R-PKG-015 BUG-NEW-05) ──
 // Generados por `php artisan mk:make:auth-user {{ModuleName}} --with-crud`.
 // Las rutas usan SmartController que delega a {{ModuleName}}Service via container.
+
+// R-PKG-015 BUG-NEW-05: los 3 controllers deben estar importados. Sin esto,
+// ReflectionException: Class "{{ModuleName}}Controller" does not exist al hacer
+// route:list, porque las rutas referencian FQCNs no resueltos en este namespace.
+use App\Modules\{{ModuleName}}\Http\Controllers\AbilityController;
+use App\Modules\{{ModuleName}}\Http\Controllers\RoleController;
+use App\Modules\{{ModuleName}}\Http\Controllers\{{ModuleName}}Controller;
 
 Route::prefix('api/{{moduleNamePluralLower}}')->middleware('mk.auth:{{moduleNameLower}}')->group(function () {
     Route::get('/',         [{{ModuleName}}Controller::class, 'index']);
