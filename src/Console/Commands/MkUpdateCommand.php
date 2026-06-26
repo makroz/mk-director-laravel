@@ -30,36 +30,106 @@ class MkUpdateCommand extends Command
 
     /**
      * Execute the console command.
+     *
+     * R-PKG-013 (2026-06-26): rediseño interactivo. Antes el command solo
+     * mostraba la "última estable" (vía regex `/^v?\d+\.\d+\.\d+$/` que
+     * filtraba los RCs), dejando invisible v1.6.0-rc2 a usuarios en v1.3.1.
+     * Ahora lista TODAS las versiones superiores a la instalada (incluyendo
+     * pre-releases), las presenta en un menú navegable con flechas (vía
+     * Symfony `choice`), y actualiza a la versión que el dev elija.
      */
     public function handle()
     {
         $this->info("\n🚀 Iniciando actualización interactiva de MK-Director...\n");
 
         $oldVersion = $this->getInstalledVersion();
-        $latestVersion = $this->getLatestVersion();
 
-        $this->line("Tu versión actual es: {$oldVersion} y la última disponible es: {$latestVersion}");
+        if ($oldVersion === 'unknown') {
+            $this->error('❌ No se pudo determinar la versión instalada de makroz/director-laravel.');
+            $this->comment('Verificá que el paquete esté correctamente instalado en composer.json.');
+
+            return 1;
+        }
+
+        // Obtener TODAS las versiones superiores (incluyendo RCs/alpha/beta)
+        $higherVersions = $this->getVersionsHigherThan($oldVersion);
+
+        if (empty($higherVersions)) {
+            $this->info("✅ Ya estás en la última versión disponible ({$oldVersion}). No hay actualizaciones.");
+
+            // Aún así corremos el resto del pipeline (auditoría, status, skills)
+            $this->runDatabaseMigrationsPipeline();
+            if (! $this->option('dry-run')) {
+                $this->call('migrate');
+            }
+            $this->auditCodebaseRisks();
+            $this->info("\nRunning final health check...");
+            $this->call('mk:status');
+            $this->promptForSkillDeploy();
+            $this->info("🏁 Proceso de actualización finalizado.\n");
+
+            return 0;
+        }
+
+        $this->line("Tu versión actual es: <fg=yellow>{$oldVersion}</>");
+        $this->line('Hay <fg=green>'.count($higherVersions).'</> versiones disponibles para actualizar (incluyendo pre-releases):');
+        $this->newLine();
+
+        // Ordenar de mayor a menor (RCs mezcladas con stables)
+        usort($higherVersions, function ($a, $b) {
+            return version_compare(ltrim($b, 'v'), ltrim($a, 'v'));
+        });
+
+        // Construir opciones para el menú navegable
+        $choices = [];
+        foreach ($higherVersions as $i => $version) {
+            $isRc = (bool) preg_match('/(rc|alpha|beta)/i', $version);
+            $isLatestStable = ($i === 0) && ! $isRc;
+
+            $marker = match (true) {
+                $isLatestStable => ' ⭐ (última estable)',
+                $isRc => ' 🧪 (pre-release)',
+                default => '',
+            };
+
+            $choices[] = "v{$version}{$marker}";
+        }
+
+        $selected = $this->choice(
+            '¿A qué versión querés actualizar? (↑↓ navegá con el teclado, Enter para seleccionar)',
+            $choices,
+            0  // default a la primera (la más alta disponible)
+        );
+
+        // Extraer la versión pura del string seleccionado (saca el marker)
+        $targetVersion = (string) preg_replace('/\s+[⭐🧪].*$/u', '', $selected);
+        $targetVersion = ltrim($targetVersion, 'v');
+
+        $this->newLine();
+        $this->info("📌 Versión seleccionada: <fg=cyan>v{$targetVersion}</>");
+        $this->newLine();
 
         if ($this->option('dry-run')) {
-            $this->comment("\n[Simulación] Se omitirá la descarga e instalación.");
+            $this->comment("[Simulación] Se omitirá la descarga e instalación de v{$targetVersion}.");
         } else {
-            if (! $this->confirm('¿Querés actualizar?', true)) {
+            if (! $this->confirm("¿Confirmás la actualización de {$oldVersion} → v{$targetVersion}?", true)) {
                 $this->comment('Actualización cancelada por el usuario.');
 
                 return 0;
             }
-            $this->runComposerUpdate();
+
+            $this->runComposerUpdate($targetVersion);
         }
 
-        // Re-read installed version after possible update
+        // Re-leer la versión instalada después del posible update
         $newVersion = $this->getInstalledVersion();
 
-        if ($oldVersion !== $newVersion && $newVersion !== 'unknown' && $oldVersion !== 'unknown') {
+        if ($oldVersion !== $newVersion && $newVersion !== 'unknown') {
             $this->info("📈 Transición de versión: {$oldVersion} -> {$newVersion}");
         } else {
             $this->info("✅ Versión del paquete: {$newVersion} (sin cambios).");
-            if ($latestVersion !== 'unknown' && version_compare(ltrim($newVersion, 'v'), ltrim($latestVersion, 'v'), '<')) {
-                $this->warn("⚠️  ADVERTENCIA: La versión instalada ({$newVersion}) sigue siendo menor que la última disponible ({$latestVersion}).");
+            if ($newVersion !== 'unknown' && version_compare(ltrim($newVersion, 'v'), ltrim($targetVersion, 'v'), '<')) {
+                $this->warn("⚠️  ADVERTENCIA: La versión instalada ({$newVersion}) sigue siendo menor que la solicitada ({$targetVersion}).");
                 $this->warn('Esto puede deberse a la caché de Composer o CDN.');
                 $this->comment("Sugerencia: Ejecutá 'composer clear-cache' y volvé a correr 'php artisan mk:update'.");
             }
@@ -85,6 +155,8 @@ class MkUpdateCommand extends Command
         $this->promptForSkillDeploy();
 
         $this->info("🏁 Proceso de actualización finalizado.\n");
+
+        return 0;
     }
 
     /**
@@ -138,9 +210,17 @@ class MkUpdateCommand extends Command
     }
 
     /**
-     * Obtiene la última versión estable desde el API de Packagist.
+     * Obtiene TODAS las versiones publicadas en Packagist que son mayores
+     * a la versión instalada, incluyendo pre-releases (rc/alpha/beta).
+     *
+     * R-PKG-013 (2026-06-26): la implementación previa filtraba con
+     * `/^v?\d+\.\d+\.\d+$/`, lo que ocultaba cualquier versión con sufijo
+     * (-rc1, -beta, etc.). Bug reportado por Mario al correr `mk:update`
+     * en RETO y ver "última v1.4.0" cuando v1.6.0-rc2 ya estaba en Packagist.
+     * Ahora se devuelven TODAS las versiones superiores para que el usuario
+     * elija interactivamente con `choice()`.
      */
-    protected function getLatestVersion(): string
+    protected function getVersionsHigherThan(string $currentVersion): array
     {
         try {
             $response = Http::timeout(5)->get('https://repo.packagist.org/p2/makroz/director-laravel.json');
@@ -149,72 +229,71 @@ class MkUpdateCommand extends Command
                 $items = $data['packages']['makroz/director-laravel'] ?? [];
                 $versions = array_column($items, 'version');
 
-                return $this->getLatestStableVersion($versions);
+                $higher = [];
+                $currentNorm = ltrim($currentVersion, 'v');
+
+                foreach ($versions as $version) {
+                    // Skip branches de desarrollo
+                    if (str_contains($version, 'dev-')) {
+                        continue;
+                    }
+                    if (str_ends_with($version, '-dev') || str_contains($version, 'x-dev')) {
+                        continue;
+                    }
+
+                    $versionNorm = ltrim($version, 'v');
+
+                    // version_compare maneja correctamente sufijos -rc1, -beta, etc.
+                    // siguiendo semver: 1.6.0-rc2 > 1.6.0-rc1 > 1.6.0 > 1.5.0
+                    if (version_compare($versionNorm, $currentNorm, '>')) {
+                        $higher[] = $version;
+                    }
+                }
+
+                return $higher;
             }
-        } catch (\Throwable) {
-            // silent fallback
+        } catch (\Throwable $e) {
+            $this->warn('⚠️  No se pudo conectar con Packagist para listar versiones disponibles.');
+            $this->comment('Verificá tu conexión a internet. Si persistí, corré `composer require makroz/director-laravel:<version>` manualmente.');
         }
 
-        return 'unknown';
+        return [];
     }
 
     /**
-     * Filtra la lista de versiones para encontrar la versión estable más alta.
+     * Ejecuta `composer require makroz/director-laravel:vX.Y.Z` en segundo plano.
+     * R-PKG-013: antes hacía `composer update` (actualizaba a la última según
+     * el constraint del composer.json). Ahora respeta la versión específica
+     * que el usuario eligió del menú interactivo.
      */
-    protected function getLatestStableVersion(array $versions): string
+    protected function runComposerUpdate(string $targetVersion)
     {
-        $stableVersions = [];
-        foreach ($versions as $version) {
-            if (preg_match('/^v?\d+\.\d+\.\d+$/', $version)) {
-                $stableVersions[] = $version;
-            }
-        }
-
-        if (empty($stableVersions)) {
-            return 'unknown';
-        }
-
-        usort($stableVersions, function ($a, $b) {
-            $normA = ltrim($a, 'v');
-            $normB = ltrim($b, 'v');
-
-            return version_compare($normA, $normB);
-        });
-
-        return end($stableVersions);
-    }
-
-    /**
-     * Ejecuta el comando composer update en segundo plano.
-     */
-    protected function runComposerUpdate()
-    {
-        $this->comment("Ejecutando 'composer update makroz/director-laravel'...");
+        $this->comment("Ejecutando 'composer require makroz/director-laravel:v{$targetVersion}'...");
 
         try {
-            // Usamos Symfony Process nativo en Laravel/Illuminate
-            $process = new Process(['composer', 'update', 'makroz/director-laravel']);
-            $process->setTimeout(300); // 5 minutos de tiempo de espera
+            // Symfony Process nativo de Laravel/Illuminate
+            $process = new Process(['composer', 'require', "makroz/director-laravel:v{$targetVersion}"]);
+            $process->setTimeout(300); // 5 minutos
 
             $process->start();
 
             $this->output->write('Descargando y actualizando dependencias... ');
             while ($process->isRunning()) {
                 $this->output->write('.');
-                usleep(1000000); // esperar 1 segundo
+                usleep(1000000);
             }
             $this->line('');
 
             if ($process->isSuccessful()) {
                 $this->info('✅ Composer se ejecutó correctamente.');
             } else {
-                $this->error('❌ Error al ejecutar composer update:');
+                $this->error('❌ Error al ejecutar composer require:');
                 $this->line($process->getErrorOutput());
                 $this->line($process->getOutput());
             }
         } catch (\Throwable $e) {
             $this->error('❌ No se pudo ejecutar composer de forma automática: '.$e->getMessage());
-            $this->comment("Por favor, corre 'composer update makroz/director-laravel' manualmente en tu terminal.");
+            $this->comment("Por favor, corre 'composer require makroz/director-laravel:v{$targetVersion}' manualmente en tu terminal.");
         }
     }
 

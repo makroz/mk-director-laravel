@@ -866,6 +866,92 @@ public function register(Request $request): JsonResponse
 
 ---
 
+### 3.12 Actualización interactiva con `mk:update` (R-PKG-013)
+
+`php artisan mk:update` es el command de **auto-actualización del paquete**: detecta la versión instalada vía `InstalledVersions::getPrettyVersion()`, consulta Packagist por versiones superiores, deja al dev elegir interactivamente cuál instalar, corre `composer require`, y luego audita el schema + código del proyecto buscando incompatibilidades con la nueva versión.
+
+#### Uso
+
+```bash
+# Default: menú interactivo con todas las versiones superiores
+php artisan mk:update
+
+# Simular sin ejecutar composer (útil para CI/dry-run)
+php artisan mk:update --dry-run
+```
+
+#### Output típico (versión instalada v1.3.1, última publicada v1.6.0-rc2)
+
+```
+🚀 Iniciando actualización interactiva de MK-Director...
+
+Tu versión actual es: v1.3.1
+Hay 7 versiones disponibles para actualizar (incluyendo pre-releases):
+
+  [0] v1.6.0-rc2 🧪 (pre-release)
+  [1] v1.6.0-rc1 🧪 (pre-release)
+  [2] v1.5.0
+  [3] v1.4.0 ⭐ (última estable)
+  [4] v1.3.2
+  [5] v1.3.1
+  [6] v1.3.0
+
+¿A qué versión querés actualizar? (↑↓ navegá con el teclado, Enter para seleccionar) [0]:
+```
+
+El dev navega con flechas ↑↓, presiona Enter, confirma, y `composer require makroz/director-laravel:vX.Y.Z` corre en segundo plano.
+
+#### Diferencia vs versiones previas
+
+| Aspecto | Antes (≤ v1.6.0-rc2) | Ahora (≥ v1.6.0-rc3) |
+|---|---|---|
+| Versiones mostradas | Solo `vX.Y.Z` (regex `/^v?\d+\.\d+\.\d+$/`) | **Todas** las superiores (RCs, betas, alphas incluidas) |
+| Selección | "Última estable" hardcoded | Menú navegable con ↑↓ + Enter |
+| Flags extra | Ninguno | Ninguno (no `--include-rc`, no `--channel=stable`) |
+| Composer command | `composer update makroz/director-laravel` (constraint del composer.json) | `composer require makroz/director-laravel:vX.Y.Z` (versión exacta) |
+| Markers visuales | — | `⭐ (última estable)`, `🧪 (pre-release)` |
+
+#### Bug que arregla
+
+Pre-v1.6.0-rc3, el filtro `/^v?\d+\.\d+\.\d+$/` ocultaba cualquier versión con sufijo. Si estabas en `v1.3.1`, el command decía:
+
+```
+Tu versión actual es: v1.3.1 y la última disponible es: v1.4.0
+```
+
+…incluso cuando `v1.6.0-rc2` ya estaba en Packagist. Bug detectado por Mario en RETO. Fix: la nueva implementación consulta TODAS las versiones y filtra con `version_compare($versionNorm, $currentNorm, '>')`, que sí respeta semver + sufijos `-rcN`/`-betaN`/`-alphaN`.
+
+#### Pipeline completo post-selección
+
+Una vez elegida la versión:
+
+1. **`composer require makroz/director-laravel:vX.Y.Z`** (Symfony Process, 5min timeout).
+2. **Re-chequeo de versión instalada** (advertencia si quedó por debajo de la solicitada → cache de Composer).
+3. **`runDatabaseMigrationsPipeline()`** — si el proyecto viene de v1.1 (BIGINT id), confirma backup y migra `auth_users.id` a UUID (CHAR 36). Irreversible.
+4. **`php artisan migrate`** — corre migrations estándar de Laravel.
+5. **`auditCodebaseRisks()`** — escanea modelos y routes del proyecto:
+   - Modelos con `use HasTenantScope` sin `protected static bool $usesTenant` (opt-in en v1.2+, hay que declararlo explícito).
+   - Routes con `mk.ability:''` (vacío) → error 500 en v1.2+. Hay que especificar al menos una ability.
+6. **`php artisan mk:status`** — health check final de SmartControllers.
+7. **`promptForSkillDeploy()`** — pregunta si querés deployar las skills nuevas de la agencia que aún no estén en el proyecto.
+
+#### Casos de uso
+
+| Situación | Recomendación |
+|---|---|
+| Quiero el último RC para dogfooding de RETO | `mk:update` → elegir `[0] vX.Y.Z-rcN 🧪` |
+| Quiero estable para producción | `mk:update` → elegir la opción con `⭐ (última estable)` |
+| Necesito quedarme en una versión específica | `mk:update` → elegir manualmente la versión del menú |
+| Quiero ver qué cambios vendrían sin instalar | `mk:update --dry-run` (lista versiones pero no ejecuta composer) |
+| CI / scripts automatizados | No usar `mk:update` (es interactivo). Usar `composer require makroz/director-laravel:vX.Y.Z` directo |
+
+#### Spec
+
+- Sprint: `openspec/changes/2026-06-26-mk-update-interactive/`
+- Tests: 5 Pest tests source-parsing en `tests/Unit/MkUpdateCommandTest.php` (44 assertions, todos verde).
+
+---
+
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)
 
 Tanto para **Next.js** como para **React Native**, el consumo de listas es estandarizado mediante parámetros URL:
