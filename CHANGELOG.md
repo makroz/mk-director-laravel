@@ -5,6 +5,61 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0-rc4] - 2026-06-26
+
+### Added
+
+- **`php artisan mk:make:auth-user {Scope} --with-crud` flag** (R-PKG-014 MEJORA-02 / BUG-08). Genera CRUD completo del scope + RBAC triada: `AdminController` + `RoleController` + `AbilityController` (todos extendiendo `SmartController`), 4 `FormRequest`s, 3 `JsonResource`s, 2 DTOs readonly (`AdminData`, `AdminFilterData`), `Repository` + interface, `Service`, `Factory` DDD, `Seeder` con 4 roles predefinidos (super-admin, admin, editor, viewer). Total: 17 archivos nuevos. El service provider se extiende automáticamente con el binding del repository. Ortogonal con `--with-auth-rbac`, `--login-field`, `--profile-fields`.
+- **`mk:auth:create-super-admin --roles=<csv>`** (R-PKG-014 MEJORA-04). Siembra múltiples roles predefinidos (super-admin/admin/editor/viewer) en una sola corrida, cada uno con su set de abilities pre-asignadas. Override el método `roleAbilitiesMap()` para customizar la jerarquía.
+- **`--profile-fields-required=<csv>` flag** (R-PKG-014 BUG-03 fix). Override del validation default `nullable` a `required` para profile fields específicos. Default BC: todos nullable.
+- **Prefijo `!` en `--profile-fields=<csv>`** (R-PKG-014 BUG-09 fix). Marca el field como `unique` en la migration. Ej: `--profile-fields=full_name,!ci,phone` → `ci` queda `->unique()->nullable()`.
+- **`Mk\Director\Auth\Services\RefreshTokenParser`** (R-PKG-014 BUG-07 fix). Helper para parsear tokens Sanctum v4 `<id>|<plaintext>`. Lanza `InvalidRefreshTokenException` si el formato es inválido.
+- **`TokenIssuer::rotateRefreshToken($refreshToken, $expectedScope)`** (R-PKG-014 BUG-07 fix). Valida el refresh_token, hashea solo el plaintext, busca en `personal_access_tokens`, emite un nuevo access_token con el mismo `auth_scope`, opcionalmente rota el refresh_token (config `mk_director.auth.refresh.rotate_on_refresh`). Defense-in-depth contra escalación de scope vía refresh.
+- **`AuthController::refresh()`, `reset()`, `forgot()` implementación completa** (R-PKG-014 BUG-07 fix). Reemplazan los TODOs con código funcional usando `TokenIssuer::rotateRefreshToken()`, `RefreshTokenParser`, `Hash::check()`, `personal_access_tokens`, `{scope}_password_reset_tokens`. Emite `AuthEvent` para audit log.
+- **`AuthController::login()` response extendida** (R-PKG-014 BUG-05 fix). Ahora incluye profile fields + roles + abilities (no solo `id, name, {loginField}`). Built dinámicamente via `{{loginResponseArray}}` placeholder.
+- **`AuthController::me()` eager-load** (R-PKG-014 BUG-06 fix). Hace `$user->loadMissing(['roles', 'directAbilities'])` antes del `sendResponse` para que `autoTransform()` serialice correctamente.
+- **`AuthController::logout()` lookup order fix** (R-PKG-014 BUG-01 fix). `$user = $request->user()` ahora ocurre ANTES del `authorizeAbility('logout', $user)`. BC: el bug solo afectaba con `--with-auth-rbac`.
+- **Storage link check** (R-PKG-014 BUG-10 fix). Al generar un scope con `--profile-fields=photo_path,...`, si `mk_director.storage.disk === 'public'` y `public/storage` no existe, warn al dev para que corra `php artisan storage:link`.
+- **Auto `mk:discover-abilities`** (R-PKG-014 MEJORA-03). Si el scope se genera con `--with-auth-rbac`, el scaffolder corre `mk:discover-abilities` automáticamente al final para tener las abilities en DB antes del primer uso.
+- **Factory DDD helpers** (R-PKG-014 MEJORA-07). Cuando se genera con `--with-crud`, el modelo incluye `use HasFactory` + override `newFactory()` apuntando a la factory DDD en `App\Modules\{Scope}\Database\Factories\{Scope}Factory`.
+- **Ability naming convention docs** (R-PKG-014 MEJORA-05). Nueva sección en `DEVELOPER_GUIDE.md` documentando la convención `'auth.{scope}.{endpoint}'` para abilities de `--with-auth-rbac`.
+
+### Changed
+
+- **Profile fields default validation `nullable`** (R-PKG-014 BUG-03 fix). Antes era `required`, lo cual contradecía la migration (`->nullable()`). Para forzar `required` por field, pasar `--profile-fields-required=<csv>`.
+- **`resolveProfileFields()` retorna metadata `{type, unique}`** (R-PKG-014 BUG-09 fix). Antes retornaba solo `[$key => $type]`. La firma ahora es `array<string, array{type: string, unique: bool}>|null`. BC preservada en el output (los stubs siguen igual).
+- **`mk:auth:create-super-admin` ahora itera roles** (R-PKG-014 MEJORA-04). Antes solo creaba un super-admin. Ahora itera sobre `$rolesToSeed` y asigna cada role + abilities del map.
+
+### Fixed
+
+- **BUG-01**: `logout()` usaba `$user` antes de definirlo (regression de R-PKG-010).
+- **BUG-02**: Model docblock `@property` suelto (sin `/** ... */` de apertura/cierre).
+- **BUG-03**: `register()`/`updateProfile()` validation `required` vs migration `nullable()`.
+- **BUG-04**: `register()` no aceptaba `password`.
+- **BUG-05**: `login()` retornaba solo `id, name, {loginField}`.
+- **BUG-06**: `me()` no hacía eager-load de `roles` + `directAbilities`.
+- **BUG-07**: `refresh()` y `reset()` venían como TODO sin implementación.
+- **BUG-08**: scaffolder no generaba CRUD del scope (CRUD ahora opt-in via `--with-crud`).
+- **BUG-09**: `--profile-fields` no permitía `unique` constraint (ahora con prefijo `!`).
+- **BUG-10**: scaffolder no verificaba `storage:link`.
+
+### Migration desde v1.6.0-rc3
+
+- **Sin acción requerida** para consumers que NO usen `--profile-fields` (default BC: validation no aplica). Para consumers que SÍ usen `--profile-fields`:
+  - **Si tenían validación `required` antes**: agregar `--profile-fields-required=<campos>` para mantener el comportamiento.
+  - **Si querían `unique` en algún field**: antes lo agregaban a mano en la migration. Ahora usar prefijo `!` (`!ci`) y regenerar.
+- **`AuthController::register()` requiere `password` por default** (BUG-04 fix). Si tu consumer override `register()` con custom validation, no aplica. Si lo dejó default del scaffolder, ahora `password` es required (antes era imposible registrarse sin password).
+- **`AuthController::logout()` con `--with-auth-rbac` reordenado** (BUG-01 fix). Si tu consumer override `logout()` con ability check custom, no aplica. El fix solo cambia el orden del lookup.
+- **`AuthController::login()`/`me()` ahora retorna profile fields + roles + abilities** (BUG-05/BUG-06 fix). Si tu front esperaba solo `id, name, email` en `/api/{scope}/auth/login`, ahora hay más keys. Tu front puede ignorarlas o usarlas.
+
+### Spec
+
+- Sprint: `.makromania/projects/mk-director/openspec/changes/2026-06-26-auth-user-feedback-fixes/`
+- Feedback origen: [`.makromania/projects/reto/modules/admin/FEEDBACK-TO-MK-DIRECTOR.md`](../../reto/modules/admin/FEEDBACK-TO-MK-DIRECTOR.md) (RETO v1.1 consumer).
+- 17 archivos nuevos (stubs), 5 modificados (command + stubs + service helpers), 11 tests nuevos.
+
+---
+
 ## [1.6.0-rc3] - 2026-06-26
 
 ### Changed
