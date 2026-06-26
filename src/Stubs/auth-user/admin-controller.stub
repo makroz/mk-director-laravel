@@ -1,0 +1,88 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Http\Controllers;
+
+use App\Modules\{{ModuleName}}\Http\Requests\AssignRolesRequest;
+use App\Modules\{{ModuleName}}\Http\Requests\AssignDirectAbilitiesRequest;
+use App\Modules\{{ModuleName}}\Http\Requests\StoreAdminRequest;
+use App\Modules\{{ModuleName}}\Http\Requests\UpdateAdminRequest;
+use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
+use App\Modules\{{ModuleName}}\Services\{{ModuleName}}Service;
+use Illuminate\Http\JsonResponse;
+use Mk\Director\Controllers\SmartController;
+
+/**
+ * {{ModuleName}}Controller — CRUD estándar del scope `{{moduleNameLower}}`.
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ * Extiende `SmartController` para el CRUD; los endpoints `assignRoles` /
+ * `assignDirectAbilities` son específicos del RBAC del scope (operan sobre
+ * las tablas globales del paquete: `roles`, `abilities`, `role_user` con
+ * `user_type` polimórfico).
+ *
+ * **MME (R-MK-001)**: este controller es interno del bounded context
+ * `App\Modules\{{ModuleName}}`. NO debe importar modelos de otros módulos.
+ *
+ * **Permisos**: la authorization se delega a `SmartController` vía `$mkConfig`.
+ * Si necesitás abilities custom (e.g. `{{moduleNameLower}}.{{moduleNamePluralLower}}.viewAny`),
+ * agregalas a `mk_director.abilities` y el `AbilityResolver` las resolverá.
+ */
+class {{ModuleName}}Controller extends SmartController
+{
+    /**
+     * @var array<string, mixed>
+     */
+    protected array $mkConfig = [
+        'model'           => {{ModuleName}}::class,
+        'service'         => {{ModuleName}}Service::class,
+        'store_request'   => StoreAdminRequest::class,
+        'update_request'  => UpdateAdminRequest::class,
+        'searchable'      => ['name', 'full_name', 'email', 'ci'],
+        'with'            => ['roles', 'directAbilities'],
+        'allowedIncludes' => ['roles', 'roles.abilities', 'directAbilities'],
+        'features'        => [
+            'auto_cache' => true,
+            'remember_state' => true,
+        ],
+    ];
+
+    /**
+     * POST /api/{{moduleNamePluralLower}}/{id}/roles
+     *
+     * Asigna roles (por nombre) al {{ModuleName}}. Body: `{"roles": ["admin", "editor"]}`.
+     * Sincroniza (reemplaza) los roles existentes.
+     */
+    public function assignRoles(string $id, AssignRolesRequest $request): JsonResponse
+    {
+        /** @var {{ModuleName}} ${{moduleNameLower}} */
+        ${{moduleNameLower}} = {{ModuleName}}::findOrFail($id);
+
+        app({{ModuleName}}Service::class)->syncRoles(${{moduleNameLower}}, $request->validated('roles'));
+
+        return $this->sendResponse(
+            ${{moduleNameLower}}->fresh()->load('roles'),
+            'Roles asignados.',
+        );
+    }
+
+    /**
+     * POST /api/{{moduleNamePluralLower}}/{id}/abilities
+     *
+     * Asigna abilities directas (bypass role hierarchy). Body: `{"abilities": ["admin.dashboard.view"]}`.
+     * Sincroniza las abilities directas del {{ModuleName}}.
+     */
+    public function assignDirectAbilities(string $id, AssignDirectAbilitiesRequest $request): JsonResponse
+    {
+        /** @var {{ModuleName}} ${{moduleNameLower}} */
+        ${{moduleNameLower}} = {{ModuleName}}::findOrFail($id);
+
+        app({{ModuleName}}Service::class)->syncDirectAbilities(${{moduleNameLower}}, $request->validated('abilities'));
+
+        return $this->sendResponse(
+            ${{moduleNameLower}}->fresh()->load('directAbilities'),
+            'Abilities directas asignadas.',
+        );
+    }
+}

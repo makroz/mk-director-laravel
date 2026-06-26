@@ -123,8 +123,10 @@ test('auth-user.auth-controller.stub uses {{loginField}} in validation + lookup'
     // Lookup uses {{loginField}} (no hardcoded 'email').
     expect($stub)->toContain("->where('{{loginField}}', \$credentials['{{loginField}}'])");
 
-    // Response incluye el campo.
-    expect($stub)->toContain("\$user->only(['id', 'name', '{{loginField}}'])");
+    // R-PKG-014 BUG-05 fix: response ahora es dinámica via {{loginResponseArray}}
+    // (incluye profile fields + roles + abilities). Ya NO pineamos el formato
+    // literal $user->only([...]).
+    expect($stub)->toContain('{{loginResponseArray}}');
 
     // Error response key parametrizado.
     expect($stub)->toContain("['{{loginField}}' => ['Credenciales inválidas.']]");

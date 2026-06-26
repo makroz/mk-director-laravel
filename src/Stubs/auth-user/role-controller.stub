@@ -1,0 +1,62 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Http\Controllers;
+
+use App\Modules\{{ModuleName}}\Services\{{ModuleName}}Service;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Mk\Director\Auth\Models\Role;
+use Mk\Director\Controllers\SmartController;
+
+/**
+ * RoleController — CRUD de roles del scope `{{moduleNameLower}}`.
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ *
+ * Los roles son GLOBALES del paquete (`Mk\Director\Auth\Models\Role`).
+ * El sync de abilities a un role se hace via `syncAbilities()`.
+ *
+ * **MME (R-MK-001)**: NO importar modelos de otros módulos.
+ */
+class RoleController extends SmartController
+{
+    /**
+     * @var array<string, mixed>
+     */
+    protected array $mkConfig = [
+        'model'           => Role::class,
+        'service'         => {{ModuleName}}Service::class,
+        'searchable'      => ['name', 'description'],
+        'with'            => ['abilities'],
+        'allowedIncludes' => ['abilities'],
+        'features'        => [
+            'auto_cache' => true,
+            'remember_state' => true,
+        ],
+    ];
+
+    /**
+     * PUT /api/roles/{id}/abilities
+     *
+     * Sincroniza (reemplaza) las abilities del role. Body: `{"abilities": ["admin.dashboard.view"]}`.
+     */
+    public function syncAbilities(string $id, Request $request): JsonResponse
+    {
+        /** @var Role $role */
+        $role = Role::findOrFail($id);
+
+        $data = $request->validate([
+            'abilities'   => ['required', 'array'],
+            'abilities.*' => ['required', 'string'],
+        ]);
+
+        app({{ModuleName}}Service::class)->syncRoleAbilities($role, $data['abilities']);
+
+        return $this->sendResponse(
+            $role->fresh()->load('abilities'),
+            'Abilities del role sincronizadas.',
+        );
+    }
+}

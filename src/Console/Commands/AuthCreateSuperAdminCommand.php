@@ -46,14 +46,52 @@ class AuthCreateSuperAdminCommand extends Command
     protected $signature = 'mk:auth:create-super-admin
         {--email= : Email del super-admin (omite el prompt)}
         {--name= : Nombre (omite el prompt)}
-        {--password= : Password en texto plano (omite el prompt; preferir prompt o env en CI)}';
+        {--password= : Password en texto plano (omite el prompt; preferir prompt o env en CI)}
+        {--roles= : CSV de roles a sembrar en una corrida (omite → solo super-admin). Roles soportados: super-admin, admin, editor, viewer. (R-PKG-014 MEJORA-04)}';
 
     /**
      * The console command description.
      *
      * @var string
      */
-    protected $description = 'Crea el primer usuario super-admin (scope=admin, role=super-admin, ability=*).';
+    protected $description = 'Crea el primer usuario super-admin (scope=admin, role=super-admin, ability=*). Use --roles=super-admin,admin,editor,viewer para sembrar los 4 roles predefinidos.';
+
+    /**
+     * Definición de los roles predefinidos (R-PKG-014 MEJORA-04).
+     *
+     * Cada rol tiene un set de abilities pre-asignadas:
+     *   - super-admin: `*` (bypass total).
+     *   - admin: CRUD completo (`{scope}.{resource}.{action}` para todos los verbos).
+     *   - editor: view + update (no delete ni create).
+     *   - viewer: solo view.
+     *
+     * Override este map en subclases para customizar la jerarquía.
+     */
+    protected function roleAbilitiesMap(): array
+    {
+        $scope = 'admin';
+        $resource = 'admins';
+
+        return [
+            'super-admin' => ['*'],
+            'admin' => [
+                "{$scope}.{$resource}.viewAny",
+                "{$scope}.{$resource}.view",
+                "{$scope}.{$resource}.create",
+                "{$scope}.{$resource}.update",
+                "{$scope}.{$resource}.delete",
+            ],
+            'editor' => [
+                "{$scope}.{$resource}.viewAny",
+                "{$scope}.{$resource}.view",
+                "{$scope}.{$resource}.update",
+            ],
+            'viewer' => [
+                "{$scope}.{$resource}.viewAny",
+                "{$scope}.{$resource}.view",
+            ],
+        ];
+    }
 
     public function handle(): int
     {
@@ -69,7 +107,25 @@ class AuthCreateSuperAdminCommand extends Command
             return self::FAILURE;
         }
 
-        // 1. Recolectar credenciales.
+        // ── Resolver roles a sembrar (R-PKG-014 MEJORA-04) ──
+        // Default BC: solo super-admin.
+        $rolesRaw = trim((string) $this->option('roles'));
+        $rolesToSeed = $rolesRaw === ''
+            ? ['super-admin']
+            : array_values(array_filter(array_map('trim', explode(',', $rolesRaw))));
+
+        $roleAbilitiesMap = $this->roleAbilitiesMap();
+
+        // Validar roles contra el map.
+        foreach ($rolesToSeed as $roleName) {
+            if (! isset($roleAbilitiesMap[$roleName])) {
+                $this->error("Rol no soportado: `{$roleName}`. Roles válidos: ".implode(', ', array_keys($roleAbilitiesMap)));
+
+                return self::FAILURE;
+            }
+        }
+
+        // 1. Recolectar credenciales base.
         $email = $this->option('email') ?: $this->ask('Email del super-admin');
         $name = $this->option('name') ?: $this->ask('Nombre del super-admin');
 
@@ -100,9 +156,9 @@ class AuthCreateSuperAdminCommand extends Command
             return self::SUCCESS;
         }
 
-        // 3. Crear el admin. La clase generada por mk:make:auth-user
-        //    setea auth_scope='admin' en el constructor; no hace falta
-        //    pasarlo como atributo.
+        // 3. Crear el admin base. El email es el mismo para todos los roles
+        //    (cada role se vincula al MISMO user). Esto modela el caso real
+        //    donde un admin acumula roles (e.g. super-admin + admin).
         /** @var AuthUser $admin */
         $admin = $adminModel::create([
             'name' => $name,
@@ -110,19 +166,21 @@ class AuthCreateSuperAdminCommand extends Command
             'password' => Hash::make($password),
         ]);
 
-        // 4. Asignar rol "super-admin" (lo crea si no existe, con guard
-        //    = auth_scope del user = "admin").
-        $admin->assignRole('super-admin');
+        // 4. Asignar roles + abilities a cada uno.
+        foreach ($rolesToSeed as $roleName) {
+            $admin->assignRole($roleName);
 
-        // 5. Asignar ability "*" como grant directo. Esto es lo que
-        //    {@see \Mk\Director\Auth\Services\AbilityResolver} consulta
-        //    y matchea con cualquier ability. Más robusto que depender
-        //    de que el rol "super-admin" tenga la ability "*" en su
-        //    set de abilities.
-        $admin->giveAbilityTo('*');
+            // Otorgar abilities del rol como grants directos.
+            // Para super-admin, esto es `*` (bypass).
+            // Para admin/editor/viewer, son abilities específicas.
+            foreach ($roleAbilitiesMap[$roleName] as $ability) {
+                $admin->giveAbilityTo($ability);
+            }
+        }
 
         $this->newLine();
-        $this->info('✅ Super-admin creado.');
+        $infoVerb = count($rolesToSeed) > 1 ? 'Roles sembrados.' : 'Super-admin creado.';
+        $this->info('✅ '.$infoVerb);
         $this->table(
             ['Campo', 'Valor'],
             [

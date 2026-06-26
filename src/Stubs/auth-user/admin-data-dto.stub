@@ -1,0 +1,67 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\DTOs;
+
+use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
+
+/**
+ * DTO inmutable para los datos de un {{ModuleName}}.
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ *
+ * Se construye desde:
+ *   - `fromRequest()` para input HTTP (create/update)
+ *   - `fromArray()` para hidratación desde DB o fixtures de tests
+ *
+ * `final readonly` — no mutar. Si necesitás cambiar un valor, creá una nueva instancia.
+ */
+final readonly class {{ModuleName}}Data
+{
+    public function __construct(
+        public string $name,
+        public string $email,
+        public ?string $password = null,
+{{profileFieldsFillable}}    ) {}
+
+    /**
+     * Construye desde un Request HTTP. `photo` puede venir como `UploadedFile`
+     * (multipart) o string path (JSON). El Service procesa el upload.
+     */
+    public static function fromRequest(Request $request): self
+    {
+        return new self(
+            name: (string) $request->input('name'),
+            email: (string) $request->input('email'),
+            password: $request->input('password'),
+        );
+    }
+
+    /**
+     * Construye desde un array (hidratación desde DB o fixtures).
+     */
+    public static function fromArray(array $data): self
+    {
+        return new self(
+            name: (string) ($data['name'] ?? ''),
+            email: (string) ($data['email'] ?? ''),
+            password: $data['password'] ?? null,
+        );
+    }
+
+    /**
+     * Convierte a array para persistencia. Excluye `photo` (lo maneja el Service).
+     *
+     * @return array<string, mixed>
+     */
+    public function toArray(): array
+    {
+        return array_filter([
+            'name' => $this->name,
+            'email' => $this->email,
+            'password' => $this->password,
+        ], fn ($v) => $v !== null);
+    }
+}

@@ -502,8 +502,38 @@ php artisan mk:make:auth-user Admin --login-field=ci --with-auth-rbac
         'forgot' => env('MK_AUTH_RATE_LIMIT_FORGOT', '3,1'),
         'reset' => env('MK_AUTH_RATE_LIMIT_RESET', '3,1'),
     ],
+    // v1.6.0-rc4 (R-PKG-014 BUG-07 fix): rotación de refresh tokens.
+    'refresh' => [
+        'rotate_on_refresh' => env('MK_AUTH_REFRESH_ROTATE', false),
+    ],
 ],
 ```
+
+### Ability naming convention for `--with-auth-rbac`
+
+**v1.6.0-rc4 (R-PKG-014 MEJORA-05)**. Convención recomendada:
+
+```php
+'abilities' => [
+    'me' => 'auth.{scope}.me',
+    'logout' => 'auth.{scope}.logout',
+],
+```
+
+Donde `{scope}` es el nombre del scope en snake_case (`admin`, `member`, `partner`, etc.).
+
+**Por qué `auth.{scope}.{endpoint}`**:
+- `auth.*` agrupa abilities del flow de autenticación (no de la lógica de negocio).
+- `{scope}` previene colisiones entre scopes (`auth.admin.me` vs `auth.member.me`).
+- `{endpoint}` es el verbo del endpoint (`me`, `logout`).
+
+**Discovery automático**: después de generar el scope con `--with-auth-rbac`, el scaffolder corre `mk:discover-abilities` automáticamente (MEJORA-03). Si querés registrar estas abilities manualmente:
+
+```bash
+php artisan tinker --execute='\Mk\Director\Auth\Events\AuthEvent::dispatch("auth.ability.register", ["name" => "auth.admin.me", "description" => "View own admin profile"]);'
+```
+
+**Wildcard para super-admin**: el role `super-admin` que crea `mk:auth:create-super-admin --roles=super-admin,admin,editor,viewer` recibe automáticamente la ability wildcard `*` que matchea cualquier otra ability (incluyendo `auth.*`).
 
 ### Cómo registrar un listener para `AuthEvent`
 

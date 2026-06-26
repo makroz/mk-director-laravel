@@ -1,0 +1,45 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Http\Controllers;
+
+use App\Modules\{{ModuleName}}\Services\{{ModuleName}}Service;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Mk\Director\Auth\Models\Ability;
+use Mk\Director\Controllers\SmartController;
+
+/**
+ * AbilityController — CRUD de abilities del scope `{{moduleNameLower}}`.
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ *
+ * Las abilities son GLOBALES del paquete (`Mk\Director\Auth\Models\Ability`)
+ * y se crean/gestionan vía:
+ *   - `mk:discover-abilities` (auto-descubrir desde controllers)
+ *   - `{{ModuleName}}Controller::assignDirectAbilities` (asignar a un user)
+ *
+ * Este controller expone los 5 endpoints estándar. Para policies default-deny,
+ * override en `App\Modules\{{ModuleName}}\Policies\AbilityPolicy` (si la generás
+ * via `mk:module --with-rbac` por separado).
+ *
+ * **MME (R-MK-001)**: NO usar `Role` o `User` directamente — usar `Ability` del paquete.
+ */
+class AbilityController extends SmartController
+{
+    /**
+     * @var array<string, mixed>
+     */
+    protected array $mkConfig = [
+        'model'           => Ability::class,
+        'service'         => {{ModuleName}}Service::class,
+        'searchable'      => ['name', 'description'],
+        'with'            => ['roles'],
+        'allowedIncludes' => ['roles'],
+        'features'        => [
+            'auto_cache' => true,
+            'remember_state' => true,
+        ],
+    ];
+}

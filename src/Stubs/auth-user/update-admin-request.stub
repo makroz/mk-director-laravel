@@ -1,0 +1,40 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
+
+/**
+ * Validación para actualizar un {{ModuleName}} (partial update).
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ *
+ * Todos los campos son `sometimes` — solo se actualiza lo que viene.
+ * `email` y profile fields con `unique` validan IGNORANDO el row actual.
+ */
+class UpdateAdminRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function rules(): array
+    {
+        $id = $this->route('{{moduleNameLower}}')?->id ?? $this->route('{{moduleNameLower}}');
+
+        return [
+            'name' => ['sometimes', 'required', 'string', 'max:255'],
+            'email' => ['sometimes', 'required', 'email', 'max:255', Rule::unique('{{moduleNamePluralLower}}', 'email')->ignore($id)],
+            'password' => ['sometimes', 'nullable', 'string', 'min:8', 'max:255'],
+            'photo' => ['sometimes', 'nullable', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
+{{profileFieldsUniqueRulesUpdate}}
+        ];
+    }
+}

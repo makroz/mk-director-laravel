@@ -1,0 +1,56 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Database\Factories;
+
+use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
+use Illuminate\Database\Eloquent\Factories\Factory;
+use Illuminate\Support\Facades\Hash;
+
+/**
+ * Factory DDD del scope `{{moduleNameLower}}`.
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ *
+ * Vive DENTRO del módulo (`App\Modules\{{ModuleName}}\Database\Factories\{{ModuleName}}Factory`),
+ * NO en `database/factories/`. Laravel la descubre vía `newFactory()` override en el modelo.
+ */
+class {{ModuleName}}Factory extends Factory
+{
+    /**
+     * El modelo que esta factory crea. Apunta al modelo concreto del scope,
+     * NO al abstracto `AuthUser` del paquete.
+     *
+     * @var class-string<{{ModuleName}}>
+     */
+    protected $model = {{ModuleName}}::class;
+
+    public function definition(): array
+    {
+        return [
+            'id' => $this->faker->uuid(),
+            'name' => $this->faker->name(),
+            'email' => $this->faker->unique()->safeEmail(),
+            'password' => Hash::make('password'),
+            'auth_scope' => '{{moduleNameLower}}',
+            'email_verified_at' => now(),
+        ];
+    }
+
+    /**
+     * State: {{moduleNameLower}} inactivo.
+     */
+    public function inactive(): static
+    {
+        return $this->state(fn () => ['is_active' => false]);
+    }
+
+    /**
+     * State: {{moduleNameLower}} con email específico.
+     */
+    public function withEmail(string $email): static
+    {
+        return $this->state(fn () => ['email' => $email]);
+    }
+}

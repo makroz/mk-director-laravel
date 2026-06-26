@@ -169,11 +169,13 @@ test('auth-user.auth-controller.stub has all rbac placeholders', function () {
     expect($stub)->toContain('{{rbacAbilityCheckLogout}}');
     expect($stub)->toContain('{{rbacAuditLoginSuccess}}');
     expect($stub)->toContain('{{rbacAuditLoginFailed}}');
-    expect($stub)->toContain('{{rbacAuditRefreshTodo}}');
     expect($stub)->toContain('{{rbacAuditLogout}}');
     expect($stub)->toContain('{{rbacAuditForgot}}');
-    expect($stub)->toContain('{{rbacAuditResetTodo}}');
     expect($stub)->toContain('{{rbacAuthorizeAbilityMethod}}');
+    // R-PKG-014 BUG-07 fix: refresh() y reset() tienen implementación completa
+    // con auth.refresh.success y auth.password_reset.success. Ya NO son TODO markers.
+    // Los placeholders rbacAuditRefreshTodo y rbacAuditResetTodo se removieron
+    // porque el código siempre emite el audit event ahora.
 });
 
 // ── Stub structure (auth-user.routes.stub) ────────────────────────────

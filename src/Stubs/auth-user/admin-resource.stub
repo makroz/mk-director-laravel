@@ -1,0 +1,41 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Http\Resources;
+
+use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Json\JsonResource;
+
+/**
+ * Resource del modelo {{ModuleName}} para serialización JSON.
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ *
+ * Solo se incluyen relaciones si están `whenLoaded` para evitar N+1.
+ * `photo_url` se calcula via accessor en el modelo (`getPhotoUrlAttribute()`).
+ */
+class {{ModuleName}}Resource extends JsonResource
+{
+    /**
+     * @return array<string, mixed>
+     */
+    public function toArray(Request $request): array
+    {
+        return [
+            'id' => $this->id,
+            'name' => $this->name,
+            'email' => $this->email,
+            'photo_path' => $this->photo_path,
+            'photo_url' => $this->photo_url,
+            'auth_scope' => $this->auth_scope,
+            'roles' => $this->whenLoaded('roles', fn () => $this->roles->map(fn ($r) => [
+                'id' => $r->id,
+                'name' => $r->name,
+            ])),
+            'direct_abilities' => $this->whenLoaded('directAbilities', fn () => $this->directAbilities->pluck('name')),
+            'created_at' => $this->created_at?->toIso8601String(),
+            'updated_at' => $this->updated_at?->toIso8601String(),
+        ];
+    }
+}

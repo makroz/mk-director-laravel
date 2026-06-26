@@ -1,0 +1,37 @@
+// ── CRUD endpoints del scope `{{moduleNameLower}}` (R-PKG-014 BUG-08/MEJORA-02) ──
+// Generados por `php artisan mk:make:auth-user {{ModuleName}} --with-crud`.
+// Las rutas usan SmartController que delega a {{ModuleName}}Service via container.
+
+Route::prefix('api/{{moduleNamePluralLower}}')->middleware('mk.auth:{{moduleNameLower}}')->group(function () {
+    Route::get('/',         [{{ModuleName}}Controller::class, 'index']);
+    Route::get('/{ {{moduleNameLower}}}',     [{{ModuleName}}Controller::class, 'show']);
+    Route::post('/',        [{{ModuleName}}Controller::class, 'store']);
+    Route::put('/{ {{moduleNameLower}}}',     [{{ModuleName}}Controller::class, 'update']);
+    Route::patch('/{ {{moduleNameLower}}}',   [{{ModuleName}}Controller::class, 'update']);
+    Route::delete('/{ {{moduleNameLower}}}',  [{{ModuleName}}Controller::class, 'destroy']);
+
+    // Asignar roles / abilities directas a un {{moduleNameLower}} específico.
+    Route::post('/{ {{moduleNameLower}}}/roles',         [{{ModuleName}}Controller::class, 'assignRoles']);
+    Route::post('/{ {{moduleNameLower}}}/abilities',     [{{ModuleName}}Controller::class, 'assignDirectAbilities']);
+});
+
+// CRUD de Roles del paquete (global).
+Route::prefix('api/roles')->middleware('mk.auth:{{moduleNameLower}}')->group(function () {
+    Route::get('/',         [RoleController::class, 'index']);
+    Route::get('/{role}',     [RoleController::class, 'show']);
+    Route::post('/',        [RoleController::class, 'store']);
+    Route::put('/{role}',     [RoleController::class, 'update']);
+    Route::patch('/{role}',   [RoleController::class, 'update']);
+    Route::delete('/{role}',  [RoleController::class, 'destroy']);
+    Route::put('/{role}/abilities', [RoleController::class, 'syncAbilities']);
+});
+
+// CRUD de Abilities del paquete (global, read-only by default).
+Route::prefix('api/abilities')->middleware('mk.auth:{{moduleNameLower}}')->group(function () {
+    Route::get('/',         [AbilityController::class, 'index']);
+    Route::get('/{ability}',     [AbilityController::class, 'show']);
+    Route::post('/',        [AbilityController::class, 'store']);
+    Route::put('/{ability}',     [AbilityController::class, 'update']);
+    Route::patch('/{ability}',   [AbilityController::class, 'update']);
+    Route::delete('/{ability}',  [AbilityController::class, 'destroy']);
+});

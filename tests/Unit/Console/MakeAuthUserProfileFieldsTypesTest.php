@@ -100,36 +100,40 @@ test('PROFILE_FIELD_TYPES cast entries per type (string/text = null, rest = cast
     expect($source)->toMatch("/'json'\\s*=>\\s*\\[.*?'cast'\\s*=>\\s*'array'/s");
 });
 
-test('PROFILE_FIELD_TYPES validation rules per type (table-driven)', function () {
+test('PROFILE_FIELD_TYPES validation rules per type (table-driven, nullable default R-PKG-014)', function () {
     $source = commandSource012Pft();
 
-    // string → ['required', 'string', 'max:255'].
-    expect($source)->toMatch("/'string'\\s*=>\\s*\\[.*?'validation'\\s*=>\\s*\\[\\s*'required'\\s*,\\s*'string'\\s*,\\s*'max:255'/s");
-    // text → ['required', 'string'] (sin max).
-    expect($source)->toMatch("/'text'\\s*=>\\s*\\[.*?'validation'\\s*=>\\s*\\[\\s*'required'\\s*,\\s*'string'\\s*\\]/s");
-    // int → ['required', 'integer'].
-    expect($source)->toMatch("/'int'\\s*=>\\s*\\[.*?'validation'\\s*=>\\s*\\[\\s*'required'\\s*,\\s*'integer'\\s*\\]/s");
-    // decimal → ['required', 'numeric'].
-    expect($source)->toMatch("/'decimal'\\s*=>\\s*\\[.*?'validation'\\s*=>\\s*\\[\\s*'required'\\s*,\\s*'numeric'\\s*\\]/s");
-    // bool → ['required', 'boolean'].
-    expect($source)->toMatch("/'bool'\\s*=>\\s*\\[.*?'validation'\\s*=>\\s*\\[\\s*'required'\\s*,\\s*'boolean'\\s*\\]/s");
-    // date → ['required', 'date'].
-    expect($source)->toMatch("/'date'\\s*=>\\s*\\[.*?'validation'\\s*=>\\s*\\[\\s*'required'\\s*,\\s*'date'\\s*\\]/s");
-    // datetime → ['required', 'date'] (mismo que date, ADR-008).
-    expect($source)->toMatch("/'datetime'\\s*=>\\s*\\[.*?'validation'\\s*=>\\s*\\[\\s*'required'\\s*,\\s*'date'\\s*\\]/s");
-    // json → ['required', 'array'].
-    expect($source)->toMatch("/'json'\\s*=>\\s*\\[.*?'validation'\\s*=>\\s*\\[\\s*'required'\\s*,\\s*'array'\\s*\\]/s");
+    // R-PKG-014 BUG-03 fix: validation default es 'nullable' (no 'required').
+    // Para forzar required, override via --profile-fields-required=<csv>.
+
+    // string → ['nullable', 'string', 'max:255'].
+    expect($source)->toMatch("/'string'\\s*=>\\s*\\[.*?'validation'\\s*=>\\s*\\[\\s*'nullable'\\s*,\\s*'string'\\s*,\\s*'max:255'/s");
+    // text → ['nullable', 'string'] (sin max).
+    expect($source)->toMatch("/'text'\\s*=>\\s*\\[.*?'validation'\\s*=>\\s*\\[\\s*'nullable'\\s*,\\s*'string'\\s*\\]/s");
+    // int → ['nullable', 'integer'].
+    expect($source)->toMatch("/'int'\\s*=>\\s*\\[.*?'validation'\\s*=>\\s*\\[\\s*'nullable'\\s*,\\s*'integer'\\s*\\]/s");
+    // decimal → ['nullable', 'numeric'].
+    expect($source)->toMatch("/'decimal'\\s*=>\\s*\\[.*?'validation'\\s*=>\\s*\\[\\s*'nullable'\\s*,\\s*'numeric'\\s*\\]/s");
+    // bool → ['nullable', 'boolean'].
+    expect($source)->toMatch("/'bool'\\s*=>\\s*\\[.*?'validation'\\s*=>\\s*\\[\\s*'nullable'\\s*,\\s*'boolean'\\s*\\]/s");
+    // date → ['nullable', 'date'].
+    expect($source)->toMatch("/'date'\\s*=>\\s*\\[.*?'validation'\\s*=>\\s*\\[\\s*'nullable'\\s*,\\s*'date'\\s*\\]/s");
+    // datetime → ['nullable', 'date'] (mismo que date, ADR-008).
+    expect($source)->toMatch("/'datetime'\\s*=>\\s*\\[.*?'validation'\\s*=>\\s*\\[\\s*'nullable'\\s*,\\s*'date'\\s*\\]/s");
+    // json → ['nullable', 'array'].
+    expect($source)->toMatch("/'json'\\s*=>\\s*\\[.*?'validation'\\s*=>\\s*\\[\\s*'nullable'\\s*,\\s*'array'\\s*\\]/s");
 });
 
 // ── resolveProfileFields signature ──────────────────────────────────────
 
-test('resolveProfileFields retorna array<string, string> (key => type)', function () {
+test('resolveProfileFields retorna array<string, array{type, unique}> (key => metadata)', function () {
     $source = commandSource012Pft();
 
-    // Docblock + signature: array<string, string>|null.
-    expect($source)->toMatch('/@return\s+array<string,\s*string>\|null/');
-    // Builder local acumula type por key.
-    expect($source)->toMatch('/\$fields\[\$key\]\s*=\s*\$type/');
+    // R-PKG-014 BUG-09 fix: ahora retorna metadata con type + unique (no solo type).
+    // Docblock + signature: array<string, array{type: string, unique: bool}>|null.
+    expect($source)->toMatch('/@return\s+array<string,\s*array\{type:/');
+    expect($source)->toContain("'type' => \$type");
+    expect($source)->toContain("'unique' => \$unique");
 });
 
 test('resolveProfileFields splits on `:` for key:type syntax', function () {
@@ -192,7 +196,13 @@ test('buildProfileFieldsReplacements pasa validation rules al rulesPhp', functio
 
     // El builder usa $config['validation'] y lo pasa al rulesPhp.
     expect($source)->toMatch('/\\$config\[[\'"]validation[\'"]\]/');
-    expect($source)->toMatch('/\\$validationRules\[\\$key\]\s*=\s*\\$config\[[\'"]validation[\'"]\]/');
+
+    // R-PKG-014 BUG-03 fix: validation rules ahora se aplican con override
+    // required/nullable por field. Ya NO es asignación literal — la regla se
+    // modifica in-place cuando el field está en --profile-fields-required.
+    // Pineamos el código que modifica la regla in-place:
+    expect($source)->toMatch('/isset\(\$requiredFields\[\$key\]\)\s*&&\s*\$rules\[0\]\s*===\s*\'nullable\'/');
+    expect($source)->toMatch('/\$rules\[0\]\s*=\s*\'required\'/');
 });
 
 // ── Stubs parametrizados ────────────────────────────────────────────────

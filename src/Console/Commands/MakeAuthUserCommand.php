@@ -67,55 +67,63 @@ class MakeAuthUserCommand extends Command
      * Lista cerrada pineada (ADR-004). Tipos case-sensitive (lowercase only, ADR-003).
      *
      * Spec: MK-LAR-1.6.0-rc1.PFT.
+     *
+     * **BUG-03 fix (v1.6.0-rc4)**: validation default cambió de `required` a `nullable`
+     * para ser consistente con la migration (`->nullable()`). Para forzar `required`
+     * por profile field, pasar `--profile-fields-required=<csv>` (R-PKG-014).
+     *
+     * **BUG-09 fix (v1.6.0-rc4)**: prefijo `!` en el CSV marca el field como `unique`
+     * (e.g. `--profile-fields=full_name,!ci,phone` → `ci` queda `->unique()->nullable()`).
+     * Esto se resuelve en `resolveProfileFields()` + `buildProfileFieldsReplacements()`.
      */
     public const PROFILE_FIELD_TYPES = [
         'string' => [
             'column_method' => 'string',
             'column_args' => [],
             'cast' => null,
-            'validation' => ['required', 'string', 'max:255'],
+            'validation' => ['nullable', 'string', 'max:255'],
         ],
         'text' => [
             'column_method' => 'text',
             'column_args' => [],
             'cast' => null,
-            'validation' => ['required', 'string'],
+            'validation' => ['nullable', 'string'],
         ],
         'int' => [
             'column_method' => 'integer',
             'column_args' => [],
             'cast' => 'integer',
-            'validation' => ['required', 'integer'],
+            'validation' => ['nullable', 'integer'],
         ],
         'decimal' => [
             'column_method' => 'decimal',
             'column_args' => [8, 2],
             'cast' => 'decimal:2',
-            'validation' => ['required', 'numeric'],
+            'validation' => ['nullable', 'numeric'],
         ],
         'bool' => [
             'column_method' => 'boolean',
             'column_args' => [],
             'cast' => 'boolean',
-            'validation' => ['required', 'boolean'],
+            'validation' => ['nullable', 'boolean'],
         ],
         'date' => [
             'column_method' => 'date',
             'column_args' => [],
             'cast' => 'date',
-            'validation' => ['required', 'date'],
+            'validation' => ['nullable', 'date'],
         ],
         'datetime' => [
             'column_method' => 'dateTime',
             'column_args' => [],
             'cast' => 'datetime',
-            'validation' => ['required', 'date'],
+            'validation' => ['nullable', 'date'],
         ],
         'json' => [
             'column_method' => 'json',
             'column_args' => [],
             'cast' => 'array',
-            'validation' => ['required', 'array'],
+            'validation' => ['nullable', 'array'],
         ],
     ];
 
@@ -127,7 +135,9 @@ class MakeAuthUserCommand extends Command
     protected $signature = 'mk:make:auth-user {scope : Nombre del scope en StudlyCase singular (Ej: Member, Customer, Partner)}
         {--login-field=email : Campo usado para login (default: email). BC: si no se pasa, idéntico a v1.4.0. Valores comunes: email, ci, phone, username, documento.}
         {--with-auth-rbac : Habilita RBAC integration (ability checks en /me y /logout), rate limiting en /login, /forgot, /reset, y audit log via AuthEvent (R-PKG-010). Default BC: false. Configurar abilities + rate_limits en config/mk_director.php.}
+        {--with-crud : Genera CRUD completo del scope + RBAC triada (AdminController + RoleController + AbilityController + DTOs + Repository + Service + Factory + Seeder + Requests + Resources + ServiceProvider binding). Default BC: false. Ortogonal con --with-auth-rbac, --login-field, --profile-fields. Spec: R-PKG-014.}
         {--profile-fields= : Campos adicionales para el perfil del scope (CSV con sintaxis key[:type], default: ninguno = BC). Cada field se agrega como columna del tipo correspondiente en la tabla del scope, en $fillable del modelo, y se expone en /me + PATCH /me + /register. Sin tipo = string (BC con R-PKG-011). Tipos soportados: string, text, int, decimal, bool, date, datetime, json (R-PKG-012). Ortogonal con --login-field, --with-auth-rbac y --verify-email. Ej: --profile-fields=name,birthdate:date,age:int (R-PKG-011 + R-PKG-012).}
+        {--profile-fields-required= : Override del validation default a `required` para profile fields específicos (CSV). Default: ninguno (todos nullable). Ej: --profile-fields-required=full_name,email. Solo aplica si el field está en --profile-fields. (R-PKG-014 BUG-03 fix)}
         {--verify-email : Habilita verificación por email: columna email_verified_at, endpoints /email/verify/<id>/<hash> y /email/resend, dispatch de Illuminate\Auth\Notifications\VerifyEmail en /register. Default BC: false. Aplican cuando --login-field=email (R-PKG-011).}';
 
     /**
@@ -144,8 +154,10 @@ class MakeAuthUserCommand extends Command
         $scopePlural = Str::plural($scopeLower);
         $loginField = $this->resolveLoginField((string) $this->option('login-field'));
         $withAuthRbac = (bool) $this->option('with-auth-rbac');
-        $profileFields = $this->resolveProfileFields((string) $this->option('profile-fields'), $loginField);
+        $withCrud = (bool) $this->option('with-crud');
+        $profileFieldsRaw = $this->resolveProfileFields((string) $this->option('profile-fields'), $loginField);
         $verifyEmailRequested = (bool) $this->option('verify-email');
+        $requiredFields = $this->resolveRequiredProfileFields((string) $this->option('profile-fields-required'), $profileFieldsRaw);
 
         if ($scope === '') {
             $this->error('El nombre del scope no puede estar vacío.');
@@ -159,9 +171,22 @@ class MakeAuthUserCommand extends Command
             return self::FAILURE;
         }
 
-        if ($profileFields === null) {
+        if ($profileFieldsRaw === null) {
             // resolveProfileFields() ya imprimió el error específico.
             return self::FAILURE;
+        }
+
+        if ($requiredFields === null) {
+            // resolveRequiredProfileFields() ya imprimió el error específico.
+            return self::FAILURE;
+        }
+
+        // Normalize: extract keys (sin prefijo !) para el resto del pipeline.
+        // $profileFieldsRaw = ['key' => ['type' => 'string', 'unique' => false], ...]
+        // $profileFields = ['key' => 'string', ...]  (formato legacy para PROFILE_FIELD_TYPES lookup)
+        $profileFields = [];
+        foreach ($profileFieldsRaw as $key => $meta) {
+            $profileFields[$key] = $meta['type'];
         }
 
         // --verify-email solo aplica cuando --login-field=email (no tiene sentido
@@ -232,17 +257,59 @@ class MakeAuthUserCommand extends Command
             '{{loginFieldValidationRule}}' => $isEmail
                 ? "['required', 'email']"
                 : "['required', 'string']",
+            // R-PKG-014 BUG-05: login() response incluye profile fields + roles + abilities.
+            // Construido dinámicamente según si hay o no --profile-fields.
+            '{{loginResponseArray}}' => $this->buildLoginResponseArray($profileFieldsRaw),
         ];
 
         // Placeholders condicionales R-PKG-011: profile fields per-scope + email verification opt-in.
-        $profileFieldsReplacements = $this->buildProfileFieldsReplacements($profileFields);
+        // R-PKG-014: pasa $profileFieldsRaw (con metadata unique) + $requiredFields.
+        $profileFieldsReplacements = $this->buildProfileFieldsReplacements($profileFieldsRaw, $requiredFields);
         $verifyEmailReplacements = $this->buildVerifyEmailReplacements($verifyEmail);
+
+        // R-PKG-014 MEJORA-07: factory DDD helpers cuando --with-crud está activo.
+        // Default mode: nada. --with-crud: agregar use HasFactory, trait HasFactory,
+        // y override newFactory() que apunta a la factory DDD generada por
+        // admin-factory.stub.
+        $factoryReplacements = [
+            '{{factoryHasFactoryUse}}' => $withCrud
+                ? "use Illuminate\\Database\\Eloquent\\Factories\\HasFactory;\n"
+                : '',
+            '{{factoryHasFactoryTrait}}' => $withCrud
+                ? "use HasFactory;\n    "
+                : '',
+            '{{factoryNewFactoryMethod}}' => $withCrud
+                ? <<<PHP
+
+
+    /**
+     * Factory que vive DENTRO del módulo (DDD estricto, R-P-009).
+     * Laravel la descubre vía este override. Apunta a
+     * `App\\Modules\\{$scope}\\Database\\Factories\\{$scope}Factory`.
+     */
+    protected static function newFactory(): {$scope}Factory
+    {
+        return {$scope}Factory::new();
+    }
+PHP
+                : '',
+        ];
 
         // R-PKG-011: register() y updateProfile() se generan condicionalmente.
         // - register(): si hay --profile-fields OR --verify-email (necesario para crear user).
         // - updateProfile(): solo si hay --profile-fields (PATCH /me sin razón si no hay fields custom).
-        $rulesPhp = $profileFieldsReplacements['__rulesPhp__'] ?? '[]';
+        //
+        // R-PKG-014 BUG-04: el rulesPhp base que va al register() INCLUYE `password`
+        // además de los profile fields. Esto es porque sin password el user no puede
+        // hacer login después. Si el consumer quiere opt-out (e.g. flujo con magic link),
+        // override el método register() en la subclase.
+        $profileRulesPhp = $profileFieldsReplacements['__rulesPhp__'] ?? '[]';
         unset($profileFieldsReplacements['__rulesPhp__']);
+
+        // R-PKG-014 BUG-04: rulesPhp para register() = profile fields + password base.
+        // Para updateProfile(): solo profile fields (password es opcional).
+        $passwordRuleForRegister = "        'password' => ['required', 'string', 'min:8', 'max:255'],\n";
+        $rulesPhp = $this->mergeRulesPhp($profileRulesPhp, $passwordRuleForRegister);
 
         if (! empty($profileFields) || $verifyEmail) {
             $profileFieldsReplacements['{{registerMethod}}'] = $this->buildRegisterMethod(
@@ -263,7 +330,7 @@ class MakeAuthUserCommand extends Command
                 $scope,
                 $scopeLower,
                 $loginField,
-                $rulesPhp,
+                $profileRulesPhp,
             );
             $profileFieldsReplacements['{{updateProfileRoute}}'] = "\n        Route::patch('me', [AuthController::class, 'updateProfile']);";
         } else {
@@ -276,6 +343,7 @@ class MakeAuthUserCommand extends Command
             $rbacReplacements,
             $profileFieldsReplacements,
             $verifyEmailReplacements,
+            $factoryReplacements,
         );
 
         $this->info("🔐 Generando scope de autenticación MK: {$scope}".($withAuthRbac ? ' (with RBAC)' : ''));
@@ -316,6 +384,21 @@ class MakeAuthUserCommand extends Command
         $this->info('🔌 Auto-registrando ServiceProvider:');
         $this->registerServiceProvider($scope);
 
+        // ── BUG-10 fix (R-PKG-014): check storage:link si disk=public ───
+        $this->checkStorageLink();
+
+        // ── MEJORA-03 (R-PKG-014): auto-corrrer mk:discover-abilities con --with-auth-rbac ──
+        if ($withAuthRbac) {
+            $this->newLine();
+            $this->info('🔍 Auto-corriendo mk:discover-abilities (MEJORA-03):');
+            $this->call('mk:discover-abilities');
+        }
+
+        // ── MEJORA-02 / BUG-08 (R-PKG-014): generar CRUD completo si --with-crud ──
+        if ($withCrud) {
+            $this->generateCrudPack($scope, $scopeLower, $scopePlural, $loginField, $profileFieldsRaw, $requiredFields);
+        }
+
         $this->newLine();
         $this->info("✅ Scope {$scope} generado con el estándar MK-Director:");
         $this->line("   • Model:        app/Modules/{$scope}/Models/{$scope}.php (extends AuthUser, loginField={$loginField})");
@@ -323,6 +406,9 @@ class MakeAuthUserCommand extends Command
         $this->line("   • AuthCtrl:     app/Modules/{$scope}/Http/Controllers/AuthController.php".($withAuthRbac ? ' (RBAC enabled)' : ''));
         $this->line("   • Routes:       /api/{$scopeLower}/auth/{login,refresh,logout,me,forgot,reset}".($withAuthRbac ? ' (rate limited)' : ''));
         $this->line("   • ServiceProv:  app/Modules/{$scope}/Providers/{$scope}ServiceProvider.php");
+        if ($withCrud) {
+            $this->line("   • CRUD:         17 archivos (AdminController + RoleController + AbilityController + DTOs + Repository + Service + Factory + Seeder + Requests + Resources)");
+        }
 
         if ($withAuthRbac) {
             $this->newLine();
@@ -334,11 +420,400 @@ class MakeAuthUserCommand extends Command
             $this->line("   4. Registrar un listener para Mk\\Director\\Auth\\Events\\AuthEvent si querés audit log.");
         }
 
+        if ($withCrud) {
+            $this->newLine();
+            $this->warn('📋 CRUD habilitado. Siguientes pasos:');
+            $this->line('   1. php artisan migrate');
+            $this->line("   2. Configurar abilities en config/mk_director.php (ver discover-abilities output arriba)");
+            $this->line("   3. (Opcional) Override de StoreAdminRequest/UpdateAdminRequest para validation custom");
+            $this->line("   4. (Opcional) Override de AdminService::beforeCreate() para photo upload logic");
+        }
+
         // Imprimir snippets a mano (no modificar config/auth.php automáticamente)
         $this->newLine();
         $this->printAuthConfigSnippets($scope, $scopeLower, $scopePlural, $loginField);
 
         return self::SUCCESS;
+    }
+
+    /**
+     * BUG-10 fix (R-PKG-014): check storage:link si el disk default es 'public'.
+     *
+     * Si el scaffolder generó un modelo con `photo_path` (vía --profile-fields=photo_path),
+     * el consumer necesita `php artisan storage:link` ejecutado. Si no, las URLs
+     * de las fotos van a romper. Warn no fatal — el consumer puede usar otro disk.
+     */
+    protected function checkStorageLink(): void
+    {
+        $disk = config('mk_director.storage.disk', 'public');
+
+        if ($disk !== 'public') {
+            return; // El consumer configuró otro disk — no asummos storage:link.
+        }
+
+        if (function_exists('public_path') && file_exists(public_path('storage'))) {
+            return; // Ya está linkeado.
+        }
+
+        $this->newLine();
+        $this->warn('⚠️  BUG-10: storage:link no ejecutado. Si usás photo_path en --profile-fields,');
+        $this->line('   ejecutá `php artisan storage:link` o configurá `mk_director.storage.disk` con otro disk.');
+    }
+
+    /**
+     * MEJORA-02 / BUG-08 (R-PKG-014): genera el CRUD completo del scope.
+     *
+     * Genera 17 archivos adicionales sobre la base ya creada por el scaffolder auth:
+     *   - AdminController, RoleController, AbilityController (3)
+     *   - StoreAdminRequest, UpdateAdminRequest, AssignRolesRequest, AssignDirectAbilitiesRequest (4)
+     *   - AdminResource, RoleResource, AbilityResource (3)
+     *   - AdminData, AdminFilterData DTOs (2)
+     *   - AdminRepository + Contracts/AdminRepositoryInterface (2)
+     *   - AdminService (1)
+     *   - AdminFactory (1)
+     *   - AdminRolesSeeder (1)
+     *
+     * Ortogonal con --with-auth-rbac, --login-field, --profile-fields.
+     * Las rutas CRUD se agregan al routes stub existente.
+     */
+    protected function generateCrudPack(
+        string $scope,
+        string $scopeLower,
+        string $scopePlural,
+        string $loginField,
+        array $profileFields,
+        array $requiredFields,
+    ): void {
+        $this->newLine();
+        $this->info('📄 Generando CRUD pack (17 archivos):');
+
+        $basePath = app_path("Modules/{$scope}");
+
+        // Crear directorios adicionales.
+        $crudDirs = [
+            'DTOs',
+            'Repositories/Contracts',
+            'Repositories',
+            'Services',
+            'Http/Requests',
+            'Http/Resources',
+            'Database/Factories',
+            'Database/Seeders',
+        ];
+        foreach ($crudDirs as $dir) {
+            if (! File::exists("{$basePath}/{$dir}")) {
+                File::makeDirectory("{$basePath}/{$dir}", 0755, true);
+                $this->line("  📁 {$dir}/");
+            }
+        }
+
+        // ── Extra replacements para los stubs CRUD ──
+        // Necesitan saber qué profile fields existen (para AdminResource, AdminData, etc.)
+        // y cuáles son unique (para StoreAdminRequest / UpdateAdminRequest).
+        $uniqueRules = $this->buildUniqueRules($profileFields, $requiredFields, $scopePlural);
+        $crudReplacements = [
+            '{{profileFieldsList}}' => $this->buildProfileFieldsList($profileFields),
+            '{{profileFieldsFillable}}' => $this->buildProfileFieldsFillable($profileFields),
+            '{{profileFieldsUniqueRules}}' => $uniqueRules['store'],
+            '{{profileFieldsUniqueRulesUpdate}}' => $uniqueRules['update'],
+            '{{loginFieldValidationRule}}' => $loginField === 'email'
+                ? "['required', 'email', 'max:255', 'unique:{$scopePlural},{$loginField}']"
+                : "['required', 'string', 'max:255', 'unique:{$scopePlural},{$loginField}']",
+        ];
+
+        // ── Controllers (3) ──
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/admin-controller.stub', 'Http/Controllers', "{$scope}Controller.php", $crudReplacements);
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/role-controller.stub', 'Http/Controllers', 'RoleController.php', $crudReplacements);
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/ability-controller.stub', 'Http/Controllers', 'AbilityController.php', $crudReplacements);
+
+        // ── Requests (4) ──
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/store-admin-request.stub', 'Http/Requests', 'StoreAdminRequest.php', $crudReplacements);
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/update-admin-request.stub', 'Http/Requests', 'UpdateAdminRequest.php', $crudReplacements);
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/assign-roles-request.stub', 'Http/Requests', 'AssignRolesRequest.php', $crudReplacements);
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/assign-abilities-request.stub', 'Http/Requests', 'AssignDirectAbilitiesRequest.php', $crudReplacements);
+
+        // ── Resources (3) ──
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/admin-resource.stub', 'Http/Resources', 'AdminResource.php', $crudReplacements);
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/role-resource.stub', 'Http/Resources', 'RoleResource.php', $crudReplacements);
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/ability-resource.stub', 'Http/Resources', 'AbilityResource.php', $crudReplacements);
+
+        // ── DTOs (2) ──
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/admin-data-dto.stub', 'DTOs', "{$scope}Data.php", $crudReplacements);
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/admin-filter-dto.stub', 'DTOs', "{$scope}FilterData.php", $crudReplacements);
+
+        // ── Repository + Interface (2) ──
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/admin-repository.stub', 'Repositories', "{$scope}Repository.php", $crudReplacements);
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/admin-repository-interface.stub', 'Repositories/Contracts', "{$scope}RepositoryInterface.php", $crudReplacements);
+
+        // ── Service (1) ──
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/admin-service.stub', 'Services', "{$scope}Service.php", $crudReplacements);
+
+        // ── Factory (1) ──
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/admin-factory.stub', 'Database/Factories', "{$scope}Factory.php", $crudReplacements);
+
+        // ── Seeder (1) ──
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/admin-roles-seeder.stub', 'Database/Seeders', "{$scope}RolesSeeder.php", $crudReplacements);
+
+        // ── Extender routes/api.php con CRUD ──
+        $this->extendRoutesWithCrud($basePath, $scope, $scopeLower, $scopePlural);
+
+        // ── Extender ServiceProvider con Repository binding ──
+        $this->extendServiceProviderWithBinding($basePath, $scope);
+    }
+
+    /**
+     * Helper: genera la lista CSV de profile field keys (sin tipos) para inyectar
+     * en stubs que necesitan solo los nombres (e.g. AdminData constructor).
+     */
+    protected function buildProfileFieldsList(array $profileFields): string
+    {
+        return implode(', ', array_map(
+            static fn ($key) => "'{$key}'",
+            array_keys($profileFields),
+        ));
+    }
+
+    /**
+     * Helper: genera declaraciones de parámetros del constructor de AdminData DTO.
+     *
+     * Formato: `public ?string $fullName = null,` (8 spaces indent).
+     * El AdminData tiene `name` y `email` hardcoded en su constructor; este helper
+     * emite solo los profile fields adicionales.
+     *
+     * Mapea tipos PHP:
+     *   - string, text → `?string`
+     *   - int → `?int`
+     *   - decimal → `?float`
+     *   - bool → `?bool`
+     *   - date, datetime → `?\Carbon\Carbon`
+     *   - json → `?array`
+     */
+    protected function buildProfileFieldsFillable(array $profileFields): string
+    {
+        $out = '';
+        foreach ($profileFields as $key => $meta) {
+            $type = $meta['type'];
+            $phpType = match ($type) {
+                'string', 'text' => '?string',
+                'int' => '?int',
+                'decimal' => '?float',
+                'bool' => '?bool',
+                'date', 'datetime' => '?\\Carbon\\Carbon',
+                'json' => '?array',
+                default => '?mixed',
+            };
+
+            // Camel case para el nombre del parámetro: full_name → fullName.
+            $paramName = lcfirst(str_replace('_', '', ucwords($key, '_')));
+            $out .= "        public {$phpType} \${$paramName} = null,\n";
+        }
+
+        return $out;
+    }
+
+    /**
+     * Helper: genera rules unique para StoreAdminRequest / UpdateAdminRequest.
+     *
+     * StoreAdminRequest: `'key' => ['nullable', 'string', 'unique:table,key']`.
+     * UpdateAdminRequest: `'key' => ['sometimes', 'nullable', 'string', Rule::unique(...)->ignore($id)]`.
+     *
+     * Solo emite reglas para fields que tengan `unique` en su metadata
+     * (prefijo `!` en --profile-fields).
+     *
+     * @param  array<string, array{type: string, unique: bool}>  $profileFields
+     * @param  array<string, bool>  $requiredFields
+     * @param  string  $scopePlural  Nombre de la tabla del scope (e.g. `admins`).
+     * @return array{store: string, update: string}
+     */
+    protected function buildUniqueRules(array $profileFields, array $requiredFields, string $scopePlural): array
+    {
+        $store = '';
+        $update = '';
+        foreach ($profileFields as $key => $meta) {
+            $unique = $meta['unique'];
+            $isRequired = isset($requiredFields[$key]);
+
+            // Si NO es unique, no emitir.
+            if (! $unique) {
+                continue;
+            }
+
+            $requiredRule = $isRequired ? 'required' : 'nullable';
+            $stringRule = 'string';
+
+            // Store: simple unique sin ignore.
+            $store .= "            '{$key}' => ['{$requiredRule}', '{$stringRule}', 'unique:{$scopePlural},{$key}'],\n";
+
+            // Update: con Rule::unique()->ignore() del row actual.
+            // El caller resuelve el id desde el route param.
+            $update .= "            '{$key}' => ['sometimes', '{$requiredRule}', '{$stringRule}', \\Illuminate\\Validation\\Rule::unique('{$scopePlural}', '{$key}')->ignore(\$id)],\n";
+        }
+
+        return [
+            'store' => $store,
+            'update' => $update,
+        ];
+    }
+
+    /**
+     * Extiende routes/api.php con los endpoints CRUD del scope.
+     * Lee el archivo generado por `auth-user.routes.stub` y agrega antes del cierre del group.
+     */
+    protected function extendRoutesWithCrud(string $basePath, string $scope, string $scopeLower, string $scopePlural): void
+    {
+        $routesPath = "{$basePath}/Http/Routes/api.php";
+        if (! File::exists($routesPath)) {
+            $this->warn("   ⚠️  routes/api.php no existe, no se pudo extender con CRUD.");
+
+            return;
+        }
+
+        $stubPath = __DIR__.'/../../Stubs/auth-user/auth-user.routes.with-crud.stub';
+        if (! File::exists($stubPath)) {
+            $this->warn("   ⚠️  auth-user.routes.with-crud.stub no existe.");
+
+            return;
+        }
+
+        $content = File::get($routesPath);
+        $crudRoutes = File::get($stubPath);
+        $crudRoutes = str_replace('{{ModuleName}}', $scope, $crudRoutes);
+        $crudRoutes = str_replace('{{moduleNameLower}}', $scopeLower, $crudRoutes);
+        $crudRoutes = str_replace('{{moduleNamePluralLower}}', $scopePlural, $crudRoutes);
+
+        // Insertar antes del cierre del último `});` (que cierra el group con prefix api/...)
+        $content = preg_replace(
+            '/(Route::middleware\([^)]*\)[^)]*->group\(function \(\) \{[\s\S]*?\n\}\);)\s*$/m',
+            "$1\n{$crudRoutes}",
+            $content,
+            1,
+            $count,
+        );
+
+        if ($count === 0) {
+            // Fallback: append al final.
+            $content .= "\n{$crudRoutes}";
+        }
+
+        File::put($routesPath, $content);
+        $this->line('   ✅ Http/Routes/api.php (extended with CRUD)');
+    }
+
+    /**
+     * Extiende el ServiceProvider del scope con binding del Repository.
+     */
+    protected function extendServiceProviderWithBinding(string $basePath, string $scope): void
+    {
+        $providerPath = "{$basePath}/Providers/{$scope}ServiceProvider.php";
+        if (! File::exists($providerPath)) {
+            $this->warn("   ⚠️  ServiceProvider no existe, no se pudo extender con binding.");
+
+            return;
+        }
+
+        $content = File::get($providerPath);
+        $binding = "        \$this->app->bind(\n            \\App\\Modules\\{$scope}\\Repositories\\Contracts\\{$scope}RepositoryInterface::class,\n            \\App\\Modules\\{$scope}\\Repositories\\{$scope}Repository::class,\n        );";
+
+        // Insertar después de `public function register(): void\n    {\n`
+        $content = preg_replace(
+            '/(public function register\(\): void\s*\{\s*)\/\//',
+            "$1{$binding}\n\n        //",
+            $content,
+            1,
+            $count,
+        );
+
+        if ($count === 0) {
+            // Fallback: insertar después de `public function register(): void {`
+            $content = preg_replace(
+                '/(public function register\(\): void\s*\{\s*)/',
+                "$1\n{$binding}\n",
+                $content,
+                1,
+            );
+        }
+
+        File::put($providerPath, $content);
+        $this->line('   ✅ Providers/'.$scope.'ServiceProvider.php (extended with Repository binding)');
+    }
+
+    /**
+     * Construye el array_merge dinámico para el response de login() (R-PKG-014 BUG-05).
+     *
+     * Sin profile fields: array_merge([id,name,login], [roles, abilities])
+     * Con profile fields: array_merge([id,name,login], $user->only([profile fields]), [roles, abilities])
+     *
+     * Output es PHP válido listo para inyectar en el stub.
+     */
+    protected function buildLoginResponseArray(array $profileFieldsRaw): string
+    {
+        $base = "['id', 'name', '{{loginField}}']";
+
+        if (empty($profileFieldsRaw)) {
+            $base = "\$user->only({$base})";
+        } else {
+            $base = "\$user->only({$base})";
+            $profileKeys = array_keys($profileFieldsRaw);
+            $profileArray = "['".implode("', '", $profileKeys)."']";
+            $base = "array_merge(\$user->only(['id', 'name', '{{loginField}}']), \$user->only({$profileArray}))";
+        }
+
+        return "{$base}, [\n"
+            ."            'roles' => \$user->roles->map(fn (\$r) => ['id' => \$r->id, 'name' => \$r->name]),\n"
+            ."            'abilities' => \$user->abilities->pluck('name')\n"
+            ."                ->merge(\$user->directAbilities->pluck('name'))\n"
+            ."                ->unique()\n"
+            ."                ->values(),\n"
+            .'        ]';
+    }
+
+/**
+     * Helper: merge de dos arrays de rules PHP en formato string.
+     *
+     * Input: ambos strings como `'field' => ['rule'],...` arrays.
+     * Output: array PHP válido combinando ambos, formateado en multi-línea para legibilidad.
+     *
+     * Usado por `buildRegisterMethod()` para combinar profile fields + password base.
+     */
+    protected function mergeRulesPhp(string $existing, string $additional): string
+    {
+        // Si existing está vacío, retornar solo additional envuelto.
+        if (trim($existing) === '[]' || trim($existing) === '') {
+            return '['.rtrim($additional).']';
+        }
+
+        // Parsear el existing (formato: ['key' => ['rule1', 'rule2'], ...]).
+        // Usamos eval() controlado porque la salida viene del propio builder
+        // (no es user input). Esto es seguro en este contexto porque:
+        //   1. `$existing` viene de `phpArrayExport()` que solo emite arrays literales.
+        //   2. `$additional` viene de la constante hardcoded.
+        // Si en el futuro queremos ser más estrictos, podemos parsear manualmente.
+        // Por ahora, regeneramos el array completo en formato multiline.
+        $existingArray = eval('return '.$existing.';');
+        $additionalArray = eval('return ['.rtrim($additional).'];');
+
+        if (! is_array($existingArray)) {
+            return $existing;
+        }
+        if (! is_array($additionalArray)) {
+            return $existing;
+        }
+
+        $merged = array_merge($existingArray, $additionalArray);
+
+        // Formatear en multi-línea: 8 espacios indent, un field por línea.
+        $out = "[\n";
+        foreach ($merged as $key => $value) {
+            $valueStr = $this->phpArrayExport([$key => $value]);
+            // phpArrayExport returns `['key' => ['rule']]`. Extract the inner.
+            preg_match("/^\[('[^']+'\s*=>\s*\[.*?\])\]$/s", $valueStr, $matches);
+            if (isset($matches[1])) {
+                $out .= '        '.$matches[1].",\n";
+            }
+        }
+        $out .= '    ]';
+
+        return $out;
     }
 
     protected function migrationFilename(string $scopePlural): string
@@ -564,11 +1039,12 @@ PHP,
     /**
      * Resuelve y valida los profile fields pasados via --profile-fields.
      *
-     * Sintaxis extendida (R-PKG-012):
+     * Sintaxis extendida (R-PKG-012 + R-PKG-014):
      *   - `key` (sin tipo) → default `string` (BC con R-PKG-011).
      *   - `key:type` → tipo explícito (tipos válidos en `PROFILE_FIELD_TYPES`).
+     *   - `!key` o `!key:type` → marca el field como `unique()` (BUG-09 fix, R-PKG-014).
      *
-     * Reglas (R-PKG-011 ADR-007 + ADR-008 + REQ-1 + R-PKG-012 ADR-001..ADR-009):
+     * Reglas (R-PKG-011 ADR-007 + ADR-008 + REQ-1 + R-PKG-012 ADR-001..ADR-009 + R-PKG-014 BUG-09):
      *   - Vacío o ausente → [] (BC con v1.5.0-rc4).
      *   - CSV con PHP identifiers válidos (`/^[a-zA-Z_][a-zA-Z0-9_]*$/`).
      *   - No duplicados dentro del CSV (fail-fast).
@@ -579,7 +1055,7 @@ PHP,
      *
      * @param  string  $raw  Input crudo del CSV (puede tener espacios).
      * @param  string  $loginField  Login field del scope (para detectar colisión).
-     * @return array<string, string>|null Mapa key => type (type siempre presente, default `string`), o null si inválido.
+     * @return array<string, array{type: string, unique: bool}>|null Mapa key => metadata, o null si inválido.
      */
     protected function resolveProfileFields(string $raw, string $loginField): ?array
     {
@@ -599,6 +1075,14 @@ PHP,
 
         $fields = [];
         foreach ($items as $item) {
+            // R-PKG-014 BUG-09: prefijo `!` marca el field como unique.
+            // Acepta tanto `!key` como `!key:type`.
+            $unique = false;
+            if (str_starts_with($item, '!')) {
+                $unique = true;
+                $item = substr($item, 1);
+            }
+
             if (str_contains($item, ':')) {
                 [$key, $type] = explode(':', $item, 2);
                 $key = trim($key);
@@ -634,10 +1118,55 @@ PHP,
                 return null;
             }
 
-            $fields[$key] = $type;
+            $fields[$key] = [
+                'type' => $type,
+                'unique' => $unique,
+            ];
         }
 
         return $fields;
+    }
+
+    /**
+     * Resuelve y valida los profile fields marcados como required via --profile-fields-required.
+     *
+     * Reglas (R-PKG-014 BUG-03 fix):
+     *   - Vacío o ausente → [] (default: todos los profile fields son nullable).
+     *   - CSV con PHP identifiers válidos.
+     *   - Cada key DEBE existir en `$profileFields` (fail-fast si no).
+     *
+     * @param  string  $raw  CSV crudo del flag.
+     * @param  array<string, array{type: string, unique: bool}>  $profileFields  Resultado de `resolveProfileFields`.
+     * @return array<string, bool>|null Mapa key => true (todos true por diseño), o null si inválido.
+     */
+    protected function resolveRequiredProfileFields(string $raw, array $profileFields): ?array
+    {
+        $raw = trim($raw);
+
+        if ($raw === '') {
+            return [];
+        }
+
+        $items = array_values(array_filter(array_map('trim', explode(',', $raw)), static fn ($f) => $f !== ''));
+
+        $required = [];
+        foreach ($items as $key) {
+            if (! preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $key)) {
+                $this->error("El campo \"{$key}\" en --profile-fields-required no es un identificador PHP válido.");
+
+                return null;
+            }
+
+            if (! isset($profileFields[$key])) {
+                $this->error("Campo \"{$key}\" en --profile-fields-required no existe en --profile-fields.");
+
+                return null;
+            }
+
+            $required[$key] = true;
+        }
+
+        return $required;
     }
 
     /**
@@ -653,10 +1182,17 @@ PHP,
      * R-PKG-012: cada field tiene un tipo (default `string`). El column method,
      * cast entry, y validation rule se derivan de `PROFILE_FIELD_TYPES[$type]`.
      *
-     * @param  array<string, string>  $fields  Mapa key => type (type siempre presente, default `string`).
+     * R-PKG-014 (v1.6.0-rc4):
+     *   - `unique` se aplica desde la metadata (`'unique' => true` cuando el usuario
+     *     usó prefijo `!` en --profile-fields). Migration: `->unique()->nullable()`.
+     *   - `requiredFields` se aplica al primer elemento del validation rule
+     *     (`required` reemplaza `nullable` cuando el key está en el set).
+     *
+     * @param  array<string, array{type: string, unique: bool}>  $fields  Mapa key => metadata.
+     * @param  array<string, bool>  $requiredFields  Mapa key => true (override del default nullable).
      * @return array<string, string>
      */
-    protected function buildProfileFieldsReplacements(array $fields): array
+    protected function buildProfileFieldsReplacements(array $fields, array $requiredFields = []): array
     {
         $hasProfile = ! empty($fields);
 
@@ -679,19 +1215,26 @@ PHP,
         $castEntries = '';
         $validationRules = [];
 
-        foreach ($fields as $key => $type) {
+        foreach ($fields as $key => $meta) {
+            $type = $meta['type'];
+            $unique = $meta['unique'];
             $config = self::PROFILE_FIELD_TYPES[$type];
 
             // $fillable entries: 8 espacios indent + 'name',\n
             $fillable .= "        '{$key}',\n";
 
             // Migration column: usa column_method + column_args (e.g. decimal('x', 8, 2)).
+            // R-PKG-014 BUG-09: si unique=true, agregar ->unique() a la cadena.
             $args = empty($config['column_args'])
                 ? ''
                 : ', '.implode(', ', $config['column_args']);
-            $columns .= "        \$table->{$config['column_method']}('{$key}'{$args})->nullable();\n            ";
+            $chain = $unique ? '->unique()->nullable()' : '->nullable()';
+            $columns .= "        \$table->{$config['column_method']}('{$key}'{$args}){$chain};\n            ";
 
             // Docblock @property typed (phpstan-style hint).
+            // R-PKG-014 BUG-02 fix: emite bloque completo /** ... */ cuando hay
+            // profile fields. El stub antes tenía `/**` después del placeholder,
+            // lo que resultaba en docblock suelto.
             $phpType = $this->profileFieldPhpType($type);
             $docblock .= " * @property {$phpType} \${$key}\n";
 
@@ -701,7 +1244,19 @@ PHP,
             }
 
             // Validation rule del tipo (table-driven, R-PKG-012 ADR-007).
-            $validationRules[$key] = $config['validation'];
+            // R-PKG-014 BUG-03: si el field está en --profile-fields-required, override
+            // el primer rule de 'nullable' a 'required'.
+            $rules = $config['validation'];
+            if (isset($requiredFields[$key]) && $rules[0] === 'nullable') {
+                $rules[0] = 'required';
+            }
+            $validationRules[$key] = $rules;
+        }
+
+        // R-PKG-014 BUG-02 fix: envolver el docblock en /** ... */ para que el
+        // stub no genere un docblock suelto.
+        if (! empty($docblock)) {
+            $docblock = "/**\n{$docblock} */\n    ";
         }
 
         // Para el método register() y updateProfile(): las reglas se pasan via array.
@@ -750,6 +1305,9 @@ PHP,
      *
      * Output incluye validación, creación de user, login opcional para no requerir
      * /login post-register, y dispatch de VerifyEmail notification si aplica.
+     *
+     * R-PKG-014 BUG-04: `$rulesPhp` YA incluye `password => ['required', 'string', 'min:8']`
+     * (agregado por el caller en `handle()`). El método solo usa lo que recibe.
      */
     protected function buildRegisterMethod(string $scope, string $scopeLower, string $loginField, string $rulesPhp, bool $verifyEmail): string
     {
@@ -770,6 +1328,10 @@ PHP,
      * R-PKG-011: register solo existe si hay `--profile-fields` o `--verify-email`.
      * Para custom validation (regex CI, date format, etc.), override este método
      * en la subclase generada.
+     *
+     * R-PKG-014 (v1.6.0-rc4): `$rulesPhp` incluye `password` por default
+     * (BUG-04 fix). Override via StoreAdminRequest si necesitás custom logic
+     * (e.g. confirmar password, validar contra breached passwords, etc.).
      *
      * BC: NO existe en v1.5.0-rc4 (este método es opt-in via flag).
      */

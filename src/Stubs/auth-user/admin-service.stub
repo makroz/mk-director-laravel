@@ -1,0 +1,115 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Services;
+
+use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
+use App\Modules\{{ModuleName}}\Repositories\Contracts\{{ModuleName}}RepositoryInterface;
+use Illuminate\Support\Facades\Storage;
+use Mk\Director\Auth\Models\Ability;
+use Mk\Director\Auth\Models\Role;
+
+/**
+ * Service de {{ModuleName}} — capa de orquestación.
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ *
+ * Thin layer: delega al Repository para queries, pero concentra side effects
+ * (photo upload, sync de roles/abilities). Override `beforeCreate()` para
+ * lógica custom (e.g. validar dimensiones de la foto).
+ */
+class {{ModuleName}}Service
+{
+    public function __construct(
+        protected {{ModuleName}}RepositoryInterface $repository,
+    ) {}
+
+    /**
+     * Hook antes de crear un {{ModuleName}}. Procesa el upload de foto
+     * si está presente. Override para lógica custom.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>  Datos mutados (incluye photo_path si hubo upload).
+     */
+    protected function beforeCreate(array $data): array
+    {
+        // Si hay un UploadedFile en `photo`, guardarlo y setear `photo_path`.
+        if (isset($data['photo']) && $data['photo'] instanceof \Illuminate\Http\UploadedFile) {
+            $path = $data['photo']->store(
+                '{{moduleNamePluralLower}}',
+                config('mk_director.storage.disk', 'public'),
+            );
+            $data['photo_path'] = $path;
+        }
+
+        // Hashear password si viene en plain text.
+        if (isset($data['password']) && ! str_starts_with($data['password'], '$2y$')) {
+            $data['password'] = \Illuminate\Support\Facades\Hash::make($data['password']);
+        }
+
+        // Remover `photo` del array (es UploadedFile, no persiste).
+        unset($data['photo']);
+
+        return $data;
+    }
+
+    /**
+     * Crea un {{ModuleName}} con la pipeline completa (beforeCreate → Repository).
+     */
+    public function create(array $data): {{ModuleName}}
+    {
+        return $this->repository->create($this->beforeCreate($data));
+    }
+
+    /**
+     * Actualiza un {{ModuleName}}. Override `beforeUpdate()` para lógica custom.
+     */
+    public function update({{ModuleName}} ${{moduleNameLower}}, array $data): {{ModuleName}}
+    {
+        // Si hay nueva foto, borrar la vieja.
+        if (isset($data['photo']) && $data['photo'] instanceof \Illuminate\Http\UploadedFile) {
+            if (! empty(${{moduleNameLower}}->photo_path)) {
+                Storage::disk(config('mk_director.storage.disk', 'public'))
+                    ->delete(${{moduleNameLower}}->photo_path);
+            }
+        }
+
+        $data = $this->beforeCreate($data); // Reusa la lógica de upload + hash.
+
+        return $this->repository->update(${{moduleNameLower}}, $data);
+    }
+
+    /**
+     * Sincroniza roles (delegado al Repository).
+     *
+     * @param  array<int, string>  $roleNames
+     */
+    public function syncRoles({{ModuleName}} ${{moduleNameLower}}, array $roleNames): {{ModuleName}}
+    {
+        return $this->repository->syncRoles(${{moduleNameLower}}, $roleNames);
+    }
+
+    /**
+     * Sincroniza abilities directas (delegado al Repository).
+     *
+     * @param  array<int, string>  $abilityNames
+     */
+    public function syncDirectAbilities({{ModuleName}} ${{moduleNameLower}}, array $abilityNames): {{ModuleName}}
+    {
+        return $this->repository->syncDirectAbilities(${{moduleNameLower}}, $abilityNames);
+    }
+
+    /**
+     * Sincroniza abilities de un Role.
+     *
+     * @param  array<int, string>  $abilityNames
+     */
+    public function syncRoleAbilities(Role $role, array $abilityNames): Role
+    {
+        $abilities = Ability::query()->whereIn('name', $abilityNames)->pluck('id');
+        $role->abilities()->sync($abilities);
+
+        return $role->fresh(['abilities']);
+    }
+}

@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\{{ModuleName}}\Models;
 
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
-{{mustVerifyEmailUse}}use Mk\Director\Auth\Models\AuthUser;
+{{factoryHasFactoryUse}}{{mustVerifyEmailUse}}use Mk\Director\Auth\Models\AuthUser;
 
 /**
  * {{ModuleName}} — modelo concreto de un scope de autenticación MK.
@@ -34,10 +34,14 @@ use Illuminate\Database\Eloquent\Concerns\HasUuids;
  * `email_verified_at` está en $casts y `MustVerifyEmail` interface está importada.
  * Si no está activo (default), NO hay columna `email_verified_at` y NO hay
  * verificación (BC con v1.5.0-rc4).
+ *
+ * Factory DDD: si el scope se generó con `--with-crud` (R-PKG-014), este modelo
+ * usa `HasFactory` trait + override `newFactory()` que apunta a la factory DDD
+ * en `App\Modules\{{ModuleName}}\Database\Factories\{{ModuleName}}Factory`.
  */
 class {{ModuleName}} extends AuthUser
 {
-    use HasUuids;
+    {{factoryHasFactoryTrait}}use HasUuids;
 
     /**
      * Tabla propia del scope. NO compartir con `auth_users` —
@@ -55,7 +59,7 @@ class {{ModuleName}} extends AuthUser
      */
     protected string $loginField = '{{loginField}}';
 
-{{profileFieldsDocblock}}    /**
+    {{profileFieldsDocblock}}/**
      * Columnas asignables en masa. El `auth_scope` por defecto es
      * `{{moduleNameLower}}`; las subclases (Admin, Member, etc.) lo setean
      * al crear. `{{loginField}}` es el campo de login (default `email`).
@@ -91,4 +95,5 @@ class {{ModuleName}} extends AuthUser
         parent::__construct($attributes);
         $this->setAuthScope('{{moduleNameLower}}');
     }
+{{factoryNewFactoryMethod}}
 }
