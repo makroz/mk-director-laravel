@@ -160,7 +160,7 @@ test('auth-user migration stub creates the scope table with indexed auth_scope',
 
 // ── AuthController stub ─────────────────────────────────────────────────
 
-test('auth-user auth-controller stub exposes all six endpoints as skeletons', function () {
+test('auth-user auth-controller stub exposes all six endpoints', function () {
     $source = stubSource('auth-user.auth-controller.stub');
 
     // 6 endpoints
@@ -168,9 +168,11 @@ test('auth-user auth-controller stub exposes all six endpoints as skeletons', fu
         expect($source)->toContain("public function {$endpoint}(");
     }
 
-    // Skeleton character — at least one TODO per unfinished method
-    expect($source)->toContain('TODO');
-    expect($source)->toContain('501'); // refresh + reset return 501 not_implemented
+    // R-PKG-014 BUG-07 fix: refresh() y reset() ya NO son skeletons. Implementación
+    // completa con TokenIssuer::rotateRefreshToken() y password_reset_tokens lookup.
+    // Las validamos explícitamente.
+    expect($source)->toContain('rotateRefreshToken');
+    expect($source)->toContain('password_reset_tokens');
 });
 
 test('auth-user auth-controller stub mentions TokenIssuer for the dev to wire up', function () {

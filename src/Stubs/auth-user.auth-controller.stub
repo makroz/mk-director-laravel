@@ -8,6 +8,8 @@ use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\DB;
+use Mk\Director\Auth\Services\RefreshTokenParser;
 use Mk\Director\Auth\Services\TokenIssuer;
 use Mk\Director\Controllers\BaseController;
 {{rbacImports}}
@@ -36,10 +38,10 @@ use Mk\Director\Controllers\BaseController;
  *
  * Endpoints (públicos salvo que se indique):
  *   POST   /api/{{moduleNameLower}}/auth/login    — {{loginField}} + password → tokens
- *   POST   /api/{{moduleNameLower}}/auth/refresh  — refresh_token → access_token
+ *   POST   /api/{{moduleNameLower}}/auth/refresh  — refresh_token → access_token (R-PKG-014 BUG-07 fix)
  *   POST   /api/{{moduleNameLower}}/auth/register — crea user con profile fields (si --profile-fields o --verify-email activo)
- *   POST   /api/{{moduleNameLower}}/auth/forgot   — enviar email de reset (si aplica)
- *   POST   /api/{{moduleNameLower}}/auth/reset    — reset con token
+ *   POST   /api/{{moduleNameLower}}/auth/forgot   — enviar email de reset
+ *   POST   /api/{{moduleNameLower}}/auth/reset    — reset con token (R-PKG-014 BUG-07 fix)
  *   GET    /api/{{moduleNameLower}}/auth/email/verify/{id}/{hash} — verify email (signed URL, si --verify-email activo)
  *   POST   /api/{{moduleNameLower}}/auth/email/resend — re-envía verification email (si --verify-email activo)
  *   POST   /api/{{moduleNameLower}}/auth/logout   — revoca access (auth:{{moduleNameLower}})
@@ -78,6 +80,16 @@ use Mk\Director\Controllers\BaseController;
  *
  *   Default (sin flags): idéntico a v1.5.0-rc4 — sin register, sin PATCH /me,
  *   sin verify. BC preservada.
+ *
+ * R-PKG-014 (v1.6.0-rc4):
+ *   - **BUG-01 fix**: `logout()` ahora lookup del user ANTES del ability check.
+ *   - **BUG-05 fix**: `login()` retorna profile fields + roles + abilities.
+ *   - **BUG-06 fix**: `me()` hace `loadMissing(['roles', 'directAbilities'])`.
+ *   - **BUG-07 fix**: `refresh()` y `reset()` tienen implementación completa
+ *     (usan `TokenIssuer::rotateRefreshToken()` y `RefreshTokenParser`).
+ *     `forgot()` genera token + persiste en `{scope}_password_reset_tokens`.
+ *   - **BUG-03 fix**: profile fields validation default es `nullable`
+ *     (consistente con `->nullable()` en migration).
  */
 class AuthController extends BaseController
 {
@@ -90,6 +102,9 @@ class AuthController extends BaseController
      *   - Inyectar `TokenIssuer` por constructor (recomendado para tests).
      *   - Mantener la instanciación inline (más simple, menos testeable).
      *   - Sumar validaciones custom en `beforeLogin()` (override hook).
+     *
+     * R-PKG-014 BUG-05: la response incluye profile fields + roles + abilities
+     * (no solo `id, name, {{loginField}}` como en v1.6.0-rc3).
      */
     public function login(Request $request): JsonResponse
     {
@@ -118,48 +133,86 @@ class AuthController extends BaseController
             );
         }
 
+        // R-PKG-014 BUG-06 fix: eager-load relaciones antes de serializar.
+        $user->loadMissing(['roles', 'directAbilities']);
+
         $tokenIssuer = new TokenIssuer();
         $accessToken = $tokenIssuer->issueAccessToken($user);
         $refreshToken = $tokenIssuer->issueRefreshToken($user);
 
         {{rbacAuditLoginSuccess}}
 
+        // R-PKG-014 BUG-05 fix: response incluye profile fields + roles + abilities.
+        // El array_merge es construido dinámicamente por el command según
+        // si hay o no --profile-fields.
         return $this->sendResponse([
             'access_token' => $accessToken->plainTextToken,
             'refresh_token' => $refreshToken,
             'token_type' => 'Bearer',
             'expires_in' => config('mk_director.auth.ttl.access_seconds', 15 * 60),
-            '{{moduleNameLower}}' => $user->only(['id', 'name', '{{loginField}}']),
+            '{{moduleNameLower}}' => {{loginResponseArray}},
         ], 'Login exitoso');
     }
 
     /**
      * POST /api/{{moduleNameLower}}/auth/refresh
      *
-     * TODO: Validar refresh_token (Sanctum `PersonalAccessToken` lookup
-     * con `id|plaintext` parsing — Sanctum v4 ya no tiene
-     * `Sanctum::findToken()`), emitir nuevo access_token con el mismo
-     * `auth_scope`, opcionalmente rotar el refresh_token. NO permitir
-     * escalación de scope vía refresh.
+     * R-PKG-014 BUG-07 fix: implementación completa con Sanctum v4 `id|plaintext`
+     * parsing. Valida el refresh_token, hashea solo el plaintext, busca en
+     * `personal_access_tokens` por `id` + `token_hash`, emite un nuevo
+     * access_token con el mismo `auth_scope`, opcionalmente rota el refresh_token.
+     *
+     * Config: `mk_director.auth.refresh.rotate_on_refresh` (default false).
+     *   - `false`: mantiene el mismo refresh_token (BC).
+     *   - `true`: rota el refresh (más seguro, recomendado para B2B).
+     *
+     * NO permite escalación de scope vía refresh — el nuevo token mantiene
+     * el `auth_scope` original del user.
      */
     public function refresh(Request $request): JsonResponse
     {
-        {{rbacAuditRefreshTodo}}
-        return $this->sendError(
-            'not_implemented',
-            ['hint' => 'Implementar con TokenIssuer + Sanctum v4 id|plaintext token parsing'],
-            501,
-        );
+        $request->validate([
+            'refresh_token' => ['required', 'string'],
+        ]);
+
+        $tokenIssuer = new TokenIssuer();
+        $refreshToken = $request->input('refresh_token');
+
+        try {
+            $result = $tokenIssuer->rotateRefreshToken($refreshToken, '{{moduleNameLower}}');
+        } catch (\Illuminate\Auth\Access\AuthorizationException $e) {
+            {{rbacAuditRefreshTodo}}
+            return $this->sendError('Refresh token inválido.', [], 401);
+        }
+
+        // Opcional: dispatch auth.refresh.success event.
+        // R-PKG-010: emit cuando la rotación es exitosa (para audit log).
+        if (class_exists(\Mk\Director\Auth\Events\AuthEvent::class)) {
+            \Mk\Director\Auth\Events\AuthEvent::dispatch('auth.refresh.success', [
+                'user_id' => $result['user_id'] ?? null,
+                'scope' => '{{moduleNameLower}}',
+                'ip' => $request->ip(),
+            ]);
+        }
+
+        return $this->sendResponse([
+            'access_token' => $result['access_token'],
+            'refresh_token' => $result['refresh_token'],
+            'token_type' => 'Bearer',
+            'expires_in' => config('mk_director.auth.ttl.access_seconds', 15 * 60),
+        ], 'Refresh exitoso');
     }
 
     /**
      * POST /api/{{moduleNameLower}}/auth/logout
      * Revoca el access token actual. NO revoca otros tokens del mismo user.
+     *
+     * R-PKG-014 BUG-01 fix: el lookup del user ahora ocurre ANTES del ability check.
      */
     public function logout(Request $request): JsonResponse
     {
-        {{rbacAbilityCheckLogout}}
         $user = $request->user();
+        {{rbacAbilityCheckLogout}}
         $token = $user->currentAccessToken();
         $token->delete();
 
@@ -171,26 +224,56 @@ class AuthController extends BaseController
     /**
      * GET /api/{{moduleNameLower}}/auth/me
      *
-     * El envelope estándar envuelve al user en `data`. Si el modelo
-     * declara `$apiResource`, `autoTransform()` lo aplica transparentemente.
+     * R-PKG-014 BUG-06 fix: eager-load `roles` + `directAbilities` antes
+     * del `sendResponse` para que `autoTransform()` los serialice correctamente.
      */
     public function me(Request $request): JsonResponse
     {
+        $user = $request->user();
+        $user->loadMissing(['roles', 'directAbilities']);
         {{rbacAbilityCheckMe}}
-        return $this->sendResponse($request->user());
+        return $this->sendResponse($user);
     }
 
     /**
      * POST /api/{{moduleNameLower}}/auth/forgot
      *
-     * TODO: Generar token, persistir en `{{moduleNameLower}}_password_reset_tokens`,
-     * enviar email/notification con link al frontend (configurar queue / mail).
+     * R-PKG-014 BUG-07 fix: implementación completa. Genera un token único,
+     * persiste en `{{moduleNameLower}}_password_reset_tokens`, emite AuthEvent.
+     *
+     * El envío de email/notification NO se hace automáticamente — el consumer
+     * registra un listener de `AuthEvent` con key `auth.password_reset.requested`
+     * y envía el email desde ahí.
      */
     public function forgot(Request $request): JsonResponse
     {
         $credentials = $request->validate([
             '{{loginField}}' => {{loginFieldValidationRule}},
         ]);
+
+        /** @var {{ModuleName}}|null $user */
+        $user = {{ModuleName}}::query()
+            ->where('{{loginField}}', $credentials['{{loginField}}'])
+            ->first();
+
+        // Anti-enumeración: si el user no existe, retornar OK sin hacer nada.
+        if (! $user || $user->getAuthScope() !== '{{moduleNameLower}}') {
+            return $this->sendResponse(
+                null,
+                'Si el {{loginField}} existe, recibirás un enlace para reset.',
+            );
+        }
+
+        // Genera token (Sanctum v4 formato: random 64-char string).
+        $token = bin2hex(random_bytes(32));
+
+        DB::table('{{moduleNameLower}}_password_reset_tokens')->updateOrInsert(
+            ['{{loginField}}' => $credentials['{{loginField}}']],
+            [
+                'token' => Hash::make($token),
+                'created_at' => now(),
+            ],
+        );
 
         {{rbacAuditForgot}}
 
@@ -203,17 +286,62 @@ class AuthController extends BaseController
     /**
      * POST /api/{{moduleNameLower}}/auth/reset
      *
-     * TODO: Validar token + nueva contraseña, hashear, actualizar,
-     * invalidar tokens activos del user.
+     * R-PKG-014 BUG-07 fix: implementación completa. Valida el token contra
+     * `{{moduleNameLower}}_password_reset_tokens`, hashea la nueva password,
+     * actualiza el user, invalida todos los access tokens activos.
      */
     public function reset(Request $request): JsonResponse
     {
-        {{rbacAuditResetTodo}}
-        return $this->sendError(
-            'not_implemented',
-            ['hint' => 'Validate token from {{moduleNameLower}}_password_reset_tokens and update user password'],
-            501,
-        );
+        $data = $request->validate([
+            '{{loginField}}' => {{loginFieldValidationRule}},
+            'token' => ['required', 'string'],
+            'password' => ['required', 'string', 'min:8', 'max:255', 'confirmed'],
+        ]);
+
+        $record = DB::table('{{moduleNameLower}}_password_reset_tokens')
+            ->where('{{loginField}}', $data['{{loginField}}'])
+            ->first();
+
+        // Token inválido o expirado (más de 60 minutos).
+        if (! $record
+            || ! Hash::check($data['token'], $record->token)
+            || (time() - strtotime($record->created_at)) > 3600
+        ) {
+            return $this->sendError('Token inválido o expirado.', [], 422);
+        }
+
+        /** @var {{ModuleName}}|null $user */
+        $user = {{ModuleName}}::query()
+            ->where('{{loginField}}', $data['{{loginField}}'])
+            ->first();
+
+        if (! $user || $user->getAuthScope() !== '{{moduleNameLower}}') {
+            return $this->sendError('Token inválido o expirado.', [], 422);
+        }
+
+        DB::transaction(function () use ($user, $data) {
+            $user->password = $data['password'];
+            $user->save();
+
+            // Invalida todos los access tokens activos del user.
+            $user->tokens()->delete();
+
+            // Borra el token usado.
+            DB::table('{{moduleNameLower}}_password_reset_tokens')
+                ->where('{{loginField}}', $data['{{loginField}}'])
+                ->delete();
+        });
+
+        // Opcional: dispatch auth.password_reset.success.
+        if (class_exists(\Mk\Director\Auth\Events\AuthEvent::class)) {
+            \Mk\Director\Auth\Events\AuthEvent::dispatch('auth.password_reset.success', [
+                'user_id' => $user->id,
+                'scope' => '{{moduleNameLower}}',
+                'ip' => $request->ip(),
+            ]);
+        }
+
+        return $this->sendResponse(true, 'Contraseña actualizada.');
     }
 
 {{rbacAuthorizeAbilityMethod}}
