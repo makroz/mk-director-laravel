@@ -1283,6 +1283,110 @@ php artisan tinker --execute 'echo strlen(Laravel\Sanctum\PersonalAccessToken::f
 - BUG-NEW-28: pineado en `tests/Feature/AdminUserFactoryStubTest.php` (archivo nuevo, 4 tests: source-parsing del stub, anti-regresión del hardcode, render + syntax check, render content).
 - Source: `.makromania/projects/reto/modules/admin/FEEDBACK-TO-MK-DIRECTOR.md` (sección "🐛 BUGS NUEVOS" en fase 6 sobre v1.6.0-rc8).
 
+#### 3.13.9 R-PKG-020 feedback fixes (HALLAZGO-NEW-01 + UPGRADE_1.2.md backlog cleanup)
+
+> **Fixes en v1.6.0-rc9** (R-PKG-020). Cierra el HALLAZGO-NEW-01 reportado en RETO fase 6 (`$user->roles()->attach([$id])` no incluía `user_type`) y el backlog de 4 tests pre-existing del `UpgradeDocumentationTest` que fallaban desde v1.6.0-rc4.
+
+##### HALLAZGO-NEW-01 — Pivot class con auto-set de `user_type` (solución de raíz)
+
+**Problema**: en consumers MME-polimórficos (R-MK-001, FK polimórfica con columna `user_type` en la pivot), las mutaciones nativas de Eloquent sobre las relations `roles()` y `directAbilities()` (`attach`, `detach`, `sync`, `syncWithoutDetaching`, `toggle`, `updateExistingPivot`) NO seteaban `user_type` automáticamente. Solo los métodos helper (`assignRole`, `syncRoles`, `giveAbilityTo`, `syncDirectAbilities`) lo hacían via `pivotExtras()` / `abilityPivotExtras()`.
+
+**Síntoma sin este fix**:
+```php
+$admin->roles()->attach([$roleId1, $roleId2]);
+// → SQLSTATE[23502]: null value in column "user_type" of relation "role_user" violates not-null constraint
+```
+
+Workaround aplicado en RETO fase 6: usar `syncRoles([...])` en tests en vez de `attach([...])`. El helper `AdminService::syncRoles()` scaffoldeado funcionaba OK, pero cualquier consumer que usara `attach()` directo en código custom seguía rompiendo.
+
+**Solución de raíz**: las relations `roles()` y `directAbilities()` ahora usan `->using(MkRoleUserPivot::class)` y `->using(MkAbilityUserPivot::class)`. Estas clases extienden `MkPivot` (base abstracta) que registra un listener `creating` que setea `user_type = $pivot->pivotParent->getMorphClass()` automáticamente cuando la pivot tiene la columna.
+
+**Flujo del listener** (registrado en `MkPivot::boot()`):
+
+1. **Skip si consumer override**: si `$pivot->user_type !== null` (consumer ya lo seteó via `attach($id, ['user_type' => 'X'])`), respeta su valor.
+2. **Skip si pivot legacy**: si `Schema::hasColumn($pivot->getTable(), 'user_type')` retorna `false` (cacheado en memoria del proceso), no hace nada. BC-safe con consumers legacy que NO tienen la columna.
+3. **Auto-set si MME-polimórfico**: setea `$pivot->user_type = $pivot->pivotParent->getMorphClass()` (FQCN del modelo concreto, ej: `App\Modules\Admin\Models\Admin`).
+
+**Archivos nuevos**:
+
+| Archivo | Propósito |
+|---|---|
+| `src/Auth/Pivots/MkPivot.php` | Base abstracta con `boot()` que registra el listener `creating` |
+| `src/Auth/Pivots/MkRoleUserPivot.php` | Concrete pivot para `role_user` (`protected $table = 'role_user'`) |
+| `src/Auth/Pivots/MkAbilityUserPivot.php` | Concrete pivot para `ability_user` (`protected $table = 'ability_user'`) |
+
+**Archivos modificados**:
+
+| Archivo | Cambio |
+|---|---|
+| `src/Auth/Concerns/HasRoles.php` | `roles()` ahora retorna `->using(MkRoleUserPivot::class)->withTimestamps()` |
+| `src/Auth/Concerns/HasAbilities.php` | `directAbilities()` ahora retorna `->using(MkAbilityUserPivot::class)->withTimestamps()` |
+
+**Pinear custom pivot class** (para consumers con tablas pivot custom, ej: `member_role` en lugar de `role_user`):
+
+```php
+namespace App\Modules\Member\Pivots;
+
+use Mk\Director\Auth\Pivots\MkPivot;
+
+class MkMemberRolePivot extends MkPivot
+{
+    protected $table = 'member_role';
+}
+```
+
+```php
+// En tu modelo Member:
+public function roles(): BelongsToMany
+{
+    return $this->belongsToMany(Role::class, 'member_role')
+        ->using(\App\Modules\Member\Pivots\MkMemberRolePivot::class)
+        ->withTimestamps();
+}
+```
+
+**Opt-out** (si un consumer quiere deshabilitar el auto-set):
+
+```php
+// Override sin ->using(...):
+public function roles(): BelongsToMany
+{
+    return $this->belongsToMany(Role::class, 'role_user')->withTimestamps();
+}
+```
+
+**Tests pineados** (9 nuevos en `tests/Unit/Auth/HallazgoNew01PivotTest.php`):
+
+- Source-parsing: ambas concrete classes existen y extienden `MkPivot` base.
+- Source-parsing: declaran `protected $table = 'role_user'` / `'ability_user'`.
+- Source-parsing: `HasRoles::roles()` y `HasAbilities::directAbilities()` usan `->using(MkRoleUserPivot::class)` / `MkAbilityUserPivot::class`.
+- Source-parsing: `MkPivot::boot()` registra listener `creating` con la lógica correcta.
+- Anti-regresión: listener respeta `user_type` explícito del consumer.
+- Anti-regresión: listener es no-op si la pivot NO tiene `user_type` (BC-safe).
+
+**Cross-stack impact**: 0. El cambio es interno al paquete. No afecta endpoints HTTP, contratos de Provider, ni signatures de `useAuth()` / `useMkAuth()`.
+
+##### UPGRADE_1.2.md — backlog cleanup
+
+**Problema**: el test `tests/Unit/Process/UpgradeDocumentationTest.php` tenía 4 tests fallando desde v1.6.0-rc4 porque `docs/UPGRADE_1.2.md` no existía. Era un **pre-existing failure** del backlog RC4 sin regresión, pero contaminaba la suite (505 passing / 4 failing en vez de 509/0).
+
+**Fix**: archivo `docs/UPGRADE_1.2.md` creado con:
+
+- 4 breaking changes históricos del salto 1.1.x → 1.2.x documentados con detalle (UUID primary key, opt-in multi-tenancy, MkAbility refactor, ListManager unknown operator whitelist).
+- Sección `## Rollback` explícita con 3 paths (restore from backup, manual SQL rollback, forward fix).
+- Aviso prominente de **irreversibilidad** del UUID migration (regex `irreversible|no rollback|backup`).
+- Sección `## Migration script` referenciando el companion script `bin/migrate-1.1-to-1.2.php` con sus flags (`--dry-run`, `--help`, `--connection=`).
+
+**Tests pineados**: 0 nuevos (los 4 tests pre-existing ahora pasan). Suite completa: **518 passing, 0 failing** (de 505+4 fail).
+
+#### Spec
+
+- Sprint: `makromania/260627-0045--r-pkg-020-feedback-fixes-v1.6.0-rc9` (misma rama, segunda iteración post Mario "incluir de una").
+- Tests: 9 nuevos Pest tests (HALLAZGO-NEW-01). Total paquete: **518 passing, 0 failing** (backlog RC4 cerrado).
+- HALLAZGO-NEW-01: pineado en `tests/Unit/Auth/HallazgoNew01PivotTest.php` (9 source-parsing tests: existence + table + using + listener logic + BC-safe).
+- UPGRADE_1.2.md: 4 tests pre-existing del `UpgradeDocumentationTest` ahora verde (verificado con `--filter`).
+- Source: `.makromania/projects/reto/modules/admin/FEEDBACK-TO-MK-DIRECTOR.md` (HALLAZGO-NEW-01) + audit-2026-06-17-R3-013 (UPGRADE_1.2.md backlog original).
+
 ---
 
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)

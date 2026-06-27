@@ -10,6 +10,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Mk\Director\Auth\Models\Ability;
+use Mk\Director\Auth\Pivots\MkAbilityUserPivot;
 use Mk\Director\Auth\Services\AbilityResolver;
 
 /**
@@ -102,13 +103,24 @@ trait HasAbilities
     /**
      * Grants directos (pivot `ability_user`). El consumer debe
      * publicar la migración correspondiente si quiere usar este path.
+     *
+     * R-PKG-020 HALLAZGO-NEW-01: la relation ahora usa `using(MkAbilityUserPivot::class)`
+     * para que las mutaciones nativas de Eloquent seteen
+     * `user_type = get_class($this)` automáticamente cuando la pivot
+     * tiene la columna. Antes, solo `giveAbilityTo()` y `syncDirectAbilities()`
+     * lo hacían via `abilityPivotExtras()`.
+     *
+     * Si el consumer override esta relation con su propio `->using(...)`,
+     * su pivot gana (BC preservada).
      */
     public function directAbilities(): BelongsToMany
     {
         return $this->belongsToMany(
             Ability::class,
             'ability_user',
-        )->withTimestamps();
+        )
+            ->using(MkAbilityUserPivot::class)
+            ->withTimestamps();
     }
 
     /**
