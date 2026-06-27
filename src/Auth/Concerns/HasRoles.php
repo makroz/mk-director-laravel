@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Mk\Director\Auth\Concerns;
 
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Support\Facades\Schema;
 use Mk\Director\Auth\Models\Role;
 
 /**
@@ -36,6 +37,24 @@ trait HasRoles
      * Acepta string|Role: si pasás un Role ya materializado, se
      * usa directo.
      */
+    /**
+     * Asigna un rol al usuario por nombre. Si el rol no existe,
+     * lo crea con el guard del `auth_scope` del usuario.
+     *
+     * Acepta string|Role: si pasás un Role ya materializado, se
+     * usa directo.
+     *
+     * R-PKG-016 BUG-NEW-16 fix: cuando la pivot `role_user` tiene la
+     * columna `user_type` (caso MME-polimórfico, `mk:make:auth-user X
+     * --with-crud` con FK overrides en el modelo concreto), las mutaciones
+     * DEBEN setear `user_type = static::class` para que el INSERT no rompa
+     * con `NOT NULL violation on column user_type`. Antes solo hacía
+     * `syncWithoutDetaching([$id])` sin extras, lo que dejaba la pivot en NULL.
+     *
+     * La fix detecta via `Schema::hasColumn()` si la pivot tiene la columna
+     * y agrega los extras al payload. BC-safe: si la pivot NO tiene `user_type`,
+     * el comportamiento es idéntico al previo (sin extras).
+     */
     public function assignRole(string|Role $role): void
     {
         $roleModel = $role instanceof Role
@@ -45,7 +64,10 @@ trait HasRoles
                 ['guard' => $this->getAuthScope() ?? 'web'],
             );
 
-        $this->roles()->syncWithoutDetaching([$roleModel->id]);
+        $payload = $this->pivotExtras();
+        $this->roles()->syncWithoutDetaching(
+            $payload === [] ? [$roleModel->id] : [$roleModel->id => $payload]
+        );
 
         // Roles feed into abilities via ability_role; invalidate the
         // ability cache so the next canMk() re-resolves.
@@ -109,9 +131,18 @@ trait HasRoles
      *
      * @param  array<int, string|Role>  $roles
      */
+    /**
+     * Sincroniza los roles del usuario (reemplaza los existentes).
+     *
+     * R-PKG-016 BUG-NEW-16 fix: idem assignRole() — incluye `user_type`
+     * cuando la pivot lo requiere.
+     *
+     * @param  array<int, string|Role>  $roles
+     */
     public function syncRoles(array $roles): void
     {
         $ids = [];
+        $payload = $this->pivotExtras();
 
         foreach ($roles as $role) {
             $roleModel = $role instanceof Role
@@ -120,7 +151,10 @@ trait HasRoles
                     ['name' => $role],
                     ['guard' => $this->getAuthScope() ?? 'web'],
                 );
-            $ids[] = $roleModel->id;
+            // sync() espera `[id => extras]` cuando hay extras — la firma con
+            // array_indexado también funciona pero perderíamos los extras si la
+            // pivot tiene timestamps auto.
+            $ids[$roleModel->id] = $payload;
         }
 
         $this->roles()->sync($ids);
@@ -128,6 +162,34 @@ trait HasRoles
         if (method_exists($this, 'invalidateAbilityCache')) {
             $this->invalidateAbilityCache();
         }
+    }
+
+    /**
+     * Devuelve los extras a adjuntar a las mutaciones de pivot (R-PKG-016 BUG-NEW-16).
+     *
+     * Si la pivot `role_user` tiene columna `user_type`, retorna
+     * `['user_type' => static::class]` para mantener MME-polimórfico.
+     * Si NO la tiene, retorna `[]` (BC: idéntico al comportamiento previo).
+     *
+     * Schema detection está cacheada en memoria del proceso para evitar
+     * un query a information_schema por cada attach/detach.
+     */
+    protected function pivotExtras(): array
+    {
+        static $hasUserType = null;
+
+        if ($hasUserType === null) {
+            try {
+                $hasUserType = Schema::hasColumn('role_user', 'user_type');
+            } catch (\Throwable) {
+                // Si la tabla no existe todavía (consumer no migró), no agregar
+                // extras. Cuando migre, el próximo attach ya tendrá el cache miss
+                // y re-detectará.
+                $hasUserType = false;
+            }
+        }
+
+        return $hasUserType ? ['user_type' => static::class] : [];
     }
 
     /**

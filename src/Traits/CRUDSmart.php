@@ -266,8 +266,15 @@ trait CRUDSmart
 
     /**
      * GET /resource/{id} - Ver detalle
+     *
+     * R-PKG-016 BUG-NEW-20 fix: el parámetro `$id` ahora acepta `string|int`
+     * porque consumers que usan `HasUuids` (RETO, otros) generan IDs string
+     * tipo `01HXYZ...`. La firma previa `int $id` lanzaba TypeError al primer
+     * GET /api/{scope}/{uuid} después de migrar a UUIDs.
+     *
+     * El casteo se hace internamente vía `findOrFail` que acepta ambos tipos.
      */
-    public function show(Request $request, int $id)
+    public function show(Request $request, string|int $id)
     {
         $modelClass = $this->getModel();
         $service = $this->getService();
@@ -364,8 +371,10 @@ trait CRUDSmart
 
     /**
      * PUT/PATCH /resource/{id} - Actualizar
+     *
+     * R-PKG-016 BUG-NEW-20 fix: ver show() — acepta string|int para UUIDs.
      */
-    public function update(Request $request, int $id)
+    public function update(Request $request, string|int $id)
     {
         $modelClass = $this->getModel();
         $service = $this->getService();
@@ -418,8 +427,10 @@ trait CRUDSmart
 
     /**
      * DELETE /resource/{id} - Eliminar
+     *
+     * R-PKG-016 BUG-NEW-20 fix: ver show() — acepta string|int para UUIDs.
      */
-    public function destroy(Request $request, int $id)
+    public function destroy(Request $request, string|int $id)
     {
         $modelClass = $this->getModel();
         $service = $this->getService();

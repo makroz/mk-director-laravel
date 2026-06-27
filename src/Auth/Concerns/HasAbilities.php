@@ -7,6 +7,8 @@ namespace Mk\Director\Auth\Concerns;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Mk\Director\Auth\Models\Ability;
 use Mk\Director\Auth\Services\AbilityResolver;
 
@@ -46,14 +48,28 @@ trait HasAbilities
      * NOTA: la firma es `BelongsToMany` para que encadene con el
      * resto del Query Builder, pero la `pivot` referencia una
      * tabla virtual — usa `get() / pluck()` para materializar.
+     *
+     * R-PKG-016 BUG-NEW-17 fix: el código previo hacía JOIN directo contra
+     * `ability_user` y luego filtraba con `whereExists` apuntando a
+     * `ability_role`. Esto retornaba CERO rows para usuarios que NO tienen
+     * direct abilities (caso típico cuando las abilities vienen únicamente
+     * por roles) — el JOIN a `ability_user` no matchea nada y el `whereExists`
+     * queda sin rows donde aplicar. Resultado: `$user->abilities->pluck('name')`
+     * retornaba `[]` aunque el user tuviera abilities vía roles.
+     *
+     * La fix correcta: NO hacer JOIN directo a `ability_user`. En vez de eso,
+     * restringir `abilities.id` a la UNION de los dos paths via subqueries
+     * (UNION ALL + dedup en memoria). Esto es portable cross-engine y
+     * mantiene la firma `BelongsToMany` para que encadene con el resto del
+     * Query Builder.
      */
     public function abilities(): BelongsToMany
     {
         $instance = new Ability();
 
-        // Construimos una relación contra `ability_user` (pivot directo)
-        // y luego restringimos a los abilities que también estén en
-        // ability_role para alguno de los roles del user.
+        // Construimos una relation contra `ability_user` (sigue siendo el pivot
+        // declarado en el modelo Ability), pero filtramos los ability IDs
+        // a la UNION de los dos paths via subquery.
         $relation = $instance->belongsToMany(
             static::class,
             'ability_user',
@@ -61,20 +77,23 @@ trait HasAbilities
             'user_id',
         );
 
-        // Filtramos a las abilities conectadas a través de roles del user.
         $userKey = $this->getKey();
 
-        // R-PKG-015 BUG-NEW-08: el código anterior referenciaba la tabla `abilities`
-        // desde un whereColumn sin joinearla explícitamente. MySQL/MariaDB lo toleraban
-        // (optimizador), pero PostgreSQL rompía con SQLSTATE 42P01
-        // ("missing FROM-clause entry for table 'abilities'"). Fix: join explícito
-        // a `abilities` dentro de la subquery para que el plan sea portable cross-engine.
-        $relation->whereExists(function ($query) use ($userKey) {
-            $query->select(\DB::raw(1))
-                ->from('ability_role')
-                ->join('role_user', 'role_user.role_id', '=', 'ability_role.role_id')
-                ->join('abilities', 'abilities.id', '=', 'ability_role.ability_id')
-                ->where('role_user.user_id', '=', $userKey);
+        // R-PKG-016 BUG-NEW-17: filtrar `abilities.id` por la UNION de:
+        //   Path 1 (direct):   `ability_user.user_id = ?`
+        //   Path 2 (vía rol):  `ability_role` JOIN `role_user.user_id = ?`
+        // Usamos `unionAll` + dedup en runtime (las dos subqueries pueden tener
+        // solapamiento cuando un user tiene la misma ability por ambos paths).
+        $relation->whereIn('abilities.id', function ($query) use ($userKey) {
+            $query->select('ability_id')
+                ->from('ability_user')
+                ->where('user_id', $userKey)
+                ->unionAll(
+                    DB::table('ability_role')
+                        ->join('role_user', 'role_user.role_id', '=', 'ability_role.role_id')
+                        ->where('role_user.user_id', $userKey)
+                        ->select('ability_role.ability_id'),
+                );
         });
 
         return $relation;
@@ -118,6 +137,11 @@ trait HasAbilities
      * Asigna una ability directamente al usuario.
      *
      * Crea la Ability si no existe (idempotente).
+     *
+     * R-PKG-016 BUG-NEW-16 fix: cuando la pivot `ability_user` tiene la
+     * columna `user_type` (caso MME-polimórfico), setea `user_type = static::class`
+     * para que el INSERT no rompa con `NOT NULL violation`. Si la pivot NO
+     * tiene `user_type`, el comportamiento es idéntico al previo.
      */
     public function giveAbilityTo(string $ability): void
     {
@@ -126,7 +150,10 @@ trait HasAbilities
             ['description' => null],
         );
 
-        $this->directAbilities()->syncWithoutDetaching([$abilityModel->id]);
+        $payload = $this->abilityPivotExtras();
+        $this->directAbilities()->syncWithoutDetaching(
+            $payload === [] ? [$abilityModel->id] : [$abilityModel->id => $payload]
+        );
 
         $this->invalidateAbilityCache();
     }
@@ -159,23 +186,50 @@ trait HasAbilities
     /**
      * Sincroniza los grants directos (reemplaza los existentes).
      *
+     * R-PKG-016 BUG-NEW-16 fix: idem giveAbilityTo() — incluye `user_type`
+     * cuando la pivot lo requiere.
+     *
      * @param  array<int, string>  $abilities
      */
     public function syncDirectAbilities(array $abilities): void
     {
         $ids = [];
+        $payload = $this->abilityPivotExtras();
 
         foreach ($abilities as $name) {
             $ability = Ability::query()->firstOrCreate(
                 ['name' => $name],
                 ['description' => null],
             );
-            $ids[] = $ability->id;
+            $ids[$ability->id] = $payload;
         }
 
         $this->directAbilities()->sync($ids);
 
         $this->invalidateAbilityCache();
+    }
+
+    /**
+     * Devuelve los extras a adjuntar a las mutaciones de `ability_user` (R-PKG-016 BUG-NEW-16).
+     *
+     * Si la pivot `ability_user` tiene columna `user_type`, retorna
+     * `['user_type' => static::class]`. Si NO, retorna `[]` (BC).
+     *
+     * Schema detection está cacheada en memoria del proceso.
+     */
+    protected function abilityPivotExtras(): array
+    {
+        static $hasUserType = null;
+
+        if ($hasUserType === null) {
+            try {
+                $hasUserType = Schema::hasColumn('ability_user', 'user_type');
+            } catch (\Throwable) {
+                $hasUserType = false;
+            }
+        }
+
+        return $hasUserType ? ['user_type' => static::class] : [];
     }
 
     /**

@@ -25,6 +25,14 @@ use Mk\Director\Controllers\SmartController;
  * via `mk:module --with-rbac` por separado).
  *
  * **MME (R-MK-001)**: NO usar `Role` o `User` directamente — usar `Ability` del paquete.
+ *
+ * R-PKG-016 BUG-NEW-18 fix: `with` y `allowedIncludes` ahora son arrays VACÍOS.
+ * Antes declaraban `['roles']` asumiendo que el modelo Ability tiene relación
+ * `roles()` (como Role tiene `abilities()`). NO la tiene — Ability solo tiene
+ * `users()` (vía `ability_user`). Resultado: `GET /api/abilities` crasheaba con
+ * `Call to undefined relationship [roles] on model [Mk\Director\Auth\Models\Ability]`.
+ * El fix deja `with: []` y `allowedIncludes: []` para este controller; si un
+ * consumer custom necesita eager loading, override `$mkConfig` en la subclase.
  */
 class AbilityController extends SmartController
 {
@@ -35,8 +43,8 @@ class AbilityController extends SmartController
         'model'           => Ability::class,
         'service'         => {{ModuleName}}Service::class,
         'searchable'      => ['name', 'description'],
-        'with'            => ['roles'],
-        'allowedIncludes' => ['roles'],
+        'with'            => [],
+        'allowedIncludes' => [],
         'features'        => [
             'auto_cache' => true,
             'remember_state' => true,

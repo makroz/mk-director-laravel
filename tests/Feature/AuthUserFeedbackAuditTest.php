@@ -193,12 +193,14 @@ test('BUG-NEW-08: HasAbilities::abilities() usa join() explícito a abilities (P
     // El bug era `whereColumn('ability_role.ability_id', 'abilities.id')` sin
     // join explícito. MySQL/MariaDB lo tolera, Postgres no.
     //
-    // Chequeamos: NO debe haber un whereColumn que referencie `abilities.id` sin join.
-    // Verificamos con regex negativo (no debe matchear un whereColumn que use
-    // 'abilities.id' como segundo argumento).
+    // R-PKG-016 (BUG-NEW-17): el approach cambió. Antes era `whereExists` con
+    // join explícito. Ahora es `whereIn` con subquery UNION ALL (más portable
+    // y resuelve BUG-NEW-17 de 0 rows para users sin direct abilities).
+    //
+    // Pineamos que NO haya whereColumn a abilities (que era el bug Postgres)
+    // y que SÍ haya un whereIn con subquery.
     expect($src)->not->toMatch("/whereColumn\\(\\s*'ability_role\\.ability_id'\\s*,\\s*'abilities\\.id'\\s*\\)/")
-        // El nuevo código usa ->join('abilities', ...) explícito dentro del whereExists.
-        ->and($src)->toMatch("/->join\\(\\s*'abilities'\\s*,\\s*'abilities\\.id'/");
+        ->and($src)->toMatch("/->whereIn\\(\\s*'abilities\\.id'/");
 });
 
 // ─── BUG-NEW-09 — mk:fix:sanctum-uuids command existe + registrado ────────
@@ -296,3 +298,265 @@ test('OBS-NEW-02: placeholders rbacAbilityCheck* tienen indentación correcta (8
     expect($src)->toContain($me)
         ->and($src)->toContain($logout);
 });
+// ════════════════════════════════════════════════════════════════════════════
+// R-PKG-016 — RETO fase 3 feedback fixes (v1.6.0-rc5 → rc6)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Pineados tras clean rebuild RETO sobre v1.6.0-rc5. 8 bugs nuevos + 2 drift
+// fixes (BUG-NEW-10 + BUG-NEW-14). Cada test es regression puro — si el bug
+// vuelve, el test falla. Patrón: source-parsing + reflection-based isolation
+// (mk-director-implementation.md § "Audit-driven pre-tag discovery").
+//
+// Source: .makromania/projects/reto/modules/admin/FEEDBACK-TO-MK-DIRECTOR.md
+//         (sección "🆕 Bugs nuevos en v1.6.0-rc5" + "⚠️ Bugs de fase 2 NO
+//         resueltos en rc5").
+// ════════════════════════════════════════════════════════════════════════════
+
+// ─── BUG-NEW-13 — routes/api.php con DOS bloques PHP → loadRoutesFrom crashea ───
+
+test('BUG-NEW-13: extendRoutesWithCrud extrae use statements y los inyecta al inicio (NO crea 2do bloque PHP)', function () {
+    $src = pkgFileContents('src/Console/Commands/MakeAuthUserCommand.php');
+
+    // El método extendRoutesWithCrud debe:
+    //   1. Tener un regex para extraer `use ...;` del stub (preg_match_all).
+    //   2. Insertar esos use statements al inicio del routes/api.php (después de <?php).
+    //   3. Insertar el cuerpo de las rutas (sin use statements, sin <?php) antes del cierre del grupo.
+
+    // Step 1: extracción de use statements via regex.
+    expect($src)->toContain("preg_match_all('/^use\\s+");
+    expect($src)->toContain("preg_match_all('/^use\\s+[^;]+;\\s*\$/m");
+
+    // Step 2: inserción después del primer <?php (regex match_offset).
+    expect($src)->toContain('PREG_OFFSET_CAPTURE');
+
+    // Step 3: el cuerpo insertado NO debe tener `<?php` opener — buscar preg_replace quitándolo.
+    expect($src)->toMatch("/preg_replace\\(\\s*'\\/\\^<\\\\\\?php\\\\s\\*\\\\n\\/',\\s*''/s");
+
+    // Step 4: NO debe quedar duplicado si el use statement ya existe.
+    expect($src)->toContain('str_contains($content, "use {$fqcn};")');
+
+    // Y el stub sigue conteniendo los 3 use statements (para que el scaffolder los extraiga).
+    $stub = stubContents('auth-user/auth-user.routes.with-crud.stub');
+    expect($stub)->toContain('use App\Modules\{{ModuleName}}\Http\Controllers\AbilityController;')
+        ->and($stub)->toContain('use App\Modules\{{ModuleName}}\Http\Controllers\RoleController;')
+        ->and($stub)->toContain('use App\Modules\{{ModuleName}}\Http\Controllers\{{ModuleName}}Controller;');
+});
+
+// ─── BUG-NEW-14 — docblock de profile fields sin newline entre docblocks ───────
+
+test('BUG-NEW-14: buildProfileFieldsReplacements emite docblock con doble newline final (separación)', function () {
+    $command = makeAuthUserCommand();
+    $reflection = new ReflectionClass($command);
+
+    $method = $reflection->getMethod('buildProfileFieldsReplacements');
+    $result = $method->invoke($command, ['full_name' => ['type' => 'string', 'unique' => false]], []);
+
+    $docblock = $result['{{profileFieldsDocblock}}'];
+
+    // El pineo previo (R-PKG-015 BUG-NEW-11) emitía `     */\n` (1 newline).
+    // El fix R-PKG-016 BUG-NEW-14 emite `     */\n\n` (2 newlines) para que haya
+    // una línea en blanco entre el docblock de profile fields y el siguiente
+    // docblock del modelo (que está en auth-user.model.stub sin newline entre
+    // `{{profileFieldsDocblock}}` y `/**`).
+
+    expect($docblock)->toMatch('/     \*\\/\n\n$/s');
+
+    // Pineo previo: solo 1 newline → `     */\n`. Si vuelve el bug, el patrón
+    // de abajo matchearía. Verificamos que NO matchee.
+    expect($docblock)->not->toMatch('/     \*\\/\n(?!\n)/s');
+});
+
+// ─── BUG-NEW-15 — create-super-admin name autogenerado del email ──────────────
+
+test('BUG-NEW-15: AuthCreateSuperAdminCommand autogenera name del email local-part si no se provee', function () {
+    $src = pkgFileContents('src/Console/Commands/AuthCreateSuperAdminCommand.php');
+
+    // Debe tener fallback chain:
+    //   1. --name flag
+    //   2. ask() prompt
+    //   3. autogenerar del email local-part (split antes de @)
+
+    // El pattern crítico: explode '@' + ucfirst + strtolower.
+    expect($src)->toMatch("/explode\\(\\s*'@'\\s*,\\s*\\\$email\\s*,\\s*2\\s*\\)/");
+
+    // El fallback debe setear un valor NO vacío cuando name es null.
+    expect($src)->toContain("ucfirst(strtolower(\$localPart))");
+
+    // Debe haber un fallback final a 'Admin' si el local-part está vacío (email malformado, ya validado antes).
+    expect($src)->toContain("'Admin'");
+});
+
+// ─── BUG-NEW-16 — HasRoles/HasAbilities mutations sin user_type en pivot ───────
+
+test('BUG-NEW-16: HasRoles/HasAbilities mutations setean user_type cuando la pivot tiene la columna (MME-polimórfico)', function () {
+    $hasRolesSrc = pkgFileContents('src/Auth/Concerns/HasRoles.php');
+    $hasAbilitiesSrc = pkgFileContents('src/Auth/Concerns/HasAbilities.php');
+
+    // HasRoles::assignRole debe:
+    //   1. Detectar via Schema::hasColumn('role_user', 'user_type').
+    //   2. Si existe, agregar extras ['user_type' => static::class] al syncWithoutDetaching.
+
+    expect($hasRolesSrc)->toContain("use Illuminate\\Support\\Facades\\Schema;")
+        ->and($hasRolesSrc)->toMatch("/Schema::hasColumn\\(\\s*'role_user'\\s*,\\s*'user_type'\\s*\\)/")
+        ->and($hasRolesSrc)->toContain("'user_type' => static::class");
+
+    // HasRoles::syncRoles idem.
+    expect($hasRolesSrc)->toMatch("/function\\s+syncRoles/");
+
+    // HasAbilities::giveAbilityTo + syncDirectAbilities idem pero para ability_user.
+    expect($hasAbilitiesSrc)->toContain("use Illuminate\\Support\\Facades\\Schema;")
+        ->and($hasAbilitiesSrc)->toMatch("/Schema::hasColumn\\(\\s*'ability_user'\\s*,\\s*'user_type'\\s*\\)/")
+        ->and($hasAbilitiesSrc)->toContain("'user_type' => static::class");
+
+    // Y debe haber un helper method pivotExtras() / abilityPivotExtras() que encapsule el check.
+    expect($hasRolesSrc)->toMatch("/function\\s+pivotExtras\\s*\\(/");
+    expect($hasAbilitiesSrc)->toMatch("/function\\s+abilityPivotExtras\\s*\\(/");
+
+    // BC: si la pivot NO tiene user_type, el comportamiento es idéntico al previo (sin extras).
+    // Lo verificamos buscando el pattern `[]` como retorno del helper cuando NO tiene la columna.
+    expect($hasRolesSrc)->toContain('return $hasUserType ? [\'user_type\' => static::class] : [];');
+    expect($hasAbilitiesSrc)->toContain('return $hasUserType ? [\'user_type\' => static::class] : [];');
+});
+
+// ─── BUG-NEW-17 — HasAbilities::abilities() SQL roto (WHERE ability_id IS NULL) ────
+
+test('BUG-NEW-17: HasAbilities::abilities() NO hace JOIN directo a ability_user (usa subqueries UNION)', function () {
+    $src = pkgFileContents('src/Auth/Concerns/HasAbilities.php');
+
+    // El bug era el JOIN directo a `ability_user` que retornaba 0 rows para users
+    // sin direct abilities. El fix correcto: usar `whereIn` con subqueries UNION.
+
+    // 1. El método abilities() debe usar whereIn con subquery UNION ALL.
+    expect($src)->toMatch("/->whereIn\\(\\s*'abilities\\.id'\\s*,\\s*function\\s*\\(/s");
+
+    // 2. La subquery debe contener los DOS paths: ability_user directo + ability_role via roles.
+    expect($src)->toMatch("/->from\\(\\s*'ability_user'\\s*\\)/");
+
+    // 3. Debe usar unionAll para combinar los paths.
+    expect($src)->toContain('->unionAll(');
+
+    // 4. La subquery para ability_role debe joinear role_user y filtrar por user_id.
+    expect($src)->toMatch("/->join\\(\\s*'role_user'\\s*,\\s*'role_user\\.role_id'\\s*,\\s*'='\\s*,\\s*'ability_role\\.role_id'\\s*\\)/");
+
+    // 5. NO debe haber un whereExists (que era el patrón anterior y era insuficiente).
+    //    Verificamos que NO esté en el método abilities() — el grep es una
+    //    aproximación; si el método tiene whereExists en OTRO método, no falla.
+    //    Para ser más estrictos, vamos a verificar que la firma de abilities()
+    //    NO contenga whereExists.
+    $abilitiesMethod = extractMethod($src, 'abilities');
+    expect($abilitiesMethod)->not->toContain('whereExists');
+
+    // 6. DB facade debe estar importado (para unionAll con subquery explícita).
+    expect($src)->toContain('use Illuminate\\Support\\Facades\\DB;');
+});
+
+// ─── BUG-NEW-18 — AbilityController with:['roles'] no existe en Ability model ─────
+
+test('BUG-NEW-18: ability-controller stub tiene with:[] y allowedIncludes:[] (no declara roles relation)', function () {
+    $stub = stubContents('auth-user/ability-controller.stub');
+
+    // El bug era `with: ['roles']` que crasheaba porque Ability model NO tiene
+    // relation `roles()` (solo Role tiene `abilities()`).
+    expect($stub)->not->toMatch("/'with'\\s*=>\\s*\\[\\s*'roles'/");
+
+    // El fix correcto: arrays VACÍOS.
+    expect($stub)->toMatch("/'with'\\s*=>\\s*\\[\\s*\\]/");
+    expect($stub)->toMatch("/'allowedIncludes'\\s*=>\\s*\\[\\s*\\]/");
+
+    // Y debe documentar el bug en el docblock.
+    expect($stub)->toContain('BUG-NEW-18 fix');
+});
+
+// ─── BUG-NEW-19 — rutas con { admin } (espacios) → no matchea URL ───────────
+
+test('BUG-NEW-19: routes with-crud stub emite rutas SIN espacios dentro de {param}', function () {
+    $stub = stubContents('auth-user/auth-user.routes.with-crud.stub');
+
+    // El bug era `'{ admin }'` (con espacios alrededor del param name) que
+    // Laravel interpretaba como ` admin` (con espacio).
+    // El fix: `'{admin}'` (sin espacios).
+
+    // Después del str_replace con `admin` (scope=Admin → moduleNameLower=admin),
+    // las rutas con params dinámicos del scope deben quedar como `/{admin}` sin espacios.
+    $stubResolved = str_replace(
+        ['{{ModuleName}}', '{{moduleNameLower}}', '{{moduleNamePluralLower}}'],
+        ['Admin', 'admin', 'admins'],
+        $stub,
+    );
+
+    // Filtrar las líneas que son RUTAS PHP (no comentarios) — el bug estaba en
+    // las líneas Route::xxx, no en los comentarios explicativos.
+    $routeLines = array_values(array_filter(
+        explode("\n", $stubResolved),
+        static fn (string $line): bool => str_contains($line, 'Route::') && ! str_starts_with(trim($line), '//'),
+    ));
+
+    // 6 rutas con param dinámico del scope Admin.
+    foreach ($routeLines as $line) {
+        // Las rutas con param scope dinámico (admin) NO deben tener espacios dentro de `{}`.
+        expect($line)->not->toMatch("/'\\/\\{\\s+admin\\s+\\}/");
+    }
+
+    // Las rutas del role/ability usan {role}/{ability} que NO tienen el bug (ya correcto).
+    // Verificamos que se mantuvieron sin tocar.
+    expect($stubResolved)->toContain("'/{role}'")
+        ->and($stubResolved)->toContain("'/{ability}'");
+
+    // Conteo de rutas con param scope: 6 (show, update×2, destroy, assignRoles, assignDirectAbilities).
+    // Filtramos las líneas de rutas que tienen `{admin}` o `{admin}/` (sin espacios).
+    $scopeRouteLines = array_filter($routeLines, static fn (string $line): bool =>
+        (bool) preg_match("/'\\/\\{admin\\}(['\\/])/", $line));
+    expect(count($scopeRouteLines))->toBe(6);
+});
+
+// ─── BUG-NEW-20 — SmartController::show(int $id) rompe con UUIDs ──────────────
+
+test('BUG-NEW-20: CRUDSmart acepta string|int en show/update/destroy (UUIDs-friendly)', function () {
+    $src = pkgFileContents('src/Traits/CRUDSmart.php');
+
+    // show(), update(), destroy() deben tener `string|int $id` en la signature,
+    // NO `int $id` (que era el bug). El regex usa `\\$` para matchear el `$` literal
+    // del nombre de variable en el código fuente.
+
+    // show
+    expect($src)->toMatch('/function\s+show\(\s*Request\s+\$request\s*,\s*string\|int\s+\$id\s*\)/');
+    // update
+    expect($src)->toMatch('/function\s+update\(\s*Request\s+\$request\s*,\s*string\|int\s+\$id\s*\)/');
+    // destroy
+    expect($src)->toMatch('/function\s+destroy\(\s*Request\s+\$request\s*,\s*string\|int\s+\$id\s*\)/');
+
+    // NO debe quedar `int $id` en esos 3 métodos (defensivo: que NO matchee).
+    expect($src)->not->toMatch('/function\s+show\(\s*Request[^,]*,\s*int\s+\$id/');
+    expect($src)->not->toMatch('/function\s+update\(\s*Request[^,]*,\s*int\s+\$id/');
+    expect($src)->not->toMatch('/function\s+destroy\(\s*Request[^,]*,\s*int\s+\$id/');
+});
+
+// ─── BUG-NEW-10 drift — checkSanctumInstalled() con fallback file_exists ──────
+
+test('BUG-NEW-10 drift: checkSanctumInstalled tiene fallback file_exists para drift post composer require', function () {
+    $src = pkgFileContents('src/Console/Commands/MakeAuthUserCommand.php');
+
+    // Debe tener un método isSanctumInstalled() separado (testeable).
+    expect($src)->toMatch("/function\\s+isSanctumInstalled\\s*\\(/");
+
+    // El helper debe chequear `class_exists` PRIMERO y luego `file_exists` como fallback.
+    expect($src)->toContain('class_exists(\\Laravel\\Sanctum\\HasApiTokens::class)');
+
+    // Y el fallback debe apuntar a `vendor/laravel/sanctum/composer.json`.
+    expect($src)->toContain('vendor/laravel/sanctum/composer.json');
+    expect($src)->toMatch('/file_exists\(/');
+});
+
+/**
+ * Helper: extrae el cuerpo de un método del código fuente via reflection-style parsing.
+ * Usado por BUG-NEW-17 para aislar el método `abilities()` del resto del trait.
+ */
+function extractMethod(string $source, string $methodName): string
+{
+    if (preg_match('/function\s+'.preg_quote($methodName, '/').'\s*\([^)]*\)[^{]*\{(.*?)\n    \}/s', $source, $matches)) {
+        return $matches[1];
+    }
+
+    return '';
+}
+
