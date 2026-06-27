@@ -71,9 +71,11 @@ test('bootHasTenantScope short-circuits when $usesTenant is false', function () 
     };
 
     // Force boot by calling the static boot method directly.
+    // R-PKG-022 BUG-NEW-32 + HALLAZGO-NEW-05: `bootHasTenantScope` is public,
+    // so `setAccessible(true)` is unnecessary AND emits a deprecation warning
+    // since PHP 8.5. Removed.
     $reflection = new \ReflectionClass($model);
     $boot = $reflection->getMethod('bootHasTenantScope');
-    $boot->setAccessible(true);
     $boot->invoke(null);
 
     expect($model::hasGlobalScope('tenant'))->toBeFalse();

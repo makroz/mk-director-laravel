@@ -127,8 +127,10 @@ class MkBelongsToMany extends BelongsToMany
             }
 
             $targetProp = $targetReflection->getProperty($sourceProp->getName());
-            $sourceProp->setAccessible(true);
-            $targetProp->setAccessible(true);
+
+            // R-PKG-022 BUG-NEW-32: removed `setAccessible(true)` (deprecated PHP 8.5,
+            // no-op since PHP 8.1 — properties are accessible by default).
+            // Paquete requiere PHP 8.4+, así que no hay consumer que dependa de esto.
 
             if (! $sourceProp->isInitialized($source)) {
                 continue;
@@ -244,7 +246,12 @@ class MkBelongsToMany extends BelongsToMany
         }
 
         $prop = $reflection->getProperty('using');
-        $prop->setAccessible(true);
+
+        // R-PKG-022 BUG-NEW-32: removed `setAccessible(true)` (deprecated PHP 8.5).
+        // `using` es property protected de BelongsToMany. Acceder via ReflectionProperty
+        // sigue funcionando sin setAccessible desde PHP 8.1+ cuando el calling context
+        // puede acceder (single-class reflection, lo cual es nuestro caso — la reflection
+        // se hace desde MkBelongsToMany, subclase directa de BelongsToMany).
 
         return $prop->getValue($this);
     }

@@ -101,6 +101,16 @@ class MkMultiTenantPlugin implements MkPluginInterface
      * Returns true if the model already applies the HasTenantScope global
      * scope (so we should NOT add another predicate). We detect this via
      * class_uses_recursive (Laravel helper) with an inline fallback.
+     *
+     * R-PKG-022 BUG-NEW-32 + HALLAZGO-NEW-05: refactored from reflective
+     * access (`ReflectionProperty::setAccessible(true)` + `getValue()`) to
+     * use the public accessor {@see HasTenantScope::isTenantEnabled()}.
+     *
+     * Beneficios:
+     *  - Elimina el deprecation warning de PHP 8.5.
+     *  - API pública limpia (no reflection tricks).
+     *  - Performance: O(1) sin overhead de reflection.
+     *  - Testeable directamente con `ModelClass::isTenantEnabled()`.
      */
     protected function scopeAlreadyApplied(object $model): bool
     {
@@ -110,11 +120,20 @@ class MkMultiTenantPlugin implements MkPluginInterface
             $traits = $this->classUsesRecursive($class);
             if (in_array(\Mk\Director\Tenancy\HasTenantScope::class, $traits, true)) {
                 // The trait only registers the scope when the model set
-                // $usesTenant = true. Read that flag reflectively.
+                // $usesTenant = true. Read that flag via the public accessor.
+                //
+                // R-PKG-022: previously used reflection (deprecated PHP 8.5).
+                if (method_exists($class, 'isTenantEnabled')) {
+                    return (bool) $class::isTenantEnabled();
+                }
+
+                // Legacy fallback: model uses HasTenantScope but predates
+                // isTenantEnabled() accessor (v1.x < rc11). Conservative
+                // default — treat as enabled if property exists.
                 if (property_exists($class, 'usesTenant')) {
                     try {
                         $reflection = new \ReflectionProperty($class, 'usesTenant');
-                        $reflection->setAccessible(true);
+
                         return (bool) $reflection->getValue();
                     } catch (\Throwable) {
                         return false;

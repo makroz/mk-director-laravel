@@ -73,7 +73,7 @@ Habilita features en `config/mk_director.php`:
 
 ## Stack
 
-- PHP 8.4+
+- PHP 8.4+ (PHP 8.5-clean: `MkBelongsToMany::from()` y accessors de `HasTenantScope` no emiten deprecation warnings)
 - Laravel 13+
 - Illuminate components (Support, Database, HTTP)
 
