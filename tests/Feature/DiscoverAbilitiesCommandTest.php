@@ -161,6 +161,15 @@ function makeTestCommand(string $basePath): DiscoverAbilitiesCommand
         {
             return $this->testBasePath.($moduleName !== '' ? '/'.$moduleName : '');
         }
+
+        /**
+         * Override para tests: aceptamos cualquier namespace (no solo `App\Modules`).
+         * Los tests usan namespaces `TestNs\...` para evitar "Cannot redeclare class".
+         */
+        protected function classesNamespacePrefix(): ?string
+        {
+            return null;
+        }
     };
 }
 
@@ -667,4 +676,82 @@ PHP;
     $mkConfigAbilities = invokeProtected($setup['command'], 'discoverAbilitiesFromMkConfig', [$moduleInfo, $moduleName]);
 
     expect($mkConfigAbilities)->toBeEmpty();
+});
+
+// ─── R-PKG-019 OBS-NEW-02 regression tests ───────────────────────────────
+//
+// OBS: `mk:discover-abilities` retornaba 0 abilities en RETO cuando los
+// controllers scaffoldeados NO estaban loaded (caso típico en contexto
+// artisan CLI). El método `discoverClassesInDir()` solo iteraba
+// `get_declared_classes()`, que solo retorna clases ya autoloaded.
+// Como las controllers scaffoldeadas NO se cargan hasta que route:list o
+// el bootstrap las referencia, el command reportaba "Classes: 1" (solo
+// el AdminServiceProvider) en vez de 4 (provider + 3 controllers).
+//
+// FIX (R-PKG-019 OBS-NEW-02): `discoverClassesInDir()` ahora hace
+// `require_once` del archivo PHP ANTES de iterar `get_declared_classes()`,
+// forzando la declaración de la clase sin depender del autoload trigger.
+//
+// Estos tests pinean que:
+//   1. El código fuente contiene la lógica de require_once (source-parsing).
+//   2. End-to-end: archivos PHP REALES en disco (no eval) son descubiertos
+//      correctamente por discoverClassesInDir().
+
+test('R-PKG-019 OBS-NEW-02: discoverClassesInDir uses require_once to force-load files', function () {
+    $src = (string) file_get_contents(dirname(__DIR__, 2).'/src/Console/Commands/DiscoverAbilitiesCommand.php');
+
+    // Debe hacer require_once antes de iterar get_declared_classes.
+    expect($src)->toMatch('/require_once\s+\$realPath/');
+
+    // Debe iterar get_declared_classes (legacy behavior, preservado).
+    expect($src)->toMatch('/foreach\s*\(\s*get_declared_classes\(\)\s+as\s+\$declared\s*\)/');
+});
+
+test('end-to-end: R-PKG-019 OBS-NEW-02 — files on disk (NOT loaded) are discovered via require_once', function () {
+    // Crea archivos PHP REALES en disco (no eval). Sin el fix
+    // `require_once`, el command solo vería el ServiceProvider (si
+    // alguno) y perdería los controllers. Con el fix, los 3 archivos
+    // (controller + service + seeder) son discovered.
+    $moduleName = 'DiskModule'.uniqid();
+    $uid = str_replace('.', '', uniqid('', true));
+
+    // Namespace único para evitar "Cannot redeclare class" si los tests corren en el mismo proceso.
+    $ns = "TestNs\\{$moduleName}_{$uid}";
+
+    // Crear estructura de carpetas del módulo en tempdir.
+    $tempDir = sys_get_temp_dir()."/mk-discover-disk-{$uid}";
+    mkdir("{$tempDir}/{$moduleName}/Http/Controllers", 0755, true);
+    mkdir("{$tempDir}/{$moduleName}/Models", 0755, true);
+
+    // Escribir archivos PHP reales. NO se evalúan, solo existen en disco.
+    $controllerFile = "{$tempDir}/{$moduleName}/Http/Controllers/DiskModuleController.php";
+    file_put_contents($controllerFile, "<?php\nnamespace {$ns}\\Http\\Controllers;\nclass DiskModuleController {}\n");
+
+    $modelFile = "{$tempDir}/{$moduleName}/Models/DiskModule.php";
+    file_put_contents($modelFile, "<?php\nnamespace {$ns}\\Models;\nclass DiskModule {}\n");
+
+    // Setup comando + DB.
+    $capsule = setupSqliteWithAbilities();
+    $command = makeTestCommand($tempDir);
+    $command->setOutput(new OutputStyle(new \Symfony\Component\Console\Input\StringInput(''), new NullOutput()));
+
+    // ANTES del fix: discoverClassesInDir() retorna [] porque las clases
+    // en disco NO están loaded. POST-fix: require_once fuerza la declaración.
+    // Llamamos discoverClassesInDir directamente sobre el modulePath
+    // (más simple que pasar por discoverModules que itera carpetas).
+    $modulePath = "{$tempDir}/{$moduleName}";
+
+    // Llamar discoverModules para detectar el módulo (necesita Controllers O Models).
+    $modules = invokeProtected($command, 'discoverModules', [$tempDir]);
+
+    expect($modules)->toHaveKey($moduleName);
+    $classes = $modules[$moduleName]['classes'];
+
+    // Verificar que las 2 clases (controller + model) están discovered.
+    expect($classes)->toContain("{$ns}\\Http\\Controllers\\DiskModuleController");
+    expect($classes)->toContain("{$ns}\\Models\\DiskModule");
+    expect($classes)->toHaveCount(2);
+
+    // Cleanup.
+    (new Filesystem)->deleteDirectory($tempDir);
 });

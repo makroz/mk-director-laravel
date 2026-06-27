@@ -7,6 +7,7 @@ namespace App\Modules\{{ModuleName}}\Database\Factories;
 use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * Factory DDD del scope `{{moduleNameLower}}`.
@@ -28,14 +29,26 @@ class {{ModuleName}}Factory extends Factory
 
     public function definition(): array
     {
-        return [
+        $base = [
             'id' => $this->faker->uuid(),
             'name' => $this->faker->name(),
             'email' => $this->faker->unique()->safeEmail(),
             'password' => Hash::make('password'),
             'auth_scope' => '{{moduleNameLower}}',
-            'email_verified_at' => now(),
         ];
+
+        // R-PKG-019 BUG-NEW-28 fix: solo incluir `email_verified_at` si la
+        // tabla del modelo tiene esa columna. Antes el scaffolder emitía
+        // la factory con `email_verified_at` SIEMPRE, lo cual crasheaba
+        // con SQLSTATE HY000 en consumers que NO usaron `--verify-email`
+        // (la tabla no tiene la columna). El check `Schema::hasColumn`
+        // es BC-safe: si el scaffolder se llamó CON `--verify-email`,
+        // la columna existe y el factory funciona como antes.
+        if (Schema::hasColumn((new {{ModuleName}}())->getTable(), 'email_verified_at')) {
+            $base['email_verified_at'] = now();
+        }
+
+        return $base;
     }
 
     /**
