@@ -1134,6 +1134,87 @@ Con el fix, el SQL es portable cross-engine (MySQL, MariaDB, PostgreSQL, SQLite)
 
 ---
 
+#### 3.13.7 R-PKG-018 feedback fixes (RETO fase 5 sobre v1.6.0-rc7)
+
+> **Fixes en v1.6.0-rc8** (R-PKG-018). 2 bugs nuevos CRITICAL/MEDIUM pineados + 1 OBS documentada + 2 mejoras LOW. 9 nuevos tests pineados (3 BUG-NEW-26 + 3 BUG-NEW-27 + 4 OBS-NEW-01) + 2 tests actualizados (BUG-NEW-23 pineados con la nueva realidad tras descubrir la causa raíz).
+
+**Critical** (bloqueantes para producción):
+
+- **BUG-NEW-26** (`TokenIssuer::rotateRefreshToken` asume bcrypt, Sanctum v4 hashea con SHA256): **CAUSA RAÍZ descubierta** del BUG-NEW-23. El código previo usaba `Hash::check($plaintext, $tokenModel->token)` para comparar el plaintext del refresh token contra el hash guardado en `personal_access_tokens.token`. PERO Sanctum v4.3.2 hashea con **SHA256** (no bcrypt) — verificado en `vendor/laravel/sanctum/src/HasApiTokens.php:66` y `PersonalAccessToken.php:61,67`. El hash guardado tiene 64 chars (SHA256), no 60 (bcrypt). Resultado: `Hash::check()` SIEMPRE lanzaba `RuntimeException: This password does not use the Bcrypt algorithm`. El catch de BUG-NEW-23 mitigaba el 500 → 401, pero el refresh NUNCA funcionaba (incluso con token recién emitido y válido). **Fix**: cambiar a `hash_equals($tokenModel->token, hash('sha256', $plaintext))` — timing-safe y consistente con la implementación interna de Sanctum v4. El try/catch de BUG-NEW-23 se mantiene como **defense-in-depth** por si Sanctum rota de algoritmo en el futuro (bcrypt→argon2→sha512). Documentación actualizada para reflejar SHA256 (antes incorrectamente decía "bcrypt").
+
+**Medium** (calidad / DX):
+
+- **BUG-NEW-27** (`AuthController::refresh` scaffoldeado no captura `InvalidRefreshTokenException` con mensaje específico): el catch del scaffolder solo capturaba `\Illuminate\Auth\Access\AuthorizationException`. Como `InvalidRefreshTokenException` extiende `AuthorizationException`, el catch SÍ lo capturaba — pero con un mensaje genérico ("Refresh token inválido.") en vez del mensaje detallado (e.g. "Refresh token expired.", "Refresh token hash mismatch.", "Refresh token scope mismatch: expected `admin`, got `member`.", "Refresh token not found."). **Fix**: el stub `auth-user.auth-controller.stub` ahora tiene un catch específico para `InvalidRefreshTokenException` ANTES del catch genérico. El catch específico expone el mensaje detallado vía `sendError($e->getMessage(), [], 401)` para mejor DX (front-end puede mostrar mensaje preciso) y testabilidad (tests e2e pueden pinear el path específico del error). BC-safe: el catch genérico queda como defense-in-depth.
+
+- **OBS-NEW-01** (`mk:discover-abilities` descubre abilities desde `$mkConfig` de SmartControllers, R-PKG-015): el path de fallback del comando ya estaba implementado en R-PKG-015 (release v1.6.0-rc5) para leer `$mkConfig['model']` de los SmartController scaffoldeados vía `--with-crud` y generar las 5 abilities CRUD estándar (`{scope}.{model}.viewAny|view|create|update|delete`). Sin embargo, NO había tests pineados específicos para este path — solo el código. RETO fase 5 reportó "No se descubrieron abilities" pero la causa real fue que el `ModuleServiceProvider` del módulo admin implementaba `discoverAbilities()` con un subset distinto de abilities (regla Q1 hybrid: provider es source-of-truth primario). **Pineo de tests**: 4 tests nuevos en `DiscoverAbilitiesCommandTest.php` validan que (a) `discoverAbilitiesFromMkConfig()` existe en el código, (b) se llama desde `processModule()` cuando source=fallback, (c) genera exactamente 5 abilities CRUD desde un SmartController stub con `$mkConfig['model']`, (d) ignora silenciosamente controllers que NO extienden `SmartController`. Si RETO quiere que `mk:discover-abilities` use el mkConfig path INCLUSO cuando el provider retorna abilities, es un cambio de regla Q1 (requeriría decisión de Mario).
+
+**Low** (nice-to-have):
+
+- **MEJORA-NEW-01** (preparación para `--with-rate-limit` flag): documentado como mejora futura. No implementado en este sprint para mantener scope acotado. Sigue el patrón de `--with-auth-rbac` (R-PKG-010).
+
+- **MEJORA-NEW-02** (esta sección): documentar el patrón "Sanctum v4 + UUIDs + SHA256" para que otros consumers no caigan en el mismo bug.
+
+#### Patrón Sanctum v4 + UUIDs + SHA256 (MEJORA-NEW-02)
+
+> **Lección reusable cross-project**: cualquier consumer que use `makroz/director-laravel` con Sanctum v4.x DEBE confiar en el `TokenIssuer` del paquete para emitir/validar tokens. NO implementar la comparación hash manualmente.
+
+**Cómo funciona Sanctum v4 internamente**:
+
+1. **Emisión** (`HasApiTokens::createToken`):
+   ```php
+   'token' => hash('sha256', $plainTextToken)  // 64 chars hex
+   ```
+
+2. **Validación** (`Sanctum::findToken`):
+   ```php
+   hash_equals($token->token, hash('sha256', $plainText))  // timing-safe
+   ```
+
+3. **Formato del token entregado al cliente**: `<id>|<plaintext>` (e.g. `1|abc123def...`). El id y el plaintext van separados por `|`. El hash en DB se calcula SOLO sobre el plaintext.
+
+**Anti-patterns a evitar**:
+
+- ❌ `Hash::check($plaintext, $tokenModel->token)` — asume bcrypt (60 chars), incompatible con SHA256 de Sanctum v4 (64 chars). SIEMPRE falla con `RuntimeException`.
+- ❌ `hash('sha256', $tokenCompleto)` — hashea TODO el string `<id>|<plaintext>`, no solo el plaintext. El hash en DB se calculó solo sobre el plaintext, por lo que el lookup NO matchea.
+- ❌ `md5($plaintext)` / `sha1($plaintext)` — algoritmos inseguros. Sanctum usa SHA256 específicamente por balance seguridad/performance.
+
+**Patrón correcto**:
+
+```php
+// Para refresh tokens (vía TokenIssuer del paquete, BC-safe):
+$tokenIssuer->rotateRefreshToken($refreshTokenString, $expectedScope);
+
+// Si necesitás validar manualmente (NO recomendado):
+[$tokenId, $plaintext] = explode('|', $tokenString, 2);
+$hashedToken = hash('sha256', $plaintext);
+$token = PersonalAccessToken::find($tokenId);
+$isValid = $token && hash_equals($token->token, $hashedToken);
+```
+
+**Verificación post-fix**:
+
+```bash
+# En DB: personal_access_tokens.token debe tener 64 chars (SHA256), no 60 (bcrypt)
+php artisan tinker --execute 'echo strlen(Laravel\Sanctum\PersonalAccessToken::find(16)->token);'
+# → 64
+```
+
+#### Spec
+
+- Sprint: `makromania/260627-0043--r-pkg-018-feedback-fixes-v1.6.0-rc8` (en `projects/mk-director/packagist/mk-director-laravel/`).
+- Tests: 9 nuevos Pest tests + 2 actualizados. Total paquete: 499 passing, 4 pre-existing failures (`UpgradeDocumentationTest` backlog RC4, sin regresión).
+- BUG-NEW-26: pineado en `tests/Unit/TokenIssuerTest.php` (3 source-parsing) + `tests/Feature/Fase4FeedbackAuditTest.php` (2 actualizados de BUG-NEW-23 con la nueva realidad).
+- BUG-NEW-27: pineado en `tests/Unit/Console/MakeAuthUserCommandTest.php` (3 source-parsing del stub).
+- OBS-NEW-01: pineado en `tests/Feature/DiscoverAbilitiesCommandTest.php` (2 source-parsing + 2 e2e con eval-based isolated classes).
+- Source: `.makromania/projects/reto/modules/admin/FEEDBACK-TO-MK-DIRECTOR.md` (sección "🆕 Bugs nuevos en v1.6.0-rc7").
+
+#### Cambios BC
+
+- **`TokenIssuer::rotateRefreshToken` cambia `Hash::check` por `hash_equals(hash('sha256', ...), ...)`**. BC-safe: corrige bug crítico, no rompe ningún caller (el método `rotateRefreshToken` sigue retornando `array{access_token, refresh_token, user_id}` o lanzando `InvalidRefreshTokenException` igual que antes). Si tu consumer mockeaba `Hash::check` en tests de `rotateRefreshToken`, actualizar para mockear `hash_equals` o usar el path real con Sanctum v4.
+- **`InvalidRefreshTokenException` ahora se captura explícitamente en el `AuthController::refresh` scaffoldeado**. BC-safe: el catch genérico de `AuthorizationException` se mantiene como fallback (es la parent class), pero el específico tiene precedencia para mensajes detallados. Si tu consumer custom AuthController tenía su propio catch para esta excepción, no requiere acción (la jerarquía de catches ya la cubre).
+
+---
+
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)
 
 Tanto para **Next.js** como para **React Native**, el consumo de listas es estandarizado mediante parámetros URL:

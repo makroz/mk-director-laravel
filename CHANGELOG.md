@@ -5,6 +5,34 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0-rc8] - 2026-06-27
+
+### Fixed
+
+- **BUG-NEW-26 (CRITICAL, causa raíz de BUG-NEW-23)**: `TokenIssuer::rotateRefreshToken()` usaba `Hash::check($plaintext, $tokenModel->token)` para comparar el plaintext del refresh token contra el hash guardado en `personal_access_tokens.token`. **PERO Sanctum v4.3.2 hashea con SHA256 (no bcrypt)** — verificado en `vendor/laravel/sanctum/src/HasApiTokens.php:66` y `PersonalAccessToken.php:61,67`. El hash guardado tiene 64 chars (SHA256), no 60 (bcrypt). Resultado: `Hash::check()` SIEMPRE lanzaba `RuntimeException: This password does not use the Bcrypt algorithm`. El catch de BUG-NEW-23 mitigaba el 500 → 401, pero el refresh NUNCA funcionaba (incluso con token recién emitido y válido vía `/login`). **Fix raíz**: cambiar a `hash_equals($tokenModel->token, hash('sha256', $plaintext))` — timing-safe y consistente con la implementación interna de Sanctum v4. El try/catch de BUG-NEW-23 se mantiene como **defense-in-depth** por si Sanctum rota de algoritmo en el futuro (bcrypt→argon2→sha512). Documentación del método actualizada para reflejar SHA256 (antes incorrectamente decía "bcrypt").
+
+- **BUG-NEW-27 (MEDIUM, UX)**: el `AuthController::refresh()` scaffoldeado por `mk:make:auth-user` solo capturaba `\Illuminate\Auth\Access\AuthorizationException`. Como `InvalidRefreshTokenException` extiende `AuthorizationException`, el catch SÍ lo capturaba — pero con un mensaje genérico ("Refresh token inválido.") en vez del mensaje detallado (e.g. "Refresh token expired.", "Refresh token hash mismatch.", "Refresh token scope mismatch: expected `admin`, got `member`.", "Refresh token not found."). **Fix**: el stub `auth-user.auth-controller.stub` ahora tiene un catch específico para `InvalidRefreshTokenException` ANTES del catch genérico. El catch específico expone el mensaje detallado vía `sendError($e->getMessage(), [], 401)` para mejor DX (front-end puede mostrar mensaje preciso) y testabilidad (tests e2e pueden pinear el path específico del error). BC-safe: el catch genérico queda como defense-in-depth.
+
+### Added
+
+- **9 nuevos audit tests de regresión** distribuidos en 3 archivos:
+  - `tests/Unit/TokenIssuerTest.php`: 3 source-parsing tests pineando el fix de BUG-NEW-26 (uso de `hash_equals` + SHA256, NO `Hash::check`; docblock correcto).
+  - `tests/Unit/Console/MakeAuthUserCommandTest.php`: 3 source-parsing tests pineando el fix de BUG-NEW-27 (import de `InvalidRefreshTokenException`, orden de catches, status 401).
+  - `tests/Feature/DiscoverAbilitiesCommandTest.php`: 4 tests pineando OBS-NEW-01 (path `discoverAbilitiesFromMkConfig` funciona correctamente, genera 5 abilities CRUD desde un SmartController stub con `$mkConfig['model']`, ignora controllers que NO extienden `SmartController`).
+- **2 tests actualizados** en `tests/Feature/Fase4FeedbackAuditTest.php`: los tests pineados de BUG-NEW-23 ahora reflejan la nueva realidad tras descubrir que BUG-NEW-26 es la causa raíz. Pinan `hash_equals` + SHA256 + try/catch defense-in-depth.
+- **Documentación del patrón "Sanctum v4 + UUIDs + SHA256"** en `DEVELOPER_GUIDE.md` § 3.13.7 (MEJORA-NEW-02). Para que otros consumers no caigan en el mismo bug. Cubre: cómo funciona Sanctum v4 internamente, anti-patterns a evitar (`Hash::check`, `hash(sha256, $fullToken)`, `md5`), patrón correcto, verificación post-fix.
+
+### Notes
+
+- **OBS-NEW-01**: `mk:discover-abilities` ya tenía implementado el path de `discoverAbilitiesFromMkConfig()` desde R-PKG-015 (v1.6.0-rc5), pero no había tests pineados específicos para este path. RETO fase 5 reportó "No se descubrieron abilities" pero la causa real fue que el `ModuleServiceProvider` del módulo admin implementaba `discoverAbilities()` con un subset distinto de abilities (regla Q1 hybrid: provider es source-of-truth primario). Si RETO quiere que `mk:discover-abilities` use el path `$mkConfig` INCLUSO cuando el provider retorna abilities, es un cambio de regla Q1 (requeriría decisión de Mario).
+- **MEJORA-NEW-01** (`--with-rate-limit` flag): no implementado en este sprint para mantener scope acotado. Sigue el patrón de `--with-auth-rbac` (R-PKG-010).
+
+### Migration desde v1.6.0-rc7
+
+- **Sin acción** para todos los fixes (todos son BC-safe additive o BC-safe refactors internos).
+- Consumers con Sanctum v4.3.x: el refresh token ahora funciona correctamente sin workarounds. Si tu consumer tenía un try/catch manual alrededor de `Hash::check`, puede removerlo (el `TokenIssuer::rotateRefreshToken` del paquete ya hace la comparación SHA256 internamente).
+- Consumers con AuthController scaffoldeado: regenerar el módulo para obtener el nuevo catch específico de `InvalidRefreshTokenException`. Si tu consumer custom AuthController tiene su propia jerarquía de catches, no requiere acción.
+
 ## [1.6.0-rc7] - 2026-06-26
 
 ### Fixed
