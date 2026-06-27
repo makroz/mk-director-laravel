@@ -5,6 +5,39 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0-rc11] - 2026-06-27
+
+### Fixed
+
+- **BUG-NEW-32 (MEDIUM, HALLAZGO-NEW-05 cleanup)**: `MkBelongsToMany::from()` usaba `ReflectionProperty::setAccessible(true)` (3 lugares: líneas 130, 131, 247) que está deprecated desde PHP 8.1 y completamente sin efecto desde PHP 8.5 (emits warnings en cada `roles()` / `directAbilities()` access → contamina logs y tests). Solución: removidas las 3 llamadas (PHP 8.1+ properties son accesibles por default, paquete requiere PHP 8.4+). Defense-in-depth adicional: `MkMultiTenantPlugin::scopeAlreadyApplied()` ya no usa `ReflectionProperty::setAccessible(true)` sobre `protected static $usesTenant` — ahora consume el nuevo accessor público `HasTenantScope::isTenantEnabled()`. Defense-in-depth trade-off: 12 warnings de `setAccessible()` persisten en tests que acceden a métodos private del paquete (`LintBoundariesCommand`, `HasAbilities::invalidateAbilityCache`, `ListManager::applyJoins`) y al static `$globalScopes` de Laravel Model. Esos warnings son filterables con `php -d error_reporting=E_ALL~E_DEPRECATED vendor/bin/pest` y NO afectan runtime de consumers (son testing-only path). Cleanup completo vía `Closure::bind()` deferred a sprint de hardening futuro. Ver `tests/Unit/Database/Eloquent/Relations/MkBelongsToFromNoDeprecatedTest.php` (4 tests verde).
+
+- **BUG-NEW-33 (HIGH, HALLAZGO-NEW-04 scaffolder auto-apply)**: el scaffolder `mk:make:auth-user X --with-crud` generaba un override de `roles()` / `directAbilities()` con `BelongsToMany` stock, bypaseando el fix BUG-NEW-31 (`MkBelongsToMany::from()`). Causa raíz: el scaffolder fue creado ANTES de BUG-NEW-31 (rc9). Drift scaffolder↔trait clásico. Solución: el scaffolder ahora emite directamente el patrón completo con `->using(MkRoleUserPivot::class)` + `MkBelongsToMany::from($relation)` + FK explícita `user_id` (BUG-NEW-06 BC). Esto resuelve BUG-NEW-06 (FK override) + BUG-NEW-31 (user_type auto) simultáneamente. El override scaffoldeado cubre TODAS las mutations nativas (`attach`, `detach`, `sync`, `syncWithoutDetaching`, `toggle`, `updateExistingPivot`) out-of-the-box — sin necesidad de fix manual del consumer. Lección reusable (HALLAZGO-NEW-04): cuando un fix tiene un patrón de aplicación bien definido, el scaffolder debería aplicarlo automáticamente — documentar el patrón en CHANGELOG es necesario pero no suficiente, la UX debería ser "out of the box". Ver `tests/Unit/Console/MakeAuthUserWithCrudMkBelongsToManyTest.php` (8 tests verde) + audit e2e sandbox-laravel confirma runtime `attach()` directo setea `user_type` correctamente.
+
+### Added
+
+- **2 accessors públicos nuevos** en `src/Tenancy/HasTenantScope.php`:
+  - `public static function isTenantEnabled(): bool` — lee `$usesTenant` sin reflection. Solución de raíz al `setAccessible()` deprecated en `MkMultiTenantPlugin`.
+  - `public static function setTenantEnabled(bool $enabled): void` — toggle del flag per-instance sin redeclarar la property (PHP forbids redeclaring trait static property). Útil para testing setup y runtime opt-in/out dinámicos.
+  Ambos son BC-safe (agregar método público a trait existente es no-op para consumers).
+
+- **3 nuevos archivos de test** (17 tests, 30 assertions):
+  - `tests/Unit/Database/Eloquent/Relations/MkBelongsToFromNoDeprecatedTest.php` (4 tests): pinean que `MkBelongsToMany::from()` no emite deprecation warnings, no llama `->setAccessible()` en runtime, copia properties via reflection correctamente, y preserva late static binding.
+  - `tests/Unit/Console/MakeAuthUserWithCrudMkBelongsToManyTest.php` (8 tests): pinean que el scaffolder emite `->using(MkRoleUserPivot::class)` + `->using(MkAbilityUserPivot::class)` + `MkBelongsToMany::from($relation)` en ambos relation overrides. Mantiene FK explícita `user_id` (BUG-NEW-06 BC). Mantiene `wherePivot('user_type', static::class)` (MME-polimórfico). Regression guard: pinea que NO esté el patrón viejo `return $this->belongsToMany(...)->wherePivot(...)` en ningún heredoc.
+  - `tests/Unit/Tenancy/HasTenantScopeAccessorTest.php` (5 tests): pinean que `isTenantEnabled()` retorna default false, `setTenantEnabled(true/false)` togglea el flag, late static binding funciona, y el source contiene las firmas públicas nuevas.
+
+### Changed
+
+- `src/Database/Eloquent/Relations/MkBelongsToMany.php`: 3 `setAccessible(true)` removidos. Comportamiento idéntico, BC-clean para PHP 8.5+.
+- `src/Plugins/Enterprise/MkMultiTenantPlugin.php::scopeAlreadyApplied()`: refactor de reflection (`ReflectionProperty` + `setAccessible` + `getValue`) a llamada directa al accessor público `HasTenantScope::isTenantEnabled()`. Legacy fallback preserva comportamiento pre-rc11 si el model predates el accessor.
+- `src/Console/Commands/MakeAuthUserCommand.php`: bloques PHP heredoc de `{{rolesRelationOverride}}` y `{{directAbilitiesRelationOverride}}` actualizados para emitir el patrón completo (`->using(MkPivot::class)` + `MkBelongsToMany::from($relation)`).
+
+### Migration desde v1.6.0-rc10
+
+- **BC break válido del scaffolder output** (R-G-033-C): si tu consumer regenera un scope `mk:make:auth-user X --with-crud`, el nuevo `roles()` / `directAbilities()` override ahora usa `MkBelongsToMany::from($relation)` + `->using(MkRoleUserPivot::class)`. Si tu modelo concreto tenía un override manual con el patrón incompleto (pre-rc11), ahora podés borrarlo y regenerar — el scaffolder emite el patrón correcto out-of-the-box.
+- **BC-safe runtime** para consumers existentes que NO regeneran: los 3 `setAccessible()` removidos en `MkBelongsToMany.php` son no-ops desde PHP 8.1+ (paquete requiere PHP 8.4+), así que no hay cambio funcional.
+- **Sin acción** para el accessor público nuevo en `HasTenantScope` — es API additive. Si tu código custom usaba reflection sobre `$usesTenant`, podés migrar a `ModelClass::isTenantEnabled()` pero NO es obligatorio (la reflection legacy sigue funcionando, solo emite warning PHP 8.5).
+- **Sin acción** para el cleanup de tests — los 12 deprecation warnings restantes son testing-only path, filterables.
+
 ## [1.6.0-rc10] - 2026-06-27
 
 ### Fixed

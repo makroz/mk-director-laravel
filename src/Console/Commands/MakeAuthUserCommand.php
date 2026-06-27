@@ -315,12 +315,17 @@ class MakeAuthUserCommand extends Command
 PHP
                 : '',
             // R-PKG-015 BUG-NEW-06: FK override para `roles()`.
+            // R-PKG-022 BUG-NEW-33: extended with `->using(MkRoleUserPivot::class)`
+            // + `MkBelongsToMany::from($relation)` so the auto user_type injection
+            // applies out of the box (HALLAZGO-NEW-04: scaffolder should auto-apply
+            // well-defined patterns, not just document them).
+            //
             // Default: vacío (sin override). --with-crud: override con FK explícita.
             '{{rolesRelationOverride}}' => $withCrud
                 ? <<<PHP
 
     /**
-     * Override de `roles()` del trait HasRoles (R-PKG-015 BUG-NEW-06).
+     * Override de `roles()` del trait HasRoles (R-PKG-015 BUG-NEW-06 + R-PKG-022 BUG-NEW-33).
      *
      * Eloquent infiere la foreign key pivot del nombre del modelo (`admin_id`
      * para `App\Modules\Admin\Models\Admin`), pero la pivot `role_user` del
@@ -330,38 +335,60 @@ PHP
      * El `wherePivot('user_type', static::class)` mantiene el polimorfismo: la
      * pivot es global pero cada modelo concreto filtra por su FQCN, respetando
      * MME (R-MK-001) sin necesidad de tablas separadas por scope.
+     *
+     * R-PKG-022: el `->using(MkRoleUserPivot::class)` registra el custom Pivot
+     * class con listener `creating` que setea `user_type` automáticamente. Y
+     * `MkBelongsToMany::from(\$relation)` promote la relation a nuestra subclass
+     * custom que override `newPivot()` para inyectar `user_type` runtime ANTES
+     * de instanciar la pivot (cubre `attach()`, `sync()`, `toggle()`, etc. directo,
+     * no solo los helpers del trait). Sin esto, `\$admin->roles()->attach([1])`
+     * falla con `SQLSTATE: null value in column "user_type" violates not-null constraint`.
      */
     public function roles(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
     {
-        return \$this->belongsToMany(
+        \$relation = \$this->belongsToMany(
             \Mk\Director\Auth\Models\Role::class,
             'role_user',
             'user_id',
             'role_id',
-        )->wherePivot('user_type', static::class)->withTimestamps();
+        )
+            ->using(\Mk\Director\Auth\Pivots\MkRoleUserPivot::class)
+            ->wherePivot('user_type', static::class)
+            ->withTimestamps();
+
+        return \Mk\Director\Database\Eloquent\Relations\MkBelongsToMany::from(\$relation);
     }
 PHP
                 : '',
             // R-PKG-015 BUG-NEW-06: FK override para `directAbilities()`.
+            // R-PKG-022 BUG-NEW-33: idem BUG-NEW-33 rationale.
             // Default: vacío. --with-crud: override con FK explícita.
             '{{directAbilitiesRelationOverride}}' => $withCrud
                 ? <<<PHP
 
     /**
-     * Override de `directAbilities()` del trait HasAbilities (R-PKG-015 BUG-NEW-06).
+     * Override de `directAbilities()` del trait HasAbilities (R-PKG-015 BUG-NEW-06 + R-PKG-022 BUG-NEW-33).
      *
      * Idem rationale que `roles()`: la pivot `ability_user` usa `user_id` pero
      * Eloquent inferiría `admin_id` del nombre del modelo. Sin este override,
      * `syncDirectAbilities()` y `assignDirectAbilities()` explotan.
+     *
+     * R-PKG-022: ver `roles()` para explicación de `->using(MkAbilityUserPivot::class)`
+     * + `MkBelongsToMany::from()`. Aplica idéntico para direct abilities.
      */
     public function directAbilities(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
     {
-        return \$this->belongsToMany(
+        \$relation = \$this->belongsToMany(
             \Mk\Director\Auth\Models\Ability::class,
             'ability_user',
             'user_id',
             'ability_id',
-        )->wherePivot('user_type', static::class)->withTimestamps();
+        )
+            ->using(\Mk\Director\Auth\Pivots\MkAbilityUserPivot::class)
+            ->wherePivot('user_type', static::class)
+            ->withTimestamps();
+
+        return \Mk\Director\Database\Eloquent\Relations\MkBelongsToMany::from(\$relation);
     }
 PHP
                 : '',
