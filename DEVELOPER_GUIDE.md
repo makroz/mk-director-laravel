@@ -307,12 +307,50 @@ Ejemplos:
 #### Spec & tests
 
 - **Spec / Design**: `openspec/changes/2026-06-24-discover-abilities-to-core/`
-- **Tests**: 17 Pest tests en `tests/Feature/DiscoverAbilitiesCommandTest.php`
-  (75 assertions). Cubren: signature con 4 flags, hybrid D1
-  (provider OR fallback, never both), interactive prompt D3,
-  UPSERT idempotente, scope detection, `#[Ability]` attribute
-  TARGET_METHOD + IS_REPEATABLE, PHP 8.5 PCRE2 regex sin escape de
-  llaves, end-to-end con tempdir + SQLite in-memory (5 escenarios).
+- **Tests**: 21 Pest tests en `tests/Feature/DiscoverAbilitiesCommandTest.php`
+  (104 assertions acumuladas incluyendo los 4 nuevos de R-PKG-019 OBS-NEW-02).
+  Cubren: signature con 4 flags, hybrid D1 (provider OR fallback, never
+  both), interactive prompt D3, UPSERT idempotente, scope detection,
+  `#[Ability]` attribute TARGET_METHOD + IS_REPEATABLE, PHP 8.5 PCRE2 regex
+  sin escape de llaves, end-to-end con tempdir + SQLite in-memory (5 escenarios),
+  R-PKG-018 OBS-NEW-01 (4 tests del path `discoverAbilitiesFromMkConfig`),
+  R-PKG-019 OBS-NEW-02 (2 tests del path `require_once` para force-load
+  classes no autoloaded).
+
+#### Force-require de classes no autoloaded (R-PKG-019 OBS-NEW-02)
+
+Desde **v1.6.0-rc9**, `discoverClassesInDir()` hace `require_once` de cada
+archivo PHP antes de iterar `get_declared_classes()`. Esto fuerza la
+declaración de la clase sin depender del autoload trigger.
+
+**Por qué**: en contexto artisan CLI (comando ejecutándose sin pasar por
+`route:list` o el bootstrap completo del framework), las controllers
+scaffoldeadas típicamente NO están loaded. `get_declared_classes()` solo
+retorna clases ya cargadas en memoria, así que sin el force-require el
+command perdía las 3 controllers scaffoldeadas (solo veía el ServiceProvider).
+
+**Side-effects del `require_once`**: en proyectos Laravel siguiendo la
+convención PSR-4 (cada archivo = una clase, sin código top-level), el
+`require_once` es seguro. Si tu consumer tiene archivos PHP con código
+top-level (helpers, registro de side-effects), esos side-effects ocurrirán
+al ejecutar `mk:discover-abilities`. Trade-off explícito: la alternativa
+(parsear namespace via regex sin ejecutar el archivo) requiere conocer
+el root namespace y rechazar clases con namespaces mixtos.
+
+**Namespace prefix configurable**: el matching de clases discovered usa
+`App\Modules` como prefijo default (regla R-MK-001 — módulos bounded context
+viven bajo `app/Modules/`). El método `classesNamespacePrefix()` es
+overridable para tests o consumers que usen otro namespace root:
+
+```php
+class CustomDiscoverAbilitiesCommand extends DiscoverAbilitiesCommand
+{
+    protected function classesNamespacePrefix(): ?string
+    {
+        return 'Acme\\Modules'; // o `null` para skip prefix check
+    }
+}
+```
 
 ---
 
@@ -1212,6 +1250,142 @@ php artisan tinker --execute 'echo strlen(Laravel\Sanctum\PersonalAccessToken::f
 
 - **`TokenIssuer::rotateRefreshToken` cambia `Hash::check` por `hash_equals(hash('sha256', ...), ...)`**. BC-safe: corrige bug crítico, no rompe ningún caller (el método `rotateRefreshToken` sigue retornando `array{access_token, refresh_token, user_id}` o lanzando `InvalidRefreshTokenException` igual que antes). Si tu consumer mockeaba `Hash::check` en tests de `rotateRefreshToken`, actualizar para mockear `hash_equals` o usar el path real con Sanctum v4.
 - **`InvalidRefreshTokenException` ahora se captura explícitamente en el `AuthController::refresh` scaffoldeado**. BC-safe: el catch genérico de `AuthorizationException` se mantiene como fallback (es la parent class), pero el específico tiene precedencia para mensajes detallados. Si tu consumer custom AuthController tenía su propio catch para esta excepción, no requiere acción (la jerarquía de catches ya la cubre).
+
+#### 3.13.8 R-PKG-019 feedback fixes (RETO fase 6 sobre v1.6.0-rc8)
+
+> **Fixes en v1.6.0-rc9** (R-PKG-019). 2 bugs nuevos (1 HIGH + 1 MEDIUM) + 1 cambio BC-safe (`classesNamespacePrefix()` ahora overridable). 6 nuevos tests pineados (2 OBS-NEW-02 + 4 BUG-NEW-28). Patrón consistente con R-PKG-014..018: source-parsing + e2e eval-based.
+
+**High** (feature prometida no funcionaba end-to-end):
+
+- **OBS-NEW-02** (`mk:discover-abilities` retorna `"count": 0` por bug en `discoverClassesInDir`): el método iteraba `get_declared_classes()` que SOLO retorna clases ya loaded. En contexto artisan CLI, las controllers scaffoldeadas NO se cargan hasta que `route:list` o el bootstrap las referencia. Resultado: el comando reportaba `"Classes: 1"` (solo el `AdminServiceProvider`) en vez de 4 (provider + 3 controllers). El path `discoverAbilitiesFromMkConfig()` pineado en R-PKG-015 funcionaba en unit tests pero NO en runtime de consumers reales. **Fix**: `discoverClassesInDir()` ahora hace `require_once $realPath` ANTES de iterar `get_declared_classes()`, forzando la declaración sin depender del autoload trigger. Después del require, el matching por suffix contra `get_declared_classes()` funciona correctamente. **Side-effects documentados**: el `require_once` es seguro en proyectos Laravel siguiendo convención PSR-4 (cada archivo = una clase, sin código top-level). Si tu consumer tiene archivos con código top-level (helpers, side-effects), esos side-effects ocurrirán — trade-off explícito vs parsear namespace via regex. Ver § 3.6 "Force-require de classes no autoloaded" para el detalle completo.
+
+**Medium** (drift entre scaffolder y runtime):
+
+- **BUG-NEW-28** (`AdminFactory` scaffoldeado hardcodea `email_verified_at` siempre): el stub `admin-factory.stub` emitía `'email_verified_at' => now()` SIEMPRE, sin condicional al flag `--verify-email`. Si el scaffolder se llamaba SIN `--verify-email`, la tabla `{scope}s` NO tiene columna `email_verified_at`, y cualquier test que use `{Scope}::factory()->create()` fallaba con `SQLSTATE[HY000]: General error: 1 table admins has no column named email_verified_at`. Workaround aplicado en RETO fase 6: usar `{Scope}::create([...])` directo en tests (no factory), pero el factory pattern quedaba inutilizable. **Fix**: el stub ahora envuelve `email_verified_at` en `if (Schema::hasColumn((new {Scope}())->getTable(), 'email_verified_at'))`. Si la columna existe (consumer con `--verify-email`), la factory funciona idéntico a antes (BC-safe). Si NO existe (consumer sin `--verify-email`), el array `definition()` no incluye la key y la factory funciona sin error. Implementado con check runtime en vez de dos stubs distintos — más robusto y BC-clean.
+
+**Cambios BC-safe**:
+
+- **`classesNamespacePrefix()` ahora es un método protected overridable**. Antes el matching de clases discovered usaba `str_starts_with($declared, 'App\\Modules')` hardcoded, lo cual rechazaba clases en otros namespaces. Ahora el prefijo default sigue siendo `App\\Modules` (regla R-MK-001) pero los tests pueden override el método para retornar `null` (skip prefix check) u otro prefijo custom. BC-safe: consumers reales mantienen el comportamiento default. Solo impacta tests que extiendan `DiscoverAbilitiesCommand`.
+
+#### Patrón de validación `Schema::hasColumn` en factories scaffoldeadas (MEJORA-NEW-04)
+
+> **Lección reusable**: cuando un scaffolder genera código que asume columnas opcionales (gated por flags como `--verify-email`), el stub debe usar `Schema::hasColumn()` runtime check en vez de generar código estático condicional al flag. Esto evita drift entre el scaffolder y el schema real.
+
+**Por qué**: el scaffolder no tiene acceso al estado de la migración al momento de generar el archivo. Asumir que una columna existe (porque el scaffolder se llamó con `--verify-email`) puede ser incorrecto si el consumer revierte la migración o nunca la ejecutó. El check runtime `Schema::hasColumn()` consulta el estado actual del schema y se adapta dinámicamente.
+
+**Aplicación**: cualquier stub que genere factories, seeders, o resources que referencien columnas opcionales debe usar este patrón. Si en el futuro se agregan más flags opt-in (e.g. `--with-audit-log`, `--with-soft-deletes`), las columnas que esos flags activan deben tener el mismo check runtime.
+
+#### Spec
+
+- Sprint: `makromania/260627-0045--r-pkg-019-feedback-fixes-v1.6.0-rc9` (en `projects/mk-director/packagist/mk-director-laravel/`).
+- Tests: 6 nuevos Pest tests. Total paquete: 505 passing, 4 pre-existing failures (`UpgradeDocumentationTest` backlog RC4, sin regresión).
+- OBS-NEW-02: pineado en `tests/Feature/DiscoverAbilitiesCommandTest.php` (1 source-parsing + 1 e2e real-disk con archivos PHP creados en tempdir).
+- BUG-NEW-28: pineado en `tests/Feature/AdminUserFactoryStubTest.php` (archivo nuevo, 4 tests: source-parsing del stub, anti-regresión del hardcode, render + syntax check, render content).
+- Source: `.makromania/projects/reto/modules/admin/FEEDBACK-TO-MK-DIRECTOR.md` (sección "🐛 BUGS NUEVOS" en fase 6 sobre v1.6.0-rc8).
+
+#### 3.13.9 R-PKG-020 feedback fixes (HALLAZGO-NEW-01 + UPGRADE_1.2.md backlog cleanup)
+
+> **Fixes en v1.6.0-rc9** (R-PKG-020). Cierra el HALLAZGO-NEW-01 reportado en RETO fase 6 (`$user->roles()->attach([$id])` no incluía `user_type`) y el backlog de 4 tests pre-existing del `UpgradeDocumentationTest` que fallaban desde v1.6.0-rc4.
+
+##### HALLAZGO-NEW-01 — Pivot class con auto-set de `user_type` (solución de raíz)
+
+**Problema**: en consumers MME-polimórficos (R-MK-001, FK polimórfica con columna `user_type` en la pivot), las mutaciones nativas de Eloquent sobre las relations `roles()` y `directAbilities()` (`attach`, `detach`, `sync`, `syncWithoutDetaching`, `toggle`, `updateExistingPivot`) NO seteaban `user_type` automáticamente. Solo los métodos helper (`assignRole`, `syncRoles`, `giveAbilityTo`, `syncDirectAbilities`) lo hacían via `pivotExtras()` / `abilityPivotExtras()`.
+
+**Síntoma sin este fix**:
+```php
+$admin->roles()->attach([$roleId1, $roleId2]);
+// → SQLSTATE[23502]: null value in column "user_type" of relation "role_user" violates not-null constraint
+```
+
+Workaround aplicado en RETO fase 6: usar `syncRoles([...])` en tests en vez de `attach([...])`. El helper `AdminService::syncRoles()` scaffoldeado funcionaba OK, pero cualquier consumer que usara `attach()` directo en código custom seguía rompiendo.
+
+**Solución de raíz**: las relations `roles()` y `directAbilities()` ahora usan `->using(MkRoleUserPivot::class)` y `->using(MkAbilityUserPivot::class)`. Estas clases extienden `MkPivot` (base abstracta) que registra un listener `creating` que setea `user_type = $pivot->pivotParent->getMorphClass()` automáticamente cuando la pivot tiene la columna.
+
+**Flujo del listener** (registrado en `MkPivot::boot()`):
+
+1. **Skip si consumer override**: si `$pivot->user_type !== null` (consumer ya lo seteó via `attach($id, ['user_type' => 'X'])`), respeta su valor.
+2. **Skip si pivot legacy**: si `Schema::hasColumn($pivot->getTable(), 'user_type')` retorna `false` (cacheado en memoria del proceso), no hace nada. BC-safe con consumers legacy que NO tienen la columna.
+3. **Auto-set si MME-polimórfico**: setea `$pivot->user_type = $pivot->pivotParent->getMorphClass()` (FQCN del modelo concreto, ej: `App\Modules\Admin\Models\Admin`).
+
+**Archivos nuevos**:
+
+| Archivo | Propósito |
+|---|---|
+| `src/Auth/Pivots/MkPivot.php` | Base abstracta con `boot()` que registra el listener `creating` |
+| `src/Auth/Pivots/MkRoleUserPivot.php` | Concrete pivot para `role_user` (`protected $table = 'role_user'`) |
+| `src/Auth/Pivots/MkAbilityUserPivot.php` | Concrete pivot para `ability_user` (`protected $table = 'ability_user'`) |
+
+**Archivos modificados**:
+
+| Archivo | Cambio |
+|---|---|
+| `src/Auth/Concerns/HasRoles.php` | `roles()` ahora retorna `->using(MkRoleUserPivot::class)->withTimestamps()` |
+| `src/Auth/Concerns/HasAbilities.php` | `directAbilities()` ahora retorna `->using(MkAbilityUserPivot::class)->withTimestamps()` |
+
+**Pinear custom pivot class** (para consumers con tablas pivot custom, ej: `member_role` en lugar de `role_user`):
+
+```php
+namespace App\Modules\Member\Pivots;
+
+use Mk\Director\Auth\Pivots\MkPivot;
+
+class MkMemberRolePivot extends MkPivot
+{
+    protected $table = 'member_role';
+}
+```
+
+```php
+// En tu modelo Member:
+public function roles(): BelongsToMany
+{
+    return $this->belongsToMany(Role::class, 'member_role')
+        ->using(\App\Modules\Member\Pivots\MkMemberRolePivot::class)
+        ->withTimestamps();
+}
+```
+
+**Opt-out** (si un consumer quiere deshabilitar el auto-set):
+
+```php
+// Override sin ->using(...):
+public function roles(): BelongsToMany
+{
+    return $this->belongsToMany(Role::class, 'role_user')->withTimestamps();
+}
+```
+
+**Tests pineados** (9 nuevos en `tests/Unit/Auth/HallazgoNew01PivotTest.php`):
+
+- Source-parsing: ambas concrete classes existen y extienden `MkPivot` base.
+- Source-parsing: declaran `protected $table = 'role_user'` / `'ability_user'`.
+- Source-parsing: `HasRoles::roles()` y `HasAbilities::directAbilities()` usan `->using(MkRoleUserPivot::class)` / `MkAbilityUserPivot::class`.
+- Source-parsing: `MkPivot::boot()` registra listener `creating` con la lógica correcta.
+- Anti-regresión: listener respeta `user_type` explícito del consumer.
+- Anti-regresión: listener es no-op si la pivot NO tiene `user_type` (BC-safe).
+
+**Cross-stack impact**: 0. El cambio es interno al paquete. No afecta endpoints HTTP, contratos de Provider, ni signatures de `useAuth()` / `useMkAuth()`.
+
+##### UPGRADE_1.2.md — backlog cleanup
+
+**Problema**: el test `tests/Unit/Process/UpgradeDocumentationTest.php` tenía 4 tests fallando desde v1.6.0-rc4 porque `docs/UPGRADE_1.2.md` no existía. Era un **pre-existing failure** del backlog RC4 sin regresión, pero contaminaba la suite (505 passing / 4 failing en vez de 509/0).
+
+**Fix**: archivo `docs/UPGRADE_1.2.md` creado con:
+
+- 4 breaking changes históricos del salto 1.1.x → 1.2.x documentados con detalle (UUID primary key, opt-in multi-tenancy, MkAbility refactor, ListManager unknown operator whitelist).
+- Sección `## Rollback` explícita con 3 paths (restore from backup, manual SQL rollback, forward fix).
+- Aviso prominente de **irreversibilidad** del UUID migration (regex `irreversible|no rollback|backup`).
+- Sección `## Migration script` referenciando el companion script `bin/migrate-1.1-to-1.2.php` con sus flags (`--dry-run`, `--help`, `--connection=`).
+
+**Tests pineados**: 0 nuevos (los 4 tests pre-existing ahora pasan). Suite completa: **518 passing, 0 failing** (de 505+4 fail).
+
+#### Spec
+
+- Sprint: `makromania/260627-0045--r-pkg-020-feedback-fixes-v1.6.0-rc9` (misma rama, segunda iteración post Mario "incluir de una").
+- Tests: 9 nuevos Pest tests (HALLAZGO-NEW-01). Total paquete: **518 passing, 0 failing** (backlog RC4 cerrado).
+- HALLAZGO-NEW-01: pineado en `tests/Unit/Auth/HallazgoNew01PivotTest.php` (9 source-parsing tests: existence + table + using + listener logic + BC-safe).
+- UPGRADE_1.2.md: 4 tests pre-existing del `UpgradeDocumentationTest` ahora verde (verificado con `--filter`).
+- Source: `.makromania/projects/reto/modules/admin/FEEDBACK-TO-MK-DIRECTOR.md` (HALLAZGO-NEW-01) + audit-2026-06-17-R3-013 (UPGRADE_1.2.md backlog original).
 
 ---
 

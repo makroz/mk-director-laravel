@@ -7,6 +7,7 @@ namespace Mk\Director\Auth\Concerns;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Support\Facades\Schema;
 use Mk\Director\Auth\Models\Role;
+use Mk\Director\Auth\Pivots\MkRoleUserPivot;
 
 /**
  * HasRoles — relación many-to-many entre AuthUser y Role.
@@ -21,13 +22,28 @@ trait HasRoles
 {
     /**
      * Roles asignados al usuario.
+     *
+     * R-PKG-020 HALLAZGO-NEW-01: la relation ahora usa `using(MkRoleUserPivot::class)`
+     * para que las mutaciones nativas de Eloquent (`attach`, `detach`, `sync`,
+     * `syncWithoutDetaching`, `toggle`, `updateExistingPivot`) seteen
+     * `user_type = get_class($this)` automáticamente cuando la pivot
+     * `role_user` tiene la columna. Antes, solo los métodos helper
+     * (`assignRole`, `syncRoles`) lo hacían via `pivotExtras()`; un consumer
+     * que hiciera `$user->roles()->attach([$id])` directo fallaba con
+     * `NOT NULL constraint failed: role_user.user_type`.
+     *
+     * Si el consumer override esta relation con su propio `->using(...)`,
+     * su pivot gana (BC preservada). Si el consumer quiere opt-out de la
+     * auto-inyección, override la relation en su modelo sin `->using(MkRoleUserPivot::class)`.
      */
     public function roles(): BelongsToMany
     {
         return $this->belongsToMany(
             Role::class,
             'role_user',
-        )->withTimestamps();
+        )
+            ->using(MkRoleUserPivot::class)
+            ->withTimestamps();
     }
 
     /**

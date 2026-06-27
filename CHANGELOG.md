@@ -5,6 +5,51 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0-rc9] - 2026-06-27
+
+### Fixed
+
+- **OBS-NEW-02 (HIGH)**: `mk:discover-abilities` retornaba `"count": 0` cuando los controllers scaffoldeados NO estaban loaded (caso típico en contexto artisan CLI). Causa: `discoverClassesInDir()` solo iteraba `get_declared_classes()`, que retorna únicamente clases ya cargadas por el autoloader. Como las controllers scaffoldeadas (`AdminController`, `RoleController`, `AbilityController`) NO se cargan hasta que `route:list` o el bootstrap del framework las referencia, el command reportaba `"Classes: 1"` (solo el `AdminServiceProvider`) en vez de 4 (provider + 3 controllers). Resultado: el path `discoverAbilitiesFromMkConfig()` (pinedo en v1.6.0-rc5) funcionaba en unit tests pero NO en runtime de consumers reales — `mk:discover-abilities --force` escribía 0 filas en `{scope}_abilities`, dejando a los consumers dependiendo de seeders manuales. **Fix**: `discoverClassesInDir()` ahora hace `require_once $realPath` ANTES de iterar `get_declared_classes()`, forzando la declaración de la clase sin depender del autoload trigger. Después del require, el matching por suffix contra `get_declared_classes()` funciona correctamente. Side-effects documentados: el `require_once` es seguro en proyectos Laravel siguiendo convención PSR-4 (cada archivo = una clase, sin código top-level). Si un consumer tiene archivos con código top-level (helpers, side-effects), esos side-effects ocurrirán — trade-off explícito vs parsear namespace via regex (que requiere conocer el root namespace).
+
+- **BUG-NEW-28 (MEDIUM, drift)**: el stub `admin-factory.stub` generado por `mk:make:auth-user {Scope} --with-crud` emitía `'email_verified_at' => now()` SIEMPRE. Si el scaffolder se llamaba SIN `--verify-email`, la tabla `{scope}s` NO tiene columna `email_verified_at`, y cualquier test que use `{Scope}::factory()->create()` fallaba con `SQLSTATE[HY000]: General error: 1 table admins has no column named email_verified_at`. Workaround aplicado en RETO fase 6: usar `{Scope}::create([...])` directo en tests (no factory), pero el factory pattern quedaba inutilizable. **Fix**: el stub ahora envuelve `email_verified_at` en `if (Schema::hasColumn((new {Scope}())->getTable(), 'email_verified_at'))`. Si la columna existe (consumer con `--verify-email`), la factory funciona idéntico a antes (BC-safe). Si NO existe (consumer sin `--verify-email`), el array `definition()` no incluye la key y la factory funciona sin error. Implementado con check `Schema::hasColumn` runtime en vez de dos stubs distintos — más robusto y BC-clean.
+
+- **HALLAZGO-NEW-01 (HIGH, solución de raíz)**: `attach()`/`detach()`/`sync()`/`syncWithoutDetaching()` directos en las relations `roles()` y `directAbilities()` NO seteaban `user_type` automáticamente en consumers MME-polimórficos (FK polimórfica con columna `user_type` en la pivot). Antes, solo los métodos helper (`assignRole`, `syncRoles`, `giveAbilityTo`, `syncDirectAbilities`) lo hacían via `pivotExtras()` / `abilityPivotExtras()`. Un consumer que hiciera `$admin->roles()->attach([$id])` directo fallaba con `NOT NULL constraint failed: role_user.user_type`. Workaround aplicado en RETO fase 6: usar `syncRoles()` (que sí funciona) — pero el path `attach()` directo quedaba inutilizable para casos donde se necesita insert sin detach (ej: append). **Fix raíz**: nuevas clases `Mk\Director\Auth\Pivots\MkRoleUserPivot` y `MkAbilityUserPivot` (extienden `MkPivot` base abstracta) aplicadas via `->using(...)` en las relations. `MkPivot::boot()` registra un listener `creating` que setea `user_type = $pivot->pivotParent->getMorphClass()` (FQCN del modelo concreto, ej: `App\Modules\Admin\Models\Admin`) automáticamente cuando la pivot tiene la columna. Defense-in-depth: el listener respeta `user_type` explícito del caller (no pisa intención), es no-op si la pivot NO tiene la columna (chequeo via `Schema::hasColumn()` cacheado en memoria del proceso, evita query repetido por attach/detach), y se puede opt-out via override de `roles()`/`directAbilities()` sin `->using(...)` (estándar Laravel).
+
+- **Tests pre-existing backlog RC4 (4 tests)**: `tests/Unit/Process/UpgradeDocumentationTest.php` tenía 4 tests fallando porque `docs/UPGRADE_1.2.md` no existía. **Fix**: archivo `docs/UPGRADE_1.2.md` creado documentando los 4 breaking changes históricos del salto 1.1.x → 1.2.x (UUID primary key, opt-in multi-tenancy, MkAbility refactor, ListManager unknown operator whitelist) con sección de Rollback explícita y aviso de irreversibilidad del UUID migration. Suite completa del paquete: **518 passing, 0 failing** (de 505+4 fail).
+
+### Changed
+
+- **BC-safe: `classesNamespacePrefix()` ahora es un método protected overridable**. Antes el matching de clases discovered usaba `str_starts_with($declared, 'App\\Modules')` hardcoded, lo cual rechazaba clases en otros namespaces (e.g. tests con `TestNs\\...`, packages vendorizados que usan el command con sus propios namespaces). Ahora el prefijo default sigue siendo `App\\Modules` (regla R-MK-001) pero los tests pueden override el método para retornar `null` (skip prefix check) u otro prefijo custom. Ver `tests/Feature/DiscoverAbilitiesCommandTest.php::makeTestCommand()` para el patrón. No afecta consumers reales (mantienen el default `App\\Modules`).
+
+### Added
+
+- **2 nuevos audit tests pineando OBS-NEW-02** en `tests/Feature/DiscoverAbilitiesCommandTest.php`:
+  - Source-parsing: `discoverClassesInDir` contiene `require_once $realPath` antes de iterar `get_declared_classes()`.
+  - E2E real-disk: archivos PHP creados en disco (no eval) en tempdir + módulos con estructura Controllers/Models → discoverModules() los encuentra correctamente via require_once + matching por suffix. Cubre el caso RETO (controllers scaffoldeadas no loaded).
+- **4 nuevos audit tests pineando BUG-NEW-28** en `tests/Feature/AdminUserFactoryStubTest.php` (archivo nuevo):
+  - Source-parsing: el stub importa `Schema`, usa `Schema::hasColumn` con argumento `'email_verified_at'`, y el check envuelve el `email_verified_at => now()`.
+  - Anti-regresión: el stub NO contiene `'email_verified_at' => now()` hardcoded fuera del if.
+  - Render + syntax: el stub renderizado con `{{ModuleName}}` → `Admin` compila como PHP válido (`php -l` passes).
+  - Render content: el stub renderizado con `{{ModuleName}}` → `Member` tiene `Schema::hasColumn((new Member())->getTable()` (placeholder correctamente reemplazado).
+- **9 nuevos audit tests pineando HALLAZGO-NEW-01** en `tests/Unit/Auth/HallazgoNew01PivotTest.php` (archivo nuevo):
+  - Source-parsing: `MkRoleUserPivot` y `MkAbilityUserPivot` existen y extienden `MkPivot` base abstracta.
+  - Source-parsing: ambas pivot classes declaran `protected $table = 'role_user'` / `'ability_user'`.
+  - Source-parsing: `HasRoles::roles()` y `HasAbilities::directAbilities()` usan `->using(MkRoleUserPivot::class)` / `MkAbilityUserPivot::class`.
+  - Source-parsing: `MkPivot::boot()` registra listener `creating` que setea `user_type` desde `pivotParent->getMorphClass()` cuando la pivot lo requiere.
+  - Anti-regresión: el listener respeta `user_type` explícito del consumer (no pisa).
+  - Anti-regresión: el listener es no-op si la pivot NO tiene columna `user_type` (chequeo via `Schema::hasColumn()` cacheado en memoria del proceso para evitar query repetido por attach/detach).
+- **1 método overridable nuevo**: `DiscoverAbilitiesCommand::classesNamespacePrefix(): ?string` retorna `App\\Modules` por default. Tests pueden override. Documentado en docblock del método.
+- **3 nuevas clases concretas**: `Mk\Director\Auth\Pivots\MkPivot` (base abstracta), `MkRoleUserPivot` (tabla `role_user`), `MkAbilityUserPivot` (tabla `ability_user`). Patrón: cualquier consumer puede declarar su propio Pivot class con `extends MkPivot` y `->using()` para opt-in a la auto-inyección de `user_type` en pivots custom (no solo `role_user` / `ability_user`).
+- **1 doc nuevo**: `docs/UPGRADE_1.2.md` documenta los 4 breaking changes históricos del salto 1.1.x → 1.2.x con sección de Rollback explícita y aviso de irreversibilidad del UUID migration. Companion script `bin/migrate-1.1-to-1.2.php` (ya existía) lo referencia en la sección "Migration script".
+
+### Migration desde v1.6.0-rc8
+
+- **Sin acción** para todos los fixes (todos son BC-safe additive o BC-safe refactors internos).
+- Consumers que usan `mk:discover-abilities` con `mk:make:auth-user --with-crud`: ahora el command retorna abilities de los controllers scaffoldeados (no solo del ServiceProvider). Si antes dependían de seeders manuales para popular `{scope}_abilities`, ahora `mk:discover-abilities --force` puebla la tabla automáticamente con las 5 abilities CRUD estándar por scope (`{scope}.{model}.viewAny`, `view`, `create`, `update`, `delete`).
+- Consumers con `--with-crud` que usan `{Scope}::factory()->create()` en tests: el factory stub ahora funciona tanto si la tabla tiene `email_verified_at` (con `--verify-email`) como si NO (sin `--verify-email`). Ya no necesitan usar `Admin::create([...])` como workaround.
+- Consumers con pivots MME-polimórficas (`role_user` / `ability_user` con columna `user_type`): `$user->roles()->attach([$id])`, `detach()`, `sync()`, `syncWithoutDetaching()`, `toggle()`, `updateExistingPivot()` ahora setean `user_type = $user->getMorphClass()` automáticamente vía las nuevas clases `MkRoleUserPivot` / `MkAbilityUserPivot`. Antes, esos métodos directos NO seteaban `user_type` (solo los helpers `assignRole` / `syncRoles` / `giveAbilityTo` / `syncDirectAbilities` lo hacían via `pivotExtras()`). Workaround aplicado en RETO fase 6 (usar `syncRoles()` en vez de `attach()` directo) ya NO es necesario. Opt-out disponible (defense-in-depth): override la relation `roles()` / `directAbilities()` en el modelo del consumer sin `->using(MkRoleUserPivot::class)` / `MkAbilityUserPivot::class`.
+- Upgrade histórico desde 1.1.x → 1.2.x (si todavía no se hizo): ver `docs/UPGRADE_1.2.md` con los 4 breaking changes + rollback procedure.
+
 ## [1.6.0-rc8] - 2026-06-27
 
 ### Fixed

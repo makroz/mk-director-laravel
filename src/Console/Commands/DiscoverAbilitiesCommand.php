@@ -403,6 +403,25 @@ class DiscoverAbilitiesCommand extends Command
     /**
      * Encuentra todas las clases PHP declaradas en un directorio (PSR-4 esperado).
      *
+     * Estrategia (R-PKG-019 OBS-NEW-02 fix):
+     *   1. `get_declared_classes()` SOLO retorna clases ya loaded por el
+     *      autoloader. En contexto artisan command (CLI), las controllers
+     *      scaffoldeadas típicamente NO están loaded hasta que route:list o
+     *      el bootstrap del framework las referencia.
+     *   2. Por eso, ANTES de iterar `get_declared_classes()`, hacemos
+     *      `require_once` de cada archivo PHP encontrado. Esto fuerza la
+     *      declaración de la clase sin depender del autoload trigger.
+     *   3. Después del require, el matching por suffix contra
+     *      `get_declared_classes()` funciona correctamente (convención PSR-4).
+     *
+     * Side-effects del require_once: en proyectos Laravel siguiendo la
+     * convención PSR-4 (cada archivo = una clase, sin código top-level),
+     * el require_once es seguro. Si un consumer tiene archivos con código
+     * top-level (helpers, registro de side-effects), esos side-effects
+     * ocurrirán. Trade-off documentado; alternativa sería parsear el
+     * namespace via regex en vez de require_once, pero requiere conocer
+     * el root namespace.
+     *
      * @return array<int, string>
      */
     private function discoverClassesInDir(string $dir): array
@@ -413,6 +432,13 @@ class DiscoverAbilitiesCommand extends Command
             return $classes;
         }
 
+        // Resolver symlinks (e.g. /private/var/folders en macOS) para que
+        // el matching por suffix sea consistente con $realPath de cada file.
+        // Sin esto, str_replace($dir.DIRECTORY_SEPARATOR, ...) falla porque
+        // $dir puede ser `/var/folders/...` pero $realPath es
+        // `/private/var/folders/...` (Symfony Finder resuelve symlinks).
+        $dir = realpath($dir) ?: $dir;
+
         $finder = (new Finder())
             ->files()
             ->in($dir)
@@ -422,15 +448,31 @@ class DiscoverAbilitiesCommand extends Command
             ->ignoreDotFiles(true);
 
         foreach ($finder as $file) {
-            // Use composer autoload to determine if the class exists.
-            $relativePath = str_replace([$dir.DIRECTORY_SEPARATOR, '.php'], '', $file->getRealPath());
+            $realPath = $file->getRealPath();
+
+            // Force-require para declarar la clase antes del scan
+            // (R-PKG-019 OBS-NEW-02). try/catch porque algunos archivos
+            // pueden ser helpers (no son clases) o tener dependencias
+            // que solo se resuelven en runtime Laravel completo.
+            try {
+                require_once $realPath;
+            } catch (Throwable) {
+                continue;
+            }
+
+            $relativePath = str_replace([$dir.DIRECTORY_SEPARATOR, '.php'], '', $realPath);
             $relativePath = str_replace(DIRECTORY_SEPARATOR, '\\', $relativePath);
 
-            // Heuristic: App\Modules\ModuleName\... — but we don't know
-            // the root namespace, so check ALL declared classes for a
-            // matching suffix.
+            // Heuristic: el prefijo `App\Modules` es el default para apps
+            // Laravel consumer (R-MK-001), pero lo hacemos overridable
+            // via `classesNamespacePrefix()` para que los tests puedan
+            // usar namespaces custom (e.g. `TestNs`). El matching por
+            // suffix es lo que de verdad filtra — el prefix es solo una
+            // sanity check contra falsos positivos.
+            $prefix = $this->classesNamespacePrefix();
             foreach (get_declared_classes() as $declared) {
-                if (str_ends_with($declared, '\\'.$relativePath) && str_starts_with($declared, 'App\\Modules')) {
+                if (str_ends_with($declared, '\\'.$relativePath)
+                    && ($prefix === null || str_starts_with($declared, $prefix))) {
                     $classes[] = $declared;
                     break;
                 }
@@ -543,6 +585,19 @@ class DiscoverAbilitiesCommand extends Command
         $base = config('mk_director.paths.modules', app_path('Modules'));
 
         return $moduleName !== '' ? $base.DIRECTORY_SEPARATOR.$moduleName : $base;
+    }
+
+    /**
+     * Prefijo de namespace que filtra las clases discovered.
+     *
+     * Default `App\Modules` (regla R-MK-001 — módulos bounded context
+     * viven bajo `app/Modules/`). Overridable en tests para usar
+     * namespaces custom. Si retorna `null`, se salta el prefix check
+     * (cualquier clase que matchee por suffix entra).
+     */
+    protected function classesNamespacePrefix(): ?string
+    {
+        return 'App\\Modules';
     }
 
     /**
