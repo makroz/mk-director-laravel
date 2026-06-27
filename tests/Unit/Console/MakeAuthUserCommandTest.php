@@ -262,3 +262,46 @@ test('auth-user service-provider stub loads routes and migrations for the scope'
     expect($source)->toContain('loadRoutesFrom(__DIR__ . \'/../Http/Routes/api.php\')');
     expect($source)->toContain('loadMigrationsFrom(__DIR__ . \'/../Database/Migrations\')');
 });
+
+// ── R-PKG-018 BUG-NEW-27 regression tests ────────────────────────────────
+//
+// BUG: el catch del método `refresh()` solo capturaba
+// `\Illuminate\Auth\Access\AuthorizationException`. La excepción específica
+// del paquete `InvalidRefreshTokenException` SÍ extiende AuthorizationException,
+// así que el catch la capturaba — pero con un mensaje genérico
+// ("Refresh token inválido.") en vez del específico (e.g. "Refresh token
+// expired.", "Refresh token scope mismatch: ...").
+//
+// FIX: agregar un catch específico para `InvalidRefreshTokenException` ANTES
+// del catch genérico. El catch específico expone el mensaje detallado vía
+// `sendError($e->getMessage(), [], 401)` para mejor DX y testabilidad.
+
+test('R-PKG-018 BUG-NEW-27: auth-controller stub imports InvalidRefreshTokenException', function () {
+    $source = stubSource('auth-user.auth-controller.stub');
+
+    expect($source)->toContain('use Mk\\Director\\Auth\\Services\\InvalidRefreshTokenException;');
+});
+
+test('R-PKG-018 BUG-NEW-27: auth-controller stub refresh() catches InvalidRefreshTokenException before AuthorizationException', function () {
+    $source = stubSource('auth-user.auth-controller.stub');
+
+    // El catch específico debe estar ANTES del catch genérico (orden importa
+    // porque PHP evalúa los catch en secuencia).
+    $invalidPosition = strpos($source, 'catch (InvalidRefreshTokenException');
+    $authzPosition = strpos($source, 'catch (\\Illuminate\\Auth\\Access\\AuthorizationException');
+
+    expect($invalidPosition)->toBeGreaterThan(0)
+        ->and($authzPosition)->toBeGreaterThan(0)
+        ->and($invalidPosition)->toBeLessThan($authzPosition);
+
+    // El catch específico debe usar $e->getMessage() para mensajes detallados.
+    expect($source)->toContain('catch (InvalidRefreshTokenException $e)');
+    expect($source)->toContain('$e->getMessage()');
+});
+
+test('R-PKG-018 BUG-NEW-27: auth-controller stub refresh() sends 401 status', function () {
+    $source = stubSource('auth-user.auth-controller.stub');
+
+    // Ambos catches (específico y genérico) deben retornar 401.
+    expect($source)->toMatch('/sendError\s*\([^,]+,\s*\[\s*\]\s*,\s*401\s*\)/');
+});

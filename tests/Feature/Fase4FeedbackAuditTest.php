@@ -126,35 +126,51 @@ test('BUG-NEW-22: AdminRepository stub usa pivotExtras() y abilityPivotExtras() 
 });
 
 // ─── BUG-NEW-23 — Hash::check RuntimeException → InvalidRefreshTokenException ──
+//
+// R-PKG-018 BUG-NEW-26 fix descubrió que BUG-NEW-23 era un SÍNTOMA — la causa
+// raíz era que Sanctum v4.3.2 hashea tokens con SHA256, no bcrypt, y el código
+// usaba `Hash::check()` (bcrypt). El catch de BUG-NEW-23 mitigaba el 500 → 401,
+// pero el refresh NUNCA funcionaba.
+//
+// BUG-NEW-26 fix: usar `hash_equals(hash('sha256', ...), ...)` directamente.
+// El try/catch queda como defense-in-depth por si Sanctum rota de algoritmo
+// en el futuro.
 
-test('BUG-NEW-23: TokenIssuer::rotateRefreshToken captura RuntimeException de Hash::check y lo mapea a InvalidRefreshTokenException', function () {
+test('BUG-NEW-23 + R-PKG-018 BUG-NEW-26: TokenIssuer usa hash_equals con SHA256 (no Hash::check), con try/catch defense-in-depth', function () {
     $src = pkgFileContentsFase4('src/Auth/Services/TokenIssuer.php');
 
     // Extraer el método rotateRefreshToken.
     $method = extractMethodBody($src, 'rotateRefreshToken');
 
-    // Debe haber try/catch alrededor de Hash::check.
+    // FIX raíz (R-PKG-018 BUG-NEW-26): hash_equals + SHA256.
+    expect($method)->toContain("hash_equals(\n                \$tokenModel->token,\n                hash('sha256', \$plaintext),");
+    expect($method)->toContain("hash('sha256', \$plaintext)");
+
+    // NO debe usar Hash::check para comparar tokens Sanctum.
+    expect($method)->not->toMatch('/Hash::check\s*\(\s*\\\$plaintext\s*,\s*\\\$tokenModel->token/');
+
+    // Defense-in-depth (subsume de BUG-NEW-23): el try/catch se mantiene
+    // como safety net por si Sanctum rota a otro algoritmo.
     expect($method)->toContain('try {');
     expect($method)->toContain('catch (\\RuntimeException $e)');
 
-    // El catch debe lanzar InvalidRefreshTokenException::hashMismatch().
+    // El catch sigue lanzando InvalidRefreshTokenException::hashMismatch().
     expect($method)->toContain('InvalidRefreshTokenException::hashMismatch()');
 
-    // Debe documentar el R-PKG-017 BUG-NEW-23 fix.
+    // Documentación actualizada.
     expect($method)->toContain('R-PKG-017 BUG-NEW-23');
-
-    // Debe explicar el caso del RuntimeException (Bcrypt mismatch).
-    expect($method)->toContain('Bcrypt');
+    expect($method)->toContain('R-PKG-018 BUG-NEW-26');
+    expect($method)->toContain('SHA256');
+    expect($method)->toContain('Sanctum v4.3.2');
 });
 
-test('BUG-NEW-23: Hash::check está envuelto en try/catch (no queda suelto al cliente)', function () {
+test('BUG-NEW-23 + R-PKG-018 BUG-NEW-26: rotateRefreshToken tiene try/catch con hash_equals (defense-in-depth)', function () {
     $src = pkgFileContentsFase4('src/Auth/Services/TokenIssuer.php');
 
     $method = extractMethodBody($src, 'rotateRefreshToken');
 
-    // El método debe tener `Hash::check` dentro de un bloque `try { ... }`.
-    // Buscamos la secuencia exacta.
-    expect($method)->toMatch('/try\s*\{[\s\S]*?Hash::check\([\s\S]*?\}\s*catch\s*\(\s*\\\\?RuntimeException/s');
+    // El método debe tener `hash_equals` dentro de un bloque `try { ... }`.
+    expect($method)->toMatch('/try\s*\{[\s\S]*?hash_equals\([\s\S]*?\}\s*catch\s*\(\s*\\\\?RuntimeException/s');
 });
 
 // ─── BUG-NEW-24 — Admin::newFactory() retorna AdminFactory con import correcto ──

@@ -9,6 +9,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
+use Mk\Director\Auth\Services\InvalidRefreshTokenException;
 use Mk\Director\Auth\Services\RefreshTokenParser;
 use Mk\Director\Auth\Services\TokenIssuer;
 use Mk\Director\Controllers\BaseController;
@@ -180,7 +181,21 @@ class AuthController extends BaseController
 
         try {
             $result = $tokenIssuer->rotateRefreshToken($refreshToken, '{{moduleNameLower}}');
+        } catch (InvalidRefreshTokenException $e) {
+            // R-PKG-018 BUG-NEW-27 fix: capturar la excepción específica del
+            // paquete ANTES del catch genérico para devolver el mensaje
+            // detallado (hash mismatch / expired / scope mismatch / not found)
+            // en vez del mensaje genérico "Refresh token inválido.".
+            //
+            // InvalidRefreshTokenException extiende AuthorizationException,
+            // así que el catch de más abajo también la capturaría — pero con
+            // el catch específico primero tenemos mejor DX (el front-end
+            // puede mostrar un mensaje más preciso) y los tests e2e pueden
+            // pinear el path específico del error.
+            {{rbacAuditRefreshTodo}}
+            return $this->sendError($e->getMessage(), [], 401);
         } catch (\Illuminate\Auth\Access\AuthorizationException $e) {
+            // Cualquier otra AuthorizationException (defense-in-depth).
             {{rbacAuditRefreshTodo}}
             return $this->sendError('Refresh token inválido.', [], 401);
         }
