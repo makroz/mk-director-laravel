@@ -7,6 +7,7 @@ namespace Mk\Director\Tests\Feature;
 use Illuminate\Console\OutputStyle;
 use Illuminate\Database\Capsule\Manager as Capsule;
 use Illuminate\Filesystem\Filesystem;
+use Illuminate\Support\Str;
 use Mk\Director\Auth\Attributes\Ability as AbilityAttribute;
 use Mk\Director\Console\Commands\DiscoverAbilitiesCommand;
 use Mk\Director\Tests\MkLaravelTestCase;
@@ -527,4 +528,143 @@ test('config has paths.modules and features.auto_discover_abilities', function (
     expect($src)->toContain("MK_MODULES_PATH");
     expect($src)->toContain('auto_discover_abilities');
     expect($src)->toContain('MK_AUTO_DISCOVER_ABILITIES');
+});
+
+// ─── R-PKG-018 OBS-NEW-01 regression tests ──────────────────────────────
+//
+// OBS: el comando `mk:discover-abilities` no descubría abilities generadas
+// automáticamente por `--with-crud` (controllers que extienden SmartController
+// con `$mkConfig['model']` definido). El path de fallback solo buscaba
+// atributos PHP 8.4 y docblocks, que `--with-crud` no emite.
+//
+// FIX (R-PKG-015 OBS-NEW-01, ya implementado): agregar un segundo path de
+// fallback que escanea los SmartController del módulo y genera 5 abilities
+// CRUD estándar (`{scope}.{model}.viewAny|view|create|update|delete`).
+//
+// Estos tests pinean que:
+//   1. El método `discoverAbilitiesFromMkConfig` existe en el código.
+//   2. Se llama desde `processModule` cuando source=fallback.
+//   3. E2E: genera las 5 abilities CRUD desde un SmartController stub.
+
+test('R-PKG-018 OBS-NEW-01: DiscoverAbilitiesCommand has discoverAbilitiesFromMkConfig method', function () {
+    $src = (string) file_get_contents(dirname(__DIR__, 2).'/src/Console/Commands/DiscoverAbilitiesCommand.php');
+
+    expect($src)->toMatch('/function\s+discoverAbilitiesFromMkConfig\s*\(/');
+
+    // Debe mirar la propiedad $mkConfig.
+    expect($src)->toContain("'mkConfig'");
+
+    // Debe apuntar a SmartController como parent class.
+    expect($src)->toContain('SmartController::class');
+});
+
+test('R-PKG-018 OBS-NEW-01: processModule calls discoverAbilitiesFromMkConfig when source=fallback', function () {
+    $src = (string) file_get_contents(dirname(__DIR__, 2).'/src/Console/Commands/DiscoverAbilitiesCommand.php');
+
+    // La llamada debe estar dentro del bloque else (source !== 'provider').
+    expect($src)->toContain('$mkConfigAbilities = $this->discoverAbilitiesFromMkConfig');
+
+    // Debe estar en el path de fallback, NO cuando source=provider.
+    $providerBlock = strpos($src, "if (\$discovery['source'] === 'provider')");
+    $mkConfigCall = strpos($src, '$this->discoverAbilitiesFromMkConfig');
+
+    expect($providerBlock)->toBeGreaterThan(0);
+    expect($mkConfigCall)->toBeGreaterThan($providerBlock);
+});
+
+test('end-to-end: R-PKG-018 OBS-NEW-01 — SmartController with $mkConfig generates 5 CRUD abilities', function () {
+    $moduleName = 'Member'.uniqid();
+
+    // SmartController stub con $mkConfig['model'] apuntando a un model class.
+    // NO provider, NO atributos, NO docblocks. Solo mkConfig.
+    $modelClassName = 'Member';
+    $controllerClassName = $moduleName.'Controller';
+
+    // Generamos el FQCN real del model (mismo namespace que el controller).
+    $uid = str_replace('.', '', uniqid('', true));
+    $ns = "TestNs\\{$moduleName}_{$uid}";
+    $modelFqn = "{$ns}\\Models\\{$modelClassName}";
+    $controllerFqn = "{$ns}\\Http\\Controllers\\{$controllerClassName}";
+
+    // Eval primero el modelo (sin él, $mkConfig['model'] apuntaría a clase inexistente).
+    $modelBody = "class {$modelClassName} { public function getKeyName(): string { return 'id'; } }";
+    eval("namespace {$ns}\\Models; {$modelBody}");
+
+    // Crear temp dir + estructura.
+    $tempDir = sys_get_temp_dir()."/mk-discover-{$uid}";
+    mkdir("{$tempDir}/{$moduleName}/Http/Controllers", 0755, true);
+    mkdir("{$tempDir}/{$moduleName}/Models", 0755, true);
+
+    // Eval el controller.
+    $controllerBody = <<<PHP
+use Mk\\Director\\Controllers\\SmartController;
+
+class {$controllerClassName} extends SmartController
+{
+    protected array \$mkConfig = [
+        'model' => \\{$modelFqn}::class,
+        'searchable' => ['name'],
+    ];
+}
+PHP;
+    eval("namespace {$ns}\\Http\\Controllers; {$controllerBody}");
+
+    // Setup comando + DB.
+    $capsule = setupSqliteWithAbilities();
+    $command = makeTestCommand($tempDir);
+    $command->setOutput(new OutputStyle(new \Symfony\Component\Console\Input\StringInput(''), new NullOutput()));
+
+    $moduleInfo = [
+        'path' => "{$tempDir}/{$moduleName}",
+        'classes' => [$controllerFqn, $modelFqn],
+    ];
+
+    // Verificar que source=fallback (sin provider).
+    $discovery = invokeProtected($command, 'discoverAbilitiesFromProvider', [$moduleName, $moduleInfo]);
+    expect($discovery['source'])->toBe('fallback');
+
+    // Llamar al path mkConfig.
+    $mkConfigAbilities = invokeProtected($command, 'discoverAbilitiesFromMkConfig', [$moduleInfo, $moduleName]);
+
+    expect($mkConfigAbilities)->toHaveCount(5);
+
+    // Los nombres siguen el patrón {Str::snake(moduleName)}.{Str::snake(Str::plural(modelShortName))}.{verb}.
+    $expectedScope = Str::snake($moduleName);
+    $expectedResource = Str::snake(Str::plural($modelClassName));
+    $names = array_column($mkConfigAbilities, 'name');
+    expect($names)->toContain("{$expectedScope}.{$expectedResource}.viewAny");
+    expect($names)->toContain("{$expectedScope}.{$expectedResource}.view");
+    expect($names)->toContain("{$expectedScope}.{$expectedResource}.create");
+    expect($names)->toContain("{$expectedScope}.{$expectedResource}.update");
+    expect($names)->toContain("{$expectedScope}.{$expectedResource}.delete");
+
+    // Cleanup.
+    (new Filesystem)->deleteDirectory($tempDir);
+});
+
+test('end-to-end: R-PKG-018 OBS-NEW-01 — non-SmartController is silently skipped', function () {
+    $moduleName = 'Plain'.uniqid();
+
+    // Controller que NO extiende SmartController. Debe ser ignorado por
+    // discoverAbilitiesFromMkConfig (sin abilities generadas).
+    $controllerBody = <<<'PHP'
+class {ClassName}
+{
+    // Plain controller — no extends SmartController.
+    protected array $mkConfig = [
+        'model' => 'Whatever',
+    ];
+}
+PHP;
+
+    $setup = buildIsolatedModule($moduleName, '', $controllerBody);
+
+    $moduleInfo = [
+        'path' => $setup['tempDir'].'/'.$moduleName,
+        'classes' => [$setup['controllerFqn']],
+    ];
+
+    $mkConfigAbilities = invokeProtected($setup['command'], 'discoverAbilitiesFromMkConfig', [$moduleInfo, $moduleName]);
+
+    expect($mkConfigAbilities)->toBeEmpty();
 });

@@ -139,11 +139,15 @@ class TokenIssuer
      * Valida un refresh token y emite uno nuevo access token (con refresh opcional).
      *
      * R-PKG-014 BUG-07 fix: implementación completa con Sanctum v4 `id|plaintext` parsing.
+     * R-PKG-018 BUG-NEW-26 fix: hash comparison usa `hash_equals(hash('sha256', ...), ...)`
+     *                            (Sanctum v4.3.2 hashea tokens con SHA256, NO bcrypt).
      *
      * Pipeline:
      *   1. Parsear `<id>|<plaintext>` (RefreshTokenParser).
      *   2. Buscar `personal_access_tokens` por `id`.
-     *   3. Hash comparar `plaintext` contra `token` (Sanctum v4 hashea el token con Hash::make()).
+     *   3. Hash comparar `plaintext` contra `token` (Sanctum v4.3.2 usa SHA256).
+     *      Ver `vendor/laravel/sanctum/src/HasApiTokens.php:66` y
+     *      `PersonalAccessToken.php:61,67`.
      *   4. Validar que el token no expiró.
      *   5. Validar que el scope del token coincide con `$expectedScope` (defense-in-depth).
      *   6. Cargar el `tokenable` (user).
@@ -169,24 +173,36 @@ class TokenIssuer
             throw InvalidRefreshTokenException::notFound();
         }
 
-        // Sanctum v4 hashea con Hash::make() (bcrypt). Comparar.
+        // Sanctum v4.3.2 hashea los tokens con **SHA256** (NO bcrypt),
+        // verificado en:
+        //   - vendor/laravel/sanctum/src/HasApiTokens.php:66
+        //     `'token' => hash('sha256', $plainTextToken)`
+        //   - vendor/laravel/sanctum/src/PersonalAccessToken.php:61,67
+        //     usa `hash('sha256', ...)` y `hash_equals(..., hash('sha256', ...))`
         //
-        // R-PKG-017 BUG-NEW-23 fix: `Hash::check()` puede lanzar
+        // La columna `personal_access_tokens.token` guarda 64 chars hex (SHA256),
+        // no 60 chars como un hash bcrypt.
+        //
+        // R-PKG-018 BUG-NEW-26 fix (causa raíz): el código previo usaba
+        // `Hash::check()` (bcrypt) lo cual SIEMPRE lanzaba
         // `RuntimeException: This password does not use the Bcrypt algorithm`
-        // cuando el valor en `$tokenModel->token` no es un hash bcrypt válido
-        // (caso edge: tokens legacy con sha256, datos corruptos, o scope
-        // mismatching donde el ID encontrado NO corresponde a un refresh token
-        // y su columna `token` no es bcrypt). Antes este `RuntimeException`
-        // se filtraba al usuario como HTTP 500 en vez del HTTP 401 esperado.
+        // porque el hash guardado es SHA256. El catch de R-PKG-017 BUG-NEW-23
+        // mitigaba el 500 → 401, pero el refresh NUNCA funcionaba (incluso
+        // con token recién emitido y válido).
         //
-        // La fix envuelve la comparación en try/catch y mapea CUALQUIER
-        // `RuntimeException` a `InvalidRefreshTokenException::hashMismatch()`,
-        // que el AuthController::refresh() SÍ captura y traduce a HTTP 401
-        // (consistente con los otros paths de invalidación).
+        // La fix correcta es `hash_equals` con SHA256, timing-safe y
+        // consistente con la implementación interna de Sanctum v4.
+        //
+        // Defense-in-depth: el try/catch de R-PKG-017 queda en caso de que
+        // Sanctum rote a otro algoritmo (bcrypt→argon2→sha512) en el futuro.
+        // Hoy es unreachable con Sanctum v4.3.x, pero es un safety net barato.
         try {
-            $hashMatches = \Illuminate\Support\Facades\Hash::check($plaintext, $tokenModel->token);
+            $hashMatches = hash_equals(
+                $tokenModel->token,
+                hash('sha256', $plaintext),
+            );
         } catch (\RuntimeException $e) {
-            // Hash no es bcrypt (o está corrupto) → tratar como mismatch.
+            // Algoritmo desconocido (futuro) → tratar como mismatch.
             // NO relanzar el RuntimeException — eso filtraría 500 al cliente.
             throw InvalidRefreshTokenException::hashMismatch();
         }
