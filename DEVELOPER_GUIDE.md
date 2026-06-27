@@ -1101,6 +1101,39 @@ Con el fix, el SQL es portable cross-engine (MySQL, MariaDB, PostgreSQL, SQLite)
 
 ---
 
+#### 3.13.6 R-PKG-017 feedback fixes (RETO fase 4 sobre v1.6.0-rc6)
+
+> **Fixes en v1.6.0-rc7** (R-PKG-017). 5 bugs nuevos pineados con 5 audit tests adicionales en `Fase4FeedbackAuditTest.php` + 1 pineo actualizado (BUG-NEW-14 test reescrito para reflejar la nueva fix de BUG-NEW-25).
+
+**Critical** (bloqueantes para producción):
+
+- **BUG-NEW-21** (`--with-crud` rompía bootstrap con `declare(strict_types=1)`): REGRESIÓN del fix de BUG-NEW-13. El scaffolder inyectaba los `use` statements del CRUD stub DESPUÉS del `<?php` opener y ANTES del `declare`, dejando `<?php\nuse ...\ndeclare(strict_types=1);` — PHP rechaza con `Fatal error: strict_types declaration must be the very first statement in the script`. Resultado: `php artisan route:list` crasheaba con `ReflectionException` / FatalError. **Fix**: `MakeAuthUserCommand::extendRoutesWithCrud()` ahora detecta vía regex si el archivo tiene un bloque `declare(...)` (ej: `declare(strict_types=1);`) inmediatamente después del `<?php` opener (con whitespace flexible entre medio). Si lo hay, inserta los `use` statements NUEVOS DESPUÉS del bloque `declare`, no antes. Si NO hay `declare`, mantiene el comportamiento previo (insertar después de `<?php\n`). BC-safe: solo cambia el orden cuando el `declare` está presente, que es lo que `auth-user.routes.stub` SIEMPRE emite. Patrón regex: `/^(<\?php[ \t]*\R)((?:[ \t]*\R)*)(declare\s*\([^)]+\)\s*;\s*\R)((?:[ \t]*\R)*)/m`.
+
+- **BUG-NEW-22** (`AdminRepository::syncRoles/syncDirectAbilities` sin `user_type`): el endpoint CRUD `POST /api/admins/{uuid}/roles` fallaba con `SQLSTATE[23502]: null value in column "user_type"` porque el Repository scaffoldeado usaba `$admin->roles()->sync($ids)` sin extras. La fix de BUG-NEW-16 solo había cubierto `mk:auth:create-super-admin --roles=`, no el endpoint CRUD. **Fix**: 3 cambios: (a) `HasRoles::pivotExtras()` y `HasAbilities::abilityPivotExtras()` ahora son `public` (BC-safe: solo agrega visibilidad) — el Repository scaffoldeado puede consumirlos directamente; (b) `admin-repository.stub` ahora invoca `$admin->pivotExtras()` / `$admin->abilityPivotExtras()` en el payload del `sync()` via `mapWithKeys(fn ($id) => [$id => $admin->pivotExtras()])`; (c) si la pivot NO tiene `user_type` (consumer legacy), `pivotExtras()` retorna `[]` y el comportamiento es idéntico al previo. Antes el consumer tenía que hardcodear `['user_type' => Admin::class]` manualmente — ahora el scaffolder genera el código correcto out-of-the-box.
+
+- **BUG-NEW-23** (`TokenIssuer::rotateRefreshToken` con `Hash::check()` RuntimeException → HTTP 500): `POST /api/admin/auth/refresh` con un refresh token no-bcrypt retornaba HTTP 500 en vez de HTTP 401. Causa: `Hash::check($plaintext, $tokenModel->token)` lanza `RuntimeException: This password does not use the Bcrypt algorithm` cuando el hash en la columna `token` no es bcrypt válido (caso edge: tokens legacy con sha256, datos corruptos, scope mismatching). El `AuthController::refresh()` solo captura `InvalidRefreshTokenException`, NO `RuntimeException`. **Fix**: envolver el `Hash::check()` en try/catch; mapear CUALQUIER `RuntimeException` a `InvalidRefreshTokenException::hashMismatch()` (que SÍ retorna HTTP 401 via el controller). El path normal (hash bcrypt válido, hash no matchea) sigue funcionando idéntico. Caso test pineado: cualquier excepción de `Hash::check` se mapea consistentemente al error estándar de invalidación.
+
+**Medium**:
+
+- **BUG-NEW-24** (`Admin::newFactory()` retorna `AdminFactory` sin importarlo): drift nuevo introducido en `v1.6.0-rc5`/`rc6` que el scaffolder pineaba parcialmente. El modelo concreto se generaba con `protected static function newFactory(): AdminFactory` PERO sin el `use App\Modules\Admin\Database\Factories\AdminFactory;` necesario. Resultado: cualquier test que use `Admin::factory()->create()` fallaba con `Class "App\Modules\Admin\Database\Factories\AdminFactory" not found`. **Fix**: el placeholder `{{factoryHasFactoryUse}}` ahora emite 2 imports cuando `$withCrud` está activo: (a) `use Illuminate\Database\Eloquent\Factories\HasFactory;` (existente) + (b) `use App\Modules\{$scope}\Database\Factories\{$scope}Factory;` (NUEVO). Tests del factory funcionan out-of-the-box sin workarounds.
+
+**Cosmetic (low)**:
+
+- **BUG-NEW-25** (docblock de profile fields con drift en indentación, 4to ciclo): el fix anterior terminaba el docblock generado con `\n\n` (doble newline) para separar del próximo bloque vía `*/`. PERO el control del blank line entre docblocks vivía en el GENERADOR (no en el stub), y con 5+ profile fields el doble newline acumulaba drift visual. **Fix robusta**: el docblock generado cierra con `\n` simple (`     */\n`); el control del blank line entre docblocks vive en el STUB (`{{profileFieldsDocblock}}\n\n    /**`). Esto elimina el drift y mantiene el control de espaciado en UN lugar (single source of truth). El pineo de BUG-NEW-14 se actualizó para reflejar la nueva realidad (newline simple en el docblock generado, blank line en el stub).
+
+#### Spec
+
+- Sprint: `makromania/260626-2254--r-pkg-017-feedback-fixes-v1.6.0-rc7` (en `projects/mk-director/packagist/mk-director-laravel/`).
+- Tests: 14 nuevos Pest tests source-parsing + reflection en `tests/Feature/Fase4FeedbackAuditTest.php` (33 assertions, todos verde). Total paquete: 489 passing, 4 pre-existing failures (UPGRADE_1.2.md backlog RC4, sin regresión).
+- Audit e2e: scaffolder corrido en `apps/sandbox-laravel` con `mk:make:auth-user Admin --with-crud --profile-fields=full_name,phone,address,dni,birthdate,is_active --no-interaction`. Genera 17 archivos del CRUD + Model con 6 profile fields + 16 rutas API registradas (incluyendo `{admin}` sin espacios, gracias a R-PKG-016 BUG-NEW-19). `php artisan route:list` funciona sin FatalError.
+- Source: `.makromania/projects/reto/modules/admin/FEEDBACK-TO-MK-DIRECTOR.md` (sección "🆕 Bugs nuevos en v1.6.0-rc6").
+
+#### Cambios BC
+
+- **`HasRoles::pivotExtras()` y `HasAbilities::abilityPivotExtras()` ahora son `public`** (antes `protected`). Visibilidad ampliada — no rompe ningún caller existente. Habilita que el Repository scaffoldeado (y cualquier consumer que quiera inspeccionar el payload de una pivot polimórfica) consuma el helper directamente sin reflection ni hardcodeo del FQCN. Ver BUG-NEW-22 fix arriba para el contexto completo. Si tu consumer tiene tests que mockean estos métodos con `protected function`, actualizar a `public function`. Si no, no requiere acción.
+
+---
+
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)
 
 Tanto para **Next.js** como para **React Native**, el consumo de listas es estandarizado mediante parámetros URL:

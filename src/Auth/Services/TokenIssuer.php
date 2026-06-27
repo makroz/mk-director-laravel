@@ -170,7 +170,28 @@ class TokenIssuer
         }
 
         // Sanctum v4 hashea con Hash::make() (bcrypt). Comparar.
-        if (! \Illuminate\Support\Facades\Hash::check($plaintext, $tokenModel->token)) {
+        //
+        // R-PKG-017 BUG-NEW-23 fix: `Hash::check()` puede lanzar
+        // `RuntimeException: This password does not use the Bcrypt algorithm`
+        // cuando el valor en `$tokenModel->token` no es un hash bcrypt válido
+        // (caso edge: tokens legacy con sha256, datos corruptos, o scope
+        // mismatching donde el ID encontrado NO corresponde a un refresh token
+        // y su columna `token` no es bcrypt). Antes este `RuntimeException`
+        // se filtraba al usuario como HTTP 500 en vez del HTTP 401 esperado.
+        //
+        // La fix envuelve la comparación en try/catch y mapea CUALQUIER
+        // `RuntimeException` a `InvalidRefreshTokenException::hashMismatch()`,
+        // que el AuthController::refresh() SÍ captura y traduce a HTTP 401
+        // (consistente con los otros paths de invalidación).
+        try {
+            $hashMatches = \Illuminate\Support\Facades\Hash::check($plaintext, $tokenModel->token);
+        } catch (\RuntimeException $e) {
+            // Hash no es bcrypt (o está corrupto) → tratar como mismatch.
+            // NO relanzar el RuntimeException — eso filtraría 500 al cliente.
+            throw InvalidRefreshTokenException::hashMismatch();
+        }
+
+        if (! $hashMatches) {
             throw InvalidRefreshTokenException::hashMismatch();
         }
 

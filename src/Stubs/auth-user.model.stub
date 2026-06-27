@@ -59,7 +59,9 @@ class {{ModuleName}} extends AuthUser
      */
     protected string $loginField = '{{loginField}}';
 
-    {{profileFieldsDocblock}}/**
+    {{profileFieldsDocblock}}
+
+    /**
      * Columnas asignables en masa. El `auth_scope` por defecto es
      * `{{moduleNameLower}}`; las subclases (Admin, Member, etc.) lo setean
      * al crear. `{{loginField}}` es el campo de login (default `email`).

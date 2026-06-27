@@ -344,7 +344,7 @@ test('BUG-NEW-13: extendRoutesWithCrud extrae use statements y los inyecta al in
 
 // ─── BUG-NEW-14 — docblock de profile fields sin newline entre docblocks ───────
 
-test('BUG-NEW-14: buildProfileFieldsReplacements emite docblock con doble newline final (separación)', function () {
+test('BUG-NEW-14: buildProfileFieldsReplacements emite docblock con newline simple al final (separación vive en el stub)', function () {
     $command = makeAuthUserCommand();
     $reflection = new ReflectionClass($command);
 
@@ -353,17 +353,25 @@ test('BUG-NEW-14: buildProfileFieldsReplacements emite docblock con doble newlin
 
     $docblock = $result['{{profileFieldsDocblock}}'];
 
-    // El pineo previo (R-PKG-015 BUG-NEW-11) emitía `     */\n` (1 newline).
-    // El fix R-PKG-016 BUG-NEW-14 emite `     */\n\n` (2 newlines) para que haya
-    // una línea en blanco entre el docblock de profile fields y el siguiente
-    // docblock del modelo (que está en auth-user.model.stub sin newline entre
-    // `{{profileFieldsDocblock}}` y `/**`).
+    // R-PKG-015 BUG-NEW-11 → R-PKG-016 BUG-NEW-14 → R-PKG-017 BUG-NEW-25 timeline:
+    //
+    //  - R-PKG-015 BUG-NEW-11 (1er ciclo): pineo previo emitía `     */\n` (1 newline).
+    //    Resultado: el próximo `/**` quedaba PEGADO al `*/` (sin blank line).
+    //
+    //  - R-PKG-016 BUG-NEW-14 (2do ciclo): fix movió el `\n\n` al cierre
+    //    del docblock generado (`     */\n\n`). Resultado: blank line entre
+    //    docblocks PERO drift en indentación cuando hay 5+ profile fields
+    //    (el doble newline acumulaba blank lines).
+    //
+    //  - R-PKG-017 BUG-NEW-25 (3er ciclo): fix robusta. El docblock generado
+    //    cierra con `\n` simple (`     */\n`) y el control de blank line entre
+    //    docblocks vive en el STUB (`{{profileFieldsDocblock}}\n\n    /**`).
+    //    Esto elimina el drift y mantiene el control de espaciado en UN lugar.
 
-    expect($docblock)->toMatch('/     \*\\/\n\n$/s');
+    expect($docblock)->toMatch('/     \*\\/\n$/s');
 
-    // Pineo previo: solo 1 newline → `     */\n`. Si vuelve el bug, el patrón
-    // de abajo matchearía. Verificamos que NO matchee.
-    expect($docblock)->not->toMatch('/     \*\\/\n(?!\n)/s');
+    // NO debe quedar la versión vieja con doble newline que era drift-prone.
+    expect($docblock)->not->toMatch('/     \*\\/\n\n$/s');
 });
 
 // ─── BUG-NEW-15 — create-super-admin name autogenerado del email ──────────────

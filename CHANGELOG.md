@@ -5,6 +5,36 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0-rc7] - 2026-06-26
+
+### Fixed
+
+- **BUG-NEW-21 (CRITICAL, REGRESIÓN de BUG-NEW-13 fix)**: `mk:make:auth-user --with-crud` rompía el bootstrap cuando el `routes/api.php` original tenía `declare(strict_types=1);` (que es lo que `auth-user.routes.stub` SIEMPRE emite). El fix de BUG-NEW-13 inyectaba los `use` statements del CRUD stub DESPUÉS del `<?php` opener y ANTES del `declare`, dejando: `<?php\nuse ...\ndeclare(strict_types=1);` — PHP rechaza esto con `Fatal error: strict_types declaration must be the very first statement in the script`. Resultado: `php artisan route:list` crasheaba con `ReflectionException` / FatalError al cargar el módulo. **Fix**: `extendRoutesWithCrud()` ahora detecta vía regex si el archivo tiene un bloque `declare(...)` inmediatamente después del `<?php` opener (con whitespace flexible entre medio). Si lo hay, inserta los `use` statements NUEVOS DESPUÉS del bloque `declare`, no antes. Si NO hay `declare`, mantiene el comportamiento previo (insertar después de `<?php\n`). BC-safe: solo cambia el orden cuando el `declare` está presente, que es lo que el scaffolder actual SIEMPRE emite.
+
+- **BUG-NEW-22 (CRITICAL, derivado de BUG-NEW-16 fix)**: el Repository scaffoldeado por `--with-crud` (`AdminRepository::syncRoles()` / `syncDirectAbilities()`) NO seteaba `user_type` en la pivot MME-polimórfica. Resultado: `POST /api/admins/{uuid}/roles` fallaba con `SQLSTATE[23502]: null value in column "user_type" of relation "role_user" violates not-null constraint`. La fix de BUG-NEW-16 solo había cubierto el command `mk:auth:create-super-admin --roles=`, no el endpoint CRUD. **Fix**: 3 cambios: (a) `HasRoles::pivotExtras()` y `HasAbilities::abilityPivotExtras()` ahora son `public` (BC-safe: solo agrega visibilidad) — el Repository scaffoldeado puede consumirlos directamente; (b) `admin-repository.stub` ahora invoca `$admin->pivotExtras()` / `$admin->abilityPivotExtras()` en el payload del `sync()`, eliminando el hardcodeo manual del FQCN; (c) si la pivot NO tiene `user_type` (consumer legacy), `pivotExtras()` retorna `[]` y el comportamiento es idéntico al previo.
+
+- **BUG-NEW-23 (CRITICAL)**: `TokenIssuer::rotateRefreshToken()` podía retornar HTTP 500 en vez de HTTP 401 cuando el refresh token recibido no era bcrypt válido. Causa: `Hash::check($plaintext, $tokenModel->token)` lanza `RuntimeException: This password does not use the Bcrypt algorithm` cuando `$tokenModel->token` no es un hash bcrypt (caso edge: tokens legacy con sha256, datos corruptos, scope mismatching). El `AuthController::refresh()` solo captura `InvalidRefreshTokenException`, NO `RuntimeException`, así que se filtraba como 500. **Fix**: envolver el `Hash::check()` en try/catch; mapear `RuntimeException` a `InvalidRefreshTokenException::hashMismatch()` (que SÍ retorna HTTP 401). El path normal (hash bcrypt válido, hash no matchea) sigue funcionando idéntico.
+
+- **BUG-NEW-24 (medium, drift)**: `mk:make:auth-user X --with-crud` generaba el Model concreto (ej: `Admin`) con `protected static function newFactory(): XFactory` PERO sin el `use App\Modules\X\Database\Factories\XFactory;` necesario para resolver el FQCN desde el namespace `App\Modules\X\Models`. Resultado: cualquier test que use `Admin::factory()->create()` fallaba con `Class "App\Modules\Admin\Database\Factories\AdminFactory" not found`. **Fix**: el placeholder `{{factoryHasFactoryUse}}` ahora emite 2 imports cuando `$withCrud` está activo: (a) `use Illuminate\Database\Eloquent\Factories\HasFactory;` (existente) + (b) `use App\Modules\{$scope}\Database\Factories\{$scope}Factory;` (NUEVO). Tests del factory funcionan out-of-the-box sin workarounds.
+
+- **BUG-NEW-25 (cosmetic, 4to ciclo de BUG-NEW-14)**: `buildProfileFieldsReplacements()` emitía docblock de profile fields con drift de indentación cuando el consumer tenía 5+ profile fields. Causa raíz: la fix anterior terminaba el docblock con `\n\n` (doble newline) para separar del próximo bloque vía `*/`. PERO el control del blank line entre docblocks vivía en el GENERADOR (no en el stub), y con muchos fields el doble newline acumulaba drift visual. **Fix robusta**: el docblock generado cierra con `\n` simple (`     */\n`); el control del blank line entre docblocks vive en el STUB (`{{profileFieldsDocblock}}\n\n    /**`). Esto elimina el drift y mantiene el control de espaciado en UN lugar (single source of truth).
+
+### Changed
+
+- **BC-safe: `HasRoles::pivotExtras()` y `HasAbilities::abilityPivotExtras()` ahora son `public`** (antes `protected`). Esto permite que el Repository scaffoldeado (y cualquier consumer que quiera inspeccionar el payload de una pivot polimórfica) consuma el helper directamente sin reflection ni hardcodeo del FQCN. No rompe ningún caller existente (solo se agrega visibilidad). Ver BUG-NEW-22 fix arriba para el contexto completo.
+
+### Added
+
+- **5 nuevos audit tests de regresión** (`tests/Feature/Fase4FeedbackAuditTest.php`) pineando los 5 bugs de fase 4 (BUG-NEW-21..25). Patrón: source-parsing con helpers `extractMethodBody()` + `extractArrayBody()` (recuento de llaves balanceadas, NO regex frágil). Total acumulado: 22 audit tests verde (33 nuevos assertions en Fase4 + 117 del AuthUserFeedbackAuditTest previo). Total paquete: 489 tests passing, 4 pre-existing failures (UPGRADE_1.2.md backlog RC4, sin regresión).
+- **1 pineo actualizado**: `BUG-NEW-14` test en `AuthUserFeedbackAuditTest.php` se actualizó para reflejar la nueva realidad de BUG-NEW-25 (newline simple en el docblock, blank line en el stub). El pineo previo pineaba el patrón viejo con doble newline; ahora pinea el patrón correcto.
+
+### Migration desde v1.6.0-rc6
+
+- **Sin acción** para todos los fixes (todos son BC-clean additive o BC-clean refactors internos).
+- Consumers con `--with-crud` que regeneren el módulo Admin: el `routes/api.php` final respetará la regla PHP de `declare(strict_types=1)` como primera instrucción. Workaround previo (mover `declare` manualmente) ya NO es necesario.
+- Consumers con pivot MME-polimórfica (`role_user` / `ability_user` con columna `user_type`) que usan `--with-crud`: el Repository scaffoldeado ahora setea `user_type = static::class` automáticamente via `pivotExtras()`. Workaround previo (hardcodear `['user_type' => Admin::class]` en `sync()`) ya NO es necesario y debería removerse para mantener consistencia.
+- Consumers que llamaban `HasRoles::pivotExtras()` o `HasAbilities::abilityPivotExtras()` via reflection: ahora pueden llamarlos directamente (visibilidad pública). No requiere acción — solo habilita un patrón más limpio.
+
 ## [1.6.0-rc6] - 2026-06-26
 
 ### Fixed
