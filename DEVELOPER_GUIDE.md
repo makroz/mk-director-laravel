@@ -1065,10 +1065,39 @@ La subquery de `whereExists` ahora hace `->join('abilities', 'abilities.id', '='
 
 Con el fix, el SQL es portable cross-engine (MySQL, MariaDB, PostgreSQL, SQLite).
 
+#### 3.13.5 R-PKG-016 feedback fixes (RETO fase 3 sobre v1.6.0-rc5)
+
+> **Fixes en v1.6.0-rc6** (R-PKG-016). 8 bugs nuevos + 2 drift fixes pineados con 8 audit tests adicionales en `AuthUserFeedbackAuditTest.php`.
+
+**Critical** (bloqueantes para producción):
+
+- **BUG-NEW-13** (`--with-crud` → `routes/api.php` con DOS bloques PHP): el scaffolder insertaba el CRUD stub completo (con `<?php` opener + `use` statements + body) antes del cierre del último grupo, generando un segundo bloque PHP que rompía `loadRoutesFrom` con `ReflectionException: Class "AdminController" does not exist`. **Fix**: `MakeAuthUserCommand::extendRoutesWithCrud()` extrae los `use` statements del stub via regex (`preg_match_all('/^use\s+[^;]+;\s*$/m')`) y los inyecta al inicio del `routes/api.php` (después del primer `<?php`, con dedup via `str_contains`). Luego inserta solo el cuerpo de las rutas (sin `<?php`, sin `use`) antes del cierre del grupo. Resultado: UN solo bloque PHP con imports consolidados al inicio (PSR-12).
+
+- **BUG-NEW-16** (mutations sin `user_type` en pivot MME-polimórfica): `HasRoles::assignRole()` y `HasAbilities::giveAbilityTo()` usaban `syncWithoutDetaching([$id])` sin setear `user_type` en el pivot. En consumers MME con FK polimórfica (`role_user` con columna `user_type`), el INSERT quedaba con `user_type = NULL` → `NOT NULL violation`. **Fix**: helpers `pivotExtras()` y `abilityPivotExtras()` detectan via `Schema::hasColumn('role_user', 'user_type')` (cacheado en memoria del proceso); si la pivot tiene la columna, agregan `['user_type' => static::class]` al payload del sync. BC-safe: si la pivot NO tiene `user_type`, el comportamiento es idéntico al previo.
+
+- **BUG-NEW-17** (`HasAbilities::abilities()` retornaba `[]` para users sin direct abilities): el método hacía `belongsToMany(static::class, 'ability_user', ...)` (JOIN directo a la pivot) + filtro `whereExists` que no aplicaba a filas inexistentes. Para users sin direct abilities, el JOIN retornaba 0 rows. **Fix**: refactor a `whereIn('abilities.id', $unionSubquery)` con subqueries `UNION ALL` (path 1: `ability_user.user_id = ?`, path 2: `ability_role JOIN role_user`). Portable cross-engine, lazy. El cambio de `whereExists` a `whereIn` también resuelve el BUG-NEW-08 (Postgres SQLSTATE 42P01).
+
+- **BUG-NEW-20** (`CRUDSmart::show/update/destroy(int $id)` rompía con UUIDs): consumers que usan `HasUuids` generan IDs string tipo `01HXYZ...`. **Fix**: signatures cambiadas a `string|int $id` (PHP 8.0+ union type). BC: cualquier código existente que pase `int` sigue funcionando.
+
+**High**:
+
+- **BUG-NEW-19** (rutas con `'{ admin }'` con espacios): el stub `auth-user.routes.with-crud.stub` emitía rutas con espacios alrededor del placeholder (`'{ {{moduleNameLower}}}'`). Después del str_replace con `admin`, quedaba `'{ admin }'` que Laravel interpretaba como ` admin` (con espacio). **Fix**: stub ahora emite `'{ {{moduleNameLower}}}'` sin espacios → `'{admin}'` post-resolve.
+
+**Medium**:
+
+- **BUG-NEW-15** (`create-super-admin` sin `--name` en `--no-interaction` → NULL): el `$this->ask('Nombre')` retorna `null` en modo no-interactive. **Fix**: fallback chain (1) `--name=` flag, (2) prompt interactivo, (3) `ucfirst(strtolower(explode('@', $email)[0]))`, (4) default `'Admin'`.
+- **BUG-NEW-18** (`AbilityController with:['roles']` no existe): el modelo `Ability` NO tiene relation `roles()`. **Fix**: stub ahora usa `'with' => []` y `'allowedIncludes' => []`.
+- **BUG-NEW-14** (docblock suelto, 3er ciclo): `*/` quedaba pegado al `/**` del siguiente bloque. **Fix**: terminación con `\n\n` (doble newline).
+
+**Drift fix**:
+
+- **BUG-NEW-10** (`checkSanctumInstalled` drift post `composer require`): el comando seguía reportando "Sanctum no instalado" después de que el consumer instalara el package, porque `class_exists()` falla si el autoloader no regeneró el classmap. **Fix**: helper `isSanctumInstalled()` con fallback `file_exists(base_path('vendor/laravel/sanctum/composer.json'))`.
+
 #### Spec
 
-- Sprint: `makromania/260626-1845--r-pkg-015-feedback-fixes-v1.6.0-rc5` (en `projects/mk-director/packagist/mk-director-laravel/`).
-- Tests: 13 Pest tests source-parsing + reflection en `tests/Feature/AuthUserFeedbackAuditTest.php` (53 assertions, todos verde).
+- Sprint: `makromania/260626-2200--r-pkg-016-feedback-fixes-v1.6.0-rc6` (en `projects/mk-director/packagist/mk-director-laravel/`).
+- Tests: 22 Pest tests source-parsing + reflection en `tests/Feature/AuthUserFeedbackAuditTest.php` (117 assertions, todos verde).
+- Source: `.makromania/projects/reto/modules/admin/FEEDBACK-TO-MK-DIRECTOR.md` (sección "🆕 Bugs nuevos en v1.6.0-rc5").
 
 ---
 
