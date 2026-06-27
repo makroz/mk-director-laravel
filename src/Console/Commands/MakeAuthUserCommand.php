@@ -530,7 +530,7 @@ PHP
     }
 
     /**
-     * BUG-NEW-10 fix (R-PKG-015): verifica que `laravel/sanctum` esté instalado.
+     * BUG-NEW-10 fix (R-PKG-015) + R-PKG-016 drift fix: verifica que `laravel/sanctum` esté instalado.
      *
      * El paquete usa `HasApiTokens` de Sanctum en `AuthUser` y emite tokens vía
      * `Mk\Director\Auth\Services\TokenIssuer`. Si el consumer no tiene Sanctum
@@ -542,13 +542,23 @@ PHP
      * (SQLSTATE 22P02). Sugerimos correr `mk:fix:sanctum-uuids` después de
      * `php artisan install:api`.
      *
+     * R-PKG-016 BUG-NEW-10 drift fix: en RETO fase 3, el comando seguía reportando
+     * "BUG-NEW-10: laravel/sanctum no está instalado" DESPUÉS de que el consumer
+     * corriera `composer require laravel/sanctum`. Causa: `class_exists()` falla
+     * si el autoloader de Composer todavía no regeneró el classmap (común
+     * cuando el scaffolder corre en la misma sesión que `composer require`
+     * sin un `composer dump-autoload` intermedio). Fix: agregar fallback via
+     * `file_exists()` en `vendor/laravel/sanctum` antes de considerar
+     * "Sanctum no instalado". Si la carpeta existe, Sanctum SÍ está instalado
+     * aunque el autoloader no haya picked up aún.
+     *
      * Warn no fatal — el consumer puede usar otro package de tokens.
      */
     protected function checkSanctumInstalled(): void
     {
-        // Verificar si Sanctum está cargado. `class_exists` funciona porque
-        // Composer autoload ya está activo en consola.
-        if (class_exists(\Laravel\Sanctum\HasApiTokens::class)) {
+        $sanctumInstalled = $this->isSanctumInstalled();
+
+        if ($sanctumInstalled) {
             // Sanctum instalado. Verificar si la migration usa uuidMorphs (R-PKG-015 BUG-NEW-09).
             $migrationsPath = function_exists('database_path') ? database_path('migrations') : null;
             if ($migrationsPath !== null && is_dir($migrationsPath)) {
@@ -586,6 +596,32 @@ PHP
         $this->newLine();
         $this->line('   O, si tu modelo AuthUser usa UUIDs, agregá este paso extra:');
         $this->line('     php artisan mk:fix:sanctum-uuids');
+    }
+
+    /**
+     * Detecta si Sanctum está instalado, con fallback robusto (R-PKG-016).
+     *
+     * Strategy:
+     *   1. `class_exists(HasApiTokens::class)` — primary (autoloader debe estar al día).
+     *   2. `file_exists(vendor/laravel/sanctum/composer.json)` — fallback para casos
+     *      donde el consumer acaba de correr `composer require laravel/sanctum` pero
+     *      el autoloader todavía no regeneró el classmap (R-PKG-016 BUG-NEW-10 drift).
+     *
+     * @return bool true si Sanctum está instalado por CUALQUIERA de las dos vías.
+     */
+    protected function isSanctumInstalled(): bool
+    {
+        if (class_exists(\Laravel\Sanctum\HasApiTokens::class)) {
+            return true;
+        }
+
+        // Fallback: ¿está la carpeta vendor/? (composer require corrió pero
+        // el autoloader todavía no picked up).
+        $vendorPath = function_exists('base_path')
+            ? base_path('vendor/laravel/sanctum/composer.json')
+            : null;
+
+        return $vendorPath !== null && file_exists($vendorPath);
     }
 
     /**
@@ -786,6 +822,22 @@ PHP
     /**
      * Extiende routes/api.php con los endpoints CRUD del scope.
      * Lee el archivo generado por `auth-user.routes.stub` y agrega antes del cierre del group.
+     *
+     * R-PKG-016 BUG-NEW-13 fix: el código previo insertaba el CRUD stub COMPLETO
+     * (con `<?php` opener + `use` statements + body) ANTES del cierre del último
+     * grupo del routes principal. Esto dejaba DOS bloques PHP en el archivo
+     * final (uno al inicio, otro en la mitad), y `loadRoutesFrom` crasheaba con
+     * `ReflectionException: Class "AdminController" does not exist` porque
+     * los `use` statements del segundo bloque no resolvían el FQCN.
+     *
+     * La fix correcta: extraer los `use` statements del CRUD stub e inyectarlos
+     * al inicio del `routes/api.php` del scope (después del primer `<?php`),
+     * y luego insertar SOLO el cuerpo de las rutas (sin `<?php` opener ni
+     * `use` statements) ANTES del cierre del último grupo del routes principal.
+     *
+     * Esto produce UN solo bloque PHP en el archivo final con todos los
+     * `use` statements consolidados al inicio (estilo PSR-12) + las rutas
+     * CRUD en el lugar correcto.
      */
     protected function extendRoutesWithCrud(string $basePath, string $scope, string $scopeLower, string $scopePlural): void
     {
@@ -804,15 +856,54 @@ PHP
         }
 
         $content = File::get($routesPath);
-        $crudRoutes = File::get($stubPath);
-        $crudRoutes = str_replace('{{ModuleName}}', $scope, $crudRoutes);
-        $crudRoutes = str_replace('{{moduleNameLower}}', $scopeLower, $crudRoutes);
-        $crudRoutes = str_replace('{{moduleNamePluralLower}}', $scopePlural, $crudRoutes);
+        $crudStub = File::get($stubPath);
+        $crudStub = str_replace('{{ModuleName}}', $scope, $crudStub);
+        $crudStub = str_replace('{{moduleNameLower}}', $scopeLower, $crudStub);
+        $crudStub = str_replace('{{moduleNamePluralLower}}', $scopePlural, $crudStub);
 
-        // Insertar antes del cierre del último `});` (que cierra el group con prefix api/...)
+        // ── 1) Extraer `use` statements del CRUD stub ──
+        // Pattern: `use App\Modules\...;` (una por línea, con o sin \).
+        // Capturamos solo líneas que comienzan con `use ` y terminan en `;`.
+        preg_match_all('/^use\s+[^;]+;\s*$/m', $crudStub, $useMatches);
+        $useStatements = $useMatches[0];
+
+        if (! empty($useStatements)) {
+            // Inyectar los `use` statements al inicio del routes/api.php,
+            // después del primer `<?php` opener. Si ya existe un `use` con
+            // el mismo FQCN, no duplicarlo.
+            $newUseLines = [];
+            foreach ($useStatements as $useLine) {
+                // Extraer el FQCN (entre `use` y `;`) para detectar duplicados.
+                if (preg_match('/^use\s+([^;]+);/', $useLine, $fqcnMatch)) {
+                    $fqcn = trim($fqcnMatch[1]);
+                    if (! str_contains($content, "use {$fqcn};")) {
+                        $newUseLines[] = $useLine;
+                    }
+                }
+            }
+
+            if (! empty($newUseLines)) {
+                $useBlock = implode("\n", $newUseLines);
+                // Insertar después del primer `<?php\n` (o al inicio si no hay).
+                if (preg_match('/^<\?php\s*\n/', $content, $phpMatch, PREG_OFFSET_CAPTURE)) {
+                    $insertPos = $phpMatch[0][1] + strlen($phpMatch[0][0]);
+                    $content = substr($content, 0, $insertPos).$useBlock."\n".substr($content, $insertPos);
+                } else {
+                    // No `<?php` opener (raro pero defensivo): prepend.
+                    $content = "<?php\n\n".$useBlock."\n\n".$content;
+                }
+            }
+        }
+
+        // ── 2) Remover `<?php` opener y `use` statements del CRUD stub ──
+        // Dejar solo el cuerpo de las rutas (los `Route::xxx(...)` calls).
+        $crudBody = preg_replace('/^<\?php\s*\n/', '', $crudStub);
+        $crudBody = preg_replace('/^use\s+[^;]+;\s*\n/m', '', $crudBody);
+
+        // ── 3) Insertar el cuerpo de las rutas ANTES del cierre del último grupo ──
         $content = preg_replace(
             '/(Route::middleware\([^)]*\)[^)]*->group\(function \(\) \{[\s\S]*?\n\}\);)\s*$/m',
-            "$1\n{$crudRoutes}",
+            "$1\n{$crudBody}",
             $content,
             1,
             $count,
@@ -820,11 +911,11 @@ PHP
 
         if ($count === 0) {
             // Fallback: append al final.
-            $content .= "\n{$crudRoutes}";
+            $content .= "\n{$crudBody}";
         }
 
         File::put($routesPath, $content);
-        $this->line('   ✅ Http/Routes/api.php (extended with CRUD)');
+        $this->line('   ✅ Http/Routes/api.php (extended with CRUD, single PHP block)');
     }
 
     /**
@@ -1420,12 +1511,21 @@ PHP,
         // R-PKG-015 BUG-NEW-11 fix: agregar header "Profile fields per-scope."
         // descriptivo + alineación correcta de `     *` (5 espacios) + cerrar
         // con newline antes del `*/`.
+        //
+        // R-PKG-016 BUG-NEW-14 fix (3er ciclo): el `*/` del docblock generado
+        // quedaba PEGADO al `/**` del siguiente bloque en el modelo, porque
+        // el `auth-user.model.stub` tiene `{{profileFieldsDocblock}}/**` (sin
+        // newline). El pineo previo de R-PKG-015 había alineado indentación
+        // pero NO había agregado separación entre docblocks. Fix: terminar el
+        // docblock con `\n\n` (doble newline) en vez de `\n` para que haya
+        // una línea en blanco entre el docblock de profile fields y el
+        // siguiente docblock del modelo.
         if (! empty($docblock)) {
             $docblock = "    /**\n"
                 ."     * Profile fields per-scope (R-PKG-011).\n"
                 ."     *\n"
                 .$docblock
-                ."     */\n";
+                ."     */\n\n";
         }
 
         // Para el método register() y updateProfile(): las reglas se pasan via array.

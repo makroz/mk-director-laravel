@@ -3,7 +3,22 @@
 // ── CRUD endpoints del scope `{{moduleNameLower}}` (R-PKG-014 BUG-08/MEJORA-02 + R-PKG-015 BUG-NEW-05) ──
 // Generados por `php artisan mk:make:auth-user {{ModuleName}} --with-crud`.
 // Las rutas usan SmartController que delega a {{ModuleName}}Service via container.
-
+//
+// R-PKG-016 BUG-NEW-13 fix: este stub contiene los `use` statements + el cuerpo
+// de las rutas. El scaffolder `MakeAuthUserCommand::extendRoutesWithCrud()`
+// extrae los `use` statements (regex) y los inyecta al inicio del archivo
+// `routes/api.php` del scope (después del primer `<?php`), y luego inserta
+// solo el cuerpo de las rutas (sin `<?php` ni `use`) ANTES del cierre del
+// último grupo del routes principal. Esto elimina el segundo bloque PHP que
+// rompía `loadRoutesFrom` con `ReflectionException: Class "AdminController" does not exist`.
+//
+// R-PKG-016 BUG-NEW-19 fix: las rutas con parámetro dinámico se emiten SIN
+// espacios alrededor del nombre del parámetro (`/{admin}` en vez de `/{ admin }`).
+// Antes emitían `'{ admin }'` (con espacios), lo que hacía que Laravel
+// interpretara el parámetro como ` admin` (con espacio) y no matcheara URLs
+// con `admin` sin espacio (`GET /api/admins/abc-123` retornaba
+// "route could not be found"). El fix aplica a las 6 rutas con param
+// dinámico de este stub.
 // R-PKG-015 BUG-NEW-05: los 3 controllers deben estar importados. Sin esto,
 // ReflectionException: Class "{{ModuleName}}Controller" does not exist al hacer
 // route:list, porque las rutas referencian FQCNs no resueltos en este namespace.
@@ -13,15 +28,15 @@ use App\Modules\{{ModuleName}}\Http\Controllers\{{ModuleName}}Controller;
 
 Route::prefix('api/{{moduleNamePluralLower}}')->middleware('mk.auth:{{moduleNameLower}}')->group(function () {
     Route::get('/',         [{{ModuleName}}Controller::class, 'index']);
-    Route::get('/{ {{moduleNameLower}}}',     [{{ModuleName}}Controller::class, 'show']);
+    Route::get('/{{{moduleNameLower}}}',     [{{ModuleName}}Controller::class, 'show']);
     Route::post('/',        [{{ModuleName}}Controller::class, 'store']);
-    Route::put('/{ {{moduleNameLower}}}',     [{{ModuleName}}Controller::class, 'update']);
-    Route::patch('/{ {{moduleNameLower}}}',   [{{ModuleName}}Controller::class, 'update']);
-    Route::delete('/{ {{moduleNameLower}}}',  [{{ModuleName}}Controller::class, 'destroy']);
+    Route::put('/{{{moduleNameLower}}}',     [{{ModuleName}}Controller::class, 'update']);
+    Route::patch('/{{{moduleNameLower}}}',   [{{ModuleName}}Controller::class, 'update']);
+    Route::delete('/{{{moduleNameLower}}}',  [{{ModuleName}}Controller::class, 'destroy']);
 
     // Asignar roles / abilities directas a un {{moduleNameLower}} específico.
-    Route::post('/{ {{moduleNameLower}}}/roles',         [{{ModuleName}}Controller::class, 'assignRoles']);
-    Route::post('/{ {{moduleNameLower}}}/abilities',     [{{ModuleName}}Controller::class, 'assignDirectAbilities']);
+    Route::post('/{{{moduleNameLower}}}/roles',         [{{ModuleName}}Controller::class, 'assignRoles']);
+    Route::post('/{{{moduleNameLower}}}/abilities',     [{{ModuleName}}Controller::class, 'assignDirectAbilities']);
 });
 
 // CRUD de Roles del paquete (global).

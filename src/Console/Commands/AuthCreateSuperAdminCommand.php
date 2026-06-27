@@ -127,12 +127,36 @@ class AuthCreateSuperAdminCommand extends Command
 
         // 1. Recolectar credenciales base.
         $email = $this->option('email') ?: $this->ask('Email del super-admin');
-        $name = $this->option('name') ?: $this->ask('Nombre del super-admin');
+        $nameOption = trim((string) $this->option('name'));
 
         if (! filter_var($email, FILTER_VALIDATE_EMAIL)) {
             $this->error("Email inválido: {$email}");
 
             return self::FAILURE;
+        }
+
+        // R-PKG-016 BUG-NEW-15 fix: si `--name` no se pasa Y el modo es
+        // `--no-interaction` (CI / seed scripts), `$this->ask()` retorna
+        // `null` y `create(['name' => null, ...])` rompe con `NOT NULL violation
+        // on column "name"`. Fallback chain:
+        //   1. `--name=` flag (highest priority)
+        //   2. prompt interactivo `ask('Nombre')`
+        //   3. autogenerar del email local-part: `mario@retogo.com` → `Mario`
+        //      (capitalize + take before `@`)
+        // Esto permite ejecutar `mk:auth:create-super-admin --email=X --password=Y
+        // --roles=... --no-interaction` sin tener que especificar name.
+        if ($nameOption !== '') {
+            $name = $nameOption;
+        } else {
+            $name = $this->ask('Nombre del super-admin');
+        }
+
+        if ($name === null || $name === '') {
+            $localPart = explode('@', $email, 2)[0] ?? '';
+            $name = $localPart !== ''
+                ? ucfirst(strtolower($localPart))
+                : 'Admin';
+            $this->line("   (autogenerado de email: nombre = \"{$name}\")");
         }
 
         $password = $this->option('password') ?: $this->secret('Password (mínimo 8 caracteres)');
