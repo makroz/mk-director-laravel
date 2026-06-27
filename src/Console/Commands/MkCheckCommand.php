@@ -17,7 +17,9 @@ class MkCheckCommand extends Command
      *
      * @var string
      */
-    protected $signature = 'mk:status {--module= : Filtrar por un módulo específico}';
+    protected $signature = 'mk:status
+        {--module= : Filtrar por un módulo específico}
+        {--response-shape : R-PKG-023 (rc12): audit controllers for legacy nested __extraData in sendResponse() calls}';
 
     /**
      * The console command description.
@@ -31,6 +33,15 @@ class MkCheckCommand extends Command
      */
     public function handle()
     {
+        // R-PKG-023 (rc12): --response-shape option dispatches to a
+        // dedicated audit that walks every controller and warns about
+        // legacy `sendResponse(['data' => ..., '__extraData' => ...])`
+        // calls — endpoints that would emit the legacy nested shape
+        // even when `MK_DIRECTOR_RESPONSE_TOP_LEVEL_EXTRA_DATA=true`.
+        if ($this->option('response-shape')) {
+            return $this->auditResponseShape();
+        }
+
         $this->info("\n🔍 Analizando ecosistema MK-Director...\n");
 
         $controllers = $this->findSmartControllers();
@@ -50,6 +61,90 @@ class MkCheckCommand extends Command
         $this->table($headers, $rows);
 
         $this->info("\n✅ Análisis completado.\n");
+    }
+
+    /**
+     * R-PKG-023 (rc12): walk every controller in app/Http/Controllers and
+     * app/Modules/* and warn about legacy `sendResponse([...])` calls that
+     * still pass a single wrapped array (the rc11 and earlier pattern).
+     *
+     * Consumers that flip `MK_DIRECTOR_RESPONSE_TOP_LEVEL_EXTRA_DATA=true`
+     * MUST also migrate any custom controllers that still use the wrapped
+     * array — otherwise those endpoints emit the legacy nested shape and
+     * the response envelope becomes inconsistent.
+     *
+     * Reports `warning` per occurrence (not `error`) — the migration is
+     * non-urgent and consumers can run the package in mixed mode during
+     * the transition window.
+     */
+    protected function auditResponseShape(): int
+    {
+        $this->info("\n🔍 Auditando response shape (top-level __extraData) — R-PKG-023 (rc12)...\n");
+
+        $paths = [
+            app_path('Http/Controllers'),
+            app_path('Modules'),
+        ];
+
+        $findings = [];
+
+        foreach ($paths as $path) {
+            if (! is_dir($path)) {
+                continue;
+            }
+
+            $finder = new \Symfony\Component\Finder\Finder();
+            $finder->files()->in($path)->name('*.php');
+
+            foreach ($finder as $file) {
+                $contents = (string) file_get_contents($file->getRealPath());
+                $relative = ltrim(str_replace(base_path() . '/', '', $file->getRealPath()), '/');
+
+                // Look for `sendResponse([` followed (within 200 chars) by
+                // `__extraData`. That's the legacy nested pattern.
+                if (preg_match_all(
+                    '/sendResponse\s*\(\s*\[\s*[\s\S]{0,500}?[\'"]__extraData[\'"]/',
+                    $contents,
+                    $matches,
+                    PREG_OFFSET_CAPTURE
+                )) {
+                    foreach ($matches[0] as $match) {
+                        $offset = $match[1];
+                        $line = substr_count(substr($contents, 0, $offset), "\n") + 1;
+                        $findings[] = [
+                            'file' => $relative,
+                            'line' => $line,
+                            'snippet' => $match[0],
+                        ];
+                    }
+                }
+            }
+        }
+
+        if (empty($findings)) {
+            $this->info('✅ All controllers use the top-level __extraData shape (or no __extraData at all).');
+            return self::SUCCESS;
+        }
+
+        $rows = [];
+        foreach ($findings as $f) {
+            $rows[] = [
+                $f['file'],
+                $f['line'],
+                '<fg=yellow>legacy nested __extraData</>',
+                'migrate to: sendResponse($data, \'\', 200, $extra)',
+            ];
+        }
+
+        $this->table(['File', 'Line', 'Issue', 'Migration hint'], $rows);
+        $this->warn(sprintf(
+            "\n⚠️  %d legacy sendResponse([...]) call(s) found.\n" .
+            "   Consumers with MK_DIRECTOR_RESPONSE_TOP_LEVEL_EXTRA_DATA=true should migrate these to use\n" .
+            "   the 4th argument: sendResponse(\$data, '', 200, \$extra). See CHANGELOG rc12.\n",
+            count($findings)
+        ));
+
+        return self::SUCCESS;
     }
 
     /**

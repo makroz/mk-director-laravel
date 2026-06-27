@@ -20,8 +20,26 @@ abstract class BaseController extends LaravelController
 
     /**
      * Standard JSON Success Response
+     *
+     * R-PKG-023 (rc12): added optional 4th parameter `array $extra = []`.
+     * When the caller passes a non-empty `$extra` AND the config flag
+     * `mk_director.response.top_level_extra_data` is true, the response
+     * envelope emits `__extraData` as a TOP-LEVEL sibling of `data` —
+     * matching the @makroz/core `MkResponse<T>` contract and the
+     * `useMkInfiniteList` consumption shape in web + mobile.
+     *
+     * BC strategy:
+     *   - When `$extra` is empty (default), behavior is IDENTICAL to rc11.
+     *   - When the flag is `false` (rc12 default), behavior is IDENTICAL
+     *     to rc11 even if the caller passes `$extra`.
+     *   - The flag flips to `true` at GA. Between rc12 and GA, consumers
+     *     opt-in per-environment via `MK_DIRECTOR_RESPONSE_TOP_LEVEL_EXTRA_DATA=true`.
+     *
+     * Coexistence during rc12 → GA: callers that don't pass `$extra` (or
+     * keep the flag off) see the legacy nested shape. Callers that opt
+     * in (flag on + passing `$extra`) get the top-level shape.
      */
-    protected function sendResponse($result, $message = '', $code = 200)
+    protected function sendResponse($result, $message = '', $code = 200, array $extra = [])
     {
         $response = [
             'success'   => true,
@@ -29,6 +47,13 @@ abstract class BaseController extends LaravelController
             'data'      => $this->autoTransform($result),
             'debugMsg'  => $this->debugMsgs
         ];
+
+        // R-PKG-023: top-level __extraData when caller passes $extra
+        // AND the config flag is enabled. BC-safe: when $extra is empty
+        // OR the flag is off, the response shape is unchanged.
+        if ($extra !== [] && config('mk_director.response.top_level_extra_data', false)) {
+            $response['__extraData'] = $extra;
+        }
 
         if (config('mk_director.debug', false)) {
             $response = array_merge($response, $this->getDebugData());
@@ -109,14 +134,37 @@ abstract class BaseController extends LaravelController
                  $query['optimization_alert'] = "Slow query detected (>100ms).";
             }
 
-            // Auto-Explain strategy
+            // R-PKG-024 (rc13): the previous code interpolated the query
+            // directly into a database call that prepended the string
+            // `EXPLAIN` to the SQL, which is a SQL injection vector when
+            // the query contains user-controlled values (an authenticated
+            // `super-admin` or `dev` could pass `?debug=true&_debug=1` to
+            // reach this path). The new behavior:
+            //
+            //   1. Always log slow-query candidates via `Log::debug()` for
+            //      offline analysis. Safe default.
+            //   2. When the config flag `mk_director.debug.explain_enabled`
+            //      is true, log the SQL as a `warning` so a developer can
+            //      run the explain manually in a safe environment. The query
+            //      is NOT interpolated into any database call.
+            //
+            // Migration: see CHANGELOG rc13. No BC break for consumers that
+            // never set `explain_enabled` — they get the same shape, just
+            // safer.
             if (isset($query['query']) && str_starts_with(strtolower($query['query']), 'select')) {
-                try {
-                    $explain = DB::select("EXPLAIN " . $query['query'], $query['bindings']);
-                    if (!empty($explain) && $explain[0]->type == 'ALL') {
-                        $query['optimization_alert'] = "FULL TABLE SCAN detected. Indexing highly recommended.";
-                    }
-                } catch (\Exception $e) {}
+                Log::debug('[mk-director] slow query candidate', [
+                    'sql' => $query['query'],
+                    'bindings' => $query['bindings'],
+                    'time_ms' => $query['time'],
+                ]);
+
+                if (config('mk_director.debug.explain_enabled', false)) {
+                    Log::warning('[mk-director] EXPLAIN query (run manually in safe env):', [
+                        'sql' => $query['query'],
+                        'bindings' => $query['bindings'],
+                    ]);
+                    $query['optimization_alert'] = "EXPLAIN logged. Run manually in safe env.";
+                }
             }
         }
 

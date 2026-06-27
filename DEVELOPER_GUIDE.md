@@ -9,24 +9,36 @@ Bienvenido a la guía oficial de **MK-Director Core**, el motor de backend dise�
 MK-Director se basa en el principio de **Zero-Coupling** y **Configuración sobre Código**. El objetivo es que puedas definir el comportamiento de un módulo completo (CRUD, búsquedas, caché, plugins) simplemente configurando un arreglo en tu controlador.
 
 ### Flujo Estándar de Respuesta
-Todas las respuestas de MK-Director siguen este formato:
+Todas las respuestas de MK-Director siguen este formato canónico (top-level `__extraData`):
+
 ```json
 {
-  "data": {
-    "data": [...], // Colección de objetos o un objeto único
-    "__extraData": {
-       "total": 150,
-       "perPage": 15,
-       "page": 1,
-       "plugin_verified": true, // Inyectado por plugins
-       ...
-    }
+  "data": [...], // Colección de objetos o un objeto único
+  "__extraData": {
+     "total": 150,
+     "perPage": 15,
+     "page": 1,
+     "plugin_verified": true, // Inyectado por plugins
+     ...
   },
   "message": "Operación exitosa",
   "status": 200,
   "execution_time": "0.02s" // (Solo en modo Debug)
 }
 ```
+
+> **R-PKG-023 (rc12) — Migración a `__extraData` top-level**: el shape canónico que coincide
+> con `@makroz/core` `MkResponse<T>` y que consumen `useMkInfiniteList` (web + mobile) es el
+> de arriba. La opción de flag `mk_director.response.top_level_extra_data` (default `false`
+> en rc12, `true` en GA) controla si el paquete emite el shape canónico o el legacy
+> anidado:
+>
+> - **Flag `true` (rc12 opt-in / GA default)**: top-level (arriba).
+> - **Flag `false` (rc12 default)**: legacy anidado — `data.data` + `data.__extraData`.
+>   Coexiste durante rc12 → GA para que los consumers migren gradualmente.
+>
+> Activar por entorno: `MK_DIRECTOR_RESPONSE_TOP_LEVEL_EXTRA_DATA=true`. Auditar
+> controllers legacy con `php artisan mk:status --response-shape`.
 
 ---
 
@@ -1541,7 +1553,7 @@ MK-Director estandariza la comunicación mediante un protocolo de URL predefinid
 - **Ordenamiento**: `?sort=-created_at` (el prefijo `-` indica descendente)
 - **Paginación**: `?page=2&per_page=15`
 
-Toda respuesta exitosa (200 OK) garantiza la presencia de la llave `data` y, en colecciones, la llave `__extraData` con metadatos de paginación y telemetría.
+Toda respuesta exitosa (200 OK) garantiza la presencia de la llave `data` y, en colecciones, la llave `__extraData` con metadatos de paginación y telemetría. Con el flag `mk_director.response.top_level_extra_data` activo (rc12 opt-in / GA default), `__extraData` se emite como **sibling top-level** de `data` (forma canónica que matchea `@makroz/core` `MkResponse<T>`). Sin el flag, se emite en el shape legacy anidado dentro de `data` para BC con consumers pre-rc12.
 
 ---
 

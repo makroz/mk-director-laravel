@@ -253,8 +253,28 @@ trait CRUDSmart
             }
         }
 
+        $items = $paginator->items();
+
+        // R-PKG-023 (rc12): top-level __extraData when the config flag
+        // is on. Default false in rc12 → true in GA. Coexistence with
+        // the legacy nested shape is opt-in per-environment via
+        // `MK_DIRECTOR_RESPONSE_TOP_LEVEL_EXTRA_DATA=true`. See CHANGELOG
+        // for the full migration guide.
+        //
+        // Note: in the new path the `fireAfterResponse` plugin hook
+        // receives `$items` (transformed) instead of the wrapped array
+        // — the plugin contract changes in rc12 to match the new top-level
+        // shape. Consumers that need access to `$extra` from a plugin
+        // should read the `mk_director.response.top_level_extra_data` config
+        // or look at a future plugin API extension.
+        if (config('mk_director.response.top_level_extra_data', false)) {
+            $transformed = $this->autoTransform($items);
+            $this->getPluginManager()->fireAfterResponse($transformed);
+            return $this->sendResponse($transformed, '', 200, $extra);
+        }
+
         $response = [
-            'data' => $paginator->items(),
+            'data' => $items,
             '__extraData' => $extra
         ];
 

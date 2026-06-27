@@ -1701,8 +1701,12 @@ PHP,
         \$data = \$request->validate({$rulesPhp});
 
         /** @var {$scope} \$user */
-        \$user = {$scope}::create(\$data);
-        \$user->setAuthScope('{$scopeLower}');{$verifyDispatch}
+        \$user = \\DB::transaction(function () use (\$data) {
+            /** @var {$scope} \$user */
+            \$user = {$scope}::create(\$data);
+            \$user->setAuthScope('{$scopeLower}');
+            return \$user;
+        });{$verifyDispatch}
 
         return \$this->sendResponse(
             \$user->only(['id', 'name', '{$loginField}']),

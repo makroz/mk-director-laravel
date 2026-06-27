@@ -85,3 +85,57 @@ test('mk_director.auth block has a comment that names the offending anti-pattern
     expect($source)->toContain('rompe DDD');
     expect($source)->toContain('mk:make:auth-user');
 });
+
+test('R-PKG-023 (rc12) response.top_level_extra_data flag exists with env-driven default false', function () {
+    // R-PKG-023 introduces an opt-in flag for the top-level __extraData
+    // response shape. The flag MUST be env-driven (so consumers can flip
+    // it via .env without re-publishing the config) and MUST default to
+    // `false` in rc12 (legacy nested shape is the BC default).
+    $source = configSource();
+
+    // Block exists.
+    expect($source)->toContain("'response'");
+    expect($source)->toContain("'top_level_extra_data'");
+
+    // Reads from env, not hardcoded.
+    expect($source)->toContain("env('MK_DIRECTOR_RESPONSE_TOP_LEVEL_EXTRA_DATA'");
+    expect($source)->toContain(', false)');  // default is false
+
+    // NOT hardcoded to `true` (which would be a BC break at GA only).
+    expect($source)->not->toMatch("/'top_level_extra_data'\s*=>\s*env\([^,]+,\s*true\s*\)/");
+});
+
+test('R-PKG-024 (rc13) cache.allow_full_clear flag exists with env-driven default false', function () {
+    // R-PKG-024 introduces a gate for CacheManager::flush() fallback path
+    // (nuke all cache when no tags support). MUST be env-driven and MUST
+    // default to `false` (safe: no accidental nuke in production).
+    $source = configSource();
+
+    // Block + key exists.
+    expect($source)->toContain("'allow_full_clear'");
+
+    // Reads from env.
+    expect($source)->toContain("env('MK_CACHE_ALLOW_FULL_CLEAR'");
+    expect($source)->toContain(', false)');
+
+    // NOT hardcoded to `true`.
+    expect($source)->not->toMatch("/'allow_full_clear'\s*=>\s*env\([^,]+,\s*true\s*\)/");
+});
+
+test('R-PKG-024 (rc13) debug.explain_enabled flag exists with env-driven default false', function () {
+    // R-PKG-024 (T13) introduces a gate for the optional EXPLAIN in
+    // BaseController::getDebugData(). Default `false` (safe: no SQL
+    // interpolation, no DB::select("EXPLAIN ...") at runtime).
+    $source = configSource();
+
+    // The `debug` block was refactored from a flat bool to a nested
+    // array (preserves BC for `mk_director.debug` being truthy).
+    expect($source)->toContain("'explain_enabled'");
+
+    // Reads from env.
+    expect($source)->toContain("env('MK_DIRECTOR_DEBUG_EXPLAIN_ENABLED'");
+    expect($source)->toContain(', false)');
+
+    // NOT hardcoded to `true`.
+    expect($source)->not->toMatch("/'explain_enabled'\s*=>\s*env\([^,]+,\s*true\s*\)/");
+});

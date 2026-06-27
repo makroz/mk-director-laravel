@@ -203,8 +203,27 @@ class MkMultiTenantPlugin implements MkPluginInterface
 
     protected function resolveTenantId(Request $request): mixed
     {
-        // Soporta JWT Auth o Session Auth asumiendo convención 'client_id' 
-        return $request->user()?->{$this->tenantColumn} ?? null;
+        $user = $request->user();
+        if (! $user) {
+            return null;
+        }
+
+        // R-PKG-024 (rc13): if the user model implements `getTenantId()`
+        // (typically via the `HasTenantMembership` trait), use the
+        // method as the preferred resolver. This matches the pattern
+        // already used by `TenantResolver` (TenantResolver.php:89-90) and
+        // lets consumers with custom tenant-resolution logic (e.g.
+        // derived from org memberships) override the accessor without
+        // touching the plugin.
+        //
+        // BC: the fallback to direct property access is preserved for
+        // legacy consumers whose User model predates the trait.
+        if (method_exists($user, 'getTenantId')) {
+            return $user->getTenantId();
+        }
+
+        // Legacy fallback: acceso directo a la columna configurada.
+        return $user->{$this->tenantColumn} ?? null;
     }
 
     protected function isStrict(): bool

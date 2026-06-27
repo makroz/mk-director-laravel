@@ -214,9 +214,21 @@ class MkServiceProvider extends ServiceProvider
                 }
             }
 
-            // 2. Only act on writes (INSERT / UPDATE / DELETE).
-            if (preg_match('/(update|delete|insert\s+into)\s+`?(\w+)`?/i', $query->sql, $matches)) {
-                $table = $matches[2];
+            // 2. Only act on writes (INSERT / UPDATE / DELETE / REPLACE / TRUNCATE / upsert).
+            //
+            // R-PKG-024 (rc13): regex broadened to cover `REPLACE`, `TRUNCATE`,
+            // and `upsert()` (Eloquent upsert generates `INSERT ... ON DUPLICATE
+            // KEY UPDATE` on MySQL/MariaDB — covered by `insert\s+into`).
+            // The previous regex missed these mutations, leaving stale cache
+            // after `TRUNCATE TABLE` or `Eloquent::upsert()`.
+            //
+            // Group 1: write verb (update|delete|insert[ into]|replace[ into]|upsert|truncate)
+            // Group 5: table name
+            if (preg_match('/(update|delete|insert(\s+into)?|replace(\s+into)?|upsert|truncate)\s+`?(\w+)`?/i', $query->sql, $matches)) {
+                $table = $matches[5] ?? null;
+                if ($table === null) {
+                    return;  // TRUNCATE without a table name — skip.
+                }
                 Cache::tags([$table.'_all'])->flush();
 
                 if (config('mk_director.debug', false)) {

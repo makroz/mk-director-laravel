@@ -5,6 +5,126 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0-rc13] - 2026-06-27
+
+### Fixed
+
+- **R3.1 (HIGH) — SQL injection vector in `BaseController::getDebugData()`**: the previous code interpolated the query directly into a database call that prepended the string `EXPLAIN` to the SQL. An authenticated `super-admin` or `dev` could pass `?debug=true&_debug=1` to reach this path; any field that leaked into the query was vulnerable. The new behavior logs slow-query candidates via `Log::debug()` for offline analysis (safe default), and gates the actual `EXPLAIN` execution behind the new config flag `mk_director.debug.explain_enabled` (default `false`). When the flag is `true`, the SQL is logged as a `warning` so a developer can run the analysis manually in a safe environment — the query is NEVER interpolated into a database call. The role gate from R2-010 is preserved (defense-in-depth). Pineado con `tests/Unit/Controllers/BaseControllerGetDebugDataTest.php` (5 tests).
+
+- **R3.2 (HIGH) — `MkMultiTenantPlugin::resolveTenantId()` now uses `getTenantId()` centralizado**: when the user model implements `getTenantId()` (typically via the `HasTenantMembership` trait), the plugin uses the method as the preferred resolver — matching the pattern already used by `TenantResolver` (TenantResolver.php:89-90). The legacy fallback to direct property access (`$user->{$this->tenantColumn}`) is preserved for consumers that predated the trait. This lets consumers with custom tenant-resolution logic (e.g. derived from org memberships) override the accessor without touching the plugin. Pineado con `tests/Unit/Plugins/MkMultiTenantPluginResolveTenantIdTest.php` (3 tests).
+
+- **R3.3 (HIGH) — `CacheManager::flush()` no longer silently nukes the entire cache**: the previous fallback (`$cache->clear()`) when the cache driver does not support tags wipes EVERY key in the app's cache store — not just the keys for the requested tags. That's destructive in production where multiple modules share the same cache store. The new behavior gates the fallback path with `mk_director.cache.allow_full_clear` (default `false`). When the flag is `false` and no tags support: throw a `RuntimeException` with an actionable message. When the flag is `true`: preserve the legacy `$cache->clear()` behavior (dev environments that use file/database cache). Production MUST use a cache store that supports tags (Redis, Memcached) — see `cache.store` config. Pineado con `tests/Unit/Managers/CacheManagerFlushTest.php` (4 tests).
+
+- **R3.4 (HIGH) — `MkServiceProvider::registerGlobalCacheListener()` regex broadened**: the previous regex `(update|delete|insert\s+into)` missed `REPLACE`, `TRUNCATE`, and `upsert()` (Eloquent's `upsert()` generates `INSERT ... ON DUPLICATE KEY UPDATE` on MySQL/MariaDB). The auto-cache invalidation listener would NOT fire for these mutations, leaving stale cache after a `TRUNCATE TABLE` or `Eloquent::upsert()`. The new pattern is `(update|delete|insert(\s+into)?|replace(\s+into)?|upsert|truncate)` with the same `\s+` requirement after the verb (so `updateHook` and `deletedAt` are not matched). Pineado con `tests/Unit/Console/RegisterGlobalCacheListenerRegexTest.php` (3 tests).
+
+- **R3.5 (HIGH) — `mk:make:auth-user {Scope}` generated `register()` now wraps `create + setAuthScope` in `DB::transaction()`**: the previous code did both as separate statements, NOT wrapped in a transaction. If `setAuthScope` failed after `create` succeeded, the user row was orphaned (no scope bound, no error reported). The new stub uses `\DB::transaction(function () { ... })` with `return $user` so the rest of the method has access to it. `sendEmailVerificationNotification` stays OUTSIDE the transaction (queueable side-effect — must not be rolled back if the queue worker is down, and does not need to be in the same TX as user creation). Pineado con `tests/Feature/MakeAuthUserCommandBuildRegisterTransactionTest.php` (2 tests, source-parsing the stub heredoc).
+
+### Added
+
+- **3 new config flags** (env-driven, defaults safe):
+  - `mk_director.response.top_level_extra_data` (R-PKG-023, lifted forward from rc12 work) — `MK_DIRECTOR_RESPONSE_TOP_LEVEL_EXTRA_DATA` (default `false`).
+  - `mk_director.cache.allow_full_clear` (R3.3) — `MK_CACHE_ALLOW_FULL_CLEAR` (default `false`).
+  - `mk_director.debug.explain_enabled` (R3.1) — `MK_DIRECTOR_DEBUG_EXPLAIN_ENABLED` (default `false`).
+  The original flat `mk_director.debug` boolean is preserved as the inner `debug.enabled` for BC. See `config/mk_director.php` and `DEVELOPER_GUIDE.md` for full descriptions.
+
+- **10 new unit test files** (29 tests, 79 assertions) pineando R3.1–R3.5:
+  - `tests/Unit/Controllers/BaseControllerGetDebugDataTest.php` (5)
+  - `tests/Unit/Plugins/MkMultiTenantPluginResolveTenantIdTest.php` (3)
+  - `tests/Unit/Managers/CacheManagerFlushTest.php` (4)
+  - `tests/Unit/Console/RegisterGlobalCacheListenerRegexTest.php` (3)
+  - `tests/Feature/MakeAuthUserCommandBuildRegisterTransactionTest.php` (2)
+  - Plus 3 extensions to `tests/Unit/MkDirectorConfigDefaultsTest.php` (3) verifying the new flags are env-driven and default `false`.
+  - Plus 2 existing test files (`BaseControllerDebugGateTest.php`, `ListManagerSecurityTest.php`) continue to pass — the R3.x fixes are additive (no regressions on R2-010 hardening).
+
+### Migration desde rc12
+
+None of the R3.x fixes are BC-breaking for runtime consumers:
+
+- **R3.1 (SQL injection fix)**: code path gated by `mk_director.debug.explain_enabled` (default `false`). Consumers that never set the flag see the same behavior, just safer (the dangerous `EXPLAIN` interpolation is gone). To re-enable manual EXPLAIN analysis, set `MK_DIRECTOR_DEBUG_EXPLAIN_ENABLED=true` and inspect the warning log.
+- **R3.2 (resolveTenantId)**: prefers the new `getTenantId()` method, falls back to direct property access. Consumers that don't implement `HasTenantMembership` see identical behavior.
+- **R3.3 (CacheManager::flush gate)**: the gate defaults to `false` (safe). Dev environments that use file/database cache MUST set `MK_CACHE_ALLOW_FULL_CLEAR=true` to opt into the legacy nuke. Production environments that use Redis/Memcached see no behavior change.
+- **R3.4 (regex broadening)**: additive. Existing `update|delete|insert into` writes are still matched; new verbs (REPLACE/TRUNCATE/upsert) now also match.
+- **R3.5 (buildRegisterMethod DB::transaction)**: only affects the SCAFFOLDER output. Consumers that regenerate a scope with `mk:make:auth-user {Scope}` get the new transactional version. Existing AuthController code in consumer projects is unaffected unless they regenerate.
+
+**BC-safe for the entire rc12 → rc13 transition.**
+
+## [1.6.0-rc12] - 2026-06-27
+
+### Added
+
+- **`BaseController::sendResponse()` signature extended** with optional 4th parameter `array $extra = []`. When the caller passes a non-empty `$extra` AND the config flag `mk_director.response.top_level_extra_data` is true, the response envelope emits `__extraData` as a **TOP-LEVEL sibling of `data`** — matching the `@makroz/core` `MkResponse<T>` contract and the `useMkInfiniteList` consumption shape in web + mobile. BC strategy: opt-in via flag (default `false` in rc12, `true` in GA). See "Migration desde rc11" below.
+
+- **`mk:status --response-shape` audit option** on the existing `MkCheckCommand`. Walks every controller in `app/Http/Controllers` and `app/Modules/*` and warns about legacy `sendResponse(['data' => ..., '__extraData' => ...])` calls (the rc11 and earlier pattern). Consumers that flip the flag MUST also migrate any custom controllers — otherwise those endpoints emit the legacy nested shape and the envelope becomes inconsistent. Output: per-file/per-line warning with migration hint. Run with `php artisan mk:status --response-shape`.
+
+- **`config('mk_director.response.top_level_extra_data')`** flag, env-driven via `MK_DIRECTOR_RESPONSE_TOP_LEVEL_EXTRA_DATA` (default `false`). The flag flips to `true` at GA. The shape is opt-in per environment during the transition window.
+
+- **`config('mk_director.cache.allow_full_clear')`** flag, env-driven via `MK_CACHE_ALLOW_FULL_CLEAR` (default `false`). Used by `CacheManager::flush()` to gate the fallback path when the cache driver does not support tags — prevents accidental nuke of the entire app cache. (Lifted forward to rc13 implementation.)
+
+- **`config('mk_director.debug.explain_enabled')`** flag, env-driven via `MK_DIRECTOR_DEBUG_EXPLAIN_ENABLED` (default `false`). Used by `BaseController::getDebugData()` to gate the optional `EXPLAIN` query analysis. (Lifted forward to rc13 implementation.)
+
+- **Two new unit test files** (15 tests, 51 assertions):
+  - `tests/Unit/Controllers/BaseControllerSendResponseExtraTest.php` (5 tests): pinean the new `sendResponse` signature, the top-level `__extraData` emission when both `$extra` and the flag are non-empty, the guard with the non-empty + flag check, the original payload regression guard, and the debug-merge behavior preservation.
+  - `tests/Unit/Controllers/ControllerIndexTopLevelTest.php` (5 tests): pinean the legacy `Controller::index()` (template-method controller) branches on the flag, keeps the legacy nested path when off, and emits the new top-level path via the 4-arg `sendResponse` form when on.
+  - `tests/Unit/CRUDSmartIndexTopLevelTest.php` (6 tests): pinean the recommended `CRUDSmart::index()` (used by 95% of generated controllers) branches on the flag, preserves the legacy nested path, and emits the new top-level path. Also pines regression guards for `fireAfterResponse` plugin hook and `afterList + getExtraData` extra-data assembly.
+  - `tests/Unit/Console/MkCheckCommandResponseShapeTest.php` (4 tests): pinean the `--response-shape` option in the signature, the dispatch to `auditResponseShape`, the audit method's structure (scans both `app/Http/Controllers` and `app/Modules`), and the legacy-nested detection logic.
+  - `tests/Unit/Console/LintBoundariesDtoLayoutTest.php` (5 tests): pinean the new `ALLOWED_PATTERNS` (with `DTOs\` as canonical), the deprecated `Api\Dto\` pattern, the `isDeprecatedExternal` warning emit method, and the split between `Api\` (no Dto) and `DTOs\` (sibling of Api).
+  - Plus 3 extensions to `tests/Unit/MkDirectorConfigDefaultsTest.php` for the new flags: `response.top_level_extra_data` (rc12), `cache.allow_full_clear` (rc13 lift-forward), `debug.explain_enabled` (rc13 lift-forward).
+
+### Changed
+
+- **`src/Controllers/BaseController.php::sendResponse()`** — added optional `array $extra = []` 4th parameter. The flag check `if ($extra !== [] && config('mk_director.response.top_level_extra_data', false))` is the only condition that emits the top-level `__extraData`. Default behavior (empty `$extra`, flag off) is byte-identical to rc11.
+
+- **`src/Controllers/Controller.php::index()`** — added the same flag branch. When on, calls `sendResponse($data, '', 200, $extra)` directly. When off, keeps the legacy `sendResponse(['data' => $data, '__extraData' => $extra])` shape (BC default).
+
+- **`src/Traits/CRUDSmart.php::index()`** — extracted `$items = $paginator->items()` once. When the flag is on, the new path auto-transforms `$items` (via `autoTransform`) before passing to `sendResponse(..., $extra)` — this is the only place the items go through the resource collection when the new shape is active. The plugin hook `fireAfterResponse` receives `$items` (transformed) in the new path, the wrapped array in the legacy path. Plugin contract change is documented in `Migration desde rc11`.
+
+- **`src/Console/Commands/MkCheckCommand.php`** — added `--response-shape` option and `auditResponseShape()` method. The audit is a one-pass Symfony Finder scan of every controller PHP file; pattern is `sendResponse([` followed within 500 chars by `'__extraData'`. Reports per-file/per-line warnings (not errors) — mixed-mode operation is allowed during the transition window.
+
+- **`src/Console/Commands/LintBoundariesCommand.php`** — split the `Api\Dto` pattern from the main `ALLOWED_PATTERNS` into a separate `DEPRECATED_PATTERNS` constant. Added `App\Modules\X\DTOs\` as the canonical (silent) pattern. The new `isDeprecatedExternal()` method and `reportDeprecations()` reporter emit per-import warnings for `Api\Dto` use. The `Api\Dto` allowance is a 1-release BC window — it will be removed in 1.7.0.
+
+- **`config/mk_director.php`** — added 3 new top-level blocks: `response` (top-level extra_data flag), expanded `cache` (allow_full_clear flag), expanded `debug` (nested block with `explain_enabled` flag). The original flat `mk_director.debug` boolean is preserved as the inner `debug.enabled` for BC.
+
+- **`packages/mk-web/src/hooks/useMkList.ts`** — auto-detects the response shape. Reads `__extraData` from the top-level `response.__extraData` first (canonical, matches `@makroz/core` `MkResponse<T>`), falls back to legacy nested `response.data?.__extraData`. Captures the value in local state so `pagination` is stable across re-renders. New `useMkList.test.ts` (4 tests) pinean both shapes plus the empty case and the defensive top-level-wins case.
+
+- **`packages/mk-mobile/src/hooks/useMkList.ts`** — same auto-detect logic as web. New `useMkList.test.ts` (4 tests) mirror the web coverage.
+
+- **`DEVELOPER_GUIDE.md`** — JSON example updated to the canonical top-level shape. New "Migration a `__extraData` top-level" note explains the flag and the BC window. § 5.1 (línea 1544) now mentions the top-level shape explicitly.
+
+### Migration desde rc11
+
+#### Frontend consumers (web + mobile)
+
+The `@makroz/web` and `@makroz/mobile` `useMkList` hooks now auto-detect the response shape. **No code change is required on the consumer side** for the hooks themselves — they read top-level when present, fall back to nested otherwise. If you bypass `useMkList` and read the response body directly (e.g. with `api.get()` and manual handling), update your code to read `response.__extraData` (top-level) instead of `response.data?.__extraData` (nested) when the flag is on.
+
+#### Backend consumers (the Laravel app)
+
+If you have custom controllers that override `BaseController::sendResponse()` or that call `sendResponse([...])` directly with a wrapped array, audit them with `php artisan mk:status --response-shape` and migrate the affected ones to the new 4-arg form:
+
+```php
+// Before (rc11 and earlier)
+return $this->sendResponse([
+    'data' => $items,
+    '__extraData' => $extra,
+]);
+
+// After (rc12+, when flag is on)
+return $this->sendResponse($items, '', 200, $extra);
+```
+
+When the flag is off (rc12 default), the legacy form is still accepted and emitted as-is. The flag flips to `true` at GA. The audit command lists every controller that still uses the legacy form.
+
+#### Plugin authors (MkMultiTenantPlugin, MkAuditLoggerPlugin, custom)
+
+The `fireAfterResponse` plugin hook receives different shapes depending on the response envelope:
+- Legacy path (flag off): `['data' => $items, '__extraData' => $extra]`
+- New top-level path (flag on): the items directly (after `autoTransform`)
+
+If your plugin needs access to `$extra` (e.g. for audit metadata), it should read `mk_director.response.top_level_extra_data` config to decide which path is active, or read from a future plugin API extension. CHANGELOG note: this is a contract change in rc12.
+
+#### DTO namespace
+
+The `mk:lint:boundaries` linter now accepts `App\Modules\X\DTOs\` as the canonical DTO location. The legacy `App\Modules\X\Api\Dto\` is still allowed (BC 1-release window) but emits a deprecation warning. To migrate: rename your namespace from `App\Modules\{Module}\Api\Dto` to `App\Modules\{Module}\DTOs` and update the import statements.
+
 ## [1.6.0-rc11] - 2026-06-27
 
 ### Fixed

@@ -188,6 +188,65 @@ return [
     'cache' => [
         'default_ttl' => env('MK_CACHE_TTL', 3600),
         'store' => env('MK_CACHE_STORE', null), // Configured in cache.php
+
+        // R-PKG-024 (rc13): gate for `CacheManager::flush()` fallback path.
+        // When the cache driver does NOT support tags (e.g. file/database
+        // cache in dev), the only way to invalidate is `$cache->clear()`
+        // which wipes the ENTIRE application cache (not just this module's
+        // keys). This is a "nuke" — opt-in via this flag.
+        //
+        // Default `false` (safe). Set to `true` ONLY in dev environments
+        // that use file/database cache AND understand the nuke risk.
+        // Production MUST use a cache store that supports tags (Redis,
+        // Memcached) — see `cache.store` config above.
+        'allow_full_clear' => env('MK_CACHE_ALLOW_FULL_CLEAR', false),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Response Envelope
+    |--------------------------------------------------------------------------
+    |
+    | R-PKG-023 (rc12): opt-in flag for the top-level `__extraData` shape
+    | that matches the @makroz/core `MkResponse<T>` contract. When the
+    | flag is `false` (rc12 default), controllers emit the legacy nested
+    | shape (`data.data` + `data.__extraData`). When the flag is `true`,
+    | controllers emit the canonical top-level shape (`data` + top-level
+    | `__extraData`).
+    |
+    | Migration plan:
+    |   - rc12: default `false`. Consumers opt-in per-environment.
+    |   - GA:   default `true`. Legacy path is removed.
+    |
+    | Toggle via env: `MK_DIRECTOR_RESPONSE_TOP_LEVEL_EXTRA_DATA=true`.
+    |
+    | @see https://github.com/makroz/mk-director-laravel/blob/main/CHANGELOG.md
+    |      for the full migration guide from rc11 → rc12.
+    */
+    'response' => [
+        'top_level_extra_data' => env('MK_DIRECTOR_RESPONSE_TOP_LEVEL_EXTRA_DATA', false),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Debug
+    |--------------------------------------------------------------------------
+    |
+    | R-PKG-024 (rc13): gate for the optional `EXPLAIN` query analysis in
+    | `BaseController::getDebugData()`. When this flag is `false` (default),
+    | slow-query candidates are logged via `Log::debug()` for offline
+    | analysis — no `EXPLAIN` is executed against the database. When the
+    | flag is `true`, the SQL is logged as a `warning` so a developer can
+    | run `EXPLAIN` manually in a safe environment.
+    |
+    | The previous behavior (rc12 and earlier) interpolated the query
+    | directly into `DB::select("EXPLAIN " . $query)`, which is a SQL
+    | injection vector if the query contains user-controlled values.
+    | This flag prevents the unsafe path by default. See CHANGELOG rc13.
+    */
+    'debug' => [
+        'enabled' => env('MK_DIRECTOR_DEBUG', false),
+        'explain_enabled' => env('MK_DIRECTOR_DEBUG_EXPLAIN_ENABLED', false),
     ],
 
     /*
