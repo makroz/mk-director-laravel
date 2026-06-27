@@ -106,7 +106,17 @@ class {{ModuleName}}Repository implements {{ModuleName}}RepositoryInterface
     {
         $roles = Role::query()->whereIn('name', $roleNames)->get();
 
-        ${{moduleNameLower}}->roles()->sync($roles->pluck('id')->all());
+        // R-PKG-017 BUG-NEW-22: el helper público `pivotExtras()` retorna
+        // `['user_type' => static::class]` cuando la pivot `role_user` tiene
+        // la columna `user_type` (caso MME-polimórfico), o `[]` cuando no.
+        // Esto evita que el consumer tenga que hardcodear el FQCN manualmente
+        // en cada sync (DRY + BC-safe). Si la pivot NO tiene `user_type`, el
+        // comportamiento es idéntico al previo (sync con array_indexado).
+        ${{moduleNameLower}}->roles()->sync(
+            $roles->pluck('id')
+                ->mapWithKeys(fn ($id) => [$id => ${{moduleNameLower}}->pivotExtras()])
+                ->all()
+        );
 
         return ${{moduleNameLower}}->fresh(['roles']);
     }
@@ -115,7 +125,14 @@ class {{ModuleName}}Repository implements {{ModuleName}}RepositoryInterface
     {
         $abilities = Ability::query()->whereIn('name', $abilityNames)->get();
 
-        ${{moduleNameLower}}->directAbilities()->sync($abilities->pluck('id')->all());
+        // R-PKG-017 BUG-NEW-22: idem `syncRoles()` — usa el helper público
+        // `abilityPivotExtras()` para emitir el payload correcto de la pivot
+        // `ability_user` sin hardcodear el FQCN.
+        ${{moduleNameLower}}->directAbilities()->sync(
+            $abilities->pluck('id')
+                ->mapWithKeys(fn ($id) => [$id => ${{moduleNameLower}}->abilityPivotExtras()])
+                ->all()
+        );
 
         return ${{moduleNameLower}}->fresh(['directAbilities']);
     }

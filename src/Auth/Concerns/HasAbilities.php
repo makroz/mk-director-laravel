@@ -216,8 +216,14 @@ trait HasAbilities
      * `['user_type' => static::class]`. Si NO, retorna `[]` (BC).
      *
      * Schema detection está cacheada en memoria del proceso.
+     *
+     * R-PKG-017 BUG-NEW-22: idem `HasRoles::pivotExtras()` — visibilidad
+     * cambiada de `protected` a `public` para que el Repository scaffoldeado
+     * pueda invocar `$admin->abilityPivotExtras()` directamente en
+     * `syncDirectAbilities()` y emitir el payload correcto sin hardcodear
+     * el FQCN. BC-safe.
      */
-    protected function abilityPivotExtras(): array
+    public function abilityPivotExtras(): array
     {
         static $hasUserType = null;
 

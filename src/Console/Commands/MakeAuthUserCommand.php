@@ -284,8 +284,17 @@ class MakeAuthUserCommand extends Command
         // la MME (R-MK-001): cada scope tiene su propio modelo, pero comparte
         // las pivots globales del paquete.
         $factoryReplacements = [
+            // R-PKG-017 BUG-NEW-24 fix: cuando `--with-crud` está activo, el
+            // modelo concreto usa `{$scope}Factory` en `newFactory()`'s return
+            // type y `{$scope}Factory::new()` en el body. Sin el `use` import,
+            // PHP no resuelve el FQCN desde `App\Modules\{$scope}\Models`
+            // (namespace distinto) y cualquier test que use `Admin::factory()`
+            // falla con `Class "{$scope}Factory" not found`.
+            //
+            // Antes solo importaba `HasFactory` trait — el `{$scope}Factory`
+            // quedaba sin resolver. Ahora ambos imports se emiten juntos.
             '{{factoryHasFactoryUse}}' => $withCrud
-                ? "use Illuminate\\Database\\Eloquent\\Factories\\HasFactory;\n"
+                ? "use Illuminate\\Database\\Eloquent\\Factories\\HasFactory;\nuse App\\Modules\\{$scope}\\Database\\Factories\\{$scope}Factory;\n"
                 : '',
             '{{factoryHasFactoryTrait}}' => $withCrud
                 ? "use HasFactory;\n    "
@@ -835,9 +844,36 @@ PHP
      * y luego insertar SOLO el cuerpo de las rutas (sin `<?php` opener ni
      * `use` statements) ANTES del cierre del último grupo del routes principal.
      *
+     * R-PKG-017 BUG-NEW-21 fix (REGRESIÓN del fix anterior): el `routes/api.php`
+     * generado por `auth-user.routes.stub` tiene la estructura:
+     *
+     *     <?php
+     *
+     *     declare(strict_types=1);
+     *
+     *     use App\Modules\...\Http\Controllers\AuthController;
+     *     ...
+     *
+     * `declare(strict_types=1)` DEBE ser la primera instrucción del archivo
+     * (PHP strict). El fix anterior inyectaba los `use` statements NUEVOS
+     * DESPUÉS del `<?php` opener y ANTES del `declare`, dejando el archivo así:
+     *
+     *     <?php
+     *
+     *     use App\Modules\Admin\Http\Controllers\AbilityController;  ← inyectado
+     *     use App\Modules\Admin\Http\Controllers\RoleController;       ← inyectado
+     *     declare(strict_types=1);                                     ← YA NO es la 1ra instrucción → PHP Fatal error
+     *
+     * El fix detecta si el archivo tiene `declare(strict_types=1)` (o cualquier
+     * `declare(...)`) inmediatamente después del `<?php` opener (con whitespace
+     * entre medio). Si lo hay, inserta los `use` statements DESPUÉS del bloque
+     * `declare`, no antes. Si no hay `declare`, los inserta después del `<?php\n\n`
+     * como antes. BC-safe: solo cambia el ordenamiento cuando el `declare` está
+     * presente, que es lo que el scaffolder actual SIEMPRE emite.
+     *
      * Esto produce UN solo bloque PHP en el archivo final con todos los
-     * `use` statements consolidados al inicio (estilo PSR-12) + las rutas
-     * CRUD en el lugar correcto.
+     * `use` statements consolidados (estilo PSR-12) + las rutas CRUD en el lugar
+     * correcto + `declare(strict_types=1)` respetando la primera-instrucción rule.
      */
     protected function extendRoutesWithCrud(string $basePath, string $scope, string $scopeLower, string $scopePlural): void
     {
@@ -884,8 +920,25 @@ PHP
 
             if (! empty($newUseLines)) {
                 $useBlock = implode("\n", $newUseLines);
-                // Insertar después del primer `<?php\n` (o al inicio si no hay).
-                if (preg_match('/^<\?php\s*\n/', $content, $phpMatch, PREG_OFFSET_CAPTURE)) {
+
+                // R-PKG-017 BUG-NEW-21 fix: detectar si el archivo tiene un
+                // bloque `declare(...)` (ej: `declare(strict_types=1);`) entre
+                // el `<?php` opener y el primer `use`. Si lo hay, insertar los
+                // `use` statements NUEVOS DESPUÉS del bloque `declare`, no antes,
+                // para no romper la regla PHP "declare must be the first
+                // statement".
+                //
+                // Pattern: `<?php\n\ndeclare(strict_types=1);\n\n` o variantes
+                // con whitespace flexible.
+                $declarePattern = '/^(<\?php[ \t]*\R)((?:[ \t]*\R)*)(declare\s*\([^)]+\)\s*;\s*\R)((?:[ \t]*\R)*)/m';
+                if (preg_match($declarePattern, $content, $declareMatch, PREG_OFFSET_CAPTURE)) {
+                    // Insertar después del bloque `declare` (después de su
+                    // newline final + cualquier whitespace siguiente).
+                    $insertPos = $declareMatch[0][1] + strlen($declareMatch[0][0]);
+                    $content = substr($content, 0, $insertPos).$useBlock."\n".substr($content, $insertPos);
+                } elseif (preg_match('/^<\?php\s*\R/', $content, $phpMatch, PREG_OFFSET_CAPTURE)) {
+                    // Sin `declare`: insertar después del `<?php\n` opener
+                    // (como en R-PKG-016 BUG-NEW-13).
                     $insertPos = $phpMatch[0][1] + strlen($phpMatch[0][0]);
                     $content = substr($content, 0, $insertPos).$useBlock."\n".substr($content, $insertPos);
                 } else {
@@ -915,7 +968,7 @@ PHP
         }
 
         File::put($routesPath, $content);
-        $this->line('   ✅ Http/Routes/api.php (extended with CRUD, single PHP block)');
+        $this->line('   ✅ Http/Routes/api.php (extended with CRUD, single PHP block, declare preserved)');
     }
 
     /**
@@ -1516,16 +1569,28 @@ PHP,
         // quedaba PEGADO al `/**` del siguiente bloque en el modelo, porque
         // el `auth-user.model.stub` tiene `{{profileFieldsDocblock}}/**` (sin
         // newline). El pineo previo de R-PKG-015 había alineado indentación
-        // pero NO había agregado separación entre docblocks. Fix: terminar el
-        // docblock con `\n\n` (doble newline) en vez de `\n` para que haya
-        // una línea en blanco entre el docblock de profile fields y el
-        // siguiente docblock del modelo.
+        // pero NO había agregado separación entre docblocks.
+        //
+        // R-PKG-017 BUG-NEW-25 fix (4to ciclo, drift nuevo con 5+ fields):
+        // el pineo previo terminaba el docblock con `\n\n` (doble newline) para
+        // insertar blank line entre el docblock y el siguiente bloque. PERO
+        // cuando el consumer tiene 5+ profile fields, el último `$key` generaba
+        // un `*/` con newline doble que se COMÍA la indentación del próximo
+        // bloque del modelo (`{{profileFieldsDocblock}}/**` quedaba como
+        // `... last */\n\n/**...` con blank lines acumuladas), produciendo
+        // drift en la indentación que rompía el formato PSR-12 en modelos
+        // con muchos profile fields.
+        //
+        // La fix robusta: el docblock generado termina en `\n` (un solo
+        // newline) — el control de blank line entre docblocks vive en el
+        // stub (`{{profileFieldsDocblock}}\n\n    /**` o similar). Esto
+        // elimina el drift y mantiene el control de espaciado en UN lugar.
         if (! empty($docblock)) {
             $docblock = "    /**\n"
                 ."     * Profile fields per-scope (R-PKG-011).\n"
                 ."     *\n"
                 .$docblock
-                ."     */\n\n";
+                ."     */\n";
         }
 
         // Para el método register() y updateProfile(): las reglas se pasan via array.

@@ -173,8 +173,28 @@ trait HasRoles
      *
      * Schema detection está cacheada en memoria del proceso para evitar
      * un query a information_schema por cada attach/detach.
+     *
+     * R-PKG-017 BUG-NEW-22: visibilidad cambiada de `protected` a `public`
+     * (BC-safe: solo agrega visibilidad, no rompe ningún caller existente).
+     * Esto permite que el Repository scaffoldeado por
+     * `mk:make:auth-user X --with-crud` consuma este helper directamente
+     * en `syncRoles($admin, [...])` para evitar el hardcodeo manual de
+     * `['user_type' => Admin::class]` que el consumer tenía que hacer.
+     * Antes el consumer tenía que hardcodear el FQCN (DRY violation +
+     * acoplamiento a una clase concreta del paquete) o usar reflection
+     * (frágil). Con el helper público, el scaffolder emite:
+     *
+     *     $admin->roles()->sync(
+     *         $roles->pluck('id')->mapWithKeys(
+     *             fn ($id) => [$id => $admin->pivotExtras()]
+     *         )->all()
+     *     );
+     *
+     * Si la pivot NO tiene `user_type` (consumer legacy), `pivotExtras()`
+     * retorna `[]` y el comportamiento es idéntico al previo
+     * (`sync($ids, [])` ≈ `sync($ids)` con array_indexado).
      */
-    protected function pivotExtras(): array
+    public function pivotExtras(): array
     {
         static $hasUserType = null;
 
