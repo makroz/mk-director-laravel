@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Mk\Director\Console\Commands;
 
 use Illuminate\Console\Command;
+use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 use Mk\Director\Auth\Concerns\HasAbilities;
 use Mk\Director\Auth\Concerns\HasRoles;
@@ -202,6 +203,22 @@ class AuthCreateSuperAdminCommand extends Command
             }
         }
 
+        // 5. R-PKG-021 BUG-NEW-30 (MEDIUM): invocar el `AdminRolesSeeder`
+        //    scaffoldeado para popular `ability_role` (asigna abilities a
+        //    los ROLES, no a los users). Sin esto, `ability_role` queda
+        //    vacío y los roles no tienen abilities asignadas — solo los
+        //    grants directos (path `ability_user`) funcionan.
+        //
+        //    Namespace DDD (R-P-009): `App\Modules\Admin\Database\Seeders\`
+        //    Antes (silencioso) el comando asumía `Database\Seeders\...` que
+        //    NO existe en proyectos DDD estricto. Fallaba con
+        //    `Target class [Database\Seeders\AdminRolesSeeder] does not exist.`
+        //
+        //    Fix: `class_exists()` chequea el namespace DDD correcto. Si no
+        //    existe, warning explícito (no error fatal) para que el consumer
+        //    sepa que necesita scaffoldear el seeder.
+        $this->seedAdminRolesIfAvailable();
+
         $this->newLine();
         $infoVerb = count($rolesToSeed) > 1 ? 'Roles sembrados.' : 'Super-admin creado.';
         $this->info('✅ '.$infoVerb);
@@ -222,5 +239,42 @@ class AuthCreateSuperAdminCommand extends Command
         $this->line('  { "email": "'.$email.'", "password": "<el que tipeaste>" }');
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Invoca el `AdminRolesSeeder` scaffoldeado (namespace DDD, R-P-009) si existe.
+     *
+     * R-PKG-021 BUG-NEW-30 (MEDIUM):
+     *  - El seeder scaffoldeado por `mk:make:auth-user Admin --with-crud` vive en
+     *    `App\Modules\Admin\Database\Seeders\AdminRolesSeeder` (DDD estricto).
+     *  - El namespace NO es `Database\Seeders\AdminRolesSeeder` (eso era un
+     *    bug previo silencioso — el comando asumía el namespace global).
+     *  - Si el seeder existe, lo invoca. Si no, warning explícito indicando
+     *    que las abilities no se asignaron a los roles (solo a users directos).
+     *
+     * Defense-in-depth: el seeder es idempotente (usa `firstOrCreate` y `sync`
+     * sin detach), así que múltiples invocaciones no duplican filas.
+     */
+    private function seedAdminRolesIfAvailable(): void
+    {
+        $seederClass = 'App\\Modules\\Admin\\Database\\Seeders\\AdminRolesSeeder';
+
+        if (! class_exists($seederClass)) {
+            $this->warn("   ⚠️  Seeder DDD '{$seederClass}' no existe.");
+            $this->warn('   Las abilities del role (`ability_role`) NO fueron sembradas — solo los grants directos al user (`ability_user`).');
+            $this->warn('   Si querés las abilities asignadas a los roles, scaffoldeá con:');
+            $this->warn('     php artisan mk:make:auth-user Admin --with-crud --with-auth-rbac');
+
+            return;
+        }
+
+        try {
+            /** @var Seeder $seeder */
+            $seeder = app($seederClass);
+            $seeder->run();
+            $this->info('   → AdminRolesSeeder corrió OK (ability_role + roles re-poblados).');
+        } catch (\Throwable $e) {
+            $this->warn("   ⚠️  AdminRolesSeeder falló: {$e->getMessage()}");
+        }
     }
 }

@@ -5,13 +5,13 @@ declare(strict_types=1);
 namespace Mk\Director\Console\Commands;
 
 use Illuminate\Console\Command;
-use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Mk\Director\Auth\Attributes\Ability;
+use Mk\Director\Controllers\SmartController;
 use ReflectionClass;
 use Symfony\Component\Finder\Finder;
 use Throwable;
-use Mk\Director\Auth\Attributes\Ability;
 
 /**
  * mk:discover-abilities — auto-pobla {scope}_abilities desde providers / atributos / docblocks.
@@ -298,7 +298,26 @@ class DiscoverAbilitiesCommand extends Command
     }
 
     /**
-     * UPSERT idempotente en `{scope}_abilities`.
+     * UPSERT idempotente de abilities.
+     *
+     * R-PKG-021 BUG-NEW-29 (HIGH): el scaffolder tiene dos rutas que generan
+     * schema distinto:
+     *  - `mk:module X --with-rbac`         → tabla `{scope}_abilities` per-scope.
+     *  - `mk:make:auth-user X --with-crud` → tabla `abilities` global (del paquete).
+     *
+     * Antes, este método SIEMPRE escribía en `{scope}_abilities`. Para
+     * consumers que usan `--with-crud`, la tabla per-scope NO existe y el
+     * UPSERT falla con `relation "{scope}_abilities" does not exist`.
+     *
+     * Fix R-PKG-021: schema-aware. Detecta cuál tabla existe y escribe ahí:
+     *  - Si `{scope}_abilities` existe → UPSERT per-scope (caso `--with-rbac`).
+     *  - Si NO existe → UPSERT en `abilities` global (caso `--with-crud`).
+     *
+     * Idempotente: múltiples ejecuciones actualizan `description` y `updated_at`.
+     *
+     * Si NINGUNA tabla existe (caso patológico: consumer no migró), lanza
+     * excepción con mensaje accionable para que el consumer sepa qué migración
+     * le falta.
      *
      * @param  array<int, array{name: string, description: ?string}>  $abilities
      */
@@ -308,7 +327,7 @@ class DiscoverAbilitiesCommand extends Command
             return;
         }
 
-        $table = "{$scope}_abilities";
+        $table = $this->resolveAbilitiesTable($scope);
 
         $now = now();
         $rows = array_map(static fn (array $a): array => [
@@ -323,6 +342,76 @@ class DiscoverAbilitiesCommand extends Command
             ['name'],                  // unique key
             ['description', 'updated_at'] // columns to update on conflict
         );
+
+        $this->info("   → {$table}: ".count($rows).' abilities UPSERT-ed.');
+    }
+
+    /**
+     * Resuelve cuál tabla usar para escribir abilities.
+     *
+     * R-PKG-021 BUG-NEW-29: schema-aware — per-scope si existe, global si no.
+     *
+     * @return string Nombre de la tabla a usar.
+     *
+     * @throws \RuntimeException Si ninguna tabla existe.
+     */
+    private function resolveAbilitiesTable(string $scope): string
+    {
+        $perScopeTable = "{$scope}_abilities";
+        $globalTable = 'abilities';
+
+        $perScopeExists = $this->tableExists($perScopeTable);
+        $globalExists = $this->tableExists($globalTable);
+
+        if ($perScopeExists) {
+            return $perScopeTable;
+        }
+
+        if ($globalExists) {
+            return $globalTable;
+        }
+
+        throw new \RuntimeException(
+            "Ninguna tabla de abilities existe. Esperaba '{$perScopeTable}' (caso `mk:module X --with-rbac`) "
+            ."o '{$globalTable}' (caso `mk:make:auth-user X --with-crud`). "
+            .'Corriste `php artisan migrate` después de scaffoldear?'
+        );
+    }
+
+    /**
+     * Check si una tabla existe en la conexión default.
+     *
+     * Helper aislado para que el test source-parsing pueda pinear el patrón.
+     *
+     * Usa `DB::connection()->getSchemaBuilder()` directamente en vez del facade
+     * `Schema::hasTable()`. Razón: el facade `Schema` requiere que el container
+     * tenga bindeado `db.schema` correctamente. Algunos setups de testing (e.g.
+     * los end-to-end tests del paquete, que usan `Capsule` con un container
+     * recién creado) NO bindean `db.schema` automáticamente, así que el facade
+     * falla silenciosamente y retorna `false` aún cuando la tabla existe.
+     *
+     * `DB::connection()->getSchemaBuilder()` es más robusto: usa el
+     * DatabaseManager bindeado en `db` y delega al schema builder de esa conexión.
+     */
+    private function tableExists(string $table): bool
+    {
+        try {
+            if (! function_exists('app')) {
+                return false;
+            }
+
+            $app = app();
+            if (! $app->bound('db')) {
+                return false;
+            }
+
+            $connection = $app->make('db')->connection();
+            $schema = $connection->getSchemaBuilder();
+
+            return $schema->hasTable($table);
+        } catch (Throwable) {
+            return false;
+        }
     }
 
     /**
@@ -439,7 +528,7 @@ class DiscoverAbilitiesCommand extends Command
         // `/private/var/folders/...` (Symfony Finder resuelve symlinks).
         $dir = realpath($dir) ?: $dir;
 
-        $finder = (new Finder())
+        $finder = (new Finder)
             ->files()
             ->in($dir)
             ->name('*.php')
@@ -523,7 +612,7 @@ class DiscoverAbilitiesCommand extends Command
         $abilities = [];
         $scope = Str::snake($moduleName);
 
-        $smartControllerClass = \Mk\Director\Controllers\SmartController::class;
+        $smartControllerClass = SmartController::class;
 
         foreach ($this->findControllerClasses($moduleInfo) as $class) {
             try {

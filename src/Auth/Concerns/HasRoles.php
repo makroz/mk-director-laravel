@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Support\Facades\Schema;
 use Mk\Director\Auth\Models\Role;
 use Mk\Director\Auth\Pivots\MkRoleUserPivot;
+use Mk\Director\Database\Eloquent\Relations\MkBelongsToMany;
 
 /**
  * HasRoles — relación many-to-many entre AuthUser y Role.
@@ -23,27 +24,42 @@ trait HasRoles
     /**
      * Roles asignados al usuario.
      *
-     * R-PKG-020 HALLAZGO-NEW-01: la relation ahora usa `using(MkRoleUserPivot::class)`
-     * para que las mutaciones nativas de Eloquent (`attach`, `detach`, `sync`,
-     * `syncWithoutDetaching`, `toggle`, `updateExistingPivot`) seteen
-     * `user_type = get_class($this)` automáticamente cuando la pivot
-     * `role_user` tiene la columna. Antes, solo los métodos helper
-     * (`assignRole`, `syncRoles`) lo hacían via `pivotExtras()`; un consumer
-     * que hiciera `$user->roles()->attach([$id])` directo fallaba con
-     * `NOT NULL constraint failed: role_user.user_type`.
+     * R-PKG-021 BUG-NEW-31 (RC9 regression of HALLAZGO-NEW-01):
+     * La relation retorna `MkBelongsToMany` (no `BelongsToMany` stock).
+     * Esta relation custom override `attach()` y `attachNew()` para
+     * inyectar `user_type = $this->getMorphClass()` automáticamente cuando
+     * la pivot tiene la columna. Cubre TODAS las mutations nativas de
+     * Eloquent (`attach`, `detach`, `sync`, `syncWithoutDetaching`,
+     * `toggle`, `updateExistingPivot`) — no solo los helpers.
+     *
+     * R-PKG-020 HALLAZGO-NEW-01 (defense-in-depth):
+     * `using(MkRoleUserPivot::class)` también aplica un listener
+     * `creating` en `MkPivot::boot()` que setea `user_type` si el listener
+     * se dispara (es la segunda capa de defensa). En la práctica, la
+     * primera capa (MkBelongsToMany::attach) cubre runtime; la segunda
+     * cubre cualquier edge case donde la relation stock cree la pivot
+     * directamente.
      *
      * Si el consumer override esta relation con su propio `->using(...)`,
      * su pivot gana (BC preservada). Si el consumer quiere opt-out de la
-     * auto-inyección, override la relation en su modelo sin `->using(MkRoleUserPivot::class)`.
+     * auto-inyección, override la relation en su modelo sin retornar
+     * `MkBelongsToMany`.
      */
     public function roles(): BelongsToMany
     {
-        return $this->belongsToMany(
+        // Crea la BelongsToMany stock via Laravel, luego promueve a
+        // MkBelongsToMany via reflection-based state copy (R-PKG-021).
+        // Esto preserva el setup interno de Laravel (query builder,
+        // related model, keys) y solo cambia el tipo de la instance
+        // para que `newPivot()` override aplique via dynamic dispatch.
+        $relation = $this->belongsToMany(
             Role::class,
             'role_user',
         )
             ->using(MkRoleUserPivot::class)
             ->withTimestamps();
+
+        return MkBelongsToMany::from($relation);
     }
 
     /**

@@ -6,6 +6,8 @@ namespace Mk\Director\Auth\Pivots;
 
 use Illuminate\Database\Eloquent\Relations\Pivot;
 use Illuminate\Support\Facades\Schema;
+use Mk\Director\Auth\Concerns\HasAbilities;
+use Mk\Director\Auth\Concerns\HasRoles;
 
 /**
  * MkPivot — base para pivots MME-polimórficas del paquete.
@@ -35,8 +37,8 @@ use Illuminate\Support\Facades\Schema;
  * en las relaciones `roles()` y `directAbilities()`. Si el consumer override
  * estas relaciones con su propio `->using(...)`, su pivot gana (BC preservada).
  *
- * @see \Mk\Director\Auth\Concerns\HasRoles::roles()
- * @see \Mk\Director\Auth\Concerns\HasAbilities::directAbilities()
+ * @see HasRoles::roles()
+ * @see HasAbilities::directAbilities()
  */
 abstract class MkPivot extends Pivot
 {
@@ -88,5 +90,16 @@ abstract class MkPivot extends Pivot
                 $pivot->user_type = $pivot->pivotParent->getMorphClass();
             }
         });
+    }
+
+    /**
+     * Helper para tests que necesitan limpiar el cache entre casos.
+     * No es parte del API público; usar solo desde test code.
+     *
+     * @internal
+     */
+    public static function clearUserTypeCache(): void
+    {
+        self::$userTypeColumnCache = [];
     }
 }

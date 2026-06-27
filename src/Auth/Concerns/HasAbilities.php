@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Schema;
 use Mk\Director\Auth\Models\Ability;
 use Mk\Director\Auth\Pivots\MkAbilityUserPivot;
 use Mk\Director\Auth\Services\AbilityResolver;
+use Mk\Director\Database\Eloquent\Relations\MkBelongsToMany;
 
 /**
  * HasAbilities — relación many-to-many entre AuthUser y Ability.
@@ -66,7 +67,7 @@ trait HasAbilities
      */
     public function abilities(): BelongsToMany
     {
-        $instance = new Ability();
+        $instance = new Ability;
 
         // Construimos una relation contra `ability_user` (sigue siendo el pivot
         // declarado en el modelo Ability), pero filtramos los ability IDs
@@ -104,23 +105,31 @@ trait HasAbilities
      * Grants directos (pivot `ability_user`). El consumer debe
      * publicar la migración correspondiente si quiere usar este path.
      *
-     * R-PKG-020 HALLAZGO-NEW-01: la relation ahora usa `using(MkAbilityUserPivot::class)`
-     * para que las mutaciones nativas de Eloquent seteen
-     * `user_type = get_class($this)` automáticamente cuando la pivot
-     * tiene la columna. Antes, solo `giveAbilityTo()` y `syncDirectAbilities()`
-     * lo hacían via `abilityPivotExtras()`.
+     * R-PKG-021 BUG-NEW-31 (RC9 regression of HALLAZGO-NEW-01):
+     * La relation retorna `MkBelongsToMany` (via reflection-based state copy).
+     * Override de `newPivot()` inyecta `user_type = $this->getMorphClass()`
+     * automáticamente cuando la pivot tiene la columna. Cubre todas las
+     * mutations nativas de Eloquent.
+     *
+     * R-PKG-020 HALLAZGO-NEW-01 (defense-in-depth): `using(MkAbilityUserPivot::class)`
+     * también aplica el listener `creating` en `MkPivot::boot()`. Como segunda
+     * capa (cubre edge cases donde pivotParent SÍ está seteado).
      *
      * Si el consumer override esta relation con su propio `->using(...)`,
      * su pivot gana (BC preservada).
      */
     public function directAbilities(): BelongsToMany
     {
-        return $this->belongsToMany(
+        // Crea la BelongsToMany stock via Laravel, luego promueve a
+        // MkBelongsToMany via reflection-based state copy (R-PKG-021).
+        $relation = $this->belongsToMany(
             Ability::class,
             'ability_user',
         )
             ->using(MkAbilityUserPivot::class)
             ->withTimestamps();
+
+        return MkBelongsToMany::from($relation);
     }
 
     /**
@@ -269,7 +278,7 @@ trait HasAbilities
         $segments = explode('.', $ability, 2);
         $resource = $segments[0] ?? null;
 
-        if ($resource !== null && $resource !== '' && $names->contains($resource . '.*')) {
+        if ($resource !== null && $resource !== '' && $names->contains($resource.'.*')) {
             return true;
         }
 
