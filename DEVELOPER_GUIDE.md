@@ -213,9 +213,10 @@ análisis completo.
 ### 3.6 Auto-poblar abilities con `mk:discover-abilities` (R-PKG-007)
 
 A partir de **v1.5.0-rc2**, `mk:discover-abilities` lee las abilities
-del provider del módulo (preferred) y las persiste en `{scope}_abilities`
-via UPSERT idempotente. Es el segundo paso del workflow de scaffolding
-RBAC (después de `php artisan migrate`).
+del provider del módulo (preferred) y las persiste via UPSERT idempotente.
+Es el segundo paso del workflow de scaffolding RBAC (después de `php artisan migrate`).
+
+> **R-PKG-021 BUG-NEW-29 (HIGH, v1.6.0-rc10)**: la tabla destino del UPSERT ahora es **schema-aware**. Si `{scope}_abilities` per-scope existe (caso `mk:module X --with-rbac`), UPSERT ahí. Si NO existe, UPSERT en `abilities` global (caso `mk:make:auth-user X --with-crud`). Antes de rc10, el comando SIEMPRE escribía en `{scope}_abilities` y fallaba con `relation "{scope}_abilities" does not exist` para consumers `--with-crud`. Si NINGUNA tabla existe, lanza `RuntimeException` con mensaje accionable (`php artisan migrate` después de scaffoldear?).
 
 #### Source-of-truth: hybrid (D1)
 
