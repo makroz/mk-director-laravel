@@ -403,13 +403,54 @@ PHP
         // además de los profile fields. Esto es porque sin password el user no puede
         // hacer login después. Si el consumer quiere opt-out (e.g. flujo con magic link),
         // override el método register() en la subclase.
+        //
+        // R-PKG-031 PKG-NEW-16 fix (2026-06-28): el register() scaffoldeado ahora
+        // también valida `name` (NOT NULL en la tabla del scope, heredado del
+        // AuthUser base) y el loginField (NOT NULL UNIQUE). Antes solo validaba
+        // profile fields + password, lo que causaba SQLSTATE 500
+        // `NOT NULL constraint failed: {scope}.name` en runtime cuando el
+        // consumer trataba de usar register() — rompe el contrato del paquete
+        // que promete validación via `$request->validate()` antes del insert.
+        // Severidad original: HIGH (rompe runtime end-to-end del endpoint).
+        // Reportado en feedback RETO fase 11 (2026-06-28).
         $profileRulesPhp = $profileFieldsReplacements['__rulesPhp__'] ?? '[]';
         unset($profileFieldsReplacements['__rulesPhp__']);
 
         // R-PKG-014 BUG-04: rulesPhp para register() = profile fields + password base.
         // Para updateProfile(): solo profile fields (password es opcional).
+        //
+        // R-PKG-031 PKG-NEW-16: agregar `name` (always, NOT NULL del AuthUser base)
+        // y `loginField` (NOT NULL UNIQUE, usado para login). `name` siempre es
+        // required porque viene del modelo base; `loginField` valida con la regla
+        // correcta (`['required', 'email']` si es email, `['required', 'string']` si es ci/phone/etc.).
         $passwordRuleForRegister = "        'password' => ['required', 'string', 'min:8', 'max:255'],\n";
         $rulesPhp = $this->mergeRulesPhp($profileRulesPhp, $passwordRuleForRegister);
+        $rulesPhp = $this->mergeRulesPhp(
+            $rulesPhp,
+            "        'name' => ['required', 'string', 'max:255'],\n        '{$loginField}' => "
+                .($isEmail ? "['required', 'email', 'unique:{$scopePlural},{$loginField}']" : "['required', 'string', 'unique:{$scopePlural},{$loginField}']")
+                .",\n"
+        );
+
+        // R-PKG-031 PKG-NEW-09 fix (2026-06-28): cuando `--with-crud` está activo,
+        // pinear middleware `mk.auth:{scope}` + `mk.ability:{scope}.{table}.create`
+        // en el endpoint `register`. Defense-in-depth: register es público por
+        // default (puede ser útil para self-service), pero si el scope tiene CRUD
+        // scaffoldeado significa que las abilities `*.create` existen y deben
+        // proteger también register. Sin esto, cualquiera puede crear admins
+        // via `POST /api/admin/auth/register` (escalación de privilegios).
+        //
+        // BC preservada: sin --with-crud, register sigue público (consistente con
+        // el comportamiento documentado en la skill). El consumer puede pinear el
+        // middleware manualmente si quiere otro nivel de protección.
+        //
+        // Reportado en feedback RETO fase 11 (2026-06-28) — C-01 workaround del
+        // consumer pineado en routes/api.php antes de este fix.
+        $registerRoute = "\n    Route::post('register', [AuthController::class, 'register'])";
+        if ($withCrud) {
+            $registerRoute .= "\n        ->middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.{{moduleNamePluralLower}}.create'])";
+        }
+        $registerRoute .= ';';
 
         if (! empty($profileFields) || $verifyEmail) {
             $profileFieldsReplacements['{{registerMethod}}'] = $this->buildRegisterMethod(
@@ -419,7 +460,7 @@ PHP
                 $rulesPhp,
                 $verifyEmail,
             );
-            $profileFieldsReplacements['{{registerRoute}}'] = "\n    Route::post('register', [AuthController::class, 'register']);";
+            $profileFieldsReplacements['{{registerRoute}}'] = $registerRoute;
         } else {
             $profileFieldsReplacements['{{registerMethod}}'] = '';
             $profileFieldsReplacements['{{registerRoute}}'] = '';
@@ -1841,7 +1882,10 @@ PHP,
             '{{profileFieldsCastEntries}}' => $castEntries,
             '{{profileFieldsColumns}}' => $columns,
             '{{profileFieldsDocblock}}' => $docblock,
-            '{{registerRoute}}' => "\n    Route::post('register', [AuthController::class, 'register']);",
+            // R-PKG-031 PKG-NEW-09 fix (2026-06-28): default vacío — handle()
+            // SIEMPRE sobreescribe {{registerRoute}} con la versión condicional
+            // (middleware cuando --with-crud, sin middleware en BC mode).
+            '{{registerRoute}}' => '',
             '{{registerMethod}}' => '', // se setea después con scope + loginField
             '{{updateProfileRoute}}' => "\n        Route::patch('me', [AuthController::class, 'updateProfile']);",
             '{{updateProfileMethod}}' => '', // se setea después
