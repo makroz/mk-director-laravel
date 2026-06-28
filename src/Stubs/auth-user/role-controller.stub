@@ -32,7 +32,7 @@ class RoleController extends SmartController
     protected array $mkConfig = [
         'model'           => Role::class,
         'service'         => {{ModuleName}}Service::class,
-        'searchable'      => ['name', 'description'],
+        'searchable'      => ['name'],
         'with'            => ['abilities'],
         'allowedIncludes' => ['abilities'],
         'features'        => [
@@ -40,6 +40,11 @@ class RoleController extends SmartController
             'remember_state' => true,
         ],
     ];
+
+    public function __construct()
+    {
+        $this->middleware('mk.auth:{{moduleNameLower}}');
+    }
 
     /**
      * PUT /api/roles/{id}/abilities

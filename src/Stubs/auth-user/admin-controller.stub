@@ -48,6 +48,11 @@ class {{ModuleName}}Controller extends SmartController
         ],
     ];
 
+    public function __construct()
+    {
+        $this->middleware('mk.auth:{{moduleNameLower}}');
+    }
+
     /**
      * POST /api/{{moduleNamePluralLower}}/{id}/roles
      *
