@@ -616,10 +616,77 @@ protected $listen = [
 - **Rate limit muy agresivo** (5/min puede bloquear usuarios reales) —
   configurable por endpoint via `MK_AUTH_RATE_LIMIT_*`.
 
+#### 3.8.1. `AuthUser::safeLogoutCurrentToken()` — logout null-safe (R-PKG-027, rc14)
+
+Desde rc14, el modelo base `AuthUser` expone un helper para hacer logout sin riesgo de null-dereference:
+
+```php
+$user = $request->user();
+$revoked = $user->safeLogoutCurrentToken();
+// $revoked === true  → había un token bearer que se revocó
+// $revoked === false → no había token (cookie-based auth stateful SPA, o token ya revocado)
+```
+
+**Por qué existe**: el patrón naive `$token = $user->currentAccessToken(); $token->delete();` revienta con `Call to a member function delete() on null` cuando `currentAccessToken()` retorna `null`. Esto pasa en:
+
+- **Sanctum stateful SPA** (auth via cookies httpOnly, no bearer token) — `currentAccessToken()` retorna `null`.
+- **Logout idempotente** — segunda llamada después de que el primer logout ya revocó el token.
+- **Token ya revocado por otra request** concurrente.
+
+El `AuthController::logout()` scaffoldeado usa este helper desde rc14. Si override `logout()` manualmente en tu consumer, **usá siempre el helper en lugar del patrón naive**.
+
+```php
+// ✅ Correcto (rc14+)
+public function logout(Request $request): JsonResponse
+{
+    $user = $request->user();
+    $user->safeLogoutCurrentToken();
+    return $this->sendResponse(true, 'Sesión cerrada.');
+}
+
+// ❌ Naive (rompe con cookie-based auth)
+public function logout(Request $request): JsonResponse
+{
+    $user = $request->user();
+    $token = $user->currentAccessToken();
+    $token->delete(); // FatalError si currentAccessToken() es null
+    return $this->sendResponse(true, 'Sesión cerrada.');
+}
+```
+
+#### 3.8.2. `is_active` check en el flow de auth (R-PKG-027, rc14)
+
+Desde rc14, el `AuthController` scaffoldeado consulta `is_active` por default en `login`/`forgot`/`reset` cuando la columna existe en la tabla del scope:
+
+```php
+// login() — bloquea usuarios inactivos
+$isActiveCheck = Schema::hasColumn($user?->getTable() ?? '{{moduleNamePluralLower}}', 'is_active')
+    && $user->is_active === false;
+
+if (! $user
+    || ! Hash::check($credentials['password'], $user->password)
+    || $user->getAuthScope() !== '{{moduleNameLower}}'
+    || $isActiveCheck
+) {
+    return $this->sendError('Credenciales inválidas.', [...], 422);
+}
+```
+
+**Semántica**:
+
+- `is_active = true` → puede loguearse / recibir reset / resetear password.
+- `is_active = false` → 401 (login bloqueado, sin email de reset, reset denegado).
+- `is_active = null` → permitido (compat con datos preexistentes sin la columna).
+
+El check usa `Schema::hasColumn()` (cacheado en memoria), así que es zero-cost en runtime para consumers que NO usan la columna.
+
+**Si override `login()`/`forgot()`/`reset()` manualmente** en tu consumer, mantené la misma lógica de `Schema::hasColumn` + `=== false` para no romper el patrón.
+
 ### Spec
 
 - Spec: `openspec/changes/2026-06-24-auth-controller-rbac-stub/proposal.md`
 - Spec formal: `openspec/changes/2026-06-24-auth-controller-rbac-stub/specs/auth-controller-rbac-stub.md`
+- **rc14 update** (R-PKG-027): `safeLogoutCurrentToken()` helper (3.8.1) + `is_active` check default (3.8.2). Spec en `packagist/mk-director-laravel/CHANGELOG.md` § R-PKG-027.
 
 ### 3.9 Profile fields per-scope (`--profile-fields=<csv>`) (R-PKG-011)
 
