@@ -207,24 +207,37 @@ return [
     | Response Envelope
     |--------------------------------------------------------------------------
     |
-    | R-PKG-023 (rc12): opt-in flag for the top-level `__extraData` shape
-    | that matches the @makroz/core `MkResponse<T>` contract. When the
-    | flag is `false` (rc12 default), controllers emit the legacy nested
-    | shape (`data.data` + `data.__extraData`). When the flag is `true`,
-    | controllers emit the canonical top-level shape (`data` + top-level
-    | `__extraData`).
+    | R-PKG-024 (v1.7.0 GA) — SINGLE-LEVEL ENVELOPE. The canonical shape is:
     |
-    | Migration plan:
-    |   - rc12: default `false`. Consumers opt-in per-environment.
-    |   - GA:   default `true`. Legacy path is removed.
+    |   {
+    |     "success": true,
+    |     "message": "...",
+    |     "data": [...items...],          // ← array directo para colecciones
+    |     "__extraData": { ... },         // ← SIEMPRE top-level (sibling de `data`)
+    |     "debugMsg": []
+    |   }
     |
-    | Toggle via env: `MK_DIRECTOR_RESPONSE_TOP_LEVEL_EXTRA_DATA=true`.
+    | PROHIBIDO:
+    |   ❌ `data: { data: [...], links, meta }` (Laravel paginator nested → data.data)
+    |   ❌ `data: { data: {...resource...} }` (resource nested → data.data)
+    |   ❌ `__extraData` nested inside `data`
+    |
+    | The R-PKG-023 rc12 opt-in flag (removed in v1.7.0) is no longer
+    | referenced. The legacy nested shape is gone — the envelope is always
+    | single-level.
+    |
+    | Migration from rc11/rc12: see CHANGELOG.md `## [v1.7.0] - GA - Single-level
+    | envelope (R-PKG-024)` for the migration guide.
     |
     | @see https://github.com/makroz/mk-director-laravel/blob/main/CHANGELOG.md
-    |      for the full migration guide from rc11 → rc12.
     */
     'response' => [
-        'top_level_extra_data' => env('MK_DIRECTOR_RESPONSE_TOP_LEVEL_EXTRA_DATA', false),
+        // R-PKG-024: the rc12 opt-in flag (removed in v1.7.0 GA) is no
+        // longer referenced here. The envelope is always single-level (no
+        // `data.data`, no nested `__extraData`). Consumers that ran rc12
+        // with the flag on see no change. Consumers that ran rc12 with the
+        // flag off see the new shape — RETO migration tracked in sprint
+        // `2026-06-28-fase-12-retos-bump-v170`.
     ],
 
     /*
@@ -232,11 +245,12 @@ return [
     | Debug
     |--------------------------------------------------------------------------
     |
-    | R-PKG-024 (rc13): gate for the optional `EXPLAIN` query analysis in
-    | `BaseController::getDebugData()`. When this flag is `false` (default),
-    | slow-query candidates are logged via `Log::debug()` for offline
-    | analysis — no `EXPLAIN` is executed against the database. When the
-    | flag is `true`, the SQL is logged as a `warning` so a developer can
+    | R-PKG-024 (rc13, lifted forward — unrelated to envelope change): gate
+    | for the optional `EXPLAIN` query analysis in `BaseController::getDebugData()`.
+    | When this flag is `false` (default), slow-query candidates are logged via
+    | `Log::debug()` for offline analysis — no `EXPLAIN` is executed against the
+    | database. When the flag is `true`, the SQL is logged as a `warning` so a
+    | developer can
     | run `EXPLAIN` manually in a safe environment.
     |
     | The previous behavior (rc12 and earlier) interpolated the query

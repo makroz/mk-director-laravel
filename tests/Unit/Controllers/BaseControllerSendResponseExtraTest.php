@@ -7,37 +7,30 @@ namespace Mk\Director\Tests\Unit\Controllers;
 use Mk\Director\Tests\MkLaravelTestCase;
 
 /**
- * R-PKG-023 (rc12): `BaseController::sendResponse` signature changed to accept
- * an `array $extra = []` 4th parameter. When the caller passes a non-empty
- * `$extra` AND the config flag `mk_director.response.top_level_extra_data`
- * is true, the controller emits `__extraData` as a TOP-LEVEL sibling of
- * `data` (not nested inside it).
+ * R-PKG-024 (v1.7.0 GA) — `BaseController::sendResponse` signature change.
+ *
+ * The 4th parameter `array $extra = []` was added in R-PKG-023 (rc12). In
+ * R-PKG-024 (v1.7.0 GA), the rc12 opt-in flag is REMOVED — `__extraData` is
+ * ALWAYS emitted as a TOP-LEVEL sibling of `data` whenever:
+ *   (a) the caller passes a non-empty `$extra`, OR
+ *   (b) the input `$result` is a Laravel paginator (auto-extracted via
+ *       `extractPaginationMetadata()`).
+ *
+ * The legacy `data: { data: [...], links, meta }` nested shape is REMOVED
+ * in v1.7.0. Tests for the rc12 flag-based branch (this file's predecessor)
+ * are obsolete.
  *
  * Why this matters: the @makroz/core `MkResponse<T>` contract defines
- * `__extraData` as top-level (sibling of `data`). 2/4 frontend hooks
- * (`useMkInfiniteList` in web + mobile) consume the top-level shape. Until
- * rc12, every controller in the package emitted `__extraData` NESTED inside
- * `data` (via CRUDSmart::index() building `['data' => items, '__extraData' => $extra]`
- * and passing that to `sendResponse`, which put it inside the outer `data`).
- *
- * BC strategy (signed 2026-06-27 by Mario):
- *   - Flag `mk_director.response.top_level_extra_data` defaults to `false`
- *     in rc12 → `true` in GA.
- *   - The new top-level emission only triggers when BOTH `$extra` is
- *     non-empty AND the flag is true. Callers that don't pass `$extra`
- *     (or set the flag off) get the legacy shape unchanged.
+ * `__extraData` as top-level (sibling of `data`). `useMkInfiniteList` in
+ * web + mobile consume the top-level shape.
  *
  * Implementation note: source-parsing. The method is `protected` and the
  * class is `abstract`, so runtime instantiation would need an anonymous
- * test subclass. For a signature + conditional change like this, source-parsing
- * is the right level of abstraction — same pattern as R2-010 hardening pineo.
+ * test subclass. For a signature + paginator-handling change like this,
+ * source-parsing is the right level of abstraction.
  *
- * Cross-stack impact: this fix changes the response envelope of every
- * controller in the package. `useMkList` in `@makroz/web` and `@makroz/mobile`
- * is being updated in T8/T9 of the same sprint to read the top-level shape
- * when the flag is on, falling back to nested for the transition window.
- *
- * @see R-PKG-023 (rc12, cherry-picked from Code Review 4R R1.1 BLOCKER)
+ * @see R-PKG-024 (binding rule, rules_orchestration.md)
+ * @see BaseControllerSingleLevelEnvelopeE2ETest (EFECTIVIDAD runtime tests)
  */
 uses(MkLaravelTestCase::class);
 
@@ -57,7 +50,6 @@ function baseControllerSource(): string
 function sendResponseMethodSource(): string
 {
     $source = baseControllerSource();
-
     $start = strpos($source, 'function sendResponse(');
     if ($start === false) {
         return '';
@@ -76,17 +68,13 @@ function sendResponseMethodSource(): string
 
 function sendResponseBodySource(): string
 {
-    // Same as sendResponseMethodSource() but trimmed to body only
-    // (excludes the signature line and the opening brace).
     $source = sendResponseMethodSource();
     $bodyStart = strpos($source, '{');
     if ($bodyStart === false) {
         return '';
     }
-    $bodyStart++;
 
-    // Find closing brace matching the opening one. Naive search works
-    // for the simple sendResponse body (no nested closures).
+    $bodyStart++;
     $depth = 1;
     $pos = $bodyStart;
     $len = strlen($source);
@@ -99,51 +87,40 @@ function sendResponseBodySource(): string
     return substr($source, $bodyStart, $pos - $bodyStart - 1);
 }
 
-test('sendResponse signature includes array $extra = [] as 4th parameter (R-PKG-023)', function () {
+test('sendResponse signature includes array $extra = [] as 4th parameter (R-PKG-023 → R-PKG-024)', function () {
     $body = sendResponseMethodSource();
     expect($body)->not->toBeEmpty();
 
-    // R-PKG-023: 4th parameter must be `array $extra = []`.
     expect($body)->toContain('array $extra = []');
 });
 
-test('sendResponse emits __extraData as top-level sibling of data when $extra non-empty AND flag on (R-PKG-023)', function () {
+test('sendResponse detects paginator and extracts items + metadata (R-PKG-024 GA replaces rc12 flag check)', function () {
     $body = sendResponseBodySource();
     expect($body)->not->toBeEmpty();
 
-    // The flag must be checked: `config('mk_director.response.top_level_extra_data', false)`.
-    // Search for the unique substring (avoids quote-matching confusion).
-    expect($body)->toContain('response.top_level_extra_data');
+    // R-PKG-024: paginator detection replaces the rc12 flag check.
+    expect($body)->toContain('instanceof AbstractPaginator');
+    expect($body)->toContain('instanceof CursorPaginator');
+    expect($body)->toContain('extractPaginationMetadata');
 
-    // The emission must assign `$response['__extraData'] = $extra`
-    // (top-level — sibling of `$response['data']`).
-    expect($body)->toContain("'__extraData'] = \$extra");
+    // R-PKG-023 flag is GONE.
+    expect($body)->not->toContain('response.top_level_extra_data');
 });
 
-test('sendResponse guards the __extraData emission with non-empty + flag check (R-PKG-023)', function () {
+test('sendResponse emits __extraData as top-level sibling of data (single-level envelope, R-PKG-024)', function () {
     $body = sendResponseBodySource();
     expect($body)->not->toBeEmpty();
 
-    // Both conditions must guard the assignment:
-    //   1. $extra is not empty
-    //   2. flag is truthy
-    // We check that the conditional uses `$extra` AND the flag.
-    expect($body)->toContain('$extra');
-    expect($body)->toContain("config('mk_director.response.top_level_extra_data'");
-
-    // The whole guarded block must contain the assignment. We do a lenient
-    // match: find an `if (` that contains `$extra`, then verify that the
-    // assignment is reachable from there. To keep the test simple, we just
-    // verify the conditional structure exists in the right order.
-    expect($body)->toMatch('/if\s*\([^)]*\$extra[^)]*\)/');
+    // Top-level emission (sibling of $response['data']).
+    expect($body)->toContain("\$response['__extraData'] = \$extra");
+    // Gate: paginator OR non-empty $extra.
+    expect($body)->toContain('if ($isPaginator || $extra !== [])');
 });
 
 test('sendResponse original payload (success/message/data/debugMsg) unchanged (regression guard)', function () {
     $body = sendResponseBodySource();
     expect($body)->not->toBeEmpty();
 
-    // The original keys must still be present in the response array.
-    // R-PKG-023 is purely additive — no key is removed or renamed.
     expect($body)->toContain("'success'");
     expect($body)->toContain("'message'");
     expect($body)->toContain("'data'");
@@ -154,8 +131,6 @@ test('sendResponse preserves debug-merge behavior (regression guard)', function 
     $body = sendResponseBodySource();
     expect($body)->not->toBeEmpty();
 
-    // The conditional debug merge (`if (config('mk_director.debug', false))`)
-    // must still be present. R-PKG-023 does not modify the debug path.
     expect($body)->toContain("'mk_director.debug'");
     expect($body)->toContain('getDebugData()');
     expect($body)->toContain('array_merge');

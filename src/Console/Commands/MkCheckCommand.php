@@ -19,7 +19,7 @@ class MkCheckCommand extends Command
      */
     protected $signature = 'mk:status
         {--module= : Filtrar por un módulo específico}
-        {--response-shape : R-PKG-023 (rc12): audit controllers for legacy nested __extraData in sendResponse() calls}';
+        {--response-shape : R-PKG-024 (v1.7.0): audit controllers for legacy `data.data` nesting or nested `__extraData` in sendResponse() calls}';
 
     /**
      * The console command description.
@@ -33,11 +33,10 @@ class MkCheckCommand extends Command
      */
     public function handle()
     {
-        // R-PKG-023 (rc12): --response-shape option dispatches to a
-        // dedicated audit that walks every controller and warns about
-        // legacy `sendResponse(['data' => ..., '__extraData' => ...])`
-        // calls — endpoints that would emit the legacy nested shape
-        // even when `MK_DIRECTOR_RESPONSE_TOP_LEVEL_EXTRA_DATA=true`.
+        // R-PKG-024 (v1.7.0 GA): --response-shape option dispatches to a
+        // dedicated audit that walks every controller and ERRORS about
+        // legacy `sendResponse(['data' => $paginator, '__extraData' => ...])`
+        // calls — endpoints that emit `data.data` nesting in the JSON response.
         if ($this->option('response-shape')) {
             return $this->auditResponseShape();
         }
@@ -64,22 +63,27 @@ class MkCheckCommand extends Command
     }
 
     /**
-     * R-PKG-023 (rc12): walk every controller in app/Http/Controllers and
-     * app/Modules/* and warn about legacy `sendResponse([...])` calls that
-     * still pass a single wrapped array (the rc11 and earlier pattern).
+     * R-PKG-024 (v1.7.0 GA) — audit response envelope shape.
      *
-     * Consumers that flip `MK_DIRECTOR_RESPONSE_TOP_LEVEL_EXTRA_DATA=true`
-     * MUST also migrate any custom controllers that still use the wrapped
-     * array — otherwise those endpoints emit the legacy nested shape and
-     * the response envelope becomes inconsistent.
+     * Walks every controller in app/Http/Controllers and app/Modules/* and
+     * reports ANY of these legacy patterns:
      *
-     * Reports `warning` per occurrence (not `error`) — the migration is
-     * non-urgent and consumers can run the package in mixed mode during
-     * the transition window.
+     *   1. `sendResponse([ 'data' => ..., '__extraData' => ... ])` — legacy
+     *      nested shape (rc11 and earlier; legacy rc12 with flag off).
+     *   2. `sendResponse([ 'data' => $paginator_or_paginate_call ])` — legacy
+     *      Laravel paginator nested inside the envelope `data` key, which
+     *      produces `data: { data: [...], links, meta }` (the `data.data`
+     *      shape that R-PKG-024 prohibits).
+     *   3. Any hand-crafted `sendResponse([...])` where the array contains
+     *      a `data` key whose value is itself an array (heuristic: matches
+     *      `$paginate*`, `$paginator*`, `$cursor*`, or `->paginate(`/`->cursorPaginate(`).
+     *
+     * All findings are reported as `error` (not `warning`) post-GA — the
+     * single-level envelope is non-negotiable per R-PKG-024.
      */
     protected function auditResponseShape(): int
     {
-        $this->info("\n🔍 Auditando response shape (top-level __extraData) — R-PKG-023 (rc12)...\n");
+        $this->info("\n🔍 Auditando response shape (single-level envelope) — R-PKG-024 (v1.7.0 GA)...\n");
 
         $paths = [
             app_path('Http/Controllers'),
@@ -100,8 +104,7 @@ class MkCheckCommand extends Command
                 $contents = (string) file_get_contents($file->getRealPath());
                 $relative = ltrim(str_replace(base_path() . '/', '', $file->getRealPath()), '/');
 
-                // Look for `sendResponse([` followed (within 200 chars) by
-                // `__extraData`. That's the legacy nested pattern.
+                // Pattern 1: legacy nested __extraData inside sendResponse([ ... ])
                 if (preg_match_all(
                     '/sendResponse\s*\(\s*\[\s*[\s\S]{0,500}?[\'"]__extraData[\'"]/',
                     $contents,
@@ -112,9 +115,34 @@ class MkCheckCommand extends Command
                         $offset = $match[1];
                         $line = substr_count(substr($contents, 0, $offset), "\n") + 1;
                         $findings[] = [
-                            'file' => $relative,
-                            'line' => $line,
+                            'file'    => $relative,
+                            'line'    => $line,
                             'snippet' => $match[0],
+                            'issue'   => 'legacy nested __extraData',
+                            'migration' => 'migrate to: sendResponse($data, \'\', 200, $extra)',
+                        ];
+                    }
+                }
+
+                // Pattern 2: `data` key in sendResponse([ ... ]) wrapping a
+                // paginator / paginate() call. Produces `data: { data: [...], links, meta }`.
+                // Heuristic: the `data` value (within 500 chars after the `[`)
+                // contains `$paginat*`, `$cursor*`, or `->paginate(` / `->cursorPaginate(`.
+                if (preg_match_all(
+                    '/sendResponse\s*\(\s*\[[\s\S]{0,500}?[\'"]data[\'"]\s*=>\s*(\$[a-zA-Z_]*pag[a-zA-Z_]*|\$[a-zA-Z_]*cursor[a-zA-Z_]*|[^,]+->paginate\s*\([^)]*\)|[^,]+->cursorPaginate\s*\([^)]*\))/',
+                    $contents,
+                    $matches,
+                    PREG_OFFSET_CAPTURE
+                )) {
+                    foreach ($matches[0] as $match) {
+                        $offset = $match[1];
+                        $line = substr_count(substr($contents, 0, $offset), "\n") + 1;
+                        $findings[] = [
+                            'file'    => $relative,
+                            'line'    => $line,
+                            'snippet' => $match[0],
+                            'issue'   => 'data.data nesting (paginator wrapped in `data` key)',
+                            'migration' => 'migrate to: sendResponse($paginator, \'\', 200, $extra) — BaseController auto-flattens items to `data` and pagination meta to `__extraData` top-level',
                         ];
                     }
                 }
@@ -122,7 +150,7 @@ class MkCheckCommand extends Command
         }
 
         if (empty($findings)) {
-            $this->info('✅ All controllers use the top-level __extraData shape (or no __extraData at all).');
+            $this->info('✅ All controllers use the single-level envelope (no `data.data`, no nested `__extraData`).');
             return self::SUCCESS;
         }
 
@@ -131,20 +159,20 @@ class MkCheckCommand extends Command
             $rows[] = [
                 $f['file'],
                 $f['line'],
-                '<fg=yellow>legacy nested __extraData</>',
-                'migrate to: sendResponse($data, \'\', 200, $extra)',
+                "<fg=red>{$f['issue']}</>",
+                $f['migration'],
             ];
         }
 
         $this->table(['File', 'Line', 'Issue', 'Migration hint'], $rows);
-        $this->warn(sprintf(
-            "\n⚠️  %d legacy sendResponse([...]) call(s) found.\n" .
-            "   Consumers with MK_DIRECTOR_RESPONSE_TOP_LEVEL_EXTRA_DATA=true should migrate these to use\n" .
-            "   the 4th argument: sendResponse(\$data, '', 200, \$extra). See CHANGELOG rc12.\n",
+        $this->error(sprintf(
+            "\n❌ %d response envelope violation(s) found (R-PKG-024).\n" .
+            "   The single-level envelope is NON-NEGOTIABLE post-GA (v1.7.0).\n" .
+            "   Each violation produces `data.data` nesting in the JSON response — see CHANGELOG.md `## [v1.7.0]` for the migration guide.\n",
             count($findings)
         ));
 
-        return self::SUCCESS;
+        return self::FAILURE;
     }
 
     /**

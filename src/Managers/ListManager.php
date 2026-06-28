@@ -500,14 +500,36 @@ class ListManager
     /**
      * Get total from paginator for extraData
      */
+    /**
+     * Pagination metadata for the `__extraData` top-level field.
+     *
+     * R-PKG-024 (v1.7.0 GA): snake_case keys match the @makroz/web
+     * `useMkList` / `useMkInfiniteList` consumption shape and the
+     * @makroz/core `MkResponse<T>.__extraData` contract. Camel-case keys
+     * (`page`, `perPage`, `lastPage`) are REMOVED — they were inconsistent
+     * with the frontend and never read by any consumer.
+     *
+     * Note: this method is RETAINED for BC (consumers may call it directly),
+     * but `BaseController::sendResponse()` already auto-emits these fields
+     * for paginator responses via `extractPaginationMetadata()`. Most callers
+     * no longer need to invoke this manually.
+     *
+     * @return array{
+     *     total?: int,
+     *     current_page?: int,
+     *     last_page?: int,
+     *     per_page?: int,
+     *     has_more_pages?: bool
+     * }
+     */
     public static function getExtraData(LengthAwarePaginator $paginator): array
     {
         return [
-            'total' => $paginator->total(),
-            'page' => $paginator->currentPage(),
-            'perPage' => $paginator->perPage(),
-            'lastPage' => $paginator->lastPage(),
-            'hasMorePages' => $paginator->hasMorePages(),
+            'total'         => $paginator->total(),
+            'current_page'  => $paginator->currentPage(),
+            'per_page'      => $paginator->perPage(),
+            'last_page'     => $paginator->lastPage(),
+            'has_more_pages'=> $paginator->hasMorePages(),
         ];
     }
 }

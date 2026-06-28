@@ -36,25 +36,17 @@ abstract class Controller extends BaseController
         // Apply afterSearch hook
         $data = $this->afterSearch($request, $paginator);
 
-        // Get extra data for response
-        $extra = array_merge(
-            $this->afterList($request, $data, $paginator->total()),
-            ListManager::getExtraData($paginator)
-        );
+        // R-PKG-024 (v1.7.0 GA) — single-level envelope. We pass the
+        // paginator directly to sendResponse(); the BaseController
+        // auto-extracts items to `data` and pagination metadata to
+        // `__extraData` top-level. No flag, no opt-in, no `data.data`.
+        //
+        // Custom extras (from afterList hook) are merged by BaseController
+        // AFTER its auto-extracted pagination metadata, so hook keys
+        // win on conflict.
+        $extra = $this->afterList($request, $paginator->items(), $paginator->total());
 
-        // R-PKG-023 (rc12): top-level __extraData when the config flag
-        // is on. Default false in rc12 → true in GA. Coexistence with
-        // the legacy nested shape is opt-in per-environment via
-        // `MK_DIRECTOR_RESPONSE_TOP_LEVEL_EXTRA_DATA=true`. See CHANGELOG
-        // for the full migration guide.
-        if (config('mk_director.response.top_level_extra_data', false)) {
-            return $this->sendResponse($data, '', 200, $extra);
-        }
-
-        return $this->sendResponse([
-            'data' => $data,
-            '__extraData' => $extra
-        ]);
+        return $this->sendResponse($paginator, '', 200, $extra);
     }
 
     /**

@@ -227,17 +227,33 @@ class OpenApiGeneratorService
                 ['name' => 'limit', 'in' => 'query', 'schema' => ['type' => 'integer']],
                 ['name' => 'search', 'in' => 'query', 'schema' => ['type' => 'string']],
             ];
+            // R-PKG-024 (v1.7.0 GA) — single-level envelope schema.
+            // `data` is an ARRAY of items (NOT a paginator with nested `data`).
+            // `__extraData` is top-level (sibling of `data`) with pagination metadata
+            // (current_page, last_page, per_page, total for LengthAwarePaginator;
+            // per_page, next_cursor, prev_cursor for CursorPaginator).
             $spec['responses']['200']['content']['application/json']['schema'] = [
                 'type' => 'object',
                 'properties' => [
+                    'success' => ['type' => 'boolean', 'example' => true],
+                    'message' => ['type' => 'string', 'example' => ''],
                     'data' => [
                         'type' => 'array',
                         'items' => ['$ref' => '#/components/schemas/' . $modelName]
                     ],
                     '__extraData' => [
-                        'type' => 'object'
-                    ]
-                ]
+                        'type' => 'object',
+                        'properties' => [
+                            'current_page'  => ['type' => 'integer', 'example' => 1],
+                            'last_page'     => ['type' => 'integer', 'example' => 5],
+                            'per_page'      => ['type' => 'integer', 'example' => 20],
+                            'total'         => ['type' => 'integer', 'example' => 100],
+                            'has_more_pages'=> ['type' => 'boolean', 'example' => true],
+                        ],
+                    ],
+                    'debugMsg' => ['type' => 'array', 'items' => ['type' => 'string']],
+                ],
+                'required' => ['success', 'data'],
             ];
         }
 

@@ -86,23 +86,18 @@ test('mk_director.auth block has a comment that names the offending anti-pattern
     expect($source)->toContain('mk:make:auth-user');
 });
 
-test('R-PKG-023 (rc12) response.top_level_extra_data flag exists with env-driven default false', function () {
-    // R-PKG-023 introduces an opt-in flag for the top-level __extraData
-    // response shape. The flag MUST be env-driven (so consumers can flip
-    // it via .env without re-publishing the config) and MUST default to
-    // `false` in rc12 (legacy nested shape is the BC default).
+test('R-PKG-024 (v1.7.0 GA) — response.top_level_extra_data flag is REMOVED (no opt-in BC bridge)', function () {
+    // R-PKG-024 (v1.7.0 GA) removes the R-PKG-023 (rc12) opt-in flag. The
+    // envelope is always single-level — no `data.data`, no nested `__extraData`.
+    // The `response` block is preserved (empty) for future use, but no flag.
     $source = configSource();
 
-    // Block exists.
+    // The `response` block exists (empty, for future use).
     expect($source)->toContain("'response'");
-    expect($source)->toContain("'top_level_extra_data'");
 
-    // Reads from env, not hardcoded.
-    expect($source)->toContain("env('MK_DIRECTOR_RESPONSE_TOP_LEVEL_EXTRA_DATA'");
-    expect($source)->toContain(', false)');  // default is false
-
-    // NOT hardcoded to `true` (which would be a BC break at GA only).
-    expect($source)->not->toMatch("/'top_level_extra_data'\s*=>\s*env\([^,]+,\s*true\s*\)/");
+    // The rc12 flag is GONE — neither the key, the env var, nor the default.
+    expect($source)->not->toContain("'top_level_extra_data'");
+    expect($source)->not->toContain('MK_DIRECTOR_RESPONSE_TOP_LEVEL_EXTRA_DATA');
 });
 
 test('R-PKG-024 (rc13) cache.allow_full_clear flag exists with env-driven default false', function () {

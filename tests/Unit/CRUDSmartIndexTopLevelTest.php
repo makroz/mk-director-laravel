@@ -7,32 +7,29 @@ namespace Mk\Director\Tests\Unit;
 use Mk\Director\Tests\MkLaravelTestCase;
 
 /**
- * R-PKG-023 (rc12): `CRUDSmart::index()` (the recommended SmartController
- * index method, used by 95% of generated controllers) now passes `$extra`
- * as the 4th argument to `sendResponse()` when the config flag
- * `mk_director.response.top_level_extra_data` is true. The legacy
- * nested shape is preserved when the flag is off (BC default in rc12).
+ * R-PKG-024 (v1.7.0 GA) — `CRUDSmart::index()` (the recommended SmartController
+ * index method, used by 95% of generated controllers) passes the `$paginator`
+ * directly to `sendResponse()`. BaseController auto-extracts items to `data`
+ * (array) and pagination metadata to `__extraData` top-level. NO `data.data`
+ * nesting, NO legacy opt-in flag (R-PKG-023 flag removed in GA).
  *
- * Why this matters: `CRUDSmart::index()` is the THIRD and most-widely-used
- * call site that emits the response shape (the other two are
- * `BaseController::sendResponse` and `Controller::index`). All three
- * must switch to the top-level shape atomically when the flag is on —
- * if any one of them keeps the nested shape, consumers see inconsistent
- * envelopes across endpoints.
+ * Migration from rc12: the flag `mk_director.response.top_level_extra_data` is
+ * REMOVED in v1.7.0. The legacy nested shape is gone — the envelope is always
+ * single-level. Tests for the rc12 flag (this file's predecessor) are obsolete.
  *
- * Implementation note: source-parsing. The trait is consumed by
- * `SmartController` which is `abstract`. Runtime instantiation requires
- * a TestConcreteController — overkill for a 4-line conditional change.
- * Source-parsing the relevant 10-15 lines is the right level of
- * abstraction, same pattern as R2-010 hardening pineo and T2/T3.
+ * Implementation note: source-parsing. The trait is consumed by `SmartController`
+ * which is `abstract`. Runtime instantiation requires a TestConcreteController
+ * — overkill for this structural change. Source-parsing the relevant 5-15 lines
+ * is the right level of abstraction, same pattern as R2-010 hardening pineo.
  *
- * Plugin hook note: the `fireAfterResponse` hook receives different
- * shapes in legacy vs. new path. The legacy path passes the wrapped
- * array `['data' => items, '__extraData' => $extra]`. The new path
- * passes the items directly (since `__extraData` is emitted as a
- * sibling of `data`, not nested). Plugins that need access to
- * `$extra` should consume the `mk_director.response` config or read
- * from a future API. CHANGELOG notes the plugin contract change.
+ * Plugin hook note: `fireAfterResponse` receives the paginator (so plugins can
+ * read total / currentPage / lastPage / perPage directly). No more wrapped
+ * array shape. Plugins that need pagination metadata read from the paginator
+ * instance methods.
+ *
+ * @see R-PKG-024 (binding rule, rules_orchestration.md)
+ * @see BaseControllerSingleLevelEnvelopeTest (BaseController + package-wide invariants)
+ * @see BaseControllerSingleLevelEnvelopeE2ETest (EFECTIVIDAD runtime tests)
  */
 uses(MkLaravelTestCase::class);
 
@@ -69,65 +66,62 @@ function crudsMartIndexMethodSource(): string
     return substr($source, $start, $bodyEnd - $start);
 }
 
-test('CRUDSmart::index() exists and returns a sendResponse() call', function () {
+test('CRUDSmart::index() exists and delegates to sendResponse() (single call, R-PKG-024)', function () {
     $body = crudsMartIndexMethodSource();
     expect($body)->not->toBeEmpty();
 
-    // The body extracted by the helper starts at `function index(` (no `public`
-    // because the `public` keyword is part of the line BEFORE the body slice).
     expect($body)->toContain('function index(');
-    expect($body)->toContain('sendResponse(');
+    // Single canonical sendResponse call — the rc12 if/else is gone.
+    expect($body)->toContain('sendResponse($paginator, \'\', 200, $extra)');
 });
 
-test('CRUDSmart::index() branches on response.top_level_extra_data config flag (R-PKG-023)', function () {
+test('CRUDSmart::index() passes the paginator directly to sendResponse() (R-PKG-024 GA delegates flattening to BaseController)', function () {
     $body = crudsMartIndexMethodSource();
     expect($body)->not->toBeEmpty();
 
-    // The conditional branches on the flag — the same flag that
-    // BaseController::sendResponse() and Controller::index() check.
-    expect($body)->toContain('response.top_level_extra_data');
+    // Single canonical call: sendResponse($paginator, '', 200, $extra)
+    // — BaseController auto-extracts items + pagination meta.
+    expect($body)->toContain('return $this->sendResponse($paginator, \'\', 200, $extra)');
 });
 
-test('CRUDSmart::index() legacy path preserves the nested __extraData shape (BC default rc12)', function () {
+test('CRUDSmart::index() does NOT branch on a config flag (R-PKG-024 GA removes the rc12 flag)', function () {
     $body = crudsMartIndexMethodSource();
     expect($body)->not->toBeEmpty();
 
-    // The legacy path (flag false) must still build the array with both
-    // `data` and `__extraData` keys, and pass it to sendResponse.
-    expect($body)->toContain("'data' => \$items");
-    expect($body)->toContain("'__extraData' => \$extra");
-    expect($body)->toContain('sendResponse($response)');
+    // The rc12 opt-in flag check is gone.
+    expect($body)->not->toContain('response.top_level_extra_data');
+    expect($body)->not->toContain('top_level_extra_data');
 });
 
-test('CRUDSmart::index() new path passes $extra as 4th arg to sendResponse (top-level, R-PKG-023)', function () {
+test('CRUDSmart::index() does NOT wrap response in legacy nested array shape (R-PKG-024 GA removes the legacy path)', function () {
     $body = crudsMartIndexMethodSource();
     expect($body)->not->toBeEmpty();
 
-    // The new path (flag true) must call sendResponse with $extra as
-    // a SEPARATE 4th argument. The signature is
-    // sendResponse($result, $message, $code, $extra).
-    expect($body)->toContain('200, $extra)');
+    // The legacy nested shape pattern is GONE.
+    expect($body)->not->toContain("'data' => \$items");
+    expect($body)->not->toContain("'__extraData' => \$extra");
+    expect($body)->not->toContain('sendResponse($response)');
 });
 
-test('CRUDSmart::index() still builds $extra via afterList + getExtraData (regression guard)', function () {
+test('CRUDSmart::index() still assembles $extra via afterList service hook (regression guard)', function () {
     $body = crudsMartIndexMethodSource();
     expect($body)->not->toBeEmpty();
 
-    // The pre-rc12 logic to assemble $extra (total, afterList, getExtraData)
-    // must still be present. R-PKG-023 only changes how $extra is
-    // passed to sendResponse, not how it is built.
-    expect($body)->toContain("'total' => \$total");
+    // The pre-GA logic to call service.afterList (consumer custom hooks) is
+    // preserved. R-PKG-024 only changes how $extra is passed to sendResponse,
+    // not how it is built (R-PKG-024 refactor: $extra = $service->afterList(...)
+    // — the array_merge pattern was only needed when combining with the
+    // auto-extracted pagination defaults in CRUDSmart itself; now BaseController
+    // handles the merge, so CRUDSmart just assigns the service extras).
     expect($body)->toContain('afterList(');
-    expect($body)->toContain('getExtraData(');
-    expect($body)->toContain('array_merge(');
 });
 
-test('CRUDSmart::index() still fires afterResponse plugin hook in both paths', function () {
+test('CRUDSmart::index() still fires afterResponse plugin hook (regression guard)', function () {
     $body = crudsMartIndexMethodSource();
     expect($body)->not->toBeEmpty();
 
-    // The plugin hook `fireAfterResponse` must still be called. The
-    // argument shape differs between paths (legacy: wrapped array;
-    // new: items directly) but the hook is invoked in both.
-    expect($body)->toContain('fireAfterResponse(');
+    // The plugin hook `fireAfterResponse` is still called. R-PKG-024 passes
+    // the paginator (not a wrapped array) — plugins can read total /
+    // currentPage / lastPage / perPage from the paginator instance.
+    expect($body)->toContain('fireAfterResponse($paginator)');
 });
