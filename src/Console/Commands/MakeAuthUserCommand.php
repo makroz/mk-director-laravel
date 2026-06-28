@@ -714,6 +714,9 @@ PHP
         $crudReplacements = [
             '{{profileFieldsList}}' => $this->buildProfileFieldsList($profileFields),
             '{{profileFieldsFillable}}' => $this->buildProfileFieldsFillable($profileFields),
+            '{{profileFieldsFromRequest}}' => $this->buildProfileFieldsFromRequest($profileFields),
+            '{{profileFieldsFromArray}}' => $this->buildProfileFieldsFromArray($profileFields),
+            '{{profileFieldsToArray}}' => $this->buildProfileFieldsToArray($profileFields),
             '{{profileFieldsUniqueRules}}' => $uniqueRules['store'],
             '{{profileFieldsUniqueRulesUpdate}}' => $uniqueRules['update'],
             '{{loginFieldValidationRule}}' => $loginField === 'email'
@@ -726,11 +729,17 @@ PHP
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/role-controller.stub', 'Http/Controllers', 'RoleController.php', $crudReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/ability-controller.stub', 'Http/Controllers', 'AbilityController.php', $crudReplacements);
 
-        // ── Requests (4) ──
+        // ── Requests (5) ──
+        // R-PKG-027 PKG-NEW-07 fix: agregado `sync-role-abilities-request.stub`
+        // para cerrar el gap del único endpoint mutante del RoleController
+        // que validaba inline. Ahora todos los endpoints mutantes tienen
+        // FormRequest dedicado (consistente con AssignRolesRequest /
+        // AssignDirectAbilitiesRequest).
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/store-admin-request.stub', 'Http/Requests', 'StoreAdminRequest.php', $crudReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/update-admin-request.stub', 'Http/Requests', 'UpdateAdminRequest.php', $crudReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/assign-roles-request.stub', 'Http/Requests', 'AssignRolesRequest.php', $crudReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/assign-abilities-request.stub', 'Http/Requests', 'AssignDirectAbilitiesRequest.php', $crudReplacements);
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/sync-role-abilities-request.stub', 'Http/Requests', 'SyncRoleAbilitiesRequest.php', $crudReplacements);
 
         // ── Resources (3) ──
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/admin-resource.stub', 'Http/Resources', 'AdminResource.php', $crudReplacements);
@@ -806,6 +815,68 @@ PHP
             // Camel case para el nombre del parámetro: full_name → fullName.
             $paramName = lcfirst(str_replace('_', '', ucwords($key, '_')));
             $out .= "        public {$phpType} \${$paramName} = null,\n";
+        }
+
+        return $out;
+    }
+
+    /**
+     * Helper: genera líneas `key: $request->input('key'),` para `fromRequest()` del AdminData.
+     *
+     * R-PKG-027 PKG-NEW-06 fix: antes `fromRequest` solo mapeaba name/email/password,
+     * perdiendo los profile fields. Si alguien adoptaba el DTO tal cual, rompía la feature.
+     * Ahora mapea todos los profile fields declarados via `--profile-fields=<csv>`.
+     *
+     * Indent: 12 spaces (alineado con `password:` que ya está en el stub).
+     *
+     * @param  array<string, array{type: string, unique: bool}>  $profileFields
+     */
+    protected function buildProfileFieldsFromRequest(array $profileFields): string
+    {
+        $out = '';
+        foreach ($profileFields as $key => $meta) {
+            $out .= "            {$key}: \$request->input('{$key}'),\n";
+        }
+
+        return $out;
+    }
+
+    /**
+     * Helper: genera líneas `key: $data['key'] ?? null,` para `fromArray()` del AdminData.
+     *
+     * R-PKG-027 PKG-NEW-06 fix: complementa `buildProfileFieldsFromRequest` para
+     * hidratación desde DB / fixtures (mismo mapeo, distinto source).
+     *
+     * Indent: 12 spaces.
+     *
+     * @param  array<string, array{type: string, unique: bool}>  $profileFields
+     */
+    protected function buildProfileFieldsFromArray(array $profileFields): string
+    {
+        $out = '';
+        foreach ($profileFields as $key => $meta) {
+            $out .= "            {$key}: \$data['{$key}'] ?? null,\n";
+        }
+
+        return $out;
+    }
+
+    /**
+     * Helper: genera líneas `'key' => $this->key,` para `toArray()` del AdminData.
+     *
+     * R-PKG-027 PKG-NEW-06 fix: `toArray` también debe incluir los profile fields
+     * para persistencia. Antes los descartaba silenciosamente.
+     *
+     * Indent: 12 spaces.
+     *
+     * @param  array<string, array{type: string, unique: bool}>  $profileFields
+     */
+    protected function buildProfileFieldsToArray(array $profileFields): string
+    {
+        $out = '';
+        foreach ($profileFields as $key => $meta) {
+            $paramName = lcfirst(str_replace('_', '', ucwords($key, '_')));
+            $out .= "            '{$key}' => \$this->{$paramName},\n";
         }
 
         return $out;

@@ -9,6 +9,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Mk\Director\Auth\Services\InvalidRefreshTokenException;
 use Mk\Director\Auth\Services\RefreshTokenParser;
 use Mk\Director\Auth\Services\TokenIssuer;
@@ -122,9 +123,19 @@ class AuthController extends BaseController
         // Capa 1: el scope del token DEBE coincidir con el scope del user
         // (Capa 3 AuthScopeResolver lo valida en cada request, pero acá
         // también cortamos por las dudas).
+        //
+        // R-PKG-027 PKG-NEW-04 fix: el flow de auth scaffoldeado consulta
+        // `is_active` por default si la columna existe en la tabla del scope.
+        // Semántica: `null` o `true` = permitido (compat con datos preexistentes);
+        // `false` = bloqueado. El check usa `Schema::hasColumn` cacheado en el
+        // facade de Schema, así que es zero-cost en runtime.
+        $isActiveCheck = Schema::hasColumn($user?->getTable() ?? '{{moduleNamePluralLower}}', 'is_active')
+            && $user->is_active === false;
+
         if (! $user
             || ! Hash::check($credentials['password'], $user->password)
             || $user->getAuthScope() !== '{{moduleNameLower}}'
+            || $isActiveCheck
         ) {
             {{rbacAuditLoginFailed}}
             return $this->sendError(
@@ -272,7 +283,13 @@ class AuthController extends BaseController
             ->first();
 
         // Anti-enumeración: si el user no existe, retornar OK sin hacer nada.
-        if (! $user || $user->getAuthScope() !== '{{moduleNameLower}}') {
+        // R-PKG-027 PKG-NEW-05 fix: si la columna `is_active` existe y es false,
+        // también retornar OK sin enviar email (mismo anti-enumeración). Si la
+        // columna no existe, no checkear (BC con scopes que no la usan).
+        $isActiveCheck = Schema::hasColumn($user?->getTable() ?? '{{moduleNamePluralLower}}', 'is_active')
+            && $user->is_active === false;
+
+        if (! $user || $user->getAuthScope() !== '{{moduleNameLower}}' || $isActiveCheck) {
             return $this->sendResponse(
                 null,
                 'Si el {{loginField}} existe, recibirás un enlace para reset.',
@@ -330,7 +347,10 @@ class AuthController extends BaseController
             ->where('{{loginField}}', $data['{{loginField}}'])
             ->first();
 
-        if (! $user || $user->getAuthScope() !== '{{moduleNameLower}}') {
+        if (! $user
+            || $user->getAuthScope() !== '{{moduleNameLower}}'
+            || (Schema::hasColumn($user->getTable(), 'is_active') && $user->is_active === false)
+        ) {
             return $this->sendError('Token inválido o expirado.', [], 422);
         }
 

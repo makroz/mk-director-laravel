@@ -548,7 +548,10 @@ test('BUG-NEW-10 drift: checkSanctumInstalled tiene fallback file_exists para dr
     expect($src)->toMatch("/function\\s+isSanctumInstalled\\s*\\(/");
 
     // El helper debe chequear `class_exists` PRIMERO y luego `file_exists` como fallback.
-    expect($src)->toContain('class_exists(\\Laravel\\Sanctum\\HasApiTokens::class)');
+    // R-PKG-027 note: el rule `fully_qualified_strict_types` de Pint ahora
+    // normaliza el FQCN a alias via `use`. El código usa `HasApiTokens::class`
+    // (con `use Laravel\Sanctum\HasApiTokens;` arriba). Pineamos ambos formatos.
+    expect($src)->toMatch('/class_exists\(\s*(\\\\?Laravel\\\\Sanctum\\\\)?HasApiTokens::class\s*\)/');
 
     // Y el fallback debe apuntar a `vendor/laravel/sanctum/composer.json`.
     expect($src)->toContain('vendor/laravel/sanctum/composer.json');

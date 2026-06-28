@@ -16,8 +16,9 @@ use Mk\Director\Auth\Models\Role;
  * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
  *
  * Thin layer: delega al Repository para queries, pero concentra side effects
- * (photo upload, sync de roles/abilities). Override `beforeCreate()` para
- * lógica custom (e.g. validar dimensiones de la foto).
+ * (photo upload, sync de roles/abilities). Override `mutateData()` para
+ * lógica custom (e.g. validar dimensiones de la foto). Se ejecuta tanto en
+ * `create()` como en `update()`.
  */
 class {{ModuleName}}Service
 {
@@ -26,13 +27,22 @@ class {{ModuleName}}Service
     ) {}
 
     /**
-     * Hook antes de crear un {{ModuleName}}. Procesa el upload de foto
-     * si está presente. Override para lógica custom.
+     * Hook compartido entre create + update. Procesa el upload de foto
+     * si está presente. Override para lógica custom (e.g. validar dimensiones
+     * de la foto).
+     *
+     * NOTA — R-PKG-027 PKG-NEW-02 fix: el hash de password NO se hace acá.
+     * El modelo base `AuthUser` declara `'password' => 'hashed'` en `$casts`
+     * (vía `Illuminate\Foundation\Auth\User`), así que Eloquent hashea
+     * automáticamente al asignar `$user->password = 'plain'`. Hashear dos
+     * veces (acá + cast) producía `bcrypt(bcrypt(plain))`. El rename
+     * `beforeCreate` → `mutateData` evita el暗示 de que el método es
+     * solo para create.
      *
      * @param  array<string, mixed>  $data
      * @return array<string, mixed>  Datos mutados (incluye photo_path si hubo upload).
      */
-    protected function beforeCreate(array $data): array
+    protected function mutateData(array $data): array
     {
         // Si hay un UploadedFile en `photo`, guardarlo y setear `photo_path`.
         if (isset($data['photo']) && $data['photo'] instanceof \Illuminate\Http\UploadedFile) {
@@ -43,11 +53,6 @@ class {{ModuleName}}Service
             $data['photo_path'] = $path;
         }
 
-        // Hashear password si viene en plain text.
-        if (isset($data['password']) && ! str_starts_with($data['password'], '$2y$')) {
-            $data['password'] = \Illuminate\Support\Facades\Hash::make($data['password']);
-        }
-
         // Remover `photo` del array (es UploadedFile, no persiste).
         unset($data['photo']);
 
@@ -55,15 +60,16 @@ class {{ModuleName}}Service
     }
 
     /**
-     * Crea un {{ModuleName}} con la pipeline completa (beforeCreate → Repository).
+     * Crea un {{ModuleName}} con la pipeline completa (mutateData → Repository).
      */
     public function create(array $data): {{ModuleName}}
     {
-        return $this->repository->create($this->beforeCreate($data));
+        return $this->repository->create($this->mutateData($data));
     }
 
     /**
-     * Actualiza un {{ModuleName}}. Override `beforeUpdate()` para lógica custom.
+     * Actualiza un {{ModuleName}}. Override `mutateData()` para lógica custom
+     * (se ejecuta en create + update).
      */
     public function update({{ModuleName}} ${{moduleNameLower}}, array $data): {{ModuleName}}
     {
@@ -75,7 +81,7 @@ class {{ModuleName}}Service
             }
         }
 
-        $data = $this->beforeCreate($data); // Reusa la lógica de upload + hash.
+        $data = $this->mutateData($data); // Reusa la lógica de upload. Password hash via cast.
 
         return $this->repository->update(${{moduleNameLower}}, $data);
     }
