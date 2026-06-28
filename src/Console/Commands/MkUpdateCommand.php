@@ -19,7 +19,7 @@ class MkUpdateCommand extends Command
      *
      * @var string
      */
-    protected $signature = 'mk:update {--dry-run : Ejecutar simulando los cambios}';
+    protected $signature = 'mk:update {version? : Versión específica a actualizar} {--dry-run : Ejecutar simulando los cambios}';
 
     /**
      * The console command description.
@@ -51,74 +51,104 @@ class MkUpdateCommand extends Command
             return 1;
         }
 
-        // Obtener TODAS las versiones superiores (incluyendo RCs/alpha/beta)
-        $higherVersions = $this->getVersionsHigherThan($oldVersion);
+        $targetVersion = $this->argument('version');
 
-        if (empty($higherVersions)) {
-            $this->info("✅ Ya estás en la última versión disponible ({$oldVersion}). No hay actualizaciones.");
+        if ($targetVersion) {
+            $targetVersion = ltrim($targetVersion, 'v');
+            $this->info("📌 Versión especificada por argumento: <fg=cyan>v{$targetVersion}</>");
+            $this->newLine();
 
-            // Aún así corremos el resto del pipeline (auditoría, status, skills)
-            $this->runDatabaseMigrationsPipeline();
-            if (! $this->option('dry-run')) {
-                $this->call('migrate');
+            if ($this->option('dry-run')) {
+                $this->comment("[Simulación] Se omitirá la descarga e instalación de v{$targetVersion}.");
+            } else {
+                if (! $this->confirm("¿Confirmás la actualización de {$oldVersion} → v{$targetVersion}?", true)) {
+                    $this->comment('Actualización cancelada por el usuario.');
+
+                    return 0;
+                }
+
+                $this->runComposerUpdate($targetVersion);
             }
-            $this->auditCodebaseRisks();
-            $this->info("\nRunning final health check...");
-            $this->call('mk:status');
-            $this->promptForSkillDeploy();
-            $this->info("🏁 Proceso de actualización finalizado.\n");
-
-            return 0;
-        }
-
-        $this->line("Tu versión actual es: <fg=yellow>{$oldVersion}</>");
-        $this->line('Hay <fg=green>'.count($higherVersions).'</> versiones disponibles para actualizar (incluyendo pre-releases):');
-        $this->newLine();
-
-        // Ordenar de mayor a menor (RCs mezcladas con stables)
-        usort($higherVersions, function ($a, $b) {
-            return version_compare(ltrim($b, 'v'), ltrim($a, 'v'));
-        });
-
-        // Construir opciones para el menú navegable
-        $choices = [];
-        foreach ($higherVersions as $i => $version) {
-            $isRc = (bool) preg_match('/(rc|alpha|beta)/i', $version);
-            $isLatestStable = ($i === 0) && ! $isRc;
-
-            $marker = match (true) {
-                $isLatestStable => ' ⭐ (última estable)',
-                $isRc => ' 🧪 (pre-release)',
-                default => '',
-            };
-
-            $choices[] = "v{$version}{$marker}";
-        }
-
-        $selected = $this->choice(
-            '¿A qué versión querés actualizar? (↑↓ navegá con el teclado, Enter para seleccionar)',
-            $choices,
-            0  // default a la primera (la más alta disponible)
-        );
-
-        // Extraer la versión pura del string seleccionado (saca el marker)
-        $targetVersion = (string) preg_replace('/\s+[⭐🧪].*$/u', '', $selected);
-        $targetVersion = ltrim($targetVersion, 'v');
-
-        $this->newLine();
-        $this->info("📌 Versión seleccionada: <fg=cyan>v{$targetVersion}</>");
-        $this->newLine();
-
-        if ($this->option('dry-run')) {
-            $this->comment("[Simulación] Se omitirá la descarga e instalación de v{$targetVersion}.");
         } else {
-            if (! $this->confirm("¿Confirmás la actualización de {$oldVersion} → v{$targetVersion}?", true)) {
-                $this->comment('Actualización cancelada por el usuario.');
+            // Obtener TODAS las versiones superiores (incluyendo RCs/alpha/beta)
+            $higherVersions = $this->getVersionsHigherThan($oldVersion);
+
+            if (empty($higherVersions)) {
+                $this->info("✅ Ya estás en la última versión disponible ({$oldVersion}). No hay actualizaciones.");
+
+                // Aún así corremos el resto del pipeline (auditoría, status, skills)
+                $this->runDatabaseMigrationsPipeline();
+                if (! $this->option('dry-run')) {
+                    $this->call('migrate');
+                }
+                $this->auditCodebaseRisks();
+                $this->info("\nRunning final health check...");
+                $this->call('mk:status');
+                $this->promptForSkillDeploy();
+                $this->info("🏁 Proceso de actualización finalizado.\n");
 
                 return 0;
             }
 
-            $this->runComposerUpdate($targetVersion);
+            $this->line("Tu versión actual es: <fg=yellow>{$oldVersion}</>");
+            $this->line('Hay <fg=green>'.count($higherVersions).'</> versiones disponibles para actualizar (incluyendo pre-releases):');
+            $this->newLine();
+
+            // Ordenar de mayor a menor (RCs mezcladas con stables)
+            usort($higherVersions, function ($a, $b) {
+                return version_compare(ltrim($b, 'v'), ltrim($a, 'v'));
+            });
+
+            // Encontrar la última estable en la lista de superiores
+            $latestStableIndex = null;
+            foreach ($higherVersions as $i => $version) {
+                $isRc = (bool) preg_match('/(rc|alpha|beta)/i', $version);
+                if (! $isRc) {
+                    $latestStableIndex = $i;
+                    break;
+                }
+            }
+
+            // Construir opciones para el menú navegable
+            $choices = [];
+            foreach ($higherVersions as $i => $version) {
+                $isRc = (bool) preg_match('/(rc|alpha|beta)/i', $version);
+                $isLatestStable = ($latestStableIndex !== null) && ($i === $latestStableIndex);
+
+                $marker = match (true) {
+                    $isLatestStable => ' ⭐ (última estable)',
+                    $isRc => ' 🧪 (pre-release)',
+                    default => '',
+                };
+
+                $choices[] = "v{$version}{$marker}";
+            }
+
+            $selected = $this->choice(
+                '¿A qué versión querés actualizar? (↑↓ navegá con el teclado, Enter para seleccionar)',
+                $choices,
+                0  // default a la primera (la más alta disponible)
+            );
+
+            // Extraer la versión pura del string seleccionado (saca el marker)
+            $targetVersion = (string) preg_replace('/\s+[⭐🧪].*$/u', '', $selected);
+            $targetVersion = ltrim($targetVersion, 'v');
+
+            $this->newLine();
+            $this->info("📌 Versión seleccionada: <fg=cyan>v{$targetVersion}</>");
+            $this->newLine();
+
+            if ($this->option('dry-run')) {
+                $this->comment("[Simulación] Se omitirá la descarga e instalación de v{$targetVersion}.");
+            } else {
+                if (! $this->confirm("¿Confirmás la actualización de {$oldVersion} → v{$targetVersion}?", true)) {
+                    $this->comment('Actualización cancelada por el usuario.');
+
+                    return 0;
+                }
+
+                $this->runComposerUpdate($targetVersion);
+            }
         }
 
         // Re-leer la versión instalada después del posible update
