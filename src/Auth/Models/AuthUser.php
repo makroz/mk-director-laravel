@@ -164,4 +164,36 @@ abstract class AuthUser extends Authenticatable implements AuthenticatableContra
     {
         return $query->where($this->loginField, $value);
     }
+
+    /**
+     * Revoca el access token actual con null-safety.
+     *
+     * R-PKG-027 PKG-NEW-08 helper: el patrón naive
+     *
+     *     $token = $user->currentAccessToken();
+     *     $token->delete();
+     *
+     * revienta con `Call to a member function delete() on null` cuando
+     * `currentAccessToken()` retorna null (autenticación via Sanctum
+     * stateful SPA con cookies, o token ya revocado por otra request).
+     *
+     * Este helper encapsula la null-safety para que consumers scaffoldeados
+     * no tengan que recordar el patrón. Defense-in-depth.
+     *
+     * Spec: R-PKG-027 PKG-NEW-08.
+     *
+     * @return bool `true` si había un token que se pudo revocar, `false`
+     *              si no había token (cookie-based auth o token ya revocado).
+     */
+    public function safeLogoutCurrentToken(): bool
+    {
+        $token = $this->currentAccessToken();
+        if ($token === null) {
+            return false;
+        }
+
+        $token->delete();
+
+        return true;
+    }
 }
