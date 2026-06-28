@@ -5,11 +5,11 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — R-PKG-027 Scaffolder hardening + auth flow defaults
+## [1.6.0] - 2026-06-28 — R-PKG-027 Scaffolder hardening + auth flow defaults
 
 > Source: Code Review 4R post-merge audit 2026-06-28 sobre `mariogfos/reto` (rama `dev` commit `372c28d`, fase 9 mergeada como `reto-admin-v1.1.0`).
-> Pineado por Mavis (consumer) en `.makromania/projects/reto/modules/admin/FEEDBACK-TO-MK-DIRECTOR.md` (9 hallazgos pineables, 7 fixes en este sprint).
-> Target: `v1.6.0-rc14+` después de merge (Mario retiene tag + Packagist publish).
+> Pineado por Mavis (consumer) en `.makromania/projects/reto/modules/admin/FEEDBACK-TO-MK-DIRECTOR.md` (9 hallazgos pineables, 8 fixes en este sprint).
+> Release: `v1.6.0` GA, tag `c378c56` (post-merge PRs #31 + #32 + #33). Mario dispara tag + Packagist publish (boundary binding).
 
 ### Fixed
 
