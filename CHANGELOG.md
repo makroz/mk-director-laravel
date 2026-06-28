@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **PKG-NEW-16 (HIGH) — `register()` scaffoldeado ahora valida `name` + `loginField` (no rompe con NOT NULL)**. Antes el método `register()` scaffoldeado solo validaba profile fields + password, dejando `name` (NOT NULL en `AuthUser` base) y el loginField (NOT NULL UNIQUE, `email` por default) sin validar. Resultado runtime: SQLSTATE 500 `NOT NULL constraint failed: {scope}.name` cuando el consumer trataba de usar register, rompiendo el contrato del paquete que promete validación via `$request->validate()` antes del insert. Fix: agregar `'name' => ['required', 'string', 'max:255']` siempre + `'{$loginField}' => ['required', 'email'|'string', 'unique:{scopePlural},{loginField}']` según `--login-field`. La regla de email aplica solo cuando `loginField=email` (default); para `--login-field=ci`/`phone`/`username`, la regla es `['required', 'string', 'unique:...]`. BC preservada: profile fields existentes siguen funcionando, solo se agregaron reglas. **Stub afectado**: `MakeAuthUserCommand::buildRegisterMethod()` (vía `mergeRulesPhp()`). **Source**: feedback RETO fase 11 (`FEEDBACK-TO-MK-DIRECTOR.md`, 2026-06-28).
+
+- **PKG-NEW-09 (BLOQUEANTE) — `register()` scaffoldeado pinea middleware `mk.auth` + `mk.ability` cuando `--with-crud` está activo**. Antes el endpoint `register` quedaba público por default cuando el scope se scaffoldeaba con `--with-crud` sin `--with-auth-rbac` — cualquiera podía crear admins vía `POST /api/admin/auth/register` (escalación de privilegios). El consumer tenía que pinear el middleware manualmente en `routes/api.php` (workaround C-01 RETO). Fix: el scaffolder ahora pinea `->middleware(['mk.auth:{scope}', 'mk.ability:{scope}.{table}.create'])` en el registerRoute cuando `$withCrud` es true (defense-in-depth). BC preservada: sin `--with-crud`, register sigue público (consistente con la doc del paquete). Cuando `--with-auth-rbac` está activo, R-PKG-010 sigue aplicando sus ability checks internos — pinear el middleware es redundante pero harmless. **Stub afectado**: `MakeAuthUserCommand::handle()` → bloque `$registerRoute`. **Source**: feedback RETO fase 11 (`FEEDBACK-TO-MK-DIRECTOR.md`, 2026-06-28).
+
 ## [1.6.2] - 2026-06-28 — R-PKG-029 Post-RETO fase 10b feedback (solución óptima para RETO + defense-in-depth)
 
 > Source: `.makromania/projects/reto/modules/admin/FEEDBACK-TO-MK-DIRECTOR.md` (fase 10b, clean rebuild sobre v1.6.1).
