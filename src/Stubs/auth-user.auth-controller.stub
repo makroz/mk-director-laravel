@@ -234,13 +234,17 @@ class AuthController extends BaseController
      * Revoca el access token actual. NO revoca otros tokens del mismo user.
      *
      * R-PKG-014 BUG-01 fix: el lookup del user ahora ocurre ANTES del ability check.
+     *
+     * R-PKG-027 PKG-NEW-08 fix: usamos `$user->safeLogoutCurrentToken()` (helper
+     * provisto por `AuthUser`) en vez del patrón naive `$token->delete()` directo,
+     * que revienta con `Call to a member function delete() on null` cuando
+     * `currentAccessToken()` retorna null (cookie-based auth o token ya revocado).
      */
     public function logout(Request $request): JsonResponse
     {
         $user = $request->user();
         {{rbacAbilityCheckLogout}}
-        $token = $user->currentAccessToken();
-        $token->delete();
+        $user->safeLogoutCurrentToken();
 
         {{rbacAuditLogout}}
 
