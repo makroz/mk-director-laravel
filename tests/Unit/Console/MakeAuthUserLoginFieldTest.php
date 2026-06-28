@@ -21,6 +21,7 @@ use Mk\Director\Tests\MkLaravelTestCase;
  *   - BC: sin flag, el comportamiento es idéntico a v1.4.0.
  *
  * Spec: design.md D1-D6.
+ *
  * @see MakeAuthUserCommand
  */
 uses(MkLaravelTestCase::class);
@@ -127,10 +128,10 @@ test('auth-user.auth-controller.stub uses {{loginField}} in validation + lookup'
     // Lookup uses {{loginField}} (no hardcoded 'email').
     expect($stub)->toContain("->where('{{loginField}}', \$credentials['{{loginField}}'])");
 
-    // R-PKG-014 BUG-05 fix: response ahora es dinámica via {{loginResponseArray}}
-    // (incluye profile fields + roles + abilities). Ya NO pineamos el formato
-    // literal $user->only([...]).
-    expect($stub)->toContain('{{loginResponseArray}}');
+    // R-PKG-029 PKG-NEW-15 fix: login() ahora retorna `$user` directamente —
+    // autoTransform() en BaseController::sendResponse() aplica el `apiResource`
+    // del modelo (mismo shape canónico que `me()`).
+    expect($stub)->toContain("'{{moduleNameLower}}' => \$user,");
 
     // Error response key parametrizado.
     expect($stub)->toContain("['{{loginField}}' => ['Credenciales inválidas.']]");

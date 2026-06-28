@@ -154,15 +154,32 @@ class AuthController extends BaseController
 
         {{rbacAuditLoginSuccess}}
 
-        // R-PKG-014 BUG-05 fix: response incluye profile fields + roles + abilities.
-        // El array_merge es construido dinámicamente por el command según
-        // si hay o no --profile-fields.
+        // PKG-NEW-15 fix (feedback RETO fase 10b 2026-06-28): el shape del
+        // response de `login()` ahora es CANÓNICO con el del `me()` —
+        // retornamos el modelo `$user` completo y dejamos que `autoTransform()`
+        // (en `BaseController::sendResponse()`) aplique el `apiResource` del
+        // modelo (típicamente `AdminResource`, `MemberResource`, etc.).
+        //
+        // Antes el scaffolder generaba un `array_merge` ad-hoc con abilities
+        // TOP-LEVEL combinadas, mientras `me()` retornaba el modelo completo
+        // con abilities ANIDADAS por role. Esto causaba drift cross-stack
+        // (frontend debía parsear 2 formatos distintos) y rompía el contrato
+        // documentado en `api_contract.md`.
+        //
+        // Para que el shape funcione, el modelo del scope debe declarar:
+        //   `protected $apiResource = {{ResourceClass}}::class;`
+        // (Esto ya es el patrón canónico del paquete — ver R-PKG-014 BUG-05.)
+        //
+        // Si el consumer quiere un shape custom, override el método `login()`
+        // completo. BC: este cambio SOLO afecta el contenido dentro de
+        // `data.{{moduleNameLower}}` — `access_token`/`refresh_token`/
+        // `token_type`/`expires_in` siguen iguales (header-level).
         return $this->sendResponse([
             'access_token' => $accessToken->plainTextToken,
             'refresh_token' => $refreshToken,
             'token_type' => 'Bearer',
             'expires_in' => config('mk_director.auth.ttl.access_seconds', 15 * 60),
-            '{{moduleNameLower}}' => {{loginResponseArray}},
+            '{{moduleNameLower}}' => $user,
         ], 'Login exitoso');
     }
 

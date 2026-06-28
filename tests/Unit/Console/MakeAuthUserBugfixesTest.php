@@ -153,22 +153,32 @@ test('BUG-04 fix: rulesPhp del register() incluye password => required', functio
     expect($command)->toContain("'password' => ['required', 'string', 'min:8', 'max:255']");
 });
 
-// ── BUG-05: login() response incluye profile fields + roles + abilities ──
+// ── BUG-05 (LEGACY, R-PKG-029 PKG-NEW-15 lo refactoriza) ───────────────────
+// Históricamente el stub construía un array_merge con profile fields + roles +
+// abilities top-level. El R-PKG-029 PKG-NEW-15 refactor (2026-06-28, feedback
+// RETO fase 10b) unifica el shape con `me()`: ahora se retorna `$user` y
+// `autoTransform()` aplica el `apiResource` del modelo. Esto evita drift
+// cross-stack entre `login()` y `me()`.
 
-test('BUG-05 fix: login() stub usa placeholder {{loginResponseArray}} dinámico', function () {
+test('BUG-05 refactorizado por PKG-NEW-15: login() retorna $user (no array_merge)', function () {
     $stub = authControllerStub014();
 
-    expect($stub)->toContain("'{{moduleNameLower}}' => {{loginResponseArray}}");
+    // El stub ahora usa `$user` directamente — autoTransform() se encarga del shape.
+    expect($stub)->toContain("'{{moduleNameLower}}' => \$user,");
+
+    // Y NO contiene el array_merge ad-hoc (legacy).
+    expect($stub)->not->toMatch("/\\\$user->only\\(\\['id', 'name'/");
+    expect($stub)->not->toMatch("/'abilities'\s*=>\s*\\\$user->abilities->pluck/");
 });
 
-test('BUG-05 fix: command tiene buildLoginResponseArray() que arma el array_merge', function () {
+test('BUG-05 refactorizado por PKG-NEW-15: buildLoginResponseArray() retorna $user', function () {
     $command = commandSource014();
 
     expect($command)->toContain('protected function buildLoginResponseArray');
-    // El array incluye roles + abilities. Buscamos con backslash literal porque
-    // el código PHP usa \$user dentro de strings.
-    expect($command)->toContain('roles\' => \$user->roles->map');
-    expect($command)->toContain('abilities\' => \$user->abilities->pluck(\'name\')');
+
+    // El cuerpo ahora retorna literal `$user` (en vez del array_merge).
+    // Buscamos `return '$user';` en el cuerpo de la función.
+    expect($command)->toMatch("/function buildLoginResponseArray[^{]+\\{\\s*\\/\\/ PKG-NEW-15.*?return '\\\$user';\\s*\\}/s");
 });
 
 // ── BUG-06: me() eager-load ──────────────────────────────────────────────
@@ -184,7 +194,7 @@ test('BUG-06 fix: me() stub hace loadMissing ANTES del sendResponse', function (
 
     // El stub NO debe pasar $request->user() directo a sendResponse (BUG-06 regression).
     // Aceptable: sendResponse($user) donde $user ya tiene loadMissing aplicado.
-    expect($stub)->not->toContain("sendResponse(\$request->user())");
+    expect($stub)->not->toContain('sendResponse($request->user())');
 });
 
 // ── BUG-07: refresh() + reset() + forgot() implementación completa ────────
@@ -228,7 +238,7 @@ test('BUG-09 fix: resolveProfileFields detecta prefijo !', function () {
 test('BUG-09 fix: buildProfileFieldsReplacements aplica ->unique()->nullable() cuando unique=true', function () {
     $command = commandSource014();
 
-    expect($command)->toContain("->unique()->nullable()");
+    expect($command)->toContain('->unique()->nullable()');
 });
 
 // ── BUG-10: storage:link check ──────────────────────────────────────────
