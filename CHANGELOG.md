@@ -5,6 +5,32 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — R-PKG-029 Post-RETO fase 10b feedback (solución óptima para RETO + defense-in-depth)
+
+> Source: `.makromania/projects/reto/modules/admin/FEEDBACK-TO-MK-DIRECTOR.md` (fase 10b, clean rebuild sobre v1.6.1).
+> Driver: Mario aprueba Opción C — pinear 3 issues (PKG-NEW-12/14/15) en sprint dedicado para que RETO pueda hacer fase 11 sin workarounds.
+> Spec: R-PKG-029. Tests pineados: 11 nuevos en `MakeAuthUserRPkg029FixesTest.php` + 4 actualizados (LEGACY BUG-05/BUG-NEW-01/BUG-NEW-02).
+
+### Fixed
+
+- **PKG-NEW-12 (MEDIUM) — `logout()` scaffoldeado referencia `$user->currentAccessToken()?->id` (no `$token?->id` indefinido)**. El evento `auth.logout` auditaba `'token_id' => $token?->id` pero `$token` no estaba definido en el scope del método `logout()` scaffoldeado (el stub usa `$user->safeLogoutCurrentToken()` de R-PKG-027 PKG-NEW-08 que no expone el token al consumer). En runtime PHP 8.5+ esto emite warning `Undefined variable $token` (deprecation) y el listener de `auth.logout` recibía `null` para `token_id`. Fix: usar `$user->currentAccessToken()?->id` (null-safe, consistente con el helper). **Stub afectado**: `MakeAuthUserCommand.php` → `$rbacAuditLogout`.
+
+- **PKG-NEW-15 (MEDIUM) — `login()` y `me()` ahora retornan el mismo shape canónico (`$user` → `autoTransform()`)**. Antes `login()` construía un `array_merge` ad-hoc con `id`/`name`/`loginField` + profile fields + `roles` (mapeados a `[id, name]`) + `abilities` (top-level combinadas de roles + directAbilities), mientras `me()` retornaba el modelo completo con abilities **anidadas por role**. Esto causaba drift cross-stack: el frontend debía parsear 2 shapes distintos y `api_contract.md` documentaba solo el formato top-level (drift con `me()` real). **Fix (Opción B)**: ambos retornan `$user` (modelo completo) y `BaseController::sendResponse()` aplica `autoTransform()` con el `apiResource` del modelo (`AdminResource`/`MemberResource`/etc.) — patrón canónico del paquete desde 1.4.0. Frontend parsea 1 formato. BC: este cambio SOLO afecta el contenido dentro de `data.{scope}`; los headers `access_token`/`refresh_token`/`token_type`/`expires_in` siguen iguales. Para customizar, override `login()` completo. **Stub afectado**: `src/Stubs/auth-user.auth-controller.stub` + `MakeAuthUserCommand::buildLoginResponseArray()` ahora retorna `'$user'` literal (de 60 líneas a 1).
+
+### Added
+
+- **PKG-NEW-14 (MEDIUM UX) — Scaffolder ahora advierte sobre cache driver que no soporta tags**. SmartController, CRUDSmart, CacheTrait y BaseModelBuilder usan `Cache::tags()` extensivamente. Si `CACHE_STORE` apunta a un driver que no soporta tags (`file`, `database`, `array`, `null`, `apc`), el primer request CRUD revienta con `RuntimeException: cache driver does not support tags` — un gotcha silencioso porque la falla es runtime (no compile/lint-time) y `mk:status` no la detecta. **Fix**: nuevo método `MakeAuthUserCommand::checkCacheDriver()` (llamado post-scaffold después de `checkSanctumInstalled()`) que:
+  1. Resuelve el cache store activo (`config('cache.default')` o `CACHE_STORE` desde `.env`).
+  2. Si NO soporta tags (lista conservadora: `redis`/`memcached`/`dynamodb` son los únicos que sí), emite warning claro con:
+     - El error específico que va a ver (`RuntimeException: cache driver [X] does not support tags`).
+     - Fix por ambiente: dev/local → `CACHE_STORE=array` + `MK_CACHE_ALLOW_FULL_CLEAR=true`; staging/prod → `CACHE_STORE=redis` o `memcached`.
+  3. Helpers nuevos: `resolveCacheStore()` y `cacheStoreSupportsTags()` (testeables). **Stub afectado**: `MakeAuthUserCommand.php` → sección post-scaffold.
+
+### Migration
+
+- **PKG-NEW-15 — consumers que dependían del shape top-level de `login()`** deben migrar a un `Resource` (es el patrón canónico desde 1.4.0). Si el modelo del scope declara `protected $apiResource = {Resource}::class;` (ej: `AdminResource`), `autoTransform()` aplica el Resource automáticamente. Consumers que overridean `login()` para customizar el shape siguen funcionando sin cambios. Ver `docs/UPGRADE_1.2.md` para ejemplos completos.
+- **PKG-NEW-12** — consumers con listener custom de `Mk\Director\Auth\Events\AuthEvent` con key `auth.logout` siguen funcionando: `token_id` ahora recibe el valor correcto (`int|null` del token actual) en vez de `null` silencioso.
+
 ## [1.6.1] - 2026-06-28
 
 ### Fixed

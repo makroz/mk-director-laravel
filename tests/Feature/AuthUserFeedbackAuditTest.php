@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 namespace Mk\Director\Tests\Feature;
 
-use Illuminate\Filesystem\Filesystem;
+use Illuminate\Console\OutputStyle;
+use Mk\Director\Console\Commands\MakeAuthUserCommand;
 use Mk\Director\Tests\MkLaravelTestCase;
 use ReflectionClass;
+use Symfony\Component\Console\Input\StringInput;
+use Symfony\Component\Console\Output\NullOutput;
 
 /**
  * Audit-driven regression tests for RETO feedback fase 2 (R-PKG-015).
@@ -62,63 +65,75 @@ function pkgFileContents(string $relativePath): string
  * Helper: instancia MakeAuthUserCommand sin ejecutar handle(), configurando
  * opciones via Reflection para poder testear métodos protected.
  */
-function makeAuthUserCommand(): \Mk\Director\Console\Commands\MakeAuthUserCommand
+function makeAuthUserCommand(): MakeAuthUserCommand
 {
-    $command = new \Mk\Director\Console\Commands\MakeAuthUserCommand();
+    $command = new MakeAuthUserCommand;
 
     // Set output a NullOutput wrapped en OutputStyle (mk-director-implementation.md §
     // "Scaffolder testing: modulesPath() override + sub-classing + tempdir").
-    $command->setOutput(new \Illuminate\Console\OutputStyle(
-        new \Symfony\Component\Console\Input\StringInput(''),
-        new \Symfony\Component\Console\Output\NullOutput()
+    $command->setOutput(new OutputStyle(
+        new StringInput(''),
+        new NullOutput
     ));
 
     return $command;
 }
 
-// ─── BUG-NEW-01 — array_merge bien armado (no key '0' suelta) ──────────────
+// ─── BUG-NEW-01 — LEGACY: array_merge bien armado (R-PKG-029 PKG-NEW-15 lo refactoriza) ──
+// Históricamente `buildLoginResponseArray()` armaba un array_merge con profile
+// fields + roles + abilities top-level. El refactor R-PKG-029 PKG-NEW-15
+// (2026-06-28, feedback RETO fase 10b) simplifica esto: la función ahora
+// retorna literal `$user` y el shape canónico lo aplica `autoTransform()`
+// en `BaseController::sendResponse()` (vía el `apiResource` del modelo).
+//
+// Pineamos el nuevo comportamiento + documentamos el histórico.
 
-test('BUG-NEW-01: buildLoginResponseArray arma array_merge correctamente sin key 0 suelta', function () {
+test('BUG-NEW-01 (LEGACY) + PKG-NEW-15: buildLoginResponseArray retorna $user literal', function () {
     $command = makeAuthUserCommand();
     $reflection = new ReflectionClass($command);
     $method = $reflection->getMethod('buildLoginResponseArray');
 
-    // Sin profile fields: usa `+` para concatenar el sub-array (sin coma suelta).
+    // Sin profile fields.
     $resultEmpty = $method->invoke($command, [], 'email');
-    expect($resultEmpty)->toStartWith("\$user->only(")
-        ->and($resultEmpty)->toContain(") + [");
+    expect($resultEmpty)->toBe('$user');
 
-    // Con profile fields: el sub-array de roles/abilities DEBE estar DENTRO del
-    // array_merge() como último argumento, NO afuera separado por coma suelta.
-    // El bug original era: `array_merge($user->only(...), $user->only(...)), [...]`
-    // (coma suelta entre `)` y `[`). El fix correcto es: `array_merge(..., ..., [...])`
-    // (el `[` está DENTRO de los paréntesis del array_merge).
+    // Con profile fields.
     $resultWith = $method->invoke($command, ['full_name' => ['type' => 'string', 'unique' => false]], 'email');
-    expect($resultWith)->toStartWith('array_merge(')
-        ->and($resultWith)->toContain("'full_name'")
-        // El bug original tenía `array_merge(...)), [` — un `)` seguido de `, [`.
-        // El fix correcto tiene `array_merge(..., ...), [\n` — sin `)` antes del `, [`.
-        ->and($resultWith)->not->toContain(')), [') // No `))` seguido de `, [` (bug original)
-        ->and($resultWith)->toMatch("/\[[^\]]+\]\), \[/"); // cierra profileFieldsArray con `]), [` DENTRO del array_merge
+    expect($resultWith)->toBe('$user');
+
+    // Y el stub del AuthController usa este retorno directamente:
+    //   '{{moduleNameLower}}' => $user,
+    $stub = stubContents('auth-user.auth-controller.stub');
+    expect($stub)->toContain("'{{moduleNameLower}}' => \$user,");
+
+    // El patrón viejo (array_merge ad-hoc) NO debe existir más:
+    expect($stub)->not->toMatch("/\\\$user->only\\(\\['id', 'name'/");
+    expect($stub)->not->toMatch("/'abilities'\s*=>\s*\\\$user->abilities->pluck/");
 });
 
-// ─── BUG-NEW-02 — {{loginField}} resuelto en login response ────────────────
+// ─── BUG-NEW-02 — LEGACY: loginField resuelto en login response (R-PKG-029 PKG-NEW-15) ──
+// El bug original era que `buildLoginResponseArray()` emitía `{{loginField}}`
+// literal en vez del loginField resuelto. Después del refactor R-PKG-029
+// PKG-NEW-15, la función ya no toca loginField — solo retorna `$user`.
 
-test('BUG-NEW-02: buildLoginResponseArray emite loginField resuelto, no placeholder', function () {
+test('BUG-NEW-02 (LEGACY): buildLoginResponseArray ignora loginField (refactor PKG-NEW-15)', function () {
     $command = makeAuthUserCommand();
     $reflection = new ReflectionClass($command);
 
     $method = $reflection->getMethod('buildLoginResponseArray');
 
-    // Email field.
+    // Cualquier loginField (email, ci, phone, etc.) → mismo retorno.
     $emailResult = $method->invoke($command, [], 'email');
-    expect($emailResult)->toContain("'email'")
-        ->and($emailResult)->not->toContain("'{{loginField}}'");
+    expect($emailResult)->toBe('$user');
 
-    // Login field no-email (RETO Bolivia usa `ci`).
     $ciResult = $method->invoke($command, ['full_name' => ['type' => 'string', 'unique' => false]], 'ci');
-    expect($ciResult)->toContain("'ci'")
-        ->and($ciResult)->not->toContain("'{{loginField}}'");
+    expect($ciResult)->toBe('$user');
+
+    // El loginField sigue resolviéndose correctamente en el stub vía el
+    // placeholder `{{loginField}}` que SÍ existe en otras partes del stub
+    // (validation rule, lookup del user). Pineamos eso para asegurar BC.
+    $stub = stubContents('auth-user.auth-controller.stub');
+    expect($stub)->toContain('{{loginFieldValidationRule}}');
 });
 
 // ─── BUG-NEW-03 — seeder no setea 'module' en abilities ────────────────────
@@ -177,7 +192,7 @@ test('BUG-NEW-07: migration add_fk_role_user_to_auth_users está eliminada', fun
         .'/src/Auth/Database/Migrations/2026_06_18_000001_add_fk_role_user_to_auth_users.php';
 
     expect(file_exists($migrationPath))->toBeFalse(
-        "BUG-NEW-07: la migration FK polimórfica debe estar eliminada (R-G-033-C + clean rebuild RETO)."
+        'BUG-NEW-07: la migration FK polimórfica debe estar eliminada (R-G-033-C + clean rebuild RETO).'
     );
 
     // Y su test asociado también.
@@ -220,7 +235,7 @@ test('BUG-NEW-09: FixSanctumUuidsCommand existe y está registrado en MkServiceP
 
     // El command debe tener signature con --dry-run.
     $commandSrc = (string) file_get_contents($commandPath);
-    expect($commandSrc)->toContain("mk:fix:sanctum-uuids")
+    expect($commandSrc)->toContain('mk:fix:sanctum-uuids')
         ->and($commandSrc)->toContain('--dry-run')
         ->and($commandSrc)->toContain("uuidMorphs('tokenable')")
         ->and($commandSrc)->toContain("morphs('tokenable')");
@@ -388,7 +403,7 @@ test('BUG-NEW-15: AuthCreateSuperAdminCommand autogenera name del email local-pa
     expect($src)->toMatch("/explode\\(\\s*'@'\\s*,\\s*\\\$email\\s*,\\s*2\\s*\\)/");
 
     // El fallback debe setear un valor NO vacío cuando name es null.
-    expect($src)->toContain("ucfirst(strtolower(\$localPart))");
+    expect($src)->toContain('ucfirst(strtolower($localPart))');
 
     // Debe haber un fallback final a 'Admin' si el local-part está vacío (email malformado, ya validado antes).
     expect($src)->toContain("'Admin'");
@@ -404,21 +419,21 @@ test('BUG-NEW-16: HasRoles/HasAbilities mutations setean user_type cuando la piv
     //   1. Detectar via Schema::hasColumn('role_user', 'user_type').
     //   2. Si existe, agregar extras ['user_type' => static::class] al syncWithoutDetaching.
 
-    expect($hasRolesSrc)->toContain("use Illuminate\\Support\\Facades\\Schema;")
+    expect($hasRolesSrc)->toContain('use Illuminate\\Support\\Facades\\Schema;')
         ->and($hasRolesSrc)->toMatch("/Schema::hasColumn\\(\\s*'role_user'\\s*,\\s*'user_type'\\s*\\)/")
         ->and($hasRolesSrc)->toContain("'user_type' => static::class");
 
     // HasRoles::syncRoles idem.
-    expect($hasRolesSrc)->toMatch("/function\\s+syncRoles/");
+    expect($hasRolesSrc)->toMatch('/function\\s+syncRoles/');
 
     // HasAbilities::giveAbilityTo + syncDirectAbilities idem pero para ability_user.
-    expect($hasAbilitiesSrc)->toContain("use Illuminate\\Support\\Facades\\Schema;")
+    expect($hasAbilitiesSrc)->toContain('use Illuminate\\Support\\Facades\\Schema;')
         ->and($hasAbilitiesSrc)->toMatch("/Schema::hasColumn\\(\\s*'ability_user'\\s*,\\s*'user_type'\\s*\\)/")
         ->and($hasAbilitiesSrc)->toContain("'user_type' => static::class");
 
     // Y debe haber un helper method pivotExtras() / abilityPivotExtras() que encapsule el check.
-    expect($hasRolesSrc)->toMatch("/function\\s+pivotExtras\\s*\\(/");
-    expect($hasAbilitiesSrc)->toMatch("/function\\s+abilityPivotExtras\\s*\\(/");
+    expect($hasRolesSrc)->toMatch('/function\\s+pivotExtras\\s*\\(/');
+    expect($hasAbilitiesSrc)->toMatch('/function\\s+abilityPivotExtras\\s*\\(/');
 
     // BC: si la pivot NO tiene user_type, el comportamiento es idéntico al previo (sin extras).
     // Lo verificamos buscando el pattern `[]` como retorno del helper cuando NO tiene la columna.
@@ -512,8 +527,7 @@ test('BUG-NEW-19: routes with-crud stub emite rutas SIN espacios dentro de {para
 
     // Conteo de rutas con param scope: 6 (show, update×2, destroy, assignRoles, assignDirectAbilities).
     // Filtramos las líneas de rutas que tienen `{admin}` o `{admin}/` (sin espacios).
-    $scopeRouteLines = array_filter($routeLines, static fn (string $line): bool =>
-        (bool) preg_match("/'\\/\\{admin\\}(['\\/])/", $line));
+    $scopeRouteLines = array_filter($routeLines, static fn (string $line): bool => (bool) preg_match("/'\\/\\{admin\\}(['\\/])/", $line));
     expect(count($scopeRouteLines))->toBe(6);
 });
 
@@ -545,7 +559,7 @@ test('BUG-NEW-10 drift: checkSanctumInstalled tiene fallback file_exists para dr
     $src = pkgFileContents('src/Console/Commands/MakeAuthUserCommand.php');
 
     // Debe tener un método isSanctumInstalled() separado (testeable).
-    expect($src)->toMatch("/function\\s+isSanctumInstalled\\s*\\(/");
+    expect($src)->toMatch('/function\\s+isSanctumInstalled\\s*\\(/');
 
     // El helper debe chequear `class_exists` PRIMERO y luego `file_exists` como fallback.
     // R-PKG-027 note: el rule `fully_qualified_strict_types` de Pint ahora
@@ -570,4 +584,3 @@ function extractMethod(string $source, string $methodName): string
 
     return '';
 }
-

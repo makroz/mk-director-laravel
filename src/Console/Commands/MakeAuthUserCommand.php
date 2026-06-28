@@ -7,6 +7,7 @@ namespace Mk\Director\Console\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
+use Laravel\Sanctum\HasApiTokens;
 use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Auth\Services\AuthScopeResolver;
 
@@ -492,6 +493,17 @@ PHP
         // primer request. Verificamos + avisamos + sugerimos el comando de fix.
         $this->checkSanctumInstalled();
 
+        // ── PKG-NEW-14 fix (R-PKG-029, 2026-06-28): check cache driver ─────
+        // SmartController / CRUDSmart / CacheTrait / BaseModelBuilder usan
+        // `Cache::tags()` extensivamente. Si el cache driver default no soporta
+        // tags (file/database/array/null), cualquier request que dispare un
+        // query cacheado revienta con `RuntimeException: cache driver does not
+        // support tags`. Es un gotcha silencioso porque la falla es runtime
+        // (no compile-time) y solo aparece en el primer endpoint CRUD.
+        //
+        // Verificamos + avisamos + sugerimos la fix correcta por ambiente.
+        $this->checkCacheDriver();
+
         // ── MEJORA-03 (R-PKG-014): auto-corrrer mk:discover-abilities con --with-auth-rbac ──
         if ($withAuthRbac) {
             $this->newLine();
@@ -512,7 +524,7 @@ PHP
         $this->line("   • Routes:       /api/{$scopeLower}/auth/{login,refresh,logout,me,forgot,reset}".($withAuthRbac ? ' (rate limited)' : ''));
         $this->line("   • ServiceProv:  app/Modules/{$scope}/Providers/{$scope}ServiceProvider.php");
         if ($withCrud) {
-            $this->line("   • CRUD:         17 archivos (AdminController + RoleController + AbilityController + DTOs + Repository + Service + Factory + Seeder + Requests + Resources)");
+            $this->line('   • CRUD:         17 archivos (AdminController + RoleController + AbilityController + DTOs + Repository + Service + Factory + Seeder + Requests + Resources)');
         }
 
         if ($withAuthRbac) {
@@ -522,16 +534,16 @@ PHP
             $this->line("      'abilities' => ['me' => 'auth.{$scopeLower}.me', 'logout' => 'auth.{$scopeLower}.logout'],");
             $this->line('   2. (Opcional) Customizar rate limits via MK_AUTH_RATE_LIMIT_* env vars.');
             $this->line('   3. (Opcional) Publicar config/mk_director.php si necesitás overrides granulares.');
-            $this->line("   4. Registrar un listener para Mk\\Director\\Auth\\Events\\AuthEvent si querés audit log.");
+            $this->line('   4. Registrar un listener para Mk\\Director\\Auth\\Events\\AuthEvent si querés audit log.');
         }
 
         if ($withCrud) {
             $this->newLine();
             $this->warn('📋 CRUD habilitado. Siguientes pasos:');
             $this->line('   1. php artisan migrate');
-            $this->line("   2. Configurar abilities en config/mk_director.php (ver discover-abilities output arriba)");
-            $this->line("   3. (Opcional) Override de StoreAdminRequest/UpdateAdminRequest para validation custom");
-            $this->line("   4. (Opcional) Override de AdminService::beforeCreate() para photo upload logic");
+            $this->line('   2. Configurar abilities en config/mk_director.php (ver discover-abilities output arriba)');
+            $this->line('   3. (Opcional) Override de StoreAdminRequest/UpdateAdminRequest para validation custom');
+            $this->line('   4. (Opcional) Override de AdminService::beforeCreate() para photo upload logic');
         }
 
         // Imprimir snippets a mano (no modificar config/auth.php automáticamente)
@@ -647,7 +659,7 @@ PHP
      */
     protected function isSanctumInstalled(): bool
     {
-        if (class_exists(\Laravel\Sanctum\HasApiTokens::class)) {
+        if (class_exists(HasApiTokens::class)) {
             return true;
         }
 
@@ -658,6 +670,137 @@ PHP
             : null;
 
         return $vendorPath !== null && file_exists($vendorPath);
+    }
+
+    /**
+     * PKG-NEW-14 fix (R-PKG-029, 2026-06-28): check que el cache driver soporte tags.
+     *
+     * **Background**:
+     *   SmartController, CRUDSmart trait, CacheTrait y BaseModelBuilder del paquete
+     *   usan `Cache::tags()` extensivamente para invalidación granular por tabla.
+     *   Si el cache driver default no soporta tags, el primer request que dispare
+     *   un query cacheado revienta con:
+     *
+     *     `RuntimeException: Cache driver [file] does not support tags.`
+     *
+     *   Es un gotcha SILENCIOSO porque:
+     *     - La falla es runtime (no compile-time / lint-time).
+     *     - Solo aparece cuando el primer CRUD endpoint corre.
+     *     - El `mk:status` no lo detecta (no testea runtime, solo source).
+     *
+     * **Drivers que SÍ soportan tags** (Laravel docs): `redis`, `memcached`,
+     *   `dynamodb`. **NO soportan tags**: `file`, `database`, `array`, `null`,
+     *   `apc`.
+     *
+     * **Fix esperada por ambiente**:
+     *   - Dev/test local: `CACHE_STORE=array` (en `.env`) + `MK_CACHE_ALLOW_FULL_CLEAR=true`
+     *     para que `CacheManager::flush()` haga fallback a nuke en vez de crashear.
+     *   - Producción: usar Redis/Memcached — el override de `mk_director.cache.store`
+     *     permite forzar un store específico.
+     *
+     *   Ver `config/mk_director.php` § `cache.allow_full_clear` para el flag y
+     *   `mk-director-laravel` DEVELOPER_GUIDE § 3.11 para la guía completa.
+     *
+     * **Warn no fatal** — el consumer puede ignorar si NO usa SmartController/CRUDSmart.
+     * Pero por default el scaffolder genera el AuthController que sí usa cache
+     * indirectamente (vía ability resolution), así que el warning aplica.
+     */
+    protected function checkCacheDriver(): void
+    {
+        $store = $this->resolveCacheStore();
+
+        if ($store === null) {
+            // No pudimos detectar — probablemente no estamos en un proyecto Laravel
+            // (el scaffolder se está corriendo standalone). Silenciar.
+            return;
+        }
+
+        if ($this->cacheStoreSupportsTags($store)) {
+            // Driver OK — Redis/Memcached/DynamoDB. Silenciar.
+            return;
+        }
+
+        // Driver NO soporta tags. Warning.
+        $this->newLine();
+        $this->warn("⚠️  PKG-NEW-14: cache store `{$store}` no soporta tags.");
+        $this->line('   SmartController/CRUDSmart/CacheTrait del paquete usan `Cache::tags()`');
+        $this->line('   extensivamente. Sin tags, el primer request CRUD va a fallar con:');
+        $this->newLine();
+        $this->line('     RuntimeException: Cache driver ['.$store.'] does not support tags.');
+        $this->newLine();
+
+        // Sugerir fix por ambiente (dev vs prod).
+        $env = function_exists('app') && function_exists('config') ? config('app.env') : 'production';
+        $isLocal = in_array($env, ['local', 'testing', 'development'], true);
+
+        if ($isLocal) {
+            $this->line('   Fix para dev/local/testing (agregá en `.env`):');
+            $this->line('     CACHE_STORE=array');
+            $this->line('     MK_CACHE_ALLOW_FULL_CLEAR=true');
+            $this->newLine();
+            $this->line('   Nota: `array` es in-memory (no persiste entre requests — solo útil');
+            $this->line('   para tests/dev). Para staging/prod, usá Redis o Memcached.');
+        } else {
+            $this->line('   Fix para staging/producción:');
+            $this->line('     1. Configurá Redis o Memcached en config/cache.php.');
+            $this->line('     2. En `.env`, seteá:');
+            $this->line('        CACHE_STORE=redis   # o memcached');
+            $this->line('        MK_CACHE_ALLOW_FULL_CLEAR=false   # safe default — tags funcionan');
+            $this->newLine();
+            $this->line('   Si NO podés usar Redis/Memcached (ej: serverless), seteá:');
+            $this->line('     MK_CACHE_ALLOW_FULL_CLEAR=true   # CacheManager::flush() hace nuke');
+        }
+    }
+
+    /**
+     * Resuelve el cache store activo del consumer (env > config > 'file' default).
+     *
+     * @return string|null Nombre del store, o null si no se pudo detectar.
+     */
+    protected function resolveCacheStore(): ?string
+    {
+        // 1. Preferir `cache.default` desde la config de Laravel (más confiable).
+        if (function_exists('config') && function_exists('config_path')) {
+            try {
+                $default = config('cache.default');
+                if (is_string($default) && $default !== '') {
+                    return $default;
+                }
+            } catch (\Throwable) {
+                // config no inicializado — fallback a .env
+            }
+        }
+
+        // 2. Fallback: leer CACHE_STORE desde .env.
+        $envPath = function_exists('base_path') ? base_path('.env') : '.env';
+        if (! file_exists($envPath)) {
+            return null;
+        }
+
+        $envContent = file_get_contents($envPath);
+        if (preg_match('/^CACHE_STORE\s*=\s*([^\s#]+)/m', $envContent, $matches)) {
+            return trim($matches[1], "\"' \t\n\r\0\x0B");
+        }
+
+        // 3. Laravel default si no se setea: 'file'.
+        return 'file';
+    }
+
+    /**
+     * Determina si un cache store de Laravel soporta tags.
+     *
+     * Referencia: https://laravel.com/docs/13.x/cache#cache-tags
+     *   "The file, dynamodb, and database cache drivers do not support tags."
+     *
+     * Soportados: redis, memcached, dynamodb (Laravel 9+ agrega dynamodb a la lista).
+     * NO soportados: file, database, array, null, apc.
+     */
+    protected function cacheStoreSupportsTags(string $store): bool
+    {
+        // Drivers que SÍ soportan tags (lista conservadora de Laravel 11+ docs).
+        $supportsTags = ['redis', 'memcached', 'dynamodb'];
+
+        return in_array(strtolower($store), $supportsTags, true);
     }
 
     /**
@@ -977,14 +1120,14 @@ PHP
     {
         $routesPath = "{$basePath}/Http/Routes/api.php";
         if (! File::exists($routesPath)) {
-            $this->warn("   ⚠️  routes/api.php no existe, no se pudo extender con CRUD.");
+            $this->warn('   ⚠️  routes/api.php no existe, no se pudo extender con CRUD.');
 
             return;
         }
 
         $stubPath = __DIR__.'/../../Stubs/auth-user/auth-user.routes.with-crud.stub';
         if (! File::exists($stubPath)) {
-            $this->warn("   ⚠️  auth-user.routes.with-crud.stub no existe.");
+            $this->warn('   ⚠️  auth-user.routes.with-crud.stub no existe.');
 
             return;
         }
@@ -1076,7 +1219,7 @@ PHP
     {
         $providerPath = "{$basePath}/Providers/{$scope}ServiceProvider.php";
         if (! File::exists($providerPath)) {
-            $this->warn("   ⚠️  ServiceProvider no existe, no se pudo extender con binding.");
+            $this->warn('   ⚠️  ServiceProvider no existe, no se pudo extender con binding.');
 
             return;
         }
@@ -1108,60 +1251,44 @@ PHP
     }
 
     /**
-     * Construye el array_merge dinámico para el response de login() (R-PKG-014 BUG-05).
+     * Construye el response del `login()` scaffoldeado (PKG-NEW-15 fix, 2026-06-28).
      *
-     * Sin profile fields: `$user->only([id, name, login]) + ['roles' => ..., 'abilities' => ...]`
-     * Con profile fields: `array_merge($user->only([id, name, login]), $user->only([profile fields]), ['roles' => ..., 'abilities' => ...])`
+     * **Antes (v1.6.0 → v1.6.1)**: retornaba un `array_merge` ad-hoc con
+     *   `id`/`name`/`login` + profile fields + `roles` (mapeados a `[id, name]`) +
+     *   `abilities` (top-level combinadas de roles + directAbilities).
      *
-     ** R-PKG-015 BUG-NEW-01: el `,` después de `$base` quedaba AFUERA del `array_merge`
-     * en la versión anterior, generando que PHP interpretara el sub-array como un
-     * sibling del array padre (key `0`). Ahora el `['roles' => ..., 'abilities' => ...]`
-     * queda SIEMPRE como último argumento del `array_merge` (DENTRO de los paréntesis)
-     * — o como `+` cuando no hay profile fields, para mantener el shape consistente.
+     * **Problema**: drift cross-stack con `me()` (que retorna el modelo completo
+     *   con abilities anidadas por role). Frontend que consume ambos endpoints
+     *   debía parsear 2 shapes distintos. `api_contract.md` documentaba solo el
+     *   formato top-level (drift con `me()` real).
      *
-     * R-PKG-015 BUG-NEW-02: el placeholder `{{loginField}}` se generaba literal porque
-     * esta función se ejecuta ANTES del `str_replace('{{loginField}}', $loginField, ...)`
-     * en `generateStub()`. Fix: pasar `$loginField` ya resuelto y emitir el valor directo.
+     * **Fix (v1.6.2+)**: retornamos `$user` (modelo completo) — `autoTransform()`
+     *   en `BaseController::sendResponse()` aplica el `apiResource` del modelo
+     *   (típicamente `AdminResource`, `MemberResource`, etc.), produciendo el
+     *   MISMO shape canónico que `me()`. Frontend parsea 1 formato.
      *
-     * Output es PHP válido listo para inyectar en el stub.
+     * Requisitos del consumer (canónico, ya documentado en R-PKG-014):
+     *   - El modelo del scope debe declarar `protected $apiResource = {Resource}::class;`
+     *   - El Resource define el shape (incluyendo abilities, photo_url, etc.)
+     *   - Para customizar, override `login()` completo.
+     *
+     * BC: este cambio SOLO afecta el contenido dentro de `data.{scope}` — los
+     * headers `access_token` / `refresh_token` / `token_type` / `expires_in` siguen
+     * iguales. Consumers que dependían del shape top-level DEBEN migrar a un
+     * Resource (es el patrón canónico del paquete desde 1.4.0).
+     *
+     * @param  array<string, array{type: string, unique: bool}>  $profileFieldsRaw  Metadata de profile fields (no se usa aquí — preservado por signature).
+     * @param  string  $loginField  Nombre del login field (no se usa aquí — preservado por signature).
+     * @return string PHP literal `$user` listo para inyectar en el stub.
      */
     protected function buildLoginResponseArray(array $profileFieldsRaw, string $loginField): string
     {
-        $baseFields = "['id', 'name', '{$loginField}']";
-
-        if (empty($profileFieldsRaw)) {
-            // Sin profile fields: `$user->only([id, name, login]) + ['roles' => ..., 'abilities' => ...]`
-            $profileKeys = [];
-        } else {
-            // Con profile fields: `array_merge($user->only([id, name, login]), $user->only([profile fields]), ['roles' => ..., 'abilities' => ...])`
-            $profileKeys = array_keys($profileFieldsRaw);
-        }
-
-        // R-PKG-015 BUG-NEW-01: el sub-array de roles/abilities DEBE estar DENTRO
-        // del array_merge como último argumento (precedido por `, `, no por `)`).
-        $subArray = "[\n"
-            ."            'roles' => \$user->roles->map(fn (\$r) => ['id' => \$r->id, 'name' => \$r->name]),\n"
-            ."            'abilities' => \$user->abilities->pluck('name')\n"
-            ."                ->merge(\$user->directAbilities->pluck('name'))\n"
-            ."                ->unique()\n"
-            ."                ->values(),\n"
-            .'        ]';
-
-        if (empty($profileKeys)) {
-            // Sin profile fields: usar `+` para preservar keys de $user->only si coinciden
-            // (prácticamente imposible porque solo emitimos id/name/loginField, pero es
-            // defensivo). Más limpio que `array_merge` con un solo argumento.
-            return "\$user->only({$baseFields}) + {$subArray}";
-        }
-
-        // Con profile fields: array_merge(..., ..., [...]) — el sub-array es el último
-        // argumento DENTRO de los paréntesis. NO usar `{$baseExpression}, {$subArray}`
-        // porque eso dejaría `, [...]` AFUERA del array_merge (el bug original).
-        $profileFieldsArray = "['".implode("', '", $profileKeys)."']";
-        return "array_merge(\$user->only({$baseFields}), \$user->only({$profileFieldsArray}), {$subArray})";
+        // PKG-NEW-15: retornar el modelo completo — autoTransform() se encarga del shape.
+        // Ver docblock para justificación completa.
+        return '$user';
     }
 
-/**
+    /**
      * Helper: merge de dos arrays de rules PHP en formato string.
      *
      * Input: ambos strings como `'field' => ['rule'],...` arrays.
@@ -1334,12 +1461,12 @@ PHP,
             '{{rbacAbilityCheckLogout}}' => "        \$this->authorizeAbility('logout', \$user);\n",
 
             // ── Audit event: login success ──────────────────────────────
-            '{{rbacAuditLoginSuccess}}' => <<<PHP
+            '{{rbacAuditLoginSuccess}}' => <<<'PHP'
         AuthEvent::dispatch('auth.login.success', [
-            'user_id' => \$user->id,
-            'ip' => \$request->ip(),
-            'user_agent' => \$request->userAgent(),
-            'scope' => \$user->getAuthScope(),
+            'user_id' => $user->id,
+            'ip' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+            'scope' => $user->getAuthScope(),
         ]);
 
 PHP,
@@ -1358,10 +1485,25 @@ PHP,
             '{{rbacAuditRefreshTodo}}' => "        // TODO(R-PKG-010): emitir auth.refresh.success cuando la impl del consumer esté lista.\n",
 
             // ── Audit event: logout ─────────────────────────────────────
+            // PKG-NEW-12 fix (feedback RETO fase 10b 2026-06-28): el evento
+            // referenciaba `$token?->id` pero `$token` no estaba definido en
+            // el scope del método `logout()` scaffoldeado. El stub usa
+            // `$user->safeLogoutCurrentToken()` (helper null-safe de
+            // R-PKG-027 PKG-NEW-08) que no expone el token al consumer.
+            //
+            // Fix: usar `$user->currentAccessToken()?->id` que es null-safe
+            // (Sanctum v4 retorna null si no hay token o si fue revocado).
+            // En la práctica, esto SIEMPRE tendrá un valor en el flow normal
+            // de logout (porque `/logout` requiere middleware `auth:`), pero
+            // el null-safe es defensivo y consistente con el helper.
+            //
+            // Side note: el fix del consumer RETO era
+            // `$tokenId = $user->currentAccessToken()?->id;` ANTES del
+            // dispatch — ahora el scaffolder emite el patrón completo.
             '{{rbacAuditLogout}}' => <<<'PHP'
         AuthEvent::dispatch('auth.logout', [
             'user_id' => $user->id,
-            'token_id' => $token?->id,
+            'token_id' => $user->currentAccessToken()?->id,
         ]);
 
 PHP,
