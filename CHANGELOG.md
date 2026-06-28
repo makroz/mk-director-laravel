@@ -5,6 +5,64 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.7.0] - 2026-06-28 — GA — R-PKG-024 Single-level envelope (PROHIBIDO `data.data`)
+
+> **Source**: Mario flipió la decisión OBS-01 ("by design, NO se unificar", pineada en R-PKG-031 sprint 2026-06-28) → "ningún endpoint o DTO debe tener anidamiento `data.data`". GA trigger inmediato. BC break cross-stack (per R-G-033, válido mientras RETO migre en el mismo sprint).
+> **Spec**: R-PKG-024 (binding rule, pineada en `~/.makromania/agency/global/rules_orchestration.md` + `projects/mk-director/AGENTS.md`).
+> **Skill sync**: `mk-director-laravel` actualizado + CHANGELOG + DEVELOPER_GUIDE + OpenAPI spec + skill `mk-director-core` (`MkListResponse<T>` pineado) + skill `mk-director-web` + skill `mk-director-mobile` (fallback legacy eliminado).
+> **Tests pineados**: source-parsing INTENCIÓN (no `data.data` en el paquete) + e2e EFECTIVIDAD (paginator retorna shape canónico).
+> **PR**: pendiente Mario abrir — rama `makromania/260628-1900--r-pkg-024-single-level-envelope` (origen `dev@564a2d0`).
+
+### ⚠️ BREAKING CHANGES (BC cross-stack — R-G-033 BC opt-in válido)
+
+- **PROHIBIDO `data.data` en cualquier endpoint o DTO**. El envelope canónico es `{success, message, data, __extraData, debugMsg}`. Para colecciones, `data` es SIEMPRE un array directo de items (NO paginator Laravel nested). Metadata de paginación (`current_page`, `last_page`, `per_page`, `total`, `has_more_pages` para LengthAwarePaginator; `per_page`, `next_cursor`, `prev_cursor` para CursorPaginator) se emite en `__extraData` top-level (sibling de `data`).
+- **Eliminado flag opt-in `mk_director.response.top_level_extra_data`** (rc12) y env var `MK_DIRECTOR_RESPONSE_TOP_LEVEL_EXTRA_DATA`. El shape es siempre canónico. No hay BC bridge.
+- **Cambio de keys camelCase → snake_case en `ListManager::getExtraData()`**: `page` → `current_page`, `perPage` → `per_page`, `lastPage` → `last_page`, `hasMorePages` → `has_more_pages`. Frontend (`@makroz/web` + `@makroz/mobile`) YA consumía snake_case (ver `useMkInfiniteList.ts` línea 56-57: `extra.last_page`), por lo que la inconsistencia pre-existente queda corregida.
+
+### Migration guide (RC12 / rc11 → v1.7.0)
+
+**Backend (consumer code)**:
+- ❌ `sendResponse([ 'data' => $paginator, '__extraData' => $extra ])` — legacy nested shape.
+- ❌ `sendResponse([ 'data' => $data, '__extraData' => $extra ])` con `$data` siendo un paginator Laravel — legacy nested.
+- ✅ `sendResponse($paginator, '', 200, $extra)` — BaseController auto-extrae items a `data` y pagination meta a `__extraData` top-level.
+- ✅ `sendResponse($items, '', 200, $extra)` — items como Collection (NO paginator).
+- ✅ `sendResponse($model, 'OK')` — single resource (no change vs rc11).
+
+**Frontend (consumer code)**:
+- ❌ `response.data.data` — removed (no `data.data` ever).
+- ❌ `response.data.__extraData` — removed (top-level only).
+- ✅ `response.data` — array de items o single resource (single-level).
+- ✅ `response.__extraData` — pagination metadata (current_page, last_page, etc.) — siempre top-level.
+- ⚠️ `useMkList` / `useMkInfiniteList` en `@makroz/web` + `@makroz/mobile` — el fallback legacy `response.data?.__extraData` se ELIMINA en v1.7.0. Si tu código lee `__extraData` directamente (no vía hooks), busca top-level.
+
+### Fixed
+
+- **R-PKG-024 (BLOCKER) — `BaseController::sendResponse()` ahora siempre emite single-level envelope**. Antes el método envolvía cualquier `$result` en `data` sin detectar paginadores → cuando el caller pasaba un `LengthAwarePaginator` Laravel, `autoTransform()` lo serializaba como ResourceCollection que emite `{data: [items], links, meta}` → resultado `data: { data: [items], links, meta }` (el `data.data` problemático). Fix: `sendResponse()` ahora detecta `AbstractPaginator` / `CursorPaginator` y extrae items a `data` + pagination metadata a `__extraData` top-level vía `extractPaginationMetadata()`. También eliminó el flag opt-in `mk_director.response.top_level_extra_data` (rc12) — el shape es siempre canónico post-GA. **Stub afectado**: `BaseController::sendResponse()` + `BaseController::extractPaginationMetadata()` (nuevo método helper).
+- **R-PKG-024 (BREAKING FIX) — `CRUDSmart::index()` ahora pasa el paginator directamente al `sendResponse()`** (vía `sendResponse($paginator, '', 200, $extra)`), eliminando la duplicación manual de `total`, `service.afterList`, y `ListManager::getExtraData($paginator)`. El BaseController maneja la pagination metadata automáticamente; las keys del caller en `$extra` (e.g., custom service hooks) ganan sobre las defaults en conflicto. **Stub afectado**: `Traits/CRUDSmart.php::index()`.
+- **R-PKG-024 (BREAKING FIX) — `Controller::index()` (legacy template method, pre-1.3.0) ahora también pasa el paginator directamente**. Mismo refactor que `CRUDSmart`. **Stub afectado**: `Controllers/Controller.php::index()`.
+- **R-PKG-024 (BREAKING FIX) — `ListManager::getExtraData()` keys normalizadas a snake_case** (`current_page`, `last_page`, `per_page`, `has_more_pages`). Camel-case pre-existente (`page`, `perPage`, `lastPage`) era inconsistente con frontend `useMkInfiniteList` (que lee `extra.last_page`). Migration: ver § Migration guide. **Stub afectado**: `Managers/ListManager.php::getExtraData()`.
+- **R-PKG-024 — `mk:status --response-shape` ahora detecta `data.data` anidamiento** (no solo `__extraData` anidado). Reporta findings como `error` (no `warning` como en rc12). Detecta 2 patrones: (a) `sendResponse(['__extraData' => ...])` legacy, (b) `sendResponse(['data' => $paginate*])` paginator wrapping. Audit non-ignorable post-GA. **Stub afectado**: `Console/Commands/MkCheckCommand.php::auditResponseShape()`.
+
+### Added
+
+- **R-PKG-024 — `BaseController::extractPaginationMetadata()` helper method** (nuevo). Extrae `current_page`, `last_page`, `per_page`, `total`, `has_more_pages` (LengthAwarePaginator) o `per_page`, `next_cursor`, `prev_cursor` (CursorPaginator) para emisión top-level en `__extraData`. Snake_case para consistencia con `@makroz/web` `useMkInfiniteList` + `@makroz/core` `MkResponse<T>.__extraData` contract.
+
+### Documentation
+
+- **R-PKG-024 regla binding cross-project** pineada en `~/.makromania/agency/global/rules_orchestration.md` (nueva sección `### R-PKG-024 — Single-level envelope`). 20 lugares R-G-032 sync (CHANGELOG, DEVELOPER_GUIDE, OpenAPI spec, 4 skills, AGENTS.md monorepo, CHANGELOG monorepo, 4 packages cross-stack, RETO api_contract.md + state.yaml + composer.json).
+- **`@makroz/core` `MkListResponse<T>` type** (nuevo, pineado en sprint paralelo) — type-level guarantee: colecciones paginadas son `MkResponse<T[]>`, NO `MkResponse<{data: T[]}>`.
+- **`@makroz/web` + `@makroz/mobile` `useMkList` cleanup** (sprint paralelo) — fallback legacy `response.data?.__extraData` eliminado. Single source of truth = top-level.
+
+### Migration del consumer RETO (sprint `2026-06-28-fase-12-retos-bump-v170`)
+
+RETO bumpea `composer.json` a `^1.7.0` post-publish. Validar e2e:
+- `php artisan mk:status --response-shape` → 0 violations (todas las endpoints paginadas retornan `{data: [items], __extraData: {pagination}}`).
+- `php artisan mk:status` → 0 SmartController findings.
+- `curl GET /api/admin/admins | jq` → `data` es array directo (NO objeto paginator).
+- 17/17 e2e tests verde + 0 workarounds + 0 grep `data\.data` en runtime responses.
+
+---
+
 ## [Unreleased]
 
 ### Fixed

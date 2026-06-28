@@ -7,24 +7,18 @@ namespace Mk\Director\Tests\Unit\Controllers;
 use Mk\Director\Tests\MkLaravelTestCase;
 
 /**
- * R-PKG-023 (rc12): `Controller::index()` (the legacy template-method
- * controller, parent of pre-1.3.0 controllers) now passes `$extra` as
- * the 4th argument to `sendResponse()` when the config flag
- * `mk_director.response.top_level_extra_data` is true. The legacy
- * nested shape is preserved when the flag is off (BC default in rc12).
+ * R-PKG-024 (v1.7.0 GA) — `Controller::index()` (legacy template-method
+ * controller, parent of pre-1.3.0 controllers) passes the `$paginator`
+ * directly to `sendResponse()`. BaseController auto-extracts items to `data`
+ * and pagination metadata to `__extraData` top-level. NO legacy nested shape.
  *
- * Why this matters: `Controller::index()` is the second of three call
- * sites that emit the response shape (the third is `CRUDSmart::index()`,
- * covered in T4). All three must switch to the top-level shape atomically
- * — if only one switches, consumers see inconsistent envelopes across
- * endpoints. The opt-in flag lets consumers migrate endpoint-by-endpoint
- * if they want, but the package emits consistent top-level whenever the
- * flag is on.
+ * Migration from rc12: the flag `mk_director.response.top_level_extra_data` is
+ * REMOVED in v1.7.0. The legacy nested shape is gone.
  *
- * Implementation note: source-parsing. The legacy Controller class is
- * `abstract` and the method is non-trivial (multiple hooks, paginator
- * wrappers). Source-parsing the relevant 5-10 lines is the right level
- * of abstraction for this regression pineo.
+ * Implementation note: source-parsing. The legacy Controller class is `abstract`
+ * and the method is non-trivial. Source-parsing is the right level of abstraction.
+ *
+ * @see R-PKG-024 (binding rule, rules_orchestration.md)
  */
 uses(MkLaravelTestCase::class);
 
@@ -61,59 +55,43 @@ function indexMethodSource(): string
     return substr($source, $start, $bodyEnd - $start);
 }
 
-test('Controller::index() exists and returns a sendResponse() call', function () {
+test('Controller::index() exists and delegates to sendResponse() (single call, R-PKG-024)', function () {
     $body = indexMethodSource();
     expect($body)->not->toBeEmpty();
 
-    // The PHP source declares `function index(...)` (no explicit `public`
-    // because it's the default in PHP classes — but the body extracted
-    // by the helper starts at `function index(`, so we look for that).
     expect($body)->toContain('function index(');
-    expect($body)->toContain('sendResponse(');
+    // Single canonical sendResponse call — the rc12 if/else is gone.
+    expect($body)->toContain('sendResponse($paginator, \'\', 200, $extra)');
 });
 
-test('Controller::index() branches on response.top_level_extra_data config flag (R-PKG-023)', function () {
+test('Controller::index() passes the paginator directly to sendResponse() (R-PKG-024 GA delegates flattening)', function () {
     $body = indexMethodSource();
     expect($body)->not->toBeEmpty();
 
-    // The conditional branches on the flag — the same flag that
-    // BaseController::sendResponse() checks internally.
-    expect($body)->toContain('response.top_level_extra_data');
+    expect($body)->toContain('return $this->sendResponse($paginator, \'\', 200, $extra)');
 });
 
-test('Controller::index() legacy path preserves the nested __extraData shape (BC default rc12)', function () {
+test('Controller::index() does NOT branch on a config flag (R-PKG-024 GA removes the rc12 flag)', function () {
     $body = indexMethodSource();
     expect($body)->not->toBeEmpty();
 
-    // The legacy path (flag false) must still build the array with both
-    // `data` and `__extraData` keys, and pass it to sendResponse. This
-    // is the BC behavior that consumers on rc11 see.
-    expect($body)->toContain("'data' => \$data");
-    expect($body)->toContain("'__extraData' => \$extra");
-    expect($body)->toContain('sendResponse([');
+    expect($body)->not->toContain('response.top_level_extra_data');
+    expect($body)->not->toContain('top_level_extra_data');
 });
 
-test('Controller::index() new path passes $extra as 4th arg to sendResponse (top-level, R-PKG-023)', function () {
+test('Controller::index() does NOT wrap response in legacy nested array shape (R-PKG-024 GA removes the legacy path)', function () {
     $body = indexMethodSource();
     expect($body)->not->toBeEmpty();
 
-    // The new path (flag true) must call sendResponse with $extra as
-    // a SEPARATE 4th argument (not nested in an array). The signature
-    // is sendResponse($result, $message, $code, $extra).
-    //
-    // Look for the 4-arg form: sendResponse($data, ..., 200, $extra).
-    // We accept a few variants of the message arg ('', 'Creado con éxito', etc.).
-    expect($body)->toContain('200, $extra)');
+    expect($body)->not->toContain("'data' => \$data");
+    expect($body)->not->toContain("'__extraData' => \$extra");
+    expect($body)->not->toContain('sendResponse([');
 });
 
-test('Controller::index() still builds $extra via afterList + getExtraData (regression guard)', function () {
+test('Controller::index() still builds $extra via afterList hook (regression guard)', function () {
     $body = indexMethodSource();
     expect($body)->not->toBeEmpty();
 
-    // The pre-rc12 logic to assemble $extra (total, afterList, getExtraData)
-    // must still be present. R-PKG-023 only changes how $extra is
-    // passed to sendResponse, not how it is built.
+    // The pre-GA logic to call afterList hook (consumer custom metadata) is preserved.
     expect($body)->toContain('afterList(');
-    expect($body)->toContain('getExtraData(');
-    expect($body)->toContain('$extra = array_merge(');
 });

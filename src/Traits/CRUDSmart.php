@@ -235,53 +235,27 @@ trait CRUDSmart
             ? \Mk\Director\Managers\CacheManager::remember($cacheKey, $this->getCacheTags(), $this->getCacheTTL(), $resolver)
             : $resolver();
 
-        // Apply service hook afterList
-        $total = method_exists($paginator, 'total') ? $paginator->total() : null;
-        $extra = ['total' => $total];
-        if ($service && method_exists($service, 'afterList')) {
-            $extra = array_merge($extra, $service->afterList($request, $paginator->items(), $total));
-        }
-
-        // Add pagination info if ListManager has getExtraData
-        if (method_exists('\Mk\Director\Managers\ListManager', 'getExtraData')) {
-            $extra = array_merge($extra, ListManager::getExtraData($paginator));
-        } else {
-            // Include basic cursors if cursor pagination is in use
-            if (method_exists($paginator, 'nextCursor')) {
-                $extra['next_cursor'] = $paginator->nextCursor() ? $paginator->nextCursor()->encode() : null;
-                $extra['prev_cursor'] = $paginator->previousCursor() ? $paginator->previousCursor()->encode() : null;
-            }
-        }
-
-        $items = $paginator->items();
-
-        // R-PKG-023 (rc12): top-level __extraData when the config flag
-        // is on. Default false in rc12 → true in GA. Coexistence with
-        // the legacy nested shape is opt-in per-environment via
-        // `MK_DIRECTOR_RESPONSE_TOP_LEVEL_EXTRA_DATA=true`. See CHANGELOG
-        // for the full migration guide.
+        // R-PKG-024 (v1.7.0 GA) — single-level envelope. We pass the
+        // paginator directly to sendResponse(); the BaseController
+        // auto-extracts items to `data` and pagination metadata to
+        // `__extraData` top-level. No flag, no opt-in, no `data.data`.
         //
-        // Note: in the new path the `fireAfterResponse` plugin hook
-        // receives `$items` (transformed) instead of the wrapped array
-        // — the plugin contract changes in rc12 to match the new top-level
-        // shape. Consumers that need access to `$extra` from a plugin
-        // should read the `mk_director.response.top_level_extra_data` config
-        // or look at a future plugin API extension.
-        if (config('mk_director.response.top_level_extra_data', false)) {
-            $transformed = $this->autoTransform($items);
-            $this->getPluginManager()->fireAfterResponse($transformed);
-            return $this->sendResponse($transformed, '', 200, $extra);
+        // Custom extras (from service.afterList) are merged by BaseController
+        // AFTER its auto-extracted pagination metadata, so service keys
+        // win on conflict. Cursor pagination cursors are auto-extracted by
+        // BaseController::extractPaginationMetadata() for CursorPaginator
+        // instances.
+        $extra = [];
+        if ($service && method_exists($service, 'afterList')) {
+            $total = method_exists($paginator, 'total') ? $paginator->total() : null;
+            $extra = $service->afterList($request, $paginator->items(), $total);
         }
 
-        $response = [
-            'data' => $items,
-            '__extraData' => $extra
-        ];
+        // Plugin Hook: afterResponse (receives the raw paginator so plugins
+        // can read total / currentPage / etc. without unwrapping).
+        $this->getPluginManager()->fireAfterResponse($paginator);
 
-        // Plugin Hook: afterResponse
-        $this->getPluginManager()->fireAfterResponse($response);
-
-        return $this->sendResponse($response);
+        return $this->sendResponse($paginator, '', 200, $extra);
     }
 
     /**
