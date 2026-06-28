@@ -106,8 +106,12 @@ test('auth-user.migration.stub uses {{loginField}} column + conditional email_ve
     // Columna principal usa el campo.
     expect($stub)->toContain("\$table->string('{{loginField}}')->unique()");
 
-    // email_verified_at column es condicional.
-    expect($stub)->toContain('{{emailVerifiedAtColumn}}');
+    // email_verified_at column ahora SIEMPRE se crea (R-PKG-027 PKG-NEW-01 fix).
+    // Antes era condicional via {{emailVerifiedAtColumn}} (solo si --verify-email);
+    // el cambio evita drift entre el cast del modelo base AuthUser y la migration
+    // scaffoldeada. Ver CHANGELOG.md § R-PKG-027 PKG-NEW-01.
+    expect($stub)->toContain("\$table->timestamp('email_verified_at')->nullable()");
+    expect($stub)->not->toContain('{{emailVerifiedAtColumn}}');
 
     // Tabla password_reset_tokens usa el campo como primary key.
     expect($stub)->toContain("\$table->string('{{loginField}}')->primary()");

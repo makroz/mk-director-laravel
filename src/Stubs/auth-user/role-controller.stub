@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace App\Modules\{{ModuleName}}\Http\Controllers;
 
+use App\Modules\{{ModuleName}}\Http\Requests\SyncRoleAbilitiesRequest;
 use App\Modules\{{ModuleName}}\Services\{{ModuleName}}Service;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Http\Request;
 use Mk\Director\Auth\Models\Role;
 use Mk\Director\Controllers\SmartController;
 
@@ -19,6 +19,10 @@ use Mk\Director\Controllers\SmartController;
  * El sync de abilities a un role se hace via `syncAbilities()`.
  *
  * **MME (R-MK-001)**: NO importar modelos de otros módulos.
+ *
+ * R-PKG-027 PKG-NEW-07 fix: `syncAbilities` ahora usa `SyncRoleAbilitiesRequest`
+ * (FormRequest dedicado) en vez de validación inline (R-AD-012).
+ * Unifica el patrón con `AssignRolesRequest` / `AssignDirectAbilitiesRequest`.
  */
 class RoleController extends SmartController
 {
@@ -42,17 +46,12 @@ class RoleController extends SmartController
      *
      * Sincroniza (reemplaza) las abilities del role. Body: `{"abilities": ["admin.dashboard.view"]}`.
      */
-    public function syncAbilities(string $id, Request $request): JsonResponse
+    public function syncAbilities(string $id, SyncRoleAbilitiesRequest $request): JsonResponse
     {
         /** @var Role $role */
         $role = Role::findOrFail($id);
 
-        $data = $request->validate([
-            'abilities'   => ['required', 'array'],
-            'abilities.*' => ['required', 'string'],
-        ]);
-
-        app({{ModuleName}}Service::class)->syncRoleAbilities($role, $data['abilities']);
+        app({{ModuleName}}Service::class)->syncRoleAbilities($role, $request->validated('abilities'));
 
         return $this->sendResponse(
             $role->fresh()->load('abilities'),

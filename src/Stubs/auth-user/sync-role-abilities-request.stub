@@ -1,0 +1,44 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Mk\Director\Auth\Models\Ability;
+
+/**
+ * Validación para sincronizar (reemplazar) las abilities de un Role.
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-027).
+ *
+ * R-PKG-027 PKG-NEW-07 fix: el scaffolder `--with-crud` ahora genera este
+ * FormRequest dedicado para `PUT /roles/{id}/abilities`. Antes el
+ * `RoleController::syncAbilities` validaba inline con `$request->validate([...])`,
+ * inconsistente con `AssignRolesRequest` / `AssignDirectAbilitiesRequest` que SÍ
+ * usan FormRequest. Esta inconsistencia violaba R-AD-012 del propio paquete
+ * (validación via FormRequest, NO inline).
+ *
+ * Abilities vienen por NOMBRE (no ID) — mismo patrón que `assignDirectAbilities`.
+ * Se validan contra las abilities existentes en `mk_director`.
+ */
+class SyncRoleAbilitiesRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function rules(): array
+    {
+        $existingAbilityNames = Ability::query()->pluck('name')->all();
+
+        return [
+            'abilities' => ['required', 'array'],
+            'abilities.*' => ['string', 'in:'.implode(',', $existingAbilityNames)],
+        ];
+    }
+}

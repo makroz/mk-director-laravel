@@ -16,11 +16,16 @@ use Illuminate\Support\Facades\Schema;
  * Profile fields: declarados via --profile-fields=<csv> (R-PKG-011), cada uno como
  * columna string nullable. Solo se generan si el flag está activo.
  *
- * Si `--verify-email` está activo, también crea `email_verified_at` (MustVerifyEmail
- * opt-in via flag). R-PKG-011 ADR-009: antes (R-PKG-009) se creaba siempre que
- * loginField=email; refactor para opt-in via --verify-email.
+ * `email_verified_at` SIEMPRE se crea (nullable) — R-PKG-027 PKG-NEW-01 fix.
+ * El modelo base `AuthUser` declara el cast `email_verified_at => datetime`
+ * y la interface `MustVerifyEmail`. Si la columna NO existiera (drift pre-fix),
+ * cualquier path que setee el atributo (factory, register, verificación futura)
+ * revienta con SQLSTATE. Crear la columna siempre es barato (nullable, no molesta)
+ * y mantiene consistencia scaffolder-modelo. El flujo de verificación sigue siendo
+ * opt-in via `--verify-email` (esa flag controla el endpoint + la notification).
  *
  * Spec: MK-LAR-1.0.2 / MK-LAR-1.0.6 / MK-LAR-1.5.0-rc5.PF (R-PKG-011).
+ * Bug fix: R-PKG-027 PKG-NEW-01 (post-merge 4R audit 2026-06-28).
  */
 return new class extends Migration
 {
@@ -30,7 +35,8 @@ return new class extends Migration
             $table->uuid('id')->primary();
             $table->string('name');
             $table->string('{{loginField}}')->unique();
-            {{profileFieldsColumns}}{{emailVerifiedAtColumn}}$table->string('password');
+            {{profileFieldsColumns}}$table->timestamp('email_verified_at')->nullable();
+            $table->string('password');
             $table->string('auth_scope')->default('{{moduleNameLower}}')->index();
             $table->rememberToken();
             $table->timestamps();

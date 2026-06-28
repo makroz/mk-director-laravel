@@ -109,7 +109,10 @@ test('HasTenantScope source: when both $usesTenant and tenantEnabled are true, t
     expect($addScopePos)->toBeGreaterThan(0);
 
     // It must reference TenantScope (the actual scope class).
-    expect($src)->toContain('new TenantScope()');
+    // R-PKG-027 note: Pint's `new_with_parentheses` rule normaliza
+    // `new TenantScope()` to `new TenantScope` when no constructor args.
+    // Aceptamos ambos formatos via regex `\b` (word boundary).
+    expect($src)->toMatch('/new\s+TenantScope\b/');
 
     // And both guards must precede the addGlobalScope call.
     $usesTenantPos = strpos($src, 'if (! static::$usesTenant)');

@@ -5,6 +5,53 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — R-PKG-027 Scaffolder hardening + auth flow defaults
+
+> Source: Code Review 4R post-merge audit 2026-06-28 sobre `mariogfos/reto` (rama `dev` commit `372c28d`, fase 9 mergeada como `reto-admin-v1.1.0`).
+> Pineado por Mavis (consumer) en `.makromania/projects/reto/modules/admin/FEEDBACK-TO-MK-DIRECTOR.md` (9 hallazgos pineables, 7 fixes en este sprint).
+> Target: `v1.6.0-rc14+` después de merge (Mario retiene tag + Packagist publish).
+
+### Fixed
+
+- **PKG-NEW-01 (HIGH) — Scaffolder `--with-crud` ahora SIEMPRE crea `email_verified_at` (nullable) en la migration del scope**. Antes la columna solo se generaba cuando se pasaba `--verify-email` (placeholder `{{emailVerifiedAtColumn}}`). Esto causaba drift: el modelo base `AuthUser` declara el cast `email_verified_at => datetime` + implementa `MustVerifyEmail`, así que cualquier path que setee el atributo (factory con `Schema::hasColumn` workaround, register, verificación futura) revienta con SQLSTATE si la columna no existe. Fix: la columna se crea siempre — barato, nullable, no molesta, consistente con el cast del modelo. Defense-in-depth. **Stub afectado**: `src/Stubs/auth-user.migration.stub`.
+
+- **PKG-NEW-02 (MEDIUM) — `{{ModuleName}}Service::beforeCreate()` renombrado a `mutateData()` + eliminado el `Hash::make` manual**. El nombre `beforeCreate` inducía a error (se ejecutaba también en `update()`). Además el `Hash::make` manual con check `str_starts_with($password, '$2y$')` duplicaba el hasheo del cast `'password' => 'hashed'` del modelo base `AuthUser`, produciendo `bcrypt(bcrypt(plain))` en algunos paths. Fix: delegar 100% al cast del modelo (zero-overhead, BC-safe porque `AuthUser` ya tiene el cast). **Stub afectado**: `src/Stubs/auth-user/admin-service.stub`.
+
+- **PKG-NEW-04 (BLOCKER) — Login flow scaffoldeado ahora consulta `is_active` por default** (cuando la columna existe en la tabla del scope). Antes el flow solo validaba `Hash::check()` + `getAuthScope()`, dejando el flag `is_active` como decoración. Un admin desactivado podía loguearse y obtener tokens válidos. Fix: el `AuthController` scaffoldeado agrega `$isActiveCheck = Schema::hasColumn(...) && $user->is_active === false` y lo incluye en el guard del login. Semántica: `null` o `true` = permitido (compat con datos preexistentes); `false` = bloqueado. **Stub afectado**: `src/Stubs/auth-user.auth-controller.stub`.
+
+- **PKG-NEW-05 (MEDIUM) — `forgot()` y `reset()` también consultan `is_active`** (consistencia con el fix del login). Un admin desactivado no recibe email de reset (anti-enumeración + anti-UX-inconsistente) y no puede resetear su password (admin sigue bloqueado después del reset). **Stub afectado**: `src/Stubs/auth-user.auth-controller.stub`.
+
+- **PKG-NEW-06 (MEDIUM) — `{{ModuleName}}Data` DTO ahora mapea TODOS los profile fields** en `fromRequest`, `fromArray`, y `toArray`. Antes el DTO solo mapeaba `name`/`email`/`password`, perdiendo los profile fields (`full_name`, `ci`, `phone`, `address`, `photo_path`, `is_active`, etc.). Si alguien adoptaba el DTO tal cual, rompía la feature silenciosamente. Fix: 3 nuevos helpers en `MakeAuthUserCommand` (`buildProfileFieldsFromRequest`, `buildProfileFieldsFromArray`, `buildProfileFieldsToArray`) + 3 nuevos placeholders en `admin-data-dto.stub`. **Stubs afectados**: `src/Stubs/auth-user/admin-data-dto.stub`, `src/Console/Commands/MakeAuthUserCommand.php`.
+
+- **PKG-NEW-07 (MEDIUM) — Scaffolder `--with-crud` ahora genera `SyncRoleAbilitiesRequest`** (FormRequest dedicado) para `PUT /roles/{id}/abilities`. Antes el `RoleController::syncAbilities` validaba inline con `$request->validate([...])` — inconsistente con `AssignRolesRequest` / `AssignDirectAbilitiesRequest` que SÍ usan FormRequest. Esta inconsistencia violaba R-AD-012 del propio paquete ("validation via FormRequest, NO inline"). Fix: nuevo stub `sync-role-abilities-request.stub` + `role-controller.stub` actualizado para typehint el FormRequest + el comando scaffoldeado genera el archivo. **Stubs afectados**: `src/Stubs/auth-user/sync-role-abilities-request.stub` (nuevo), `src/Stubs/auth-user/role-controller.stub`, `src/Console/Commands/MakeAuthUserCommand.php`.
+
+### Notas de migración
+
+Todos los fixes son **BC-safe** para consumers existentes:
+
+- **PKG-NEW-01**: el cambio de migration stub SOLO afecta a consumers que regeneren un scope con `mk:make:auth-user {Scope}`. Consumers existentes que ya tienen la tabla creada sin `email_verified_at` deben correr una migration adicional (similar a `mk:fix:sanctum-uuids`).
+- **PKG-NEW-02**: rename + cambio de hash. Consumers que override `beforeCreate()` deben renombrar a `mutateData()`. El cambio de hash (manual → cast) puede romper consumers que NO tienen el cast `'hashed'` en su modelo concreto (improbable — `AuthUser` base ya lo provee).
+- **PKG-NEW-04/05**: el check de `is_active` solo aplica si la columna existe (`Schema::hasColumn`). Consumers sin la columna no ven cambio de comportamiento.
+- **PKG-NEW-06**: solo afecta al DTO scaffoldeado. Si el consumer ya cableó el DTO con un override custom, debe actualizar `fromRequest`/`fromArray`/`toArray` para incluir los profile fields (o regenerar).
+- **PKG-NEW-07**: agregar FormRequest. Consumers que override `RoleController::syncAbilities` con validación inline deben migrar al nuevo FormRequest.
+
+### Patrón pineado
+
+El code review 4R detectó un **patrón sistémico**: el scaffolder `--with-crud` genera stubs que omiten 4 reglas críticas (is_active check, login_field respeto en validaciones específicas, FormRequests consistentes, DTOs cableados). Cualquier consumer que use `--with-crud` sin auditar el código scaffoldeado va a tener estos bugs en producción. **R-PKG-027 cierra la clase de bugs**, no solo los 7 específicos — futuros consumers se benefician automáticamente.
+
+### Pendiente (no incluido en R-PKG-027)
+
+- **PKG-NEW-03** (`login()` hardcodea email) — verificado post-audit: el stub YA usa `{{loginField}}` placeholder correctamente desde v1.5.0-rc3. El reporte 4R menciona drift en RETO pero el scaffolder está OK. Sin cambios necesarios en el paquete.
+- **PKG-NEW-08** (`MkAuth::safeLogout()` helper) — feature opcional, sale casi gratis pero scope creep. Diferido a sprint futuro.
+- **PKG-NEW-09** (SKILL.md gotchas `Ability.module` + `register` público) — defense-in-depth docs. Diferido a R-G-032 sync del sprint (5 líneas de docs, no de código).
+
+### Cross-refs
+
+- **Reporte 4R preservado**: `.makromania/projects/reto/modules/admin/audits/4r-code-review-fase9-postmerge-2026-06-28.md` (consumer side).
+- **Feedback activo**: `.makromania/projects/reto/modules/admin/FEEDBACK-TO-MK-DIRECTOR.md` (consumer side, 9 hallazgos pineables).
+- **Sprint state**: `.makromania/projects/reto/openspec/changes/2026-06-26-reto-admin-module-pilot/state.yaml` (consumer SDD).
+- **Paquete rama**: `origin/makromania/260628-1110--r-pkg-027-fixes` (lista para squash-merge a `dev`).
+
 ## [1.6.0-rc13] - 2026-06-27
 
 ### Fixed

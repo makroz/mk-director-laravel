@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Modules\{{ModuleName}}\DTOs;
 
 use Illuminate\Http\Request;
-use Illuminate\Http\UploadedFile;
 
 /**
  * DTO inmutable para los datos de un {{ModuleName}}.
@@ -17,12 +16,20 @@ use Illuminate\Http\UploadedFile;
  *   - `fromArray()` para hidratación desde DB o fixtures de tests
  *
  * `final readonly` — no mutar. Si necesitás cambiar un valor, creá una nueva instancia.
+ *
+ * R-PKG-027 PKG-NEW-06 fix: `fromRequest`, `fromArray` y `toArray` ahora
+ * mapean TODOS los profile fields declarados via `--profile-fields=<csv>`,
+ * no solo `name`/`email`/`password`. Antes el DTO perdía profile fields
+ * (full_name, ci, phone, address, photo_path, is_active, etc.) — si alguien
+ * adoptaba el DTO tal cual, rompía la feature. El placeholder
+ * `{{profileFieldsFillable}}` ya existía en el constructor; ahora se aplica
+ * consistentemente en los 3 métodos de mapeo.
  */
 final readonly class {{ModuleName}}Data
 {
     public function __construct(
         public string $name,
-        public string $email,
+        public string ${{loginField}},
         public ?string $password = null,
 {{profileFieldsFillable}}    ) {}
 
@@ -34,9 +41,9 @@ final readonly class {{ModuleName}}Data
     {
         return new self(
             name: (string) $request->input('name'),
-            email: (string) $request->input('email'),
+            {{loginField}}: (string) $request->input('{{loginField}}'),
             password: $request->input('password'),
-        );
+{{profileFieldsFromRequest}}        );
     }
 
     /**
@@ -46,9 +53,9 @@ final readonly class {{ModuleName}}Data
     {
         return new self(
             name: (string) ($data['name'] ?? ''),
-            email: (string) ($data['email'] ?? ''),
+            {{loginField}}: (string) ($data['{{loginField}}'] ?? ''),
             password: $data['password'] ?? null,
-        );
+{{profileFieldsFromArray}}        );
     }
 
     /**
@@ -60,8 +67,8 @@ final readonly class {{ModuleName}}Data
     {
         return array_filter([
             'name' => $this->name,
-            'email' => $this->email,
+            '{{loginField}}' => $this->{{loginField}},
             'password' => $this->password,
-        ], fn ($v) => $v !== null);
+{{profileFieldsToArray}}        ], fn ($v) => $v !== null);
     }
 }
