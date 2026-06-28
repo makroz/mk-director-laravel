@@ -7,6 +7,7 @@ namespace Mk\Director\Console\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
 use Mk\Director\Auth\Concerns\HasAbilities;
 use Mk\Director\Auth\Concerns\HasRoles;
 use Mk\Director\Auth\Models\AuthUser;
@@ -190,6 +191,30 @@ class AuthCreateSuperAdminCommand extends Command
             'email' => $email,
             'password' => Hash::make($password),
         ]);
+
+        // OBS-02 fix (R-PKG-031 pineado 2026-06-28, defense-in-depth): pinear
+        // `is_active => true` explícitamente al crear el admin. Sin esto, si
+        // la columna `is_active` existe en la tabla del scope (pineada per
+        // R-PKG-027 PKG-NEW-04, nullable), el admin se crea con `is_active =
+        // null`. Semántica pineada: `null` = permitido (compat con datos
+        // preexistentes) — pero defense-in-depth ideal es pinear `true` desde
+        // el inicio para que un admin NUEVO siempre esté activo explícito.
+        //
+        // Patrón consistente con PKG-NEW-04: `Schema::hasColumn()` para BC con
+        // scopes que NO tienen la columna. Si no existe, no pinear (evita
+        // SQLSTATE "Unknown column 'is_active'").
+        //
+        // Bypass fillable: `is_active` NO está en `$fillable` del modelo base
+        // `AuthUser` ni del stub scaffoldeado (status: not exposed via mass
+        // assignment por diseño — solo lectura/escritura explícita). Usamos
+        // property assignment + save() en vez de add al array de create().
+        // Follow-up opcional: pinear `is_active` en `$fillable` del stub del
+        // modelo scaffoldeado (defense-in-depth adicional, pero no requerido
+        // para este fix).
+        if (Schema::hasColumn((new $adminModel)->getTable(), 'is_active')) {
+            $admin->is_active = true;
+            $admin->save();
+        }
 
         // 4. Asignar roles + abilities a cada uno.
         foreach ($rolesToSeed as $roleName) {
