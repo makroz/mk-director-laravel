@@ -5,11 +5,14 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — R-PKG-029 Post-RETO fase 10b feedback (solución óptima para RETO + defense-in-depth)
+## [Unreleased]
+
+## [1.6.2] - 2026-06-28 — R-PKG-029 Post-RETO fase 10b feedback (solución óptima para RETO + defense-in-depth)
 
 > Source: `.makromania/projects/reto/modules/admin/FEEDBACK-TO-MK-DIRECTOR.md` (fase 10b, clean rebuild sobre v1.6.1).
 > Driver: Mario aprueba Opción C — pinear 3 issues (PKG-NEW-12/14/15) en sprint dedicado para que RETO pueda hacer fase 11 sin workarounds.
 > Spec: R-PKG-029. Tests pineados: 11 nuevos en `MakeAuthUserRPkg029FixesTest.php` + 4 actualizados (LEGACY BUG-05/BUG-NEW-01/BUG-NEW-02).
+> PR: #35 (SHA `4f1f7ca`). Rama: `makromania/260628-1700--pkg-new-12-14-15-fixes`.
 
 ### Fixed
 
