@@ -50,4 +50,9 @@ class AbilityController extends SmartController
             'remember_state' => true,
         ],
     ];
+
+    public function __construct()
+    {
+        $this->middleware('mk.auth:{{moduleNameLower}}');
+    }
 }

@@ -78,6 +78,7 @@ test('AdminController stub extends SmartController y tiene mkConfig', function (
     expect($stub)->toContain('class {{ModuleName}}Controller extends SmartController');
     expect($stub)->toContain("'model'           => {{ModuleName}}::class");
     expect($stub)->toContain("'service'         => {{ModuleName}}Service::class");
+    expect($stub)->toContain('$this->middleware(\'mk.auth:{{moduleNameLower}}\');');
 });
 
 test('RoleController stub extends SmartController y opera sobre Role del paquete', function () {
@@ -87,6 +88,9 @@ test('RoleController stub extends SmartController y opera sobre Role del paquete
     expect($stub)->toContain('use Mk\Director\Auth\Models\Role;');
     expect($stub)->toContain("'model'           => Role::class");
     expect($stub)->toContain('public function syncAbilities');
+    expect($stub)->toContain('$this->middleware(\'mk.auth:{{moduleNameLower}}\');');
+    expect($stub)->not->toContain("'searchable'      => ['name', 'description'],");
+    expect($stub)->toContain("'searchable'      => ['name'],");
 });
 
 test('AbilityController stub extends SmartController y opera sobre Ability del paquete', function () {
@@ -94,6 +98,7 @@ test('AbilityController stub extends SmartController y opera sobre Ability del p
 
     expect($stub)->toContain('class AbilityController extends SmartController');
     expect($stub)->toContain('use Mk\Director\Auth\Models\Ability;');
+    expect($stub)->toContain('$this->middleware(\'mk.auth:{{moduleNameLower}}\');');
 });
 
 // ── Service implementa MkModuleServiceInterface-style API ────────────────

@@ -5,6 +5,13 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.1] - 2026-06-28
+
+### Fixed
+
+- **PKG-NEW-10** — Removed `'description'` from the `'searchable'` array of the `RoleController` stub (`role-controller.stub`). The `roles` table does not have a description column.
+- **PKG-NEW-11** — Added the auth middleware constructor (`$this->middleware('mk.auth:{{moduleNameLower}}');`) to the generated controllers (`AbilityController`, `RoleController`, and `{{ModuleName}}Controller` / `AdminController`). This ensures that authorization middleware is enforced by default in generated controllers.
+
 ## [1.6.0] - 2026-06-28 — R-PKG-027 Scaffolder hardening + auth flow defaults
 
 > Source: Code Review 4R post-merge audit 2026-06-28 sobre `mariogfos/reto` (rama `dev` commit `372c28d`, fase 9 mergeada como `reto-admin-v1.1.0`).
