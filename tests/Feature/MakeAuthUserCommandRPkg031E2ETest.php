@@ -124,13 +124,18 @@ test('PKG-NEW-09 e2e: handle() pinea middleware mk.auth + mk.ability en register
 
     // El bloque que genera el registerRoute con middleware está dentro de handle().
     // Debe aparecer UN bloque donde el middleware se pinea dentro de `if ($withCrud)`.
+    //
+    // R-PKG-031 PKG-NEW-17 fix (v1.7.1-rc1): el source usa PHP interpolation
+    // `{\$scopeLower}` / `{\$scopePlural}` (escaped below para que PHP no interpole
+    // al ejecutar el test) en vez de `{{moduleNameLower}}` literal.
     expect($commandSource)->toMatch(
-        "/\\\$registerRoute\s*=\s*['\"]\\\\n\s*Route::post\\('register'.*?if\s*\\(\\\$withCrud\).*?->middleware\\(\['mk\.auth:.*?\.create'.*?\]\\).*?;/s"
+        "/\\\$registerRoute\s*=\s*[\"']\\\\n\s*Route::post\\('register'.*?if\s*\\(\\\$withCrud\\).*?->middleware\\(\\['mk\\.auth:.*?\\.create'.*?\\]\\).*?;/s"
     );
 
     // El middleware pineado debe ser consistente con el workaround del consumer
     // (RETO C-01): `mk.auth:{scope}` + `mk.ability:{scope}.{table}.create`.
-    expect($commandSource)->toContain("'mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.{{moduleNamePluralLower}}.create'");
+    // Post-PKG-NEW-17: el comando source usa PHP interpolation `{\$scopeLower}`.
+    expect($commandSource)->toContain("'mk.auth:{\$scopeLower}', 'mk.ability:{\$scopeLower}.{\$scopePlural}.create'");
 });
 
 test('PKG-NEW-09 e2e: registerRoute BC mode (sin --with-crud) NO pinea middleware', function () {
@@ -147,8 +152,11 @@ test('PKG-NEW-09 e2e: registerRoute BC mode (sin --with-crud) NO pinea middlewar
     //   $registerRoute .= ";"
     //
     // Esto pinea que el middleware está CONDICIONADO a $withCrud.
-
-    expect($commandSource)->toMatch("/if\s*\\(\\\$withCrud\\)\s*\\{[^}]*->middleware\\(\['mk\.auth/s");
+    //
+    // Adaptado al v1.7.1+ PKG-NEW-17: regex con `[\s\S]*?` (multi-línea, lazy match)
+    // en vez de `[^}]*` (que fallaba porque hay comentarios entre `{` y `->middleware(...)`).
+    // PHP interpolation escapada con `\$` para pinear literal source.
+    expect($commandSource)->toMatch("/if\s*\\(\\\$withCrud\\)\s*\\{[\\s\\S]*?->middleware\\(\\['mk\\.auth/s");
 
     // El registerRoute base (sin middleware) también debe estar pineado.
     expect($commandSource)->toContain("Route::post('register', [AuthController::class, 'register'])");

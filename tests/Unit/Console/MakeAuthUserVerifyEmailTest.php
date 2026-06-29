@@ -123,7 +123,14 @@ test('buildVerifyEmailReplacements genera signed URL para /email/verify/{id}/{ha
 
     expect($source)->toContain("->middleware('signed')");
     expect($source)->toContain("'email/verify/{id}/{hash}'");
-    expect($source)->toContain("name('{{moduleNameLower}}.auth.verify')");
+    // R-PKG-031 PKG-NEW-17 fix (v1.7.1-rc1): PHP interpolation `{$scopeLower}` en lugar
+    // del literal `{{moduleNameLower}}` (que el consumer tenía que `sed`-ar con
+    // R-AD-020 workaround, ahora absorbido). El stub generado usa `{$scopeLower}`
+    // como PHP variable de la heredoc.
+    //
+    // Escape `\$scopeLower` para pinear el STRING LITERAL del comando source,
+    // no la interpolación PHP (variables undefined en este scope del test).
+    expect($source)->toContain("name('{\$scopeLower}.auth.verify')");
 });
 
 test('buildVerifyEmailReplacements genera throttle 6,1 para /email/resend', function () {

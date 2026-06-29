@@ -84,18 +84,31 @@ describe('PKG-NEW-09 — register() scaffoldeado pinea middleware cuando --with-
         // Defense-in-depth: register es público por default (BC) pero si hay CRUD
         // scaffoldeado significa que las abilities `*.create` existen y deben
         // proteger también register.
+        //
+        // R-PKG-031 PKG-NEW-17 fix (v1.7.1-rc1): el placeholder `{{moduleNameLower}}`
+        // se reemplazó por PHP interpolation `{$scopeLower}` (PHP-side) para evitar
+        // literales no-interpolados en el stub generado (R-AD-020 workaround
+        // absorbido).
+        //
+        // Escape `\$scopeLower`/`\$scopePlural` para que PHP no interpole las variables
+        // (que están undefined en este scope del test) — pineamos el STRING LITERAL
+        // que el comando source contiene.
 
-        expect($command)->toContain("'mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.{{moduleNamePluralLower}}.create'");
+        expect($command)->toContain("'mk.auth:{\$scopeLower}', 'mk.ability:{\$scopeLower}.{\$scopePlural}.create'");
     });
 
     test('MakeAuthUserCommand gate el middleware en $withCrud (BC preserved sin --with-crud)', function () use ($command): void {
         // El middleware solo se pinea cuando $withCrud es true. Sin --with-crud,
         // register sigue público (BC con v1.5.0-rc4).
+        //
+        // Adaptado al v1.7.1+ PKG-NEW-17 (PHP interpolation en lugar de literal).
 
-        expect($command)->toMatch("/\\\$registerRoute\s*=\s*['\"]\\\\n\s*Route::post\\('register'/s");
+        expect($command)->toMatch('/\$registerRoute\s*=\s*"\s*\\\\n\s+Route::post\(\'register\'/s');
 
         // Verificar que el bloque del middleware está dentro de un `if ($withCrud)`.
-        expect($command)->toMatch("/if\s*\(\\\$withCrud\)\s*\{[^}]*->middleware\\(\\['mk\.auth/s");
+        // Usa [\s\S] para match multi-línea (la versión `[^}]*` original fallaba
+        // porque había comentarios entre `{` y el `->middleware(...)`).
+        expect($command)->toMatch('/if\s*\(\$withCrud\)\s*\{[\s\S]*?->middleware\(\[\s*\'mk\.auth/s');
     });
 
     test('MakeAuthUserCommand referencia PKG-NEW-09 en comentarios (drift de feedback trazable)', function () use ($command): void {
