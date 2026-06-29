@@ -270,7 +270,7 @@ class MakeAuthUserCommand extends Command
         // Placeholders condicionales R-PKG-011: profile fields per-scope + email verification opt-in.
         // R-PKG-014: pasa $profileFieldsRaw (con metadata unique) + $requiredFields.
         $profileFieldsReplacements = $this->buildProfileFieldsReplacements($profileFieldsRaw, $requiredFields);
-        $verifyEmailReplacements = $this->buildVerifyEmailReplacements($verifyEmail);
+        $verifyEmailReplacements = $this->buildVerifyEmailReplacements($verifyEmail, $scopeLower);
 
         // R-PKG-014 MEJORA-07: factory DDD helpers cuando --with-crud está activo.
         // Default mode: nada. --with-crud: agregar use HasFactory, trait HasFactory,
@@ -448,9 +448,29 @@ PHP
         // consumer pineado en routes/api.php antes de este fix.
         $registerRoute = "\n    Route::post('register', [AuthController::class, 'register'])";
         if ($withCrud) {
-            $registerRoute .= "\n        ->middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.{{moduleNamePluralLower}}.create'])";
+            // R-PKG-031 PKG-NEW-17 fix (2026-06-28, RETO fase 12 feedback):
+            // interpolate $scopeLower and $scopePlural PHP-side instead of
+            // emitting `{{moduleNameLower}}` / `{{moduleNamePluralLower}}`
+            // placeholders. Previous code emitted the placeholders LITERALLY
+            // and they were never replaced — generateStub()'s str_replace()
+            // only acts on stub files, not on PHP strings built dynamically
+            // in this closure, so the placeholders leaked into the generated
+            // `routes/api.php`. Runtime symptom (pre-fix): every
+            // `POST /api/{scope}/auth/register` returned HTTP 500 with
+            // `Auth guard [{{moduleNameLower}}] is not defined.`
+            // (InvalidArgumentException). The 1-line sed workaround on
+            // consumer side (R-AD-020) is no longer needed post-fix.
+            //
+            // Also adds the trailing newline (cosmético, pero rompe el stub
+            // `auth-user.routes.stub` línea 42 donde `{{registerRoute}}` es
+            // seguido por `Route::post('forgot', ...)` sin newline — antes
+            // quedaba `...);Route::post('forgot', ...)` que PHP acepta pero
+            // queda feo + confunde al linter).
+            $registerRoute .= "\n        ->middleware(['mk.auth:{$scopeLower}', 'mk.ability:{$scopeLower}.{$scopePlural}.create'])";
         }
-        $registerRoute .= ';';
+        // R-PKG-031 PKG-NEW-17 (cosmético): trailing newline post-`;` so the
+        // next `Route::post(...)` in the stub starts on a new line.
+        $registerRoute .= ";\n";
 
         if (! empty($profileFields) || $verifyEmail) {
             $profileFieldsReplacements['{{registerMethod}}'] = $this->buildRegisterMethod(
@@ -2024,9 +2044,18 @@ PHP;
      * Con --verify-email: cada placeholder se popula con el código correspondiente
      * (column, cast, import, routes, methods, middleware).
      *
+     * R-PKG-031 PKG-NEW-17 fix (2026-06-28, RETO fase 12 feedback): added
+     * `$scopeLower` parameter so the heredoc string in `{{emailVerifyRoutes}}`
+     * can use PHP interpolation `{$scopeLower}` instead of the literal
+     * `{{moduleNameLower}}` placeholder. The literal placeholder leaked
+     * into the generated `routes/api.php` because generateStub()'s first
+     * str_replace pass processes the stub content (not the replacement
+     * values), and the values were inserted verbatim on the second pass.
+     *
+     * @param  string  $scopeLower  The scope name in snake_case (e.g. `admin`).
      * @return array<string, string>
      */
-    protected function buildVerifyEmailReplacements(bool $enabled): array
+    protected function buildVerifyEmailReplacements(bool $enabled, string $scopeLower = ''): array
     {
         if (! $enabled) {
             return [
@@ -2039,15 +2068,34 @@ PHP;
 
         return [
             // Routes verify + resend (signed URL para verify, throttle para resend).
-            '{{emailVerifyRoutes}}' => <<<'PHP'
+            //
+            // R-PKG-031 PKG-NEW-17 fix (2026-06-28, RETO fase 12 feedback):
+            // the same bug class as the register route — the scaffolder
+            // emitted `{{moduleNameLower}}` literally in the PHP string.
+            // Because this string is later passed via
+            // `str_replace($placeholder, $value, $content)` in generateStub(),
+            // the placeholders ended up in the generated `routes/api.php`
+            // after the first str_replace pass (which only processes the
+            // stub content, not the replacement values).
+            //
+            // Solution of root: use PHP interpolation `{$scopeLower}` /
+            // `{$scopePlural}` for ALL dynamically built strings in the
+            // scaffolder. This eliminates the bug class.
+            //
+            // Note: changed from `<<<'PHP'` (NOWDOC, no interpolation) to
+            // `<<<"PHP"` (heredoc with interpolation) so `{$scopeLower}` is
+            // resolved at scaffolder execution time. The method must have
+            // access to `$scopeLower` and `$scopePlural` — they are passed
+            // via the merge of `$extraReplacements` from `handle()`.
+            '{{emailVerifyRoutes}}' => <<<"PHP"
 
     // ── Email verification (signed URLs) ──────────────────────────
     Route::get('email/verify/{id}/{hash}', [AuthController::class, 'verifyEmail'])
         ->middleware('signed')
-        ->name('{{moduleNameLower}}.auth.verify');
+        ->name('{$scopeLower}.auth.verify');
     Route::post('email/resend', [AuthController::class, 'resendVerification'])
         ->middleware('throttle:6,1')
-        ->middleware('mk.auth:{{moduleNameLower}}');
+        ->middleware('mk.auth:{$scopeLower}');
 PHP,
             // Middleware 'verified' en el grupo protegido (opcional). Default vacío = sin verificación.
             // Para activarlo, el consumer puede setear MK_AUTH_VERIFIED_MIDDLEWARE=true en .env.
