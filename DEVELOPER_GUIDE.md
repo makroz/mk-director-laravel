@@ -64,6 +64,14 @@ MK-Director se basa en el principio de **Zero-Coupling** y **Configuración sobr
 > **Migration**: ver CHANGELOG.md `## [v1.7.0] - GA - Single-level envelope (R-PKG-024)` para el migration guide completo (consumer code, frontend hooks, `ListManager::getExtraData` keys).
 >
 > **Audit**: `php artisan mk:status --response-shape` ahora detecta `data.data` y reporta como `error` (no warning). Non-ignorable post-GA.
+>
+> **v1.7.1-rc1 (post-fase 12 RETO feedback, 2026-06-28)** — 3 fixes pineados en este release:
+>
+> - **PKG-NEW-17 (HIGH) — Scaffolder `MakeAuthUserCommand` ya NO emite los placeholders `{{moduleNameLower}}` / `{{moduleNamePluralLower}}` literales en strings PHP dinámicos** (register + verify-email routes). Causa raíz: `generateStub()` solo aplica `str_replace` a los stubs, NO a los replacement values. Runtime symptom pre-fix: HTTP 500 `Auth guard [{{moduleNameLower}}] is not defined.` en `POST /api/{scope}/auth/register`. Fix: PHP interpolation `{$scopeLower}` / `{$scopePlural}` en todos los strings dinámicos + cambio de `<<<'PHP'` (NOWDOC) a `<<<"PHP"` (heredoc con interpolation) en el array de verify replacements. Solution of root: bug class completo pineado (incluye verify routes, no solo el register reportado por RETO). Consumer ya NO necesita el workaround `sed` (R-AD-020).
+> - **PKG-NEW-18 (MEDIUM) — `BaseController::extractPaginationMetadata()` ahora incluye `has_more_pages` (boolean) para `LengthAwarePaginator`**. Antes solo emitía 4 keys (`current_page, last_page, per_page, total`). `ListManager::getExtraData()` ya emitía las 5 — drift entre 2 helpers del mismo paquete, fixed. `CursorPaginator` NO emite `has_more_pages` (no tiene el método). `@makroz/core` `MkListResponse<T>.__extraData` type YA pineaba `has_more_pages?: boolean` — NO requiere cross-stack update.
+> - **BUG-NEW-auto-discover-serve (CRITICAL) — `MK_AUTO_DISCOVER_ABILITIES=true` + `php artisan serve` ya NO bricked dev server**. Fix: skip argv para long-running CLI contexts + `Artisan::call()` en lugar del malformed `$this->app->call(Class, params)`. Consumer ya NO necesita comentar el flag en `.env` (R-AD-021).
+>
+> Ver [CHANGELOG.md `## [v1.7.1-rc1]`](CHANGELOG.md) para el detalle completo + sprint `makromania/260628-2030--pkg-new-17-18-and-bug-auto-discover-serve` (PR #40 mergeado a dev 2026-06-29).
 
 ---
 
@@ -333,6 +341,16 @@ Setear `mk_director.features.auto_discover_abilities = true` (o env
 `MK_AUTO_DISCOVER_ABILITIES=true`) corre `mk:discover-abilities --force
 --json` automáticamente después del boot del kernel (solo consola).
 Útil en sandbox/dev. **Off por default** — recomendado apagado en prod.
+
+> **v1.7.1+ (BUG-NEW-auto-discover-serve fix)**: el boot hook ahora **skip**
+> cuando `$_SERVER['argv']` incluye long-running CLI contexts
+> (`serve`, `octane:start`, `octane:reload`, `horizon`, `horizon:supervisor`,
+> `queue:work`, `queue:listen`, `schedule:work`, `schedule:run`). Antes
+> v1.7.1, pinear el flag con `php artisan serve` brickeaba el primer
+> request con HTTP 500 `Call to undefined function DiscoverAbilitiesCommand()`.
+> Post-v1.7.1, el flag es **seguro** para sandbox/dev con `artisan serve`.
+> El boot usa `Artisan::call('mk:discover-abilities', [...])` (no el
+> malformed `$this->app->call(Class, params)` de v1.7.0).
 
 #### Scope detection (D6)
 
