@@ -12,7 +12,7 @@ MK-Director se basa en el principio de **Zero-Coupling** y **Configuración sobr
 
 **R-PKG-024 (v1.7.0 GA) — SINGLE-LEVEL ENVELOPE**. Todas las respuestas de MK-Director siguen este formato canónico:
 
-**Colección paginada** (single-level, sin `data.data`):
+**Colección paginada** (single-level + grouped pagination envelope, R-PKG-024 v1.7.0 + R-PKG-032 v1.8.0):
 
 ```json
 {
@@ -20,12 +20,15 @@ MK-Director se basa en el principio de **Zero-Coupling** y **Configuración sobr
   "message": "",
   "data": [...items...],          // ← array directo de items (NO paginator nested)
   "__extraData": {                // ← top-level (sibling de `data`)
-    "current_page": 1,
-    "last_page": 10,
-    "per_page": 20,
-    "total": 200,
-    "has_more_pages": true,
-    "plugin_verified": true       // ← Inyectado por plugins
+    "pagination": {               // ← R-PKG-032 v1.8.0 MAJOR — pagination metadata GROUPED
+      "current_page": 1,
+      "last_page": 10,
+      "per_page": 20,
+      "total": 200,
+      "has_more_pages": true
+      // CursorPaginator emite: per_page + next_cursor + prev_cursor
+    },
+    "plugin_verified": true       // ← Custom keys del consumer viven FLAT aquí
   },
   "debugMsg": []
 }
@@ -64,6 +67,8 @@ MK-Director se basa en el principio de **Zero-Coupling** y **Configuración sobr
 > **Migration**: ver CHANGELOG.md `## [v1.7.0] - GA - Single-level envelope (R-PKG-024)` para el migration guide completo (consumer code, frontend hooks, `ListManager::getExtraData` keys).
 >
 > **Audit**: `php artisan mk:status --response-shape` ahora detecta `data.data` y reporta como `error` (no warning). Non-ignorable post-GA.
+>
+> **R-PKG-032 (v1.8.0 MAJOR) — PAGINATION ENVELOPE GROUPING**: post-v1.8.0, las 5 (LengthAwarePaginator) / 3 (CursorPaginator) keys snake_case de paginación se agrupan bajo `__extraData.pagination`. Custom keys (audit_checked, request_id, etc.) siguen planas. **BC break clean** sin flag opt-in. Consumers v1.7.x que lean `response.__extraData.last_page` flat deben migrar a `response.__extraData.pagination.last_page`. Ver [CHANGELOG.md `## [v1.8.0]`](CHANGELOG.md) + `docs/UPGRADE_1.7_1.8.md` (migration guide completo con snippets PHP+TS BEFORE/AFTER).
 >
 > **v1.7.1-rc1 (post-fase 12 RETO feedback, 2026-06-28)** — 3 fixes pineados en este release:
 >
@@ -1576,6 +1581,10 @@ class AuditPlugin implements MkPluginInterface
     public function afterResponse(&$responseData): void {
         // Modificar el JSON final antes de enviarlo
         if (is_array($responseData) && isset($responseData['__extraData'])) {
+            // Post-R-PKG-032 v1.8.0: la paginación está agrupada bajo
+            // '__extraData.pagination' — no interfiere con custom keys flat
+            // como 'audit_checked'. El caller puede mergear extras custom
+            // aquí sin tocar la shape canónica del envelope.
             $responseData['__extraData']['audit_checked'] = true;
         }
     }
@@ -1663,7 +1672,7 @@ MK-Director estandariza la comunicación mediante un protocolo de URL predefinid
 - **Ordenamiento**: `?sort=-created_at` (el prefijo `-` indica descendente)
 - **Paginación**: `?page=2&per_page=15`
 
-Toda respuesta exitosa (200 OK) garantiza la presencia de la llave `data` y, en colecciones, la llave `__extraData` con metadatos de paginación y telemetría. Con el flag `mk_director.response.top_level_extra_data` activo (rc12 opt-in / GA default), `__extraData` se emite como **sibling top-level** de `data` (forma canónica que matchea `@makroz/core` `MkResponse<T>`). Sin el flag, se emite en el shape legacy anidado dentro de `data` para BC con consumers pre-rc12.
+Toda respuesta exitosa (200 OK) garantiza la presencia de la llave `data` y, en colecciones, la llave `__extraData` (sibling top-level de `data`). Post-R-PKG-024 v1.7.0 GA — single-level envelope OBLIGATORIO. Post-R-PKG-032 v1.8.0 MAJOR — pagination metadata se agrupa bajo `__extraData.pagination` (5 LengthAware keys o 3 Cursor keys); custom keys (audit_checked, request_id, etc.) siguen planas. Ver [`docs/UPGRADE_1.7_1.8.md`](../UPGRADE_1.7_1.8.md) para el migration guide completo al bumpear de v1.7.x → v1.8.0+.
 
 ---
 
