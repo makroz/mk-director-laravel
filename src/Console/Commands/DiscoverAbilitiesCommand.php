@@ -6,6 +6,7 @@ namespace Mk\Director\Console\Commands;
 
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Mk\Director\Auth\Attributes\Ability;
 use Mk\Director\Controllers\SmartController;
@@ -545,7 +546,19 @@ class DiscoverAbilitiesCommand extends Command
             // que solo se resuelven en runtime Laravel completo.
             try {
                 require_once $realPath;
-            } catch (Throwable) {
+            } catch (Throwable $e) {
+                // R-PKG-034 BUG-NEW-34: antes el catch era silencioso y el
+                // consumer no tenía forma de diagnosticar por qué un
+                // controller scaffoldeado no aparecía en `mk:discover-abilities`.
+                // Ahora logueamos a nivel `warning` con path + error message.
+                // El archivo se skipea (continue) igual que antes para mantener
+                // BC-safe — solo agregamos observabilidad.
+                Log::warning(sprintf(
+                    '[mk-director] require_once falló durante class discovery. Path: %s. Error: %s',
+                    $realPath,
+                    $e->getMessage()
+                ));
+
                 continue;
             }
 
