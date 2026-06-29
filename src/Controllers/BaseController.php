@@ -25,13 +25,26 @@ abstract class BaseController extends LaravelController
     /**
      * Standard JSON Success Response
      *
-     * R-PKG-024 (v1.7.0 GA) — SINGLE-LEVEL ENVELOPE. The canonical shape is:
+     * R-PKG-024 (v1.7.0 GA) — SINGLE-LEVEL ENVELOPE.
+     * R-PKG-032 (v1.8.0 MAJOR) — PAGINATION ENVELOPE: pagination metadata is
+     * GROUPED under `__extraData.pagination`. The canonical shape is:
      *
      *   {
      *     "success": true,
      *     "message": "...",
-     *     "data": [...items...],            // ← array directo para colecciones
-     *     "__extraData": { ... },           // ← SIEMPRE top-level (sibling de `data`)
+     *     "data": [...items...],                  // ← array directo para colecciones
+     *     "__extraData": {                        // ← SIEMPRE top-level (sibling de `data`)
+     *       "pagination": {                       // ← R-PKG-032: pagination metadata grouped here
+     *         "current_page": 1,
+     *         "last_page": 5,
+     *         "per_page": 20,
+     *         "total": 100,
+     *         "has_more_pages": true
+     *         // CursorPaginator emits per_page + next_cursor + prev_cursor instead
+     *       },
+     *       "audit_checked": true,                // ← consumer custom keys live FLAT here
+     *       "request_id": "req-xxx"
+     *     },
      *     "debugMsg": []
      *   }
      *
@@ -39,19 +52,25 @@ abstract class BaseController extends LaravelController
      *   ❌ `data: { data: [...], links, meta }` (paginator Laravel nested → data.data)
      *   ❌ `data: { data: {...resource...} }` (resource nested → data.data)
      *   ❌ `__extraData` nested inside `data`
+     *   ❌ Pagination metadata flat at `__extraData.current_page` etc. — must be under `__extraData.pagination` (R-PKG-032)
      *
      * When `$result` is a Laravel paginator (LengthAwarePaginator or
      * CursorPaginator), the items are extracted to `data` (array directo
-     * via `autoTransform()`) and the pagination metadata (`current_page`,
-     * `last_page`, `per_page`, `total`, `next_cursor`, `prev_cursor`) is
-     * emitted in `__extraData` top-level (sibling of `data`). The legacy
-     * `data: { data: [...], links, meta }` nested shape is REMOVED — no
-     * flag, no opt-in, no BC bridge.
+     * via `autoTransform()`) and the pagination metadata is wrapped under
+     * `__extraData.pagination` (LengthAware emits 5 snake_case keys;
+     * CursorPaginator emits per_page + next_cursor + prev_cursor). The
+     * legacy `data: { data: [...], links, meta }` nested shape is REMOVED
+     * — no flag, no opt-in, no BC bridge.
+     *
+     * Migration from v1.7.x (R-PKG-024):
+     *   v1.7.x emitted pagination keys FLAT in `__extraData`
+     *   (`response.__extraData.last_page`).
+     *   v1.8.0+ groups them under `__extraData.pagination`
+     *   (`response.__extraData.pagination.last_page`). Wrap your navigation.
      *
      * Migration from rc12 opt-in: the rc12 flag (removed in v1.7.0) is no
      * longer referenced. Consumers that ran with the rc12 flag on see no
-     * change. Consumers that ran with the rc12 flag off see the new shape —
-     * RETO migration tracked in sprint `2026-06-28-fase-12-retos-bump-v170`.
+     * change. Consumers that ran with the rc12 flag off see the new shape.
      *
      * @param mixed $result  The response payload. Can be a Model, Resource,
      *                       Collection, ResourceCollection, scalar, or a
@@ -60,8 +79,10 @@ abstract class BaseController extends LaravelController
      * @param string $message  Optional human-readable message (Spanish default).
      * @param int $code  HTTP status code (default 200).
      * @param array $extra  Optional metadata merged into `__extraData` top-level.
-     *                      For paginator responses, pagination metadata is
-     *                      prepended automatically; caller keys win on conflict.
+     *                      For paginator responses, `pagination` is prepended
+     *                      automatically under `__extraData.pagination`; caller
+     *                      keys win on conflict (caller can override the entire
+     *                      `pagination` sub-object by passing `'pagination' => [...]`).
      */
     protected function sendResponse($result, $message = '', $code = 200, array $extra = [])
     {
@@ -72,9 +93,12 @@ abstract class BaseController extends LaravelController
             // Wrap as Collection so autoTransform() picks up the model
             // apiResource and emits a flat array of resources (not a paginator).
             $dataPayload = $this->autoTransform(new Collection($items));
-            // Pagination metadata ALWAYS emitted in __extraData top-level.
-            // Caller-supplied $extra keys win on conflict (merge order: pagination defaults, then $extra).
-            $extra = array_merge($this->extractPaginationMetadata($result), $extra);
+            // R-PKG-032 (v1.8.0) — pagination metadata is GROUPED under
+            // `__extraData.pagination` (not flat anymore). Caller-supplied
+            // $extra keys win on conflict (merge order: pagination group
+            // defaults, then $extra — so caller can override the entire
+            // `pagination` sub-object by passing `'pagination' => [...]`).
+            $extra = array_merge(['pagination' => $this->extractPaginationMetadata($result)], $extra);
         } else {
             $dataPayload = $this->autoTransform($result);
         }
@@ -102,7 +126,7 @@ abstract class BaseController extends LaravelController
     }
 
     /**
-     * Extract pagination metadata for the `__extraData` top-level field.
+     * Extract pagination metadata for the `__extraData.pagination` grouped field.
      *
      * R-PKG-024: paginator metadata is NO LONGER nested inside `data`.
      * It lives at the top level of the envelope as a sibling of `data`,
@@ -121,6 +145,13 @@ abstract class BaseController extends LaravelController
      * the 5th key. Drift fixed: both helpers now emit identical 5-key
      * snake_case shape for LengthAwarePaginator (current_page, last_page,
      * per_page, total, has_more_pages).
+     *
+     * R-PKG-032 (v1.8.0 MAJOR) — PAGINATION ENVELOPE grouping.
+     * This helper RETURNS the inner metadata (5 keys for LengthAware,
+     * 3 keys for Cursor). The wrapping under `__extraData.pagination`
+     * happens in `sendResponse()` (and in `ListManager::getExtraData()`).
+     * The helper is intentionally low-level / composable — callers that
+     * want pagination metadata without the envelope can call it directly.
      *
      * @param AbstractPaginator|CursorPaginator $paginator
      * @return array{current_page?: int, last_page?: int, per_page?: int, total?: int, has_more_pages?: bool, next_cursor?: string|null, prev_cursor?: string|null}

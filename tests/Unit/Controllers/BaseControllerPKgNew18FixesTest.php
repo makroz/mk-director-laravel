@@ -168,11 +168,15 @@ describe('PKG-NEW-18 — runtime EFECTIVIDAD on real LengthAwarePaginator', func
         expect($meta)->not->toHaveKey('has_more_pages');
     });
 
-    test('5-key shape matches ListManager::getExtraData() shape (no drift between the 2 helpers)', function () {
+    test('5-key shape matches ListManager::getExtraData() inner pagination object (no drift between the 2 helpers)', function () {
         // The 2 helpers in the package (BaseController::extractPaginationMetadata
         // + ListManager::getExtraData) should emit the same 5 keys for the
         // same LengthAwarePaginator. This is the contract the skill + type
         // documentation describe.
+        //
+        // R-PKG-032 (v1.8.0 MAJOR) — PAGINATION ENVELOPE grouping. As of v1.8.0,
+        // ListManager::getExtraData() returns `['pagination' => [5 keys]]` (grouped),
+        // so we extract the inner 'pagination' sub-object for comparison.
 
         $controller = new PKgNew18TestController();
 
@@ -182,12 +186,16 @@ describe('PKG-NEW-18 — runtime EFECTIVIDAD on real LengthAwarePaginator', func
         $fromBaseController = $controller->callExtractPaginationMetadata($paginator);
         $fromListManager = \Mk\Director\Managers\ListManager::getExtraData($paginator);
 
-        // Both must have the 5 keys.
+        // R-PKG-032: ListManager groups the 5 keys under 'pagination'.
+        expect($fromListManager)->toHaveKey('pagination');
+        $listManagerPagination = $fromListManager['pagination'];
+
+        // Both must have the 5 keys with equal values.
         foreach (['current_page', 'last_page', 'per_page', 'total', 'has_more_pages'] as $key) {
             expect($fromBaseController)->toHaveKey($key);
-            expect($fromListManager)->toHaveKey($key);
+            expect($listManagerPagination)->toHaveKey($key);
             // Values should be equal for the same paginator.
-            expect($fromBaseController[$key])->toBe($fromListManager[$key]);
+            expect($fromBaseController[$key])->toBe($listManagerPagination[$key]);
         }
     });
 });

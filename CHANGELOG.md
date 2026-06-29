@@ -5,6 +5,101 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.0] - 2026-06-29 — MAJOR — R-PKG-032 Pagination envelope grouping (`__extraData.pagination`)
+
+> **Source**: Mario decision 2026-06-29 00:39 — "todos los datos de paginación siempre vayan dentro de `__extraData.pagination`".
+> **Sprint**: `makromania/260629-0030--r-pkg-032-pagination-envelope` (canonical, in `.makromania/projects/mk-director/openspec/changes/2026-06-29-r-pkg-032-pagination-envelope/`).
+> **Scope**: Cross-stack (Laravel + `@makroz/core` + `@makroz/web` + `@makroz/mobile`). RETO consumer **fuera de scope** (Mario regenera Admin module desde 0 en sesión separada, decisión 2026-06-29 00:39).
+> **Spec**: R-PKG-032 (binding rule, en `~/.makromania/agency/global/rules_orchestration.md` + `projects/mk-director/AGENTS.md`).
+> **Skill sync (R-G-032)**: 4 skills actualizadas (`mk-director-{laravel,core,web,mobile}/SKILL.md` con sección R-PKG-032). AGENTS.md del monorepo actualizado con R-PKG-032 rule binding. Documento `docs/UPGRADE_1.7_1.8.md` (NEW) con migration guide completo.
+> **Tests pineados (HALLAZGO-NEW-03)**: 15 tests verde en paquete Laravel (source-parsing INTENCIÓN + e2e EFECTIVIDAD con Mockery ResponseFactory). Cross-stack: 11 type-level tests en `@makroz/core`, 7 tests web, 5 tests mobile — todos verde.
+
+### ⚠️ BREAKING CHANGES (BC cross-stack — R-G-033-C BC opt-in válido)
+
+- **R-PKG-032 (BLOCKER + MAJOR BC) — Pagination metadata GRUPED bajo `__extraData.pagination`**. Antes (v1.7.0 → v1.7.1-rc1): `__extraData` mezclaba las 5 (LengthAwarePaginator) o 3 (CursorPaginator) keys snake_case planas al top-level junto con custom keys del consumer (`audit_checked`, `request_id`). Ahora: las keys snake_case viven exclusivamente bajo `__extraData.pagination`, y las custom keys del consumer siguen planas (sin nesting). Post-v1.8.0 el shape canónico es:
+  ```json
+  {
+    "success": true,
+    "data": [...items...],
+    "__extraData": {
+      "pagination": {
+        "current_page": 1,
+        "last_page": 10,
+        "per_page": 20,
+        "total": 200,
+        "has_more_pages": true
+      },
+      "audit_checked": true,
+      "request_id": "req-abc"
+    }
+  }
+  ```
+  **NO** flag opt-in, **NO** compat dual (siguiendo política R-PKG-024 "no BC bridge, no opt-in"). Consumers en v1.7.x que lean `response.__extraData.last_page` plano deben migrar a `response.__extraData.pagination.last_page`. La migration es trivial (1 línea). Ver `docs/UPGRADE_1.7_1.8.md` para snippets completos.
+
+### Added
+
+- **`R-PKG-032` — `__extraData.pagination` GROUPED envelope (BC break + logical conclusion of R-PKG-024)**. `BaseController::sendResponse()` envuelve `extractPaginationMetadata()` bajo `['pagination' => ...]` en el `array_merge` final:
+  ```php
+  // v1.8.0:
+  $extra = array_merge(['pagination' => $this->extractPaginationMetadata($result)], $extra);
+  ```
+  `ListManager::getExtraData()` sincroniza al mismo grouped shape (nuevo arg `$extras = []` opcional para merge de custom keys planas). El helper `extractPaginationMetadata()` **NO cambia internamente** (sigue retornando las 5 LA / 3 Cursor keys planas) — el wrap bajo `'pagination'` lo hacen los callers. Esto mantiene el helper **componible** para usos no-envelope.
+
+### Changed
+
+- **`LengthAwarePaginator` response shape**: las 5 keys snake_case (`current_page`, `last_page`, `per_page`, `total`, `has_more_pages`) ahora viven bajo `__extraData.pagination.*` en vez de `__extraData.*` (flat). Ver ejemplo JSON arriba.
+- **`CursorPaginator` response shape**: las 3 keys (`per_page`, `next_cursor`, `prev_cursor`) agrupadas bajo `__extraData.pagination.*`. NO emite `current_page`/`last_page`/`total`/`has_more_pages` (no existen en `CursorPaginator`).
+- **`ListManager::getExtraData()` signature**: nuevo parámetro opcional `array $extras = []` para merge flat de custom keys del consumer. Caller `['pagination' => [...]]` override entero del sub-object (array_merge semantics, last wins).
+- **Caller-supplied `$extra` precedence**: `array_merge(['pagination' => $defaults], $extra)` — caller gana en conflicto. Caller puede override el sub-object entero pasando `'pagination' => [...]`.
+
+### NOT emitted (intencionalmente, YAGNI)
+
+- ❌ `from`, `to`, `path` (Laravel-specific UI metadata, no consumidos en frontend).
+- ❌ `first_page_url`, `next_page_url`, `prev_page_url`, `last_page_url` (URLs Laravel-specific).
+- ❌ `links` (HTML pagination links array).
+
+### Migration guide (v1.7.x → v1.8.0)
+
+**BC break**: consumers que lean `response.__extraData.*` directamente para acceder a pagination metadata deben envolver en `pagination`:
+
+```php
+// ❌ v1.7.x (LEGACY, OBSOLETE):
+$pagination = $response['__extraData'];
+$lastPage = $pagination['last_page'] ?? null;
+
+// ✅ v1.8.0+:
+$pagination = $response['__extraData']['pagination'] ?? [];
+$lastPage = $pagination['last_page'] ?? null;
+```
+
+**TypeScript frontend** (`@makroz/web` + `@makroz/mobile` v1.3.0+):
+
+```typescript
+// ❌ v1.7.x (LEGACY):
+const lastPage = response.__extraData?.last_page;
+
+// ✅ v1.8.0+:
+const lastPage = response.__extraData?.pagination?.last_page;
+```
+
+**NO migration needed** si tu consumer solo usa `BaseController::sendResponse()` + `useMkList` / `useMkInfiniteList` (los hooks ya están actualizados para leer del grouped object — public return shape unchanged).
+
+**Custom keys** (audit_checked, request_id): NO cambian. Siguen planas en `__extraData` (no afectadas por R-PKG-032).
+
+Ver `docs/UPGRADE_1.7_1.8.md` para el migration guide completo con snippets.
+
+### Cross-stack bumped en este sprint
+
+- `@makroz/core` 1.2.0 → **1.3.0** (type regrouping, type-level guarantee reforzado).
+- `@makroz/web` 1.2.6 → **1.3.0** (`useMkList` + `useMkInfiniteList` leen de grouped pagination).
+- `@makroz/mobile` 1.2.4 → **1.3.0** (idéntico a web, `MkTable.tsx` recibe la `pagination` prop agrupada).
+
+### Consumer action
+
+Bumpear `composer.json` a `^1.8.0` cuando Mario taguee el GA + force-update Packagist. **RETO**: NO bumpear en este sprint — Mario regenera Admin module desde 0 sobre v1.8.0+ directamente (decisión 2026-06-29 00:39).
+
+---
+
 ## [v1.7.1-rc1] - 2026-06-28 — RC1 — Post-fase 12 RETO feedback fixes (PKG-NEW-17, PKG-NEW-18, BUG-NEW-auto-discover-serve)
 
 > **Source**: Feedback RETO fase 12 2026-06-28 (`FEEDBACK-TO-MK-DIRECTOR-fase12.md`) — clean rebuild sobre v1.7.0 pineó 3 issues NUEVOS al paquete. RC1, pendiente RETO fase 13 rebuild para validar EFECTIVIDAD antes de GA.

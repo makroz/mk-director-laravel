@@ -81,8 +81,8 @@ beforeEach(function () {
     ]);
 });
 
-describe('R-PKG-024 EFECTIVIDAD — sendResponse() emits single-level envelope for paginator', function (): void {
-    test('LengthAwarePaginator: data is array of items, __extraData has pagination metadata top-level (no data.data)', function () {
+describe('R-PKG-024 + R-PKG-032 EFECTIVIDAD — sendResponse() emits single-level envelope for paginator, pagination metadata GROUPED under __extraData.pagination', function (): void {
+    test('LengthAwarePaginator: data is array of items, __extraData.pagination has 5 snake_case keys (R-PKG-024 + R-PKG-032, no data.data, no flat pagination)', function () {
         $controller = new SingleLevelEnvelopeTestController();
 
         $items = new Collection([new \stdClass(), new \stdClass()]);
@@ -104,23 +104,36 @@ describe('R-PKG-024 EFECTIVIDAD — sendResponse() emits single-level envelope f
         expect($body)->toHaveKey('__extraData');
         expect($body['data'])->not->toHaveKey('__extraData');
 
-        // Pagination metadata is snake_case (frontend useMkInfiniteList consumes these).
-        expect($body['__extraData'])->toHaveKey('current_page');
-        expect($body['__extraData'])->toHaveKey('last_page');
-        expect($body['__extraData'])->toHaveKey('per_page');
-        expect($body['__extraData'])->toHaveKey('total');
-        expect($body['__extraData']['current_page'])->toBe(1);
-        expect($body['__extraData']['last_page'])->toBe(5); // ceil(100/20)
-        expect($body['__extraData']['per_page'])->toBe(20);
-        expect($body['__extraData']['total'])->toBe(100);
+        // R-PKG-032 (v1.8.0 MAJOR): pagination metadata is GROUPED under
+        // `__extraData.pagination`, NOT flat at __extraData.*.
+        expect($body['__extraData'])->toHaveKey('pagination');
+        expect($body['__extraData']['pagination'])->toBeArray();
+        expect($body['__extraData']['pagination'])->toHaveKeys([
+            'current_page', 'last_page', 'per_page', 'total', 'has_more_pages',
+        ]);
+        expect($body['__extraData']['pagination']['current_page'])->toBe(1);
+        expect($body['__extraData']['pagination']['last_page'])->toBe(5); // ceil(100/20)
+        expect($body['__extraData']['pagination']['per_page'])->toBe(20);
+        expect($body['__extraData']['pagination']['total'])->toBe(100);
+        expect($body['__extraData']['pagination']['has_more_pages'])->toBeTrue();
 
-        // No camelCase keys (legacy ListManager::getExtraData had `lastPage` etc).
+        // R-PKG-032: regression guard — pagination keys MUST NOT exist flat.
+        expect($body['__extraData'])->not->toHaveKey('current_page');
+        expect($body['__extraData'])->not->toHaveKey('last_page');
+        expect($body['__extraData'])->not->toHaveKey('per_page');
+        expect($body['__extraData'])->not->toHaveKey('total');
+        expect($body['__extraData'])->not->toHaveKey('has_more_pages');
+
+        // No camelCase keys anywhere (regression guard from R-PKG-024 v1.7.0).
         expect($body['__extraData'])->not->toHaveKey('lastPage');
         expect($body['__extraData'])->not->toHaveKey('perPage');
         expect($body['__extraData'])->not->toHaveKey('hasMorePages');
+        expect($body['__extraData']['pagination'])->not->toHaveKey('lastPage');
+        expect($body['__extraData']['pagination'])->not->toHaveKey('perPage');
+        expect($body['__extraData']['pagination'])->not->toHaveKey('hasMorePages');
     });
 
-    test('CursorPaginator: data is array of items, __extraData has cursor metadata top-level (no data.data)', function () {
+    test('CursorPaginator: data is array of items, __extraData.pagination has 3 cursor keys (per_page + next_cursor + prev_cursor)', function () {
         $controller = new SingleLevelEnvelopeTestController();
 
         $items = new Collection([new \stdClass()]);
@@ -133,33 +146,73 @@ describe('R-PKG-024 EFECTIVIDAD — sendResponse() emits single-level envelope f
         expect($body['data'])->not->toHaveKey('data');
         expect($body)->toHaveKey('__extraData');
 
-        // CursorPaginator emits per_page + cursors (NOT current_page / last_page / total).
-        expect($body['__extraData'])->toHaveKey('per_page');
-        expect($body['__extraData'])->toHaveKey('next_cursor');
-        expect($body['__extraData'])->toHaveKey('prev_cursor');
+        // R-PKG-032: cursor metadata GROUPED under __extraData.pagination.
+        expect($body['__extraData'])->toHaveKey('pagination');
+        expect($body['__extraData']['pagination'])->toHaveKey('per_page');
+        expect($body['__extraData']['pagination'])->toHaveKey('next_cursor');
+        expect($body['__extraData']['pagination'])->toHaveKey('prev_cursor');
+
+        // CursorPaginator does NOT emit current_page / last_page / total /
+        // has_more_pages (those are LengthAware-only).
         expect($body['__extraData'])->not->toHaveKey('current_page');
         expect($body['__extraData'])->not->toHaveKey('last_page');
+        expect($body['__extraData'])->not->toHaveKey('total');
+        expect($body['__extraData']['pagination'])->not->toHaveKey('current_page');
+        expect($body['__extraData']['pagination'])->not->toHaveKey('last_page');
+        expect($body['__extraData']['pagination'])->not->toHaveKey('total');
+        expect($body['__extraData']['pagination'])->not->toHaveKey('has_more_pages');
     });
 
-    test('caller-supplied $extra wins on key conflict with pagination metadata (merge order: pagination defaults, then caller)', function () {
+    test('caller-supplied $extra wins on key conflict with pagination grouping (R-PKG-032 caller override)', function () {
         $controller = new SingleLevelEnvelopeTestController();
 
         $items = new Collection([new \stdClass()]);
         $paginator = new LengthAwarePaginator($items, 100, 20, 1);
 
-        // Caller passes a custom total that should win.
+        // Caller passes a custom 'pagination' group that should win entirely.
         $response = $controller->callSendResponse($paginator, '', 200, [
-            'total' => 999, // caller's value wins
-            'custom_field' => 'caller_value', // new field preserved
+            'pagination' => ['total' => 999, 'custom_key' => 'caller_value'], // override
+            'audit_checked' => true, // separate, lives flat
         ]);
         $body = json_decode($response->getContent(), true);
 
-        expect($body['__extraData']['total'])->toBe(999); // caller wins
-        expect($body['__extraData']['custom_field'])->toBe('caller_value'); // caller adds
-        // Pagination defaults still present where caller didn't override.
-        expect($body['__extraData']['current_page'])->toBe(1);
-        expect($body['__extraData']['last_page'])->toBe(5);
-        expect($body['__extraData']['per_page'])->toBe(20);
+        // Caller's pagination group wins (override entire sub-object).
+        expect($body['__extraData']['pagination'])->toBe([
+            'total' => 999,
+            'custom_key' => 'caller_value',
+        ]);
+
+        // Caller's audit_checked lives FLAT, not inside pagination.
+        expect($body['__extraData']['audit_checked'])->toBeTrue();
+        expect($body['__extraData']['pagination'])->not->toHaveKey('audit_checked');
+    });
+
+    test('mixed: caller adds flat keys while paginator emits grouped pagination (R-PKG-032 flat + grouped coexistence)', function () {
+        $controller = new SingleLevelEnvelopeTestController();
+
+        $items = new Collection([new \stdClass()]);
+        $paginator = new LengthAwarePaginator($items, 100, 20, 1);
+
+        // Caller passes flat custom keys that should coexist with grouped pagination.
+        $response = $controller->callSendResponse($paginator, '', 200, [
+            'audit_checked' => true,
+            'request_id' => 'req-abc-123',
+        ]);
+        $body = json_decode($response->getContent(), true);
+
+        // Grouped pagination preserved.
+        expect($body['__extraData']['pagination'])->toHaveKeys([
+            'current_page', 'last_page', 'per_page', 'total', 'has_more_pages',
+        ]);
+        expect($body['__extraData']['pagination']['current_page'])->toBe(1);
+
+        // Custom keys live FLAT, NOT inside pagination.
+        expect($body['__extraData'])->toHaveKey('audit_checked');
+        expect($body['__extraData'])->toHaveKey('request_id');
+        expect($body['__extraData']['audit_checked'])->toBeTrue();
+        expect($body['__extraData']['request_id'])->toBe('req-abc-123');
+        expect($body['__extraData']['pagination'])->not->toHaveKey('audit_checked');
+        expect($body['__extraData']['pagination'])->not->toHaveKey('request_id');
     });
 });
 
