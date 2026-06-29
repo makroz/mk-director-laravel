@@ -78,6 +78,64 @@ MK-Director se basa en el principio de **Zero-Coupling** y **Configuración sobr
 >
 > Ver [CHANGELOG.md `## [v1.7.1-rc1]`](CHANGELOG.md) para el detalle completo + sprint `makromania/260628-2030--pkg-new-17-18-and-bug-auto-discover-serve` (PR #40 mergeado a dev 2026-06-29).
 
+### 1.4. `__extraData` opt-in para paginators (HALLAZGO-NEW-FASE14-02)
+
+**Regla canónica**: el campo `__extraData` se emite **SOLO** cuando el endpoint retorna un paginator (`AbstractPaginator` o `CursorPaginator`). Para endpoints no paginados, el envelope canónico es el simple `{success, message, data, debugMsg}` — **sin** `__extraData`.
+
+Esta es la tabla resumen de qué endpoints emiten `__extraData` y cuáles no, pineada a partir del feedback RETO fase 14 (2026-06-29):
+
+| Endpoint | ¿Emite `__extraData`? | Forma de `data` | Notas |
+|---|---|---|---|
+| `POST /api/{scope}/auth/login` | NO | `{access_token, refresh_token, token_type, expires_in, admin}` | Login scaffolded |
+| `POST /api/{scope}/auth/refresh` | NO | `{access_token, refresh_token, token_type, expires_in}` | Refresh scaffolded |
+| `POST /api/{scope}/auth/logout` | NO | `true` | Logout scaffolded (usa `AuthUser::safeLogoutCurrentToken()`) |
+| `POST /api/{scope}/auth/register` | NO | subset del user model | Register scaffoldeado |
+| `POST /api/{scope}/auth/forgot` | NO | `null` | Forgot scaffolded |
+| `POST /api/{scope}/auth/reset` | NO | `true` | Reset scaffolded |
+| `GET /api/{scope}/auth/me` | NO | user model (con `roles[].abilities[]`) | Me endpoint |
+| `GET /api/{scope}/{resource}` (paginated) | **SÍ** | `data: [...items...]` + `__extraData.pagination: {...}` | Collection paginada — **único caso** que agrupa |
+| `GET /api/{scope}/{resource}/{id}` | NO | user model (resource) | Show endpoint |
+| `POST /api/{scope}/{resource}` | NO | model creado (resource) | Store endpoint |
+| `PUT/PATCH /api/{scope}/{resource}/{id}` | NO | model actualizado (resource) | Update endpoint |
+| `DELETE /api/{scope}/{resource}/{id}` | NO | `true` | Destroy endpoint — ver §1.5 (REST conventions) |
+
+**Custom keys del consumer** (`audit_checked`, `request_id`, etc.) — viven planas en `__extraData` cuando este se emite (i.e. en endpoints paginados). NO se anidan bajo `__extraData.pagination`.
+
+**Reglas binding**:
+- `__extraData` es **opt-in** — SOLO paginators lo emiten.
+- `__extraData.pagination` es grouping (R-PKG-032, v1.8.0+) — keys snake_case dentro.
+- Endpoints no paginados NUNCA emiten `__extraData` (ni siquiera un objeto vacío `{}`).
+- Si tu consumer necesita `__extraData` en un endpoint no paginado (e.g. agregar `audit_checked` al login), usa el parámetro `$extra` del helper `sendResponse()`: `return $this->sendResponse($result, '', 200, ['audit_checked' => true])`.
+
+**Spec**: HALLAZGO-NEW-FASE14-02, feedback RETO fase 14 (2026-06-29).
+
+---
+
+### 1.5. REST conventions — DELETE 200+body vs 204 No Content (HALLAZGO-NEW-FASE14-04)
+
+El paquete usa **HTTP 200 con envelope canónico** para TODOS los endpoints de mutación (DELETE / PUT / PATCH), incluido DELETE. Esto es decisión de diseño deliberada para mantener consistencia con el envelope JSON canónico del paquete (ver §1 arriba).
+
+| Endpoint | HTTP status | Body | Por qué |
+|---|---|---|---|
+| `DELETE /api/{scope}/{resource}/{id}` | **200** | `{success: true, message: "...", data: true, debugMsg: []}` (envelope canónico) | Consistencia con envelope — 200 con body confirma éxito + audit message. El campo `data: true` es el "ack" semántico. |
+| (REST-canonical alternativo) | 204 | (sin body) | Más REST-strict pero rompe la consistencia del envelope canónico |
+
+**¿Por qué 200+body en vez de 204?**
+
+El envelope canónico del paquete siempre incluye `success`, `message`, `data`, `debugMsg`. Forzar 204 sin body rompería esta consistencia (clientes que esperan el envelope fallarían al parsear). Adicionalmente, 200 con `data: true` permite que el front distinga "borrado OK" de un "idempotent no-op" (e.g. si el ID no existía → `success: false` con `message: "Resource not found"`).
+
+**Workaround del consumer** (si querés aceptar ambos en tests, e.g. RETO fase 14):
+
+```php
+// En vez de assertNoContent() (estricto 204)
+expect($response->status())->toBeIn([200, 204]);
+expect(Model::find($id))->toBeNull();  // verificación real (la fuente de verdad)
+```
+
+**Opt-in a 204 No Content**: NO soportado en v1.8.x. Si tu consumer lo requiere explícitamente, override el método `destroy()` en tu controller scaffoldeado y retornar `response()->noContent()`. Considerar soporte nativo en v1.9.0 si hay demanda concreta (RETO no lo requiere, ningún otro consumer público todavía).
+
+**Spec**: HALLAZGO-NEW-FASE14-04, feedback RETO fase 14 (2026-06-29).
+
 ### 1.7. Modelos globales vs per-scope y tablas compartidas (R-PKG-035)
 
 Decisión arquitectónica pineada en R-MK-001 (MME): algunos modelos son **per-scope** (viven en `App\Modules\{Scope}\Models`), otros son **globales del paquete** (compartidos por todos los scopes). Pregunta recurrente de consumers: "¿por qué existen estas tablas y cómo identifican a qué scope pertenecen?". Tabla canónica:
@@ -471,6 +529,41 @@ class CustomDiscoverAbilitiesCommand extends DiscoverAbilitiesCommand
 
 ---
 
+#### 3.6.5. Compatibilidad con `RefreshDatabase` testing (HALLAZGO-NEW-FASE14-01, v1.8.1+)
+
+Cuando `MK_AUTO_DISCOVER_ABILITIES=true`, el hook de boot corre `mk:discover-abilities --force` durante el boot del `MkServiceProvider`. En testing con `RefreshDatabase`, las migrations del paquete (`loadMigrationsFrom`) corren **DESPUÉS** del boot del framework → la tabla `abilities` (o `{scope}_abilities`) todavía no existe cuando auto-discover intenta ejecutarse.
+
+**Síntoma pre-v1.8.1** (RETO fase 14 feedback):
+
+```
+RuntimeException: Ninguna tabla de abilities existe.
+Esperaba 'admins_abilities' o 'abilities'.
+¿Corriste `php artisan migrate` después de scaffoldear?
+```
+
+**Fix pineado en v1.8.1+** (HALLAZGO-NEW-FASE14-01): el boot hook ahora chequea `Schema::hasTable($abilitiesTable)` antes de invocar `mk:discover-abilities`. Si la tabla no existe aún (caso testing con `RefreshDatabase`), skip con `Log::debug(...)` y `return` — sin `RuntimeException`.
+
+**En producción** (`php artisan serve`, octane, queue:work): las migrations se ejecutan **ANTES** del boot del service provider → la tabla existe → el guard es **no-op** (1 check de schema por boot, costo despreciable).
+
+**Workaround pre-v1.8.1** (ya NO necesario, RETO fase 14 lo pineó):
+
+```xml
+<!-- phpunit.xml -->
+<env name="MK_AUTO_DISCOVER_ABILITIES" value="false"/>
+```
+
+```php
+// tests/Feature/Auth/AuthFlowTest.php
+beforeEach(function () {
+    $this->artisan('mk:discover-abilities', ['--force' => true])->assertSuccessful();
+    $this->artisan('mk:auth:create-super-admin', [...])->assertSuccessful();
+});
+```
+
+**Por qué `Log::debug` y no `Log::warning`**: el skip es un caso esperado en testing environments, no un error. Logging at warning level llenaría los logs del consumer con ruido innecesario.
+
+**Spec**: HALLAZGO-NEW-FASE14-01, feedback RETO fase 14 (2026-06-29). Cross-ref: R-PKG-007 D4 (auto-discover en boot), BUG-NEW-auto-discover-serve (skip long-running CLI contexts).
+
 ## ⚙️ 3.7. Login field configurable (`--login-field=<campo>`)
 
 `mk:make:auth-user` ahora soporta campos de login no-email. Útil para:
@@ -758,6 +851,31 @@ public function logout(Request $request): JsonResponse
 }
 ```
 
+
+
+**Testing gotcha — guard cache reset (HALLAZGO-NEW-FASE14-03, v1.8.1+)**:
+
+En testing Pest/PHPUnit, todas las requests dentro del mismo test comparten el container PHP. Sanctum cachea el user resuelto en `Auth::guard($scope)` durante el lifecycle del container.
+
+Si testeás `POST /api/admin/auth/logout` y después intentás `GET /api/admin/auth/me` con el mismo Bearer token (ahora revocado), el cache del guard devuelve el user authed → el test falla con 200 en vez del 401 esperado.
+
+**Fix pineado en v1.8.1+** (HALLAZGO-NEW-FASE14-03): `safeLogoutCurrentToken()` ahora llama `\Auth::forgetGuards()` post `$token->delete()`. Esto invalida el cache del guard en el mismo process.
+
+**En producción** (cada HTTP request = PHP process fresco): `\Auth::forgetGuards()` es **no-op** (no hay guards cacheados en un process que arranca de cero). El fix es transparente para consumidores production.
+
+**Workaround pre-v1.8.1** (ya NO necesario):
+
+```php
+// Después del logout en el test
+\Auth::forgetGuards();
+
+// Verificar que el token está revocado
+$reuse = $this->withHeaders(['Authorization' => "Bearer {$accessToken}"])->getJson('/api/admin/auth/me');
+$reuse->assertStatus(401);
+```
+
+**Spec**: HALLAZGO-NEW-FASE14-03, feedback RETO fase 14 (2026-06-29). Cross-ref: §3.8.2 (is_active check).
+
 #### 3.8.2. `is_active` check en el flow de auth (R-PKG-027, rc14)
 
 Desde rc14, el `AuthController` scaffoldeado consulta `is_active` por default en `login`/`forgot`/`reset` cuando la columna existe en la tabla del scope:
@@ -785,6 +903,40 @@ if (! $user
 El check usa `Schema::hasColumn()` (cacheado en memoria), así que es zero-cost en runtime para consumers que NO usan la columna.
 
 **Si override `login()`/`forgot()`/`reset()` manualmente** en tu consumer, mantené la misma lógica de `Schema::hasColumn` + `=== false` para no romper el patrón.
+
+#### 3.8.3. Ability checks — `canMk()` vs `can()` vs `hasAbility()` (HALLAZGO-NEW-FASE14-06)
+
+El trait `HasAbilities` (en `Mk\Director\Auth\Concerns\HasAbilities`) expone **`canMk(string $ability): bool`** como método canónico para chequear abilities. **NO expone `can()` ni `hasAbility()`**.
+
+| Método | ¿Existe? | ¿Qué hace? |
+|---|---|---|
+| `$user->canMk('admin.admins.view')` | ✅ **Canónico (paquete)** | Consulta `UNION ALL` de abilities directas + abilities via roles. Cache via `AbilityResolver`. |
+| `$user->can('admin.admins.view')` | ❌ NO es del paquete | `can()` es de Laravel `AuthorizesRequests` (policy-based). Llamarlo con ability name como argumento falla con `Call to undefined method` o `SQLSTATE HY000` (columna inválida). |
+| `$user->hasAbility('admin.admins.view')` | ❌ Inexistente | No existe método con ese nombre. Solo `canMk()`. |
+
+**Ejemplo correcto**:
+
+```php
+// ✅ Correcto (paquete):
+if ($admin->canMk('admin.admins.view')) {
+    // allowed
+}
+
+// ❌ Incorrecto (NO existe en paquete):
+if ($admin->can('admin.admins.view')) {       // Laravel Gate — no del paquete
+    // ...
+}
+
+if ($admin->hasAbility('admin.admins.view')) { // Inexistente
+    // ...
+}
+```
+
+**Por qué `canMk` y no `can`**: el trait evita colisión con Laravel `AuthorizesRequests::can()` (que es para policy methods, e.g. `$user->can('update', $post)`). `canMk` es específico del paquete y consulta via `AbilityResolver` con cache (union subquery cross-engine portable MySQL/MariaDB/PostgreSQL/SQLite).
+
+**Workaround del consumer** (ya NO necesario post-v1.8.1 doc): si tu consumer usa `can()` esperando Laravel Gate behavior, fallará con `Call to undefined method Admin::can()` (PHP error) o `SQLSTATE HY000` con columna inválida (DB error). El paquete solo expone `canMk` — usá ese.
+
+**Spec**: HALLAZGO-NEW-FASE14-06, feedback RETO fase 14 (2026-06-29). Cross-ref: §3.8 RBAC integration, `references/04-auth-flow.md` (HasAbilities trait detail).
 
 ### Spec
 

@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace Mk\Director;
 
 use Illuminate\Routing\Router;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\ServiceProvider;
 use Mk\Director\Auth\AuthServiceProvider;
 use Mk\Director\Console\Commands\AuthCreateSuperAdminCommand;
@@ -179,6 +181,29 @@ class MkServiceProvider extends ServiceProvider
             return;
         }
 
+        // HALLAZGO-NEW-FASE14-01 fix (v1.8.1+): skip if the abilities table
+        // doesn't exist yet. Common in RefreshDatabase testing — package
+        // migrations from `loadMigrationsFrom` run AFTER the ServiceProvider
+        // boots, so the table is not available when auto-discover fires.
+        //
+        // Without this guard, the discover-abilities command throws
+        // `RuntimeException: Ninguna tabla de abilities existe...` and the
+        // boot aborts (taking down the test runner).
+        //
+        // Production boot paths (`php artisan serve`, `octane:start`,
+        // `queue:work`, etc.) run migrations BEFORE booting the framework,
+        // so this guard is a no-op (Schema::hasTable returns true) in
+        // production. The cost is one schema introspection per boot —
+        // negligible.
+        //
+        // Spec: HALLAZGO-NEW-FASE14-01, feedback RETO fase 14 (2026-06-29).
+        $abilitiesTable = config('mk_director.auth.tables.abilities', 'abilities');
+        if (! Schema::hasTable($abilitiesTable)) {
+            Log::debug("MK-Director: skip auto-discover-abilities — table [{$abilitiesTable}] not migrated yet.");
+
+            return;
+        }
+
         try {
             // BUG-NEW-auto-discover-serve fix: use Artisan::call() instead of
             // $this->app->call(Class, params). The latter treats the FQCN as
@@ -186,7 +211,7 @@ class MkServiceProvider extends ServiceProvider
             // (the FQCN is not a function). Artisan::call dispatches via the
             // Artisan kernel and properly binds the command instance +
             // arguments.
-            $exitCode = \Illuminate\Support\Facades\Artisan::call('mk:discover-abilities', [
+            $exitCode = Artisan::call('mk:discover-abilities', [
                 '--force' => true,
                 '--json' => true,
             ]);

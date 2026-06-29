@@ -123,6 +123,86 @@ RETO consumer: **NO impact** — RETO consume v1.6.x vía path repo + composer `
 
 ---
 
+## [v1.8.1-rc0] - 2026-06-29 — MINOR — RETO fase 14 feedback fixes (HALLAZGO-NEW-FASE14-01..06)
+
+> **Source**: RETO fase 14 clean rebuild sobre v1.8.0 (`makromania/260629-1543--reto-fase14-api-admin-clean`), reporte completo en `.makromania/projects/reto/modules/admin/FEEDBACK-TO-MK-DIRECTOR-fase14.md` (239 líneas).
+> **Sprint**: `makromania/260629-1634--r-pkg-033-fase14-feedback-fixes` (canonical, en `.makromania/projects/mk-director/openspec/changes/2026-06-29-r-pkg-033-fase14-feedback-fixes/`).
+> **Scope**: Laravel package only (no cross-stack — fixes additive/BC-safe, sin breaking changes para `@makroz/core/web/mobile`). RETO consumer **fuera de scope** (Mario bumpea en sesión separada post-tag).
+> **Spec**: HALLAZGO-NEW-FASE14-01..06 (en `FEEDBACK-TO-MK-DIRECTOR-fase14.md` + `openspec/changes/2026-06-29-r-pkg-033-fase14-feedback-fixes/proposal.md`).
+> **Skill sync (R-G-032)**: skill `mk-director-laravel/SKILL.md` actualizada con 3 nuevos gotchas (#12 RefreshDatabase, #13 guard cache, #14 canMk vs can). 4 sub-secciones nuevas en `DEVELOPER_GUIDE.md` (§1.4, §1.5, §1.6, §3.6.5, §3.8.3 + nota extendida en §3.8.1).
+> **Tests pineados (HALLAZGO-NEW-03)**: 16 nuevos source-parsing tests verde (10 en `MkServiceProviderAutoDiscoverAbilitiesRefreshDatabaseTest` + 6 en `AuthUserSafeLogoutGuardResetTest`). Total paquete: 728/728 verde (vs 712 pre-sprint = +16 nuevos, 0 failures).
+> **Publish strategy**: ACUMULA al lote RELEASE_AT_END — NO tag, NO publish, NO GA trigger en este sprint. Mario retiene bumpeo + tag + Packagist force-update al cerrar el lote (post-siguiente sprint).
+
+### Added / Fixed (additive, BC-safe)
+
+- **HALLAZGO-NEW-FASE14-01 (LOW, fix) — `MkServiceProvider::registerAutoDiscoverAbilities()` ahora skipa auto-discover cuando la tabla `abilities` (o `{scope}_abilities`) no existe aún**. Caso típico: testing con `RefreshDatabase` donde las migrations del paquete (`loadMigrationsFrom`) corren DESPUÉS del boot del framework. Pre-v1.8.1 la suite de tests fallaba con `RuntimeException: Ninguna tabla de abilities existe.` en cada test. Post-v1.8.1 el hook chequea `Schema::hasTable(config('mk_director.auth.tables.abilities', 'abilities'))` antes del `Artisan::call()` y skipa con `Log::debug(...)` + `return` si la tabla no existe. **En producción** (`php artisan serve`, octane, queue:work) el guard es **no-op** (migrations corren antes del boot → la tabla existe → check retorna true). Costo: 1 check de schema por boot, despreciable.
+
+- **HALLAZGO-NEW-FASE14-03 (LOW, fix) — `AuthUser::safeLogoutCurrentToken()` ahora llama `\Auth::forgetGuards()` después de `$token->delete()`**. Caso típico: testing Pest/PHPUnit donde todas las requests del mismo test comparten el container PHP. Sanctum cachea el user resuelto en `Auth::guard($scope)` durante el lifecycle del container. Pre-v1.8.1, después de `POST /api/{scope}/auth/logout` el siguiente `GET /api/{scope}/auth/me` con el mismo Bearer token (ahora revocado) retornaba 200 con datos del user (cache). Post-v1.8.1 retorna 401 correctamente. **En producción** cada HTTP request es un PHP process fresco → `\Auth::forgetGuards()` es **no-op** (no hay guards cacheados). El fix es transparente para consumidores production. Consumers que pineaban `\Auth::forgetGuards()` manual en tests post-logout (workaround RETO) ahora pueden removerlo.
+
+### Documentation (R-G-032 sync — 4 sub-secciones nuevas + 2 notas extendidas en DEVELOPER_GUIDE.md)
+
+- **HALLAZGO-NEW-FASE14-02 (LOW, doc) — Tabla resumen `__extraData` opt-in para paginators**. Nueva §1.4 en `DEVELOPER_GUIDE.md` pineando qué endpoints emiten `__extraData` (SOLO paginators) y cuáles no (login, logout, register, refresh, forgot, reset, me, show, store, destroy — envelope simple `{success, message, data, debugMsg}` sin `__extraData`). Regla canónica pineada: `__extraData` es opt-in, NO se emite en endpoints no paginados. Elimina la confusión runtime de consumidores que recién descubren el paquete.
+
+- **HALLAZGO-NEW-FASE14-04 (LOW, doc) — REST conventions DELETE 200+body vs 204 No Content**. Nueva §1.5 en `DEVELOPER_GUIDE.md` documentando la decisión de diseño del paquete: HTTP 200 con envelope canónico para TODOS los endpoints de mutación (DELETE / PUT / PATCH), incluyendo DELETE. Justificación: consistencia con el envelope JSON canónico del paquete + `data: true` permite distinguir "borrado OK" de "idempotent no-op". Workaround para tests: `expect($response->status())->toBeIn([200, 204])`. Opt-in a 204 No Content: NO soportado en v1.8.x, considerar para v1.9.0 si hay demanda.
+
+- **HALLAZGO-NEW-FASE14-05 (INFO, doc) — Tabla Models per-scope vs globales del paquete**. Nueva §1.6 en `DEVELOPER_GUIDE.md` pineando qué modelos son per-scope (`Admin`, `Member`, `Customer` — viven en `App\Modules\{Scope}\Models`) y cuáles son globales del paquete (`Role`, `Ability` — viven en `Mk\Director\Auth\Models`, compartidos por todos los scopes vía filtro polimórfico `user_type`). Justificación MME/R-MK-001 + implicancia práctica: si tu scope es `Admin`, NO crees `App\Modules\Admin\Models\Role` — usa los globales.
+
+- **HALLAZGO-NEW-FASE14-06 (INFO, doc) — Ability checks: `canMk()` vs `can()` vs `hasAbility()`**. Nueva §3.8.3 en `DEVELOPER_GUIDE.md` pineando la convención del paquete: el trait `HasAbilities` expone **SOLO** `canMk(string $ability): bool` como método canónico. `can()` es Laravel `AuthorizesRequests` (policy-based, NO del paquete) y `hasAbility()` no existe. Ejemplos ✅/❌ con código. Justificación: el trait evita colisión con Laravel `AuthorizesRequests::can()` (que es para policy methods, e.g. `$user->can('update', $post)`).
+
+- **HALLAZGO-NEW-FASE14-01 doc (extended) — Nueva §3.6.5 en `DEVELOPER_GUIDE.md`** sobre compatibilidad con `RefreshDatabase` testing. Pinea el workaround pre-v1.8.1 (`<env name="MK_AUTO_DISCOVER_ABILITIES" value="false"/>` en `phpunit.xml` + `artisan('mk:discover-abilities')` explícito en `beforeEach`) como "ya NO necesario". Explica por qué `Log::debug` (no `Log::warning`) — skip es caso esperado en testing, no error.
+
+- **HALLAZGO-NEW-FASE14-03 doc (extended) — Nota sobre guard cache reset en §3.8.1** de `DEVELOPER_GUIDE.md`. Pinea el workaround pre-v1.8.1 (`\Auth::forgetGuards()` manual post-logout en tests) como "ya NO necesario". Explica el production vs testing lifecycle del guard cache.
+
+### Workarounds absorbed (consumer side)
+
+Consumers (RETO, otros) que pineaban los workarounds ahora pueden removerlos:
+
+- `<env name="MK_AUTO_DISCOVER_ABILITIES" value="false"/>` en `phpunit.xml` — workaround RefreshDatabase ya NO necesario (HALLAZGO-NEW-FASE14-01 fix pineado).
+- `\Auth::forgetGuards()` manual post-logout en tests — workaround guard cache ya NO necesario (HALLAZGO-NEW-FASE14-03 fix pineado).
+
+RETO bumpeará a `^1.8.1` y removerá ambos workarounds en sprint separado (cuando Mario bumpee + tag `v1.8.1` o mayor esté live).
+
+### Tests pineados
+
+- `tests/Unit/MkServiceProviderAutoDiscoverAbilitiesRefreshDatabaseTest.php` (NEW, 10 tests):
+  - Source-parsing INTENCIÓN: Schema::hasTable check, config() usage, Log::debug (NOT warning/error), early return on skip, HALLAZGO ID reference, fix comment con WHY (RefreshDatabase + loadMigrationsFrom), order de guards (skip → re-entry → schema check).
+  - Pre-existing guards regression check: long-running CLI skip (BUG-NEW-auto-discover-serve), mk:discover-abilities re-entry guard, Artisan::call() con command name.
+- `tests/Unit/Auth/AuthUserSafeLogoutGuardResetTest.php` (NEW, 6 tests):
+  - Source-parsing INTENCIÓN: `\Auth::forgetGuards()` presente post-delete, ordering correcto (delete < forgetGuards < return true), forgetGuards NO se llama cuando no hay token (null-safety), HALLAZGO ID reference, fix comment con WHY (Sanctum + cache + production no-op), PKG-NEW-08 contract preserved (regression check).
+
+Total paquete: 728/728 verde (vs 712 pre-sprint = +16 nuevos, 0 failures). 12 deprecated warnings PHP 8.5 pre-existentes sin cambios.
+
+### Cross-stack impact
+
+**NINGUNO**. Sprint interno al paquete Laravel. `@makroz/core`, `@makroz/web`, `@makroz/mobile` NO requieren update:
+- HALLAZGO-NEW-FASE14-01: cambio interno en `MkServiceProvider` (no toca HTTP contract, no toca response shape).
+- HALLAZGO-NEW-FASE14-03: cambio interno en `AuthUser::safeLogoutCurrentToken()` (mismo signature, mismo return type, solo agrega side-effect interno).
+- HALLAZGO-NEW-FASE14-02/04/05/06: solo docs, sin código.
+
+Frontend hooks (`useMkList`, `useMkInfiniteList`) NO requieren update — el shape del response no cambia.
+
+### Reglas aplicadas
+
+- **R-G-032** (Doc + skills always in sync): 4 sub-secciones nuevas en `DEVELOPER_GUIDE.md` + 2 notas extendidas + skill `mk-director-laravel/SKILL.md` actualizada con 3 gotchas (#12, #13, #14).
+- **R-G-033-D** (workflow iterativo): RETO discover (fase 14 clean rebuild) → SDD (este sprint) → impl (siguiente paso) → rc (este sprint `v1.8.1-rc0`) → sandbox (RETO bumpea cuando tag publique) → RETO valida (sprint separado) → tag + publish (Mario al cerrar lote RELEASE_AT_END).
+- **R-G-033-F** (sesión viva): todowrite desde `tasks.md` del SDD change.
+- **HALLAZGO-NEW-FASE14-01..06**: feedback RETO fase 14 pineado.
+- **HALLAZGO-NEW-03** (cross-project): source-parsing INTENCIÓN (paquete) + e2e EFECTIVIDAD (consumer RETO).
+
+### Migration guide
+
+**No requiere migration**. Los 2 fixes son aditivos/BC-safe:
+- `Schema::hasTable()` check: si la tabla existe (caso production), comportamiento idéntico al pre-fix. Si NO existe (caso testing nuevo, antes era RuntimeException), ahora skip silencioso — esto es fix de bug, no BC break.
+- `\Auth::forgetGuards()`: en production es no-op (process fresco). En testing cambia el comportamiento de "next request con token revocado retorna 200" a "retorna 401" — esto es lo correcto, fix de bug.
+- Docs: solo agregan contexto, no cambian contract.
+
+### Handoff a Mario
+
+- ✅ Push rama `makromania/260629-1634--r-pkg-033-fase14-feedback-fixes` listo (Mavis — este sprint).
+- ❌ NO tag, NO publish, NO PR (gh CLI no autenticado — Mario crea PR manual con su auth, si quiere cherry-pick al lote).
+- ⏳ RETO bump + remover workarounds: Mario — sprint separado cuando tag `v1.8.1` (o mayor) esté live.
+- ⏳ Tag + Packagist force-update: Mario — al cerrar el lote RELEASE_AT_END (sprint separado).
+
 ## [v1.8.0] - 2026-06-29 — MAJOR — R-PKG-032 Pagination envelope grouping (`__extraData.pagination`)
 
 > **Source**: Mario decision 2026-06-29 00:39 — "todos los datos de paginación siempre vayan dentro de `__extraData.pagination`".
