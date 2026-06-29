@@ -5,6 +5,30 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.7.1-rc1] - 2026-06-28 — RC1 — Post-fase 12 RETO feedback fixes (PKG-NEW-17, PKG-NEW-18, BUG-NEW-auto-discover-serve)
+
+> **Source**: Feedback RETO fase 12 2026-06-28 (`FEEDBACK-TO-MK-DIRECTOR-fase12.md`) — clean rebuild sobre v1.7.0 pineó 3 issues NUEVOS al paquete. RC1, pendiente RETO fase 13 rebuild para validar EFECTIVIDAD antes de GA.
+> **Sprint**: `makromania/260628-2030--pkg-new-17-18-and-bug-auto-discover-serve` (origen `dev@23e1040`).
+> **Spec**: 3 fixes, todos BC-safe (no breaking changes vs v1.7.0).
+> **Tests pineados**: source-parsing INTENCIÓN (3 archivos, 22 tests verde) + e2e EFECTIVIDAD para PKG-NEW-18 (paginator real, 5 tests). E2e completo de PKG-NEW-17 + BUG-NEW-auto-discover-serve deferido al consumer per HALLAZGO-NEW-03 (package no puede bootear `php artisan serve` sin app Laravel completa).
+> **Skill sync**: `mk-director-laravel` actualizado (3 gotchas nuevas + § "Cambios en v1.7.1-rc1"). Cross-stack type `@makroz/core` `MkListResponse<T>.__extraData` YA pineaba `has_more_pages` (verificado) — no requiere update.
+
+### Fixed
+
+- **PKG-NEW-17 (HIGH) — Scaffolder `MakeAuthUserCommand` ya NO emite los placeholders `{{moduleNameLower}}` / `{{moduleNamePluralLower}}` literales en strings PHP dinámicos**. El bug afectaba: (a) la `registerRoute` con `--with-crud` (`mk.auth:{{moduleNameLower}}` literal en el `->middleware(...)`), (b) las verify-email routes en el heredoc del array de replacements (`{{moduleNameLower}}.auth.verify` y `mk.auth:{{moduleNameLower}}` literales en el `<<<'PHP'`). El bug se debía a que `generateStub()` solo aplica `str_replace` a los stubs cargados, NO a los replacement values. Runtime symptom: HTTP 500 `Auth guard [{{moduleNameLower}}] is not defined.` en `POST /api/{scope}/auth/register`. Fix: PHP interpolation `{$scopeLower}` / `{$scopePlural}` en todos los strings dinámicos + cambio de `<<<'PHP'` (NOWDOC) a `<<<"PHP"` (heredoc) en el array de verify replacements para permitir interpolación. El parámetro `buildVerifyEmailReplacements(bool $enabled, string $scopeLower = '')` ahora acepta `$scopeLower` para que el heredoc lo pueda usar. **Solution of root** (per perfil Mario "soluciones de raíz, no parches"): se pineó el bug class completo en este sprint, no solo el caso reportado. Consumer ya NO necesita el workaround `sed` (R-AD-020) que RETO pineó en fase 12.
+- **PKG-NEW-18 (MEDIUM) — `BaseController::extractPaginationMetadata()` ahora incluye `has_more_pages` (boolean) para `LengthAwarePaginator`**. Antes solo emitía 4 keys (`current_page, last_page, per_page, total`). `ListManager::getExtraData()` YA emitía las 5 keys — drift fixed. Frontend `@makroz/web` `useMkInfiniteList` lee `last_page` (no se rompe), pero consumers que leen `has_more_pages` veían `undefined` runtime. `@makroz/core` `MkListResponse<T>.__extraData` type ya pineaba `has_more_pages?: boolean` (línea 53) — no requiere cross-stack update. CursorPaginator NO emite `has_more_pages` (no tiene el método, solo `next_cursor` / `prev_cursor`).
+- **BUG-NEW-auto-discover-serve (CRITICAL) — `MK_AUTO_DISCOVER_ABILITIES=true` ya NO brickea `php artisan serve`**. 2 bugs pineados: (1) `runningInConsole()` retorna `true` para `artisan serve` (Laravel CLI server cuenta como "console context"), así que el check dejaba pasar y auto-discover corría en el boot del HTTP server. (2) `$this->app->call(DiscoverAbilitiesCommand::class, ['--force' => true])` trataba la FQCN como callable, fallando con `Call to undefined function DiscoverAbilitiesCommand()`. Fix: skip cuando `$_SERVER['argv']` incluye cualquier long-running CLI context (`serve`, `octane:start`, `octane:reload`, `horizon`, `horizon:supervisor`, `queue:work`, `queue:listen`, `schedule:work`, `schedule:run`) + uso de `\Illuminate\Support\Facades\Artisan::call('mk:discover-abilities', ['--force' => true, '--json' => true])` en lugar del malformed `$this->app->call(Class, params)`. El guard pre-existente para `mk:discover-abilities` (avoid infinite recursion) se preserva. Consumer ya NO necesita comentar el flag en `.env` (R-AD-021 workaround absorbed).
+
+### Migration guide (v1.7.0 → v1.7.1-rc1)
+
+**Sin breaking changes**. Los 3 fixes son BC-safe:
+
+- (a) Scaffolders que ya pineaban `--with-crud` en v1.7.0 ahora NO necesitan el workaround `sed` post-`mk:make:auth-user`. El `routes/api.php` generado viene con `mk.auth:{scope}` + `mk.ability:{scope}.{scope_plural}.create` limpios out-of-the-box.
+- (b) Consumers que leen `__extraData.has_more_pages` ahora lo reciben populado (antes era `undefined` para endpoints que pasaban paginator al `BaseController::sendResponse`).
+- (c) `MK_AUTO_DISCOVER_ABILITIES=true` en `.env` es ahora seguro para `php artisan serve`. El dev puede pinear el flag sin riesgo de brickear el server.
+
+**Consumer action**: bump `composer.json` a `^1.7.1` cuando se libere el GA (post-fase 13 RETO validation). En RC1, RETO puede usar `path repo` o `"dev"` constraint para validar el fix end-to-end antes del GA.
+
 ## [v1.7.0] - 2026-06-28 — GA — R-PKG-024 Single-level envelope (PROHIBIDO `data.data`)
 
 > **Source**: Mario flipió la decisión OBS-01 ("by design, NO se unificar", pineada en R-PKG-031 sprint 2026-06-28) → "ningún endpoint o DTO debe tener anidamiento `data.data`". GA trigger inmediato. BC break cross-stack (per R-G-033, válido mientras RETO migre en el mismo sprint).

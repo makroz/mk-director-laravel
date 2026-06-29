@@ -109,18 +109,32 @@ abstract class BaseController extends LaravelController
      * matching the `@makroz/core` `MkResponse<T>.__extraData` contract
      * and the `useMkInfiniteList` consumption shape in web + mobile.
      *
+     * R-PKG-031 PKG-NEW-18 fix (2026-06-28, RETO fase 12 feedback):
+     * `has_more_pages` is part of the canonical 5-key snake_case contract
+     * for LengthAwarePaginator (pineado in skill § R-PKG-024 + `@makroz/core`
+     * `MkListResponse<T>.__extraData` type línea 53). Without it, frontend
+     * infinite-scroll hooks that read `has_more_pages` (vs `last_page`)
+     * see `undefined` at runtime. `ListManager::getExtraData()` already
+     * emitted the 5-key shape; this helper is the canonical path used by
+     * `BaseController::sendResponse()` for any controller extending
+     * BaseController directly (auth, webhooks, OpenAPI) and was missing
+     * the 5th key. Drift fixed: both helpers now emit identical 5-key
+     * snake_case shape for LengthAwarePaginator (current_page, last_page,
+     * per_page, total, has_more_pages).
+     *
      * @param AbstractPaginator|CursorPaginator $paginator
-     * @return array{current_page?: int, last_page?: int, per_page?: int, total?: int, next_cursor?: string|null, prev_cursor?: string|null}
+     * @return array{current_page?: int, last_page?: int, per_page?: int, total?: int, has_more_pages?: bool, next_cursor?: string|null, prev_cursor?: string|null}
      */
     protected function extractPaginationMetadata($paginator): array
     {
         $meta = [];
 
         if ($paginator instanceof LengthAwarePaginator) {
-            $meta['current_page'] = $paginator->currentPage();
-            $meta['last_page']    = $paginator->lastPage();
-            $meta['per_page']     = $paginator->perPage();
-            $meta['total']        = $paginator->total();
+            $meta['current_page']   = $paginator->currentPage();
+            $meta['last_page']      = $paginator->lastPage();
+            $meta['per_page']       = $paginator->perPage();
+            $meta['total']          = $paginator->total();
+            $meta['has_more_pages'] = $paginator->hasMorePages();
         }
 
         if ($paginator instanceof CursorPaginator) {

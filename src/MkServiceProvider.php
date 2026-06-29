@@ -109,6 +109,30 @@ class MkServiceProvider extends ServiceProvider
      *
      * En CI/prod: dejar el flag en `false` (default). El `mk:discover-abilities`
      * se corre manualmente o como parte del deploy script.
+     *
+     * BUG-NEW-auto-discover-serve fix (2026-06-28, RETO fase 12 feedback):
+     * 2 problemas pineados a v1.7.0 que bricked dev servers con el flag activo:
+     *
+     *   1. `runningInConsole()` retorna `true` cuando corrés
+     *      `php artisan serve` (Laravel CLI server cuenta como "console context"),
+     *      así que el check de línea ~120 dejaba pasar. Auto-discover corría
+     *      en el boot del HTTP server, lo que no es lo deseado.
+     *
+     *   2. La llamada pineada a `$this->app->call()` con la FQCN del comando
+     *      como primer argumento está MAL — Laravel trata el primer arg como
+     *      `callable` y FQCN no es callable, así que se invocaba como
+     *      `DiscoverAbilitiesCommand()` function call, fallando con
+     *      `Call to undefined function DiscoverAbilitiesCommand()`. Bricked
+     *      cualquier dev con `MK_AUTO_DISCOVER_ABILITIES=true` en `.env`.
+     *
+     * Fix:
+     *   - Skip cuando `$_SERVER['argv']` incluye `serve` / `octane:start` /
+     *     `horizon` / `queue:work|listen` / `schedule:work|run` (todos contextos
+     *     "long-running" que no deberían triggear auto-discover en boot).
+     *   - Usar `Artisan::call('mk:discover-abilities', [...])` en vez de
+     *     `$this->app->call(Class, params)`. `Artisan::call` dispatcha via
+     *     el kernel Artisan, que bindea correctamente la instancia del
+     *     comando + argumentos.
      */
     protected function registerAutoDiscoverAbilities(): void
     {
@@ -120,6 +144,35 @@ class MkServiceProvider extends ServiceProvider
             return;
         }
 
+        // BUG-NEW-auto-discover-serve fix: skip "long-running" CLI contexts.
+        // `php artisan serve` arranca el HTTP server (no es un comando one-shot
+        // que deba triggear auto-discover). `octane:start`, `horizon`,
+        // `queue:work/listen`, `schedule:work/run` son todos similares: un
+        // proceso se queda corriendo después del boot, y auto-discover
+        // corría una vez al inicio, lo que:
+        //   (a) no tiene sentido semántico (discover es para sandbox/dev
+        //       de un comando one-shot, no para servers);
+        //   (b) bricked el server con el bug de `$this->app->call(Class, ...)`
+        //       que se veia como "Call to undefined function".
+        $skipArgs = [
+            'serve',
+            'octane:start',
+            'octane:reload',
+            'horizon',
+            'horizon:supervisor',
+            'queue:work',
+            'queue:listen',
+            'schedule:work',
+            'schedule:run',
+        ];
+        if (isset($_SERVER['argv']) && is_array($_SERVER['argv'])) {
+            foreach ($_SERVER['argv'] as $arg) {
+                if (in_array($arg, $skipArgs, true)) {
+                    return;
+                }
+            }
+        }
+
         // Don't auto-run when the artisan command IS mk:discover-abilities
         // (avoid infinite recursion when developers run it interactively).
         if (isset($_SERVER['argv'][1]) && str_starts_with((string) $_SERVER['argv'][1], 'mk:discover-abilities')) {
@@ -127,7 +180,13 @@ class MkServiceProvider extends ServiceProvider
         }
 
         try {
-            $exitCode = $this->app->call(DiscoverAbilitiesCommand::class, [
+            // BUG-NEW-auto-discover-serve fix: use Artisan::call() instead of
+            // $this->app->call(Class, params). The latter treats the FQCN as
+            // a callable, which fails with "Call to undefined function"
+            // (the FQCN is not a function). Artisan::call dispatches via the
+            // Artisan kernel and properly binds the command instance +
+            // arguments.
+            $exitCode = \Illuminate\Support\Facades\Artisan::call('mk:discover-abilities', [
                 '--force' => true,
                 '--json' => true,
             ]);
