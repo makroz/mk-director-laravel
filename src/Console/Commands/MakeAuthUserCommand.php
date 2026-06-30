@@ -336,7 +336,7 @@ PHP
             //
             // Default: vacío (sin --with-crud). --with-crud: apiResource pineado.
             '{{apiResourceEntry}}' => $withCrud
-                ? "    /**\n     * Resource scaffoldeado por el paquete para responses API.\n     * `BaseController::autoTransform()` lo aplica automáticamente al serializar\n     * este modelo. POST-R-PKG-036: pineado como `public` (instance properties\n     * public son accesibles sin Eloquent __get magic intercept).\n     */\n    public \$apiResource = \\App\\Modules\\{$moduleName}\\Http\\Resources\\{$moduleName}Resource::class;\n\n"
+                ? "    /**\n     * Resource scaffoldeado por el paquete para responses API.\n     * `BaseController::autoTransform()` lo aplica automáticamente al serializar\n     * este modelo. POST-R-PKG-036: pineado como `public` (instance properties\n     * public son accesibles sin Eloquent __get magic intercept).\n     */\n    public \$apiResource = \\App\\Modules\\{$scope}\\Http\\Resources\\{$scope}Resource::class;\n\n"
                 : '',
             // R-PKG-015 BUG-NEW-06: FK override para `roles()`.
             // R-PKG-022 BUG-NEW-33: extended with `->using(MkRoleUserPivot::class)`

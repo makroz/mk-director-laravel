@@ -36,10 +36,20 @@ class {{ModuleName}}Controller extends SmartController
      */
     protected array $mkConfig = [
         'model'           => {{ModuleName}}::class,
+        // HALLAZGO-NEW-FASE17-03 fix: pinear `resource` explícito para que
+        // `CRUDSmart::autoTransform()` (override del BaseController) emita
+        // el Resource scaffoldeado. Sin esto, `autoTransform()` retorna
+        // el Model crudo porque `$mkConfig['resource']` es null, e ignora
+        // completamente el Resource scaffoldeado (`{Scope}Resource`).
+        'resource'        => \App\Modules\{{ModuleName}}\Http\Resources\{{ModuleName}}Resource::class,
         'service'         => {{ModuleName}}Service::class,
         'store_request'   => StoreAdminRequest::class,
         'update_request'  => UpdateAdminRequest::class,
-        'searchable'      => ['name', 'full_name', 'email', 'ci'],
+        // HALLAZGO-NEW-FASE17-04 fix: el stub pineaba
+        // `['name', 'full_name', 'email', 'ci']` pero la tabla admins default
+        // solo tiene `name` + `email` → mk:status warning. Si el consumer quiere
+        // searchable extendido, pinear --profile-fields=full_name,ci al scaffolder.
+        'searchable'      => ['name', 'email'],
         'with'            => ['roles', 'directAbilities'],
         'allowedIncludes' => ['roles', 'roles.abilities', 'directAbilities'],
         'features'        => [

@@ -31,6 +31,9 @@ class RoleController extends SmartController
      */
     protected array $mkConfig = [
         'model'           => Role::class,
+        // HALLAZGO-NEW-FASE17-03 fix: pinear `resource` explícito para que
+        // `CRUDSmart::autoTransform()` emita el RoleResource scaffoldeado.
+        'resource'        => \App\Modules\{{ModuleName}}\Http\Resources\RoleResource::class,
         'service'         => {{ModuleName}}Service::class,
         'searchable'      => ['name'],
         'with'            => ['abilities'],

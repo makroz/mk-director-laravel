@@ -14,6 +14,11 @@ class {{ModuleName}}Controller extends SmartController
      */
     protected array $mkConfig = [
         'model' => {{ModuleName}}::class,
+        // HALLAZGO-NEW-FASE17-03 fix: pinear `resource` explícito para que
+        // `CRUDSmart::autoTransform()` (override del BaseController) emita
+        // el Resource scaffoldeado. Sin esto, `autoTransform()` retorna
+        // el Model crudo porque `$mkConfig['resource']` es null.
+        'resource' => \App\Modules\{{ModuleName}}\Http\Resources\{{ModuleName}}Resource::class,
         'service' => {{ModuleName}}Service::class,
         'dto' => {{ModuleName}}DTO::class,
         'searchable' => ['name', 'description'],

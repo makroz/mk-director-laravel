@@ -41,6 +41,9 @@ class AbilityController extends SmartController
      */
     protected array $mkConfig = [
         'model'           => Ability::class,
+        // HALLAZGO-NEW-FASE17-03 fix: pinear `resource` explícito para que
+        // `CRUDSmart::autoTransform()` emita el AbilityResource scaffoldeado.
+        'resource'        => \App\Modules\{{ModuleName}}\Http\Resources\AbilityResource::class,
         'service'         => {{ModuleName}}Service::class,
         'searchable'      => ['name', 'description'],
         'with'            => [],
