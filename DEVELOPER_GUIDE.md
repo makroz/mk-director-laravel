@@ -1634,6 +1634,205 @@ Maneja automáticamente la subida de archivos y la conversión de rutas a URLs c
 
 ---
 
+## ⚠️ 6. Limitaciones Conocidas (R-PKG-034)
+
+> **Sección nueva (2026-06-29)**: Pineada como parte del sprint R-PKG-034 (code review 4R).
+> Tabla de hallazgos del code review que **NO se aplicaron como fix en el sprint**,
+> con la razón documentada. Para cada uno, ver `CHANGELOG.md` § v1.8.2-rc0 + las
+> reglas binding (`R-MK-001`, `R-PKG-024`, `R-PKG-032`).
+
+### 6.1 `FileStoragePlugin::beforeDelete()` y `afterDelete()` están vacíos
+
+**Hallazgo**: R1 MEDIUM (4R review). Cuando un modelo con file fields se elimina,
+los archivos quedan huérfanos en disk/S3.
+
+**Por qué NO se fixea en este sprint**:
+
+- **BC-break potencial**: implementar cleanup automático borra archivos que
+  consumers pinean en otros lugares (S3 multi-tenant, shared uploads entre
+  modelos, etc.). La heurística de "qué archivos son seguros de borrar" no es
+  genérica — depende de la estrategia del consumer.
+- **Por diseño**: el plugin pineó `beforeSave()` para upload automático, pero
+  deja la limpieza como responsabilidad del consumer (extensibilidad explícita
+  sobre acoplamiento implícito).
+
+**Workaround recomendado**:
+
+```php
+// En tu AppServiceProvider o model observer, manejar el cleanup manualmente:
+class YourModelObserver
+{
+    public function deleted(YourModel $model): void
+    {
+        $disk = 'public';
+        foreach (config('mk_director.plugins_config.file_storage.fields', []) as $field) {
+            if ($model->{$field}) {
+                Storage::disk($disk)->delete($model->{$field});
+            }
+        }
+    }
+}
+
+// Registrar en App\Providers\AppServiceProvider::boot():
+YourModel::observe(YourModelObserver::class);
+```
+
+**Backlog**: track en `mk-director-issues` § "FileStoragePlugin cleanup". Se
+reevaluará cuando un consumer reporte el problema concreto (R-G-033: dogfooding-first).
+
+### 6.2 `MkBelongsToMany` reflection fragility (332 líneas)
+
+**Hallazgo**: R3 HIGH (4R review). La clase usa reflection para copiar
+properties internas de Laravel `BelongsToMany`. Si Laravel cambia internals en
+un major version, puede romperse silenciosamente.
+
+**Por qué NO se fixea en este sprint**:
+
+- **Refactor de alto costo**: `BelongsToMany::__construct()` toma 8 argumentos
+  (query, parent, table, foreignPivotKey, relatedPivotKey, parentKey, relatedKey,
+  relationName). Calcular todos manualmente es frágil y duplica lógica interna
+  de Laravel.
+- **Defense-in-depth pineado**: el código actual tiene guards (`isInitialized`,
+  `hasType()`, `isBuiltin()` checks) que skip properties conflictivas. Si Laravel
+  agrega una property typed incompatible, el código la skipea en vez de crashear.
+- **Trade-off documentado en source**: el docblock de `MkBelongsToMany` líneas
+  14-73 explica por qué se hizo así, qué cubre (`attach`, `sync`, `toggle`,
+  etc.), y cómo opt-out (`override roles() sin retornar MkBelongsToMany`).
+
+**Backlog**: refactor a delegate-only cuando Laravel rompa BC. Pin tested
+Laravel version range explícitamente en `composer.json` (`^13.0`, OK).
+Agregar smoke test que asserte `BelongsToMany::$using` exists cuando
+Laravel 14 salga.
+
+### 6.3 `CRUDSmart.php` 506-line god trait
+
+**Hallazgo**: R2 HIGH (4R review). El trait contiene `index/show/store/update/destroy`
++ 17 helper methods. Excede el "300-line comfort zone".
+
+**Por qué NO se fixea en este sprint**:
+
+- **Cohesivo al ciclo CRUD**: todos los métodos son parte de index/show/store/update/destroy.
+  Refactor a 2-3 traits (`CRUDIndex`, `CRUDMutate`, `CRUDConfig`) introduce
+  overhead de composición sin valor inmediato para el consumer.
+- **R-G-030 KISS**: la solución más simple que resuelve el problema es la actual.
+  Sobre-ingeniería prematura (YAGNI).
+
+**Backlog**: extraer trait `CRUDConfig` con los helpers de configuración
+(`getModel`, `getCacheTTL`, `getCacheTags`, `getDTOClass`, `getEnumMap`) si un
+consumer necesita override parcial de la lógica CRUD sin override todo el trait.
+Threshold para actuar: cuando un segundo consumer pida override parcial.
+
+### 6.4 `MakeAuthUserCommand` sin transactional rollback
+
+**Hallazgo**: R3 HIGH (4R review). El scaffolder genera 17+ archivos en una sola
+ejecución. Si un file write falla a mitad, queda un módulo parcial.
+
+**Por qué NO se fixea en este sprint**:
+
+- **Scaffolder es dev-time, no runtime**: el escenario "disk full a mitad de
+  scaffoldear 17 archivos" es rarísimo y el developer lo resuelve manualmente
+  (`rm -rf app/Modules/NewScope` + retry).
+- **`--dry-run` ya pineado (R-PKG-021)**: el flag existe para preview antes de
+  escribir. Si se necesita, agregar un check pre-flight de disk space + permisos.
+- **Alternative rechazada**: "escribir a temp dir y mover atómicamente" introduce
+  complejidad significativa (atomic move cross-filesystem, permissions handling,
+  symlinks) para un caso de uso edge.
+
+**Backlog**: agregar check pre-flight (disk space + permissions) + warning
+post-generation con conteo de archivos generados vs esperados. Track cuando
+un developer reporte pérdida de trabajo.
+
+### 6.5 `HasAbilities/HasRoles` `pivotExtras/abilityPivotExtras` DRY violation
+
+**Hallazgo**: R2 MEDIUM + R4 MEDIUM (4R review). Las dos traits contienen
+lógica similar (static cache + `Schema::hasColumn` + payload construction).
+
+**Por qué NO se fixea en este sprint**:
+
+- **Divergencias sutiles**: `pivotExtras()` (HasRoles) usa tabla `role_user`,
+  `abilityPivotExtras()` (HasAbilities) usa tabla `ability_user`. El payload
+  es idéntico (`['user_type' => static::class]`), pero el cache keying es
+  table-specific. Extraer a un trait compartido requiere pasar `$table` por
+  parámetro, lo que pierde el cache estático elegante.
+- **Tests ya pinean el contrato**: ambos métodos tienen tests que assertean
+  el payload correcto. Refactorizar requiere reescribir tests + validar no
+  regresión.
+
+**Backlog**: extraer a `PivotExtrasTrait` con método abstracto `pivotTableName()`.
+Track cuando un tercer pivot use case aparezca (e.g., `team_user` para multi-team).
+
+### 6.6 `LintBoundariesCommand` regex-only detection (no AST)
+
+**Hallazgo**: R5 MEDIUM (4R review). La regla de MME parsea `use` statements
+via regex. No detecta aliased imports (`use Foo\Bar as BarModel`) ni dynamic
+imports dentro de closures.
+
+**Por qué NO se fixea en este sprint**:
+
+- **Symfony AST parsing es dependency mayor**: agrega nikic/php-parser o
+  symfony/php-parser como dependencia obligatoria del paquete. Trade-off
+  vs. el costo del lint imperfecto.
+- **Tasa de bypass real = 0**: en RETO (single consumer dogfooding), 0
+  developers han reportado bypass del lint en 5 sprints.
+
+**Workaround si necesitás stricter enforcement**:
+
+```bash
+# Agregar como lint step custom en tu CI:
+nikic/php-parser-based script que detecte use Foo\Bar as BarModel
+```
+
+**Backlog**: AST parsing si bypass incidents ocurren en producción (≥ 1 report).
+Threshold: 2 incidents en 2 sprints consecutivos.
+
+### 6.7 `MkDTO::detectEnums()` + `DTOFactory::detectEnums()` DRY violation
+
+**Hallazgo**: R4 MEDIUM (4R review). Dos clases tienen `detectEnums()` con
+lógica similar pero NO idéntica.
+
+**Por qué NO se fixea en este sprint**:
+
+- **Lógicas divergentes**:
+  - `MkDTO::detectEnums()` (línea 89) usa namespace-prefix matching
+    (`App\Modules\{Module}\Enums`).
+  - `DTOFactory::detectEnums()` (línea 178) usa dirname-based resolution
+    (`dirname($modelDir) . '/Enums'`) + custom resolver config
+    (`mk_director.enum_namespace_resolver`).
+- **No 1-a-1 refactorable** sin perder features (DTOFactory tiene config override).
+
+**Backlog**: extraer a `EnumDetector` utility class con dos métodos
+(`detectByNamespace()`, `detectByDirname()`) que ambos callers delegan. Track
+cuando un tercer use case pida enum detection.
+
+### 6.8 `OpenApiController::docs()` hardcoded Swagger CDN version
+
+**Hallazgo**: R4 LOW (4R review). Línea 67-71 hardcoded `swagger-ui-dist@5.11.0`.
+
+**Por qué NO se fixea en este sprint**:
+
+- **`spec()` SÍ usa config** (`mk_director.openapi.cache_ttl`, línea 42). Solo
+  `docs()` no usa config — es una inconsistencia cosmética, no un bug.
+- **Upgrade path claro**: si necesitás cambiar la versión, override el método
+  `docs()` en tu controller subclass.
+
+**Backlog**: agregar `mk_director.openapi.cdn_version` config con default
+`5.11.0`. Track cuando un consumer pida self-hosted Swagger UI assets.
+
+### 6.9 Hallazgos que fueron FALSO POSITIVO del reviewer
+
+Para referencia, estos hallazgos del 4R review **NO eran bugs reales** — el
+código actual ya pineaba el patrón descrito:
+
+| Hallazgo | Sev | Por qué es falso positivo |
+|---|---|---|
+| `DiscoverAbilitiesCommand` hardcoded `users.*` pattern | LOW R1 | Las abilities se generan con `"{$scope}.{$resource}.{$verb}"` (línea 658), donde scope y resource derivan del module name + model FQCN. NO pinea `users.*` hardcoded. |
+| `BaseController::autoTransform()` lacks null-safe operator | MEDIUM R3 | Línea 205-208 ya tiene `if ($first && isset($first->apiResource))` — la guarda null-safe está pineada. |
+| `MakeAuthUserCommand` --scope no propaga | HIGH R5 | El scope SÍ propaga a nombres de archivos generados (`{$scope}Controller.php`, etc., líneas 932-968). Los nombres de stubs internos son convención sin impacto en runtime. |
+| `MkDTO::detectEnums()` couples to filesystem sin logging | MEDIUM R3 | El código actual (líneas 89-118) tiene try/catch robusto + config resolver (`mk_director.enum_namespace_resolver`). |
+| `CacheManager::flush()` crashes sin recovery | MEDIUM R3 | Decisión arquitectónica pineada en R-PKG-024 (rc13): fail-fast con mensaje accionable es preferible a "nuke" con `$cache->clear()` que borra TODO el cache. La scaffolder avisa al consumer sobre la config requerida. |
+
+---
+
 ## 🛡️ 7. Diagnóstico y Estándares de Calidad
 
 MK-Director incluye un ecosistema de validación proactiva para evitar errores de configuración comunes.

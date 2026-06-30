@@ -68,13 +68,6 @@ trait HasRoles
      *
      * Acepta string|Role: si pasás un Role ya materializado, se
      * usa directo.
-     */
-    /**
-     * Asigna un rol al usuario por nombre. Si el rol no existe,
-     * lo crea con el guard del `auth_scope` del usuario.
-     *
-     * Acepta string|Role: si pasás un Role ya materializado, se
-     * usa directo.
      *
      * R-PKG-016 BUG-NEW-16 fix: cuando la pivot `role_user` tiene la
      * columna `user_type` (caso MME-polimórfico, `mk:make:auth-user X
@@ -158,11 +151,6 @@ trait HasRoles
         return $this->roles->firstWhere('name', $name);
     }
 
-    /**
-     * Sincroniza los roles del usuario (reemplaza los existentes).
-     *
-     * @param  array<int, string|Role>  $roles
-     */
     /**
      * Sincroniza los roles del usuario (reemplaza los existentes).
      *

@@ -4,25 +4,29 @@ declare(strict_types=1);
 
 namespace Mk\Director\Managers;
 
-class SearchManager implements \Mk\Director\Contracts\SearchManagerInterface
-{
-    const REPEATED_COMAS = ',,,,,,';
+use Illuminate\Database\Eloquent\Builder;
+use Mk\Director\Contracts\SearchManagerInterface;
+use Mk\Director\Contracts\SearchStrategyInterface;
+use Mk\Director\Strategies\LikeSearchStrategy;
 
-    protected ?\Mk\Director\Contracts\SearchStrategyInterface $strategy = null;
+class SearchManager implements SearchManagerInterface
+{
+    protected ?SearchStrategyInterface $strategy = null;
 
     /**
      * Set search strategy
      */
-    public function setStrategy(\Mk\Director\Contracts\SearchStrategyInterface $strategy): self
+    public function setStrategy(SearchStrategyInterface $strategy): self
     {
         $this->strategy = $strategy;
+
         return $this;
     }
 
     /**
      * Get search strategy
      */
-    public function getStrategy(): ?\Mk\Director\Contracts\SearchStrategyInterface
+    public function getStrategy(): ?SearchStrategyInterface
     {
         return $this->strategy;
     }
@@ -35,20 +39,20 @@ class SearchManager implements \Mk\Director\Contracts\SearchManagerInterface
         if (empty($search)) {
             return [];
         }
-        
+
         return array_filter(
             array_map('trim', explode(',', $search)),
-            fn($term) => $term !== ''
+            fn ($term) => $term !== ''
         );
     }
 
     /**
      * Apply search to the query
      */
-    public function search(\Illuminate\Database\Eloquent\Builder $query, string $search, array $searchBy): \Illuminate\Database\Eloquent\Builder
+    public function search(Builder $query, string $search, array $searchBy): Builder
     {
-        if (!$this->strategy) {
-            $this->strategy = new \Mk\Director\Strategies\LikeSearchStrategy();
+        if (! $this->strategy) {
+            $this->strategy = new LikeSearchStrategy;
         }
 
         $terms = $this->parse($search);
@@ -70,90 +74,15 @@ class SearchManager implements \Mk\Director\Contracts\SearchManagerInterface
         });
     }
 
-    /**
-     * Parse and apply search criteria to a query builder (legacy static method).
-     */
-    public static function searchStatic($model, &$busquedas, &$inicio, $fin, $joins = '')
-    {
-        for ($i = $inicio; $i < $fin; $i++) {
-            $join = self::getJoinType($busquedas, $i);
-            $busqueda = self::getBusqueda($busquedas, $i);
-            
-            if (self::isEndGroup($busqueda)) {
-                self::resetGroupEnd($busquedas, $i);
-                $inicio = $i + 1;
-                return $model;
-            }
-            
-            if (self::isStartNestedGroup($busqueda, $i, $inicio)) {
-                $model = self::handleNestedGroup($model, $busquedas, $i, $fin, $joins, $join);
-                $inicio = $i;
-                continue;
-            }
-            
-            if ($i >= $fin || empty($busqueda[0])) {
-                continue;
-            }
-            
-            $model = self::applySearchCriteria($model, $busqueda, $join, $joins);
-        }
-        $inicio = $i;
-        return $model;
-    }
-
-    private static function getJoinType($busquedas, $i)
-    {
-        return $i > 0 ? explode(',', $busquedas[$i - 1] . self::REPEATED_COMAS)[3] : '';
-    }
-
-    private static function getBusqueda(&$busquedas, $i)
-    {
-        return explode(',', $busquedas[$i] . self::REPEATED_COMAS);
-    }
-
-    private static function isEndGroup($busqueda)
-    {
-        return isset($busqueda[4]) && $busqueda[4] == ')*';
-    }
-
-    private static function resetGroupEnd(&$busquedas, $i)
-    {
-        $nBusqueda = explode(',', $busquedas[$i] . self::REPEATED_COMAS);
-        $nBusqueda[4] = '';
-        $busquedas[$i] = join(',', $nBusqueda);
-    }
-
-    private static function isStartNestedGroup($busqueda, $i, $inicio)
-    {
-        return (isset($busqueda[4]) && (($busqueda[4] == '((' && $i > $inicio) || ($busqueda[4] == '(' && $i >= $inicio)));
-    }
-
-    private static function handleNestedGroup($model, &$busquedas, &$i, $fin, $joins, $join)
-    {
-        $nBusqueda = explode(',', $busquedas[$i] . self::REPEATED_COMAS);
-        $nBusqueda[4] = '(';
-        $busquedas[$i] = join(',', $nBusqueda);
-        $callback = function ($query) use (&$busquedas, &$i, $fin, $joins) {
-            return self::searchStatic($query, $busquedas, $i, $fin, $joins);
-        };
-        return ($join == '' || $join == 'a') ? $model->where($callback) : $model->orWhere($callback);
-    }
-
-    private static function applySearchCriteria($model, $busqueda, $join, $joins)
-    {
-        $column = $busqueda[0];
-        $operator = $busqueda[1];
-        $value = $busqueda[2] ?? '';
-
-        if (!empty($joins) && !str_contains($column, '.')) {
-            $column = $model->getModel()->getTable() . '.' . $column;
-        }
-
-        if ($operator == 'l' || $operator == 'like') {
-            $operator = 'like';
-            $value = "%$value%";
-        }
-
-        return ($join == 'o') ? $model->orWhere($column, $operator, $value) : $model->where($column, $operator, $value);
-    }
+    // R-PKG-034 BUG-NEW-35: removed `searchStatic()` + helpers estáticos
+    // (`getJoinType`, `getBusqueda`, `isEndGroup`, `resetGroupEnd`,
+    // `isStartNestedGroup`, `handleNestedGroup`, `applySearchCriteria`) +
+    // constante `REPEATED_COMAS`. Era código legacy de v0.x (pre-CRUDSmart)
+    // con naming español (`$busquedas`) y parsing de comma-delimited strings
+    // via `strtok()`-equivalente. Confirmado muerto por `grep` cross-package
+    // (0 call-sites). Si algún consumer externo dependía de este método,
+    // el error será catchado en su test suite con un mensaje accionable
+    // (`Call to undefined method Mk\Director\Managers\SearchManager::searchStatic()`).
+    // Migración: reescribir a la API moderna `search($query, $search, $searchBy)`
+    // + strategy pattern via `setStrategy()`. Ver DEVELOPER_GUIDE §"Search API".
 }

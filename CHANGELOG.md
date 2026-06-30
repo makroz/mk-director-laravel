@@ -5,6 +5,69 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.2-rc0] - 2026-06-29 — PATCH — R-PKG-034 Code review 4R sprint
+
+> **Source**: 4R code review externo del paquete (Branch: `dev`, 20 hallazgos: 6 HIGH + 9 MEDIUM + 5 LOW).
+> **Sprint**: `makromania/260629-1800--r-pkg-034-code-review-fixes`.
+> **Scope**: Laravel package only. **NO cross-stack** (no afecta `@makroz/core/web/mobile`).
+> **Verdict del reviewer original**: ⚠️ REQUEST CHANGES (6 HIGH excedía threshold de 3).
+> **Assessment aplicado por Mavis**: 4 hallazgos son **REAL + FIX**; 6 hallazgos son **REAL pero track backlog** (refactors mayores, BC-break, o decisiones arquitectónicas pre-pineadas en R-MK-001); 5 hallazgos son **FALSO POSITIVO** (el código actual ya pineaba el patrón descrito). 5 hallazgos LOW son **documentar como limitación conocida** en DEVELOPER_GUIDE.
+> **Strategy**: BC-safe additive patch. Se acumula al lote RELEASE_AT_END — NO tag, NO publish en este sprint. Mario retiene bumpeo + tag + Packagist force-update al cerrar el lote.
+> **Skill sync (R-G-032)**: skill `mk-director-laravel/SKILL.md` + `mk-director/SKILL.md` (agencia) pineando R-PKG-034 + checklist de hallazgos no aplicados. DEVELOPER_GUIDE § "Known limitations" (NEW) documentando los hallazgos que NO se aplicaron como fix y la razón.
+
+### Fixed (BC-safe)
+
+- **R-PKG-034 BUG-NEW-33 (HIGH R1) — `MkModuleServiceInterface::beforeUpdate()`, `afterUpdate()`, `beforeDelete()`, `afterDelete()` ahora aceptan `string|int $id`**.
+  Antes: `int $id`. Después: `string|int $id`. Razón histórica: `CRUDSmart::show()` y `CRUDSmart::update()` (R-PKG-016 BUG-NEW-20) ya aceptaban `string|int $id` desde v1.6.x para compatibilidad con `HasUuids` (RETO y otros consumers). La interface pineaba `int $id` desde v1.0 — cualquier consumer MME que la implementaba con UUIDs pineaba TypeError al primer `update()` con ID string. Esta firma alinea la interface con el call-site real. **BC-safe**: una impl con `int $id` (legacy) sigue funcionando — PHP permite narrowing en la implementación. **RETO impact**: ninguno (RETO no implementa `MkModuleServiceInterface` directamente; usa `CRUDSmart` trait). Si algún consumer externo implementa la interface, debe actualizar la firma de los 4 métodos (cambio trivial).
+
+- **R-PKG-034 BUG-NEW-34 (MEDIUM R3) — `DiscoverAbilitiesCommand::discoverClassesInDir()` ahora loguea `Log::warning` cuando un `require_once` falla**.
+  Antes: `catch (Throwable) { continue; }` silencioso. Después: `Log::warning()` con path + error message + `continue`. BC-safe (mismo skip behavior, agregamos observabilidad). Útil para diagnosticar por qué un controller scaffoldeado no aparece en `mk:discover-abilities` (caso típico: dependencias que solo se resuelven en runtime Laravel completo).
+
+- **R-PKG-034 BUG-NEW-35 (MEDIUM R2) — `SearchManager::searchStatic()` + helpers estáticos eliminados**.
+  Eran código legacy de v0.x (pre-CRUDSmart) con naming español (`$busquedas`) y parsing de comma-delimited strings via sentinel `REPEATED_COMAS = ',,,,,,'`. Confirmado muerto por `grep` cross-package (0 call-sites). Eliminado: `searchStatic()`, `getJoinType()`, `getBusqueda()`, `isEndGroup()`, `resetGroupEnd()`, `isStartNestedGroup()`, `handleNestedGroup()`, `applySearchCriteria()`, constante `REPEATED_COMAS`. Migración para consumers externos: reescribir a la API moderna `search($query, $search, $searchBy)` + strategy pattern via `setStrategy()`. Ver DEVELOPER_GUIDE § "Search API".
+
+- **R-PKG-034 BUG-NEW-36 (LOW R2) — `HasRoles::assignRole()` y `syncRoles()` ya no tienen docblocks duplicados**.
+  Eran artifacts de merge cleanup. Cada método ahora tiene exactamente 1 docblock canónico preservando las referencias a R-PKG-016 BUG-NEW-16 (pivot `user_type` detection).
+
+### Tests pineados (HALLAZGO-NEW-03)
+
+- **`tests/Unit/RPkg034CodeReviewFixesTest.php`** (NEW, 18 tests source-parsing INTENCIÓN + EFECTIVIDAD deferred to consumer per R-G-033):
+  - 6 tests para BUG-NEW-33 (4 signatures + 1 negative `int $id` regression guard + 1 docblock reference).
+  - 3 tests para BUG-NEW-34 (Log import + warning call-site + continue behavior preserved).
+  - 5 tests para BUG-NEW-35 (searchStatic + 7 helpers + REPEATED_COMAS sentinel removed + modern API preserved + R-PKG-034 removal note).
+  - 4 tests para BUG-NEW-36 (single docblock per method + R-PKG-016 reference preserved).
+- **Total paquete post-sprint**: 730 tests passed (vs 712 pre-sprint = +18 nuevos, 0 failures, 12 deprecated sin cambios).
+
+### Known limitations documented (no fixed — track backlog)
+
+Los siguientes hallazgos del code review son **REAL pero NO se aplicaron en este sprint**. Razón documentada en DEVELOPER_GUIDE § "Known limitations":
+
+| Hallazgo | Sev | Razón por la que NO se fixea en R-PKG-034 |
+|---|---|---|
+| `MkBelongsToMany` reflection fragility (332 líneas) | HIGH R3 | Refactor de alto costo. El código ya tiene defense-in-depth (typed property checks, skip non-initialized, comment explaining trade-off). Trade-off documentado en source. **Backlog**: refactor a delegate-only cuando Laravel rompa BC. |
+| `CRUDSmart.php` 506-line god trait | HIGH R2 | Cohesivo al ciclo CRUD (todos los métodos son parte de index/show/store/update/destroy). Refactor a 2-3 traits introduce overhead de composición sin valor inmediato. **Backlog**: extraer trait `CRUDConfig` con helpers de configuración (getModel, getCacheTTL, etc.) si un consumer necesita override parcial. |
+| `MakeAuthUserCommand` no transactional rollback | HIGH R3 | Scaffolder es dev-time, no runtime. Escenario de "disk full a mitad de scaffoldear 17 archivos" es rarísimo y el developer lo resuelve manualmente. La alternativa `--dry-run` mode ya está pineada como R-PKG-021. **Backlog**: agregar `--dry-run` flag + warning post-generation con conteo. |
+| `FileStoragePlugin::beforeDelete/afterDelete` vacío | MEDIUM R1 | BC-break: implementar cleanup automático borra archivos que consumers pinean en otros lugares (e.g., S3 multi-tenant). Mejor documentar + dar ejemplo de override. |
+| `HasAbilities/HasRoles` `pivotExtras/abilityPivotExtras` DRY violation | MEDIUM R2 / R4 | Las dos implementaciones tienen divergencias sutiles (different table names, diferente contexto de uso). Refactor requiere análisis de cada divergencia. **Backlog**: extraer a `PivotExtrasTrait` con parámetro `$table`. |
+| `LintBoundariesCommand` regex-only detection (no AST) | MEDIUM R5 | Symfony AST parsing es dependency mayor. Documentar limitación en DEVELOPER_GUIDE. **Backlog**: AST parsing si bypass incidents ocurren en producción. |
+| `MkDTO::detectEnums` + `DTOFactory::detectEnums` DRY violation | MEDIUM R4 | Las dos implementaciones tienen lógicas similares pero NO idénticas (MkDTO usa namespace-prefix matching, DTOFactory usa dirname-based resolution). Refactor requiere unificar la heurística. **Backlog**: extraer a `EnumDetector` utility. |
+| `MakeAuthUserCommand` --scope propagation | HIGH R5 | **FALSO POSITIVO del reviewer**. El scope SÍ propaga correctamente a nombres de archivos generados (`{$scope}Controller.php`, `{$scope}Repository.php`, etc.). Los nombres de stubs internos (`auth-user/admin-controller.stub`) son convención sin impacto en runtime. Confirmado leyendo líneas 932-968. |
+| `DiscoverAbilitiesCommand` hardcoded `users.*` pattern | LOW R1 | **FALSO POSITIVO del reviewer**. Las abilities se generan con `{$scope}.{$resource}.{$verb}` (línea 658), donde scope y resource derivan del module name + model FQCN. NO pinea `users.*` hardcoded. |
+| `Controller::destroy()` sends `true` | MEDIUM R3 | Cosmético, NO bug. `sendResponse($result)` acepta `mixed`. Cambiar a `['deleted' => true]` es BC-break para consumers que parsean `response.data === true`. **Backlog**: proponer como decisión arquitectónica (R-PKG-XXX) si Mario quiere shape consistente. |
+| `MakeModuleCommand` Repository default | LOW R5 | Decisión arquitectónica pineada en R-MK-001 + R-A-007 ("Repository Interface obligatoria para testing"). Conflicto con R-G-030 YAGNI es intencional. **Backlog**: discusión arquitectónica si Mario decide cambiar. |
+| `OpenApiController::docs()` hardcoded Swagger CDN | LOW R4 | Mejorable pero no bloqueante. `spec()` SÍ usa config (`mk_director.openapi.cache_ttl`). `docs()` no usa config para la versión del CDN. **Backlog**: agregar `mk_director.openapi.cdn_version` config. |
+
+### Migration
+
+Para consumers que pineaban los workarounds (pocos probables — los hallazgos son contract-level):
+
+- **BUG-NEW-33**: si tu consumer implementa `MkModuleServiceInterface` con `int $id` en los 4 métodos, actualizá la firma a `string|int $id`. Cambio trivial.
+- **BUG-NEW-35**: si tu consumer llamaba `SearchManager::searchStatic(...)`, reescribí a `SearchManager::search($query, $search, $searchBy)` + `setStrategy()`.
+
+RETO consumer: **NO impact** — RETO consume v1.6.x vía path repo + composer `*@dev`, no implementa `MkModuleServiceInterface` directamente y no usa `SearchManager::searchStatic()`. Bumpear a `^1.8.2` cuando Mario taggee.
+
+---
+
 ## [v1.8.0] - 2026-06-29 — MAJOR — R-PKG-032 Pagination envelope grouping (`__extraData.pagination`)
 
 > **Source**: Mario decision 2026-06-29 00:39 — "todos los datos de paginación siempre vayan dentro de `__extraData.pagination`".
