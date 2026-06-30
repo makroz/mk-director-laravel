@@ -5,6 +5,68 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.4-rc0] - 2026-06-30 — PATCH — R-PKG-038 RETO fase 17 feedback fixes (scaffolder batch)
+
+> **Source**: RETO fase 17 clean rebuild sobre `makroz/director-laravel v1.8.3-rc0` + `@makroz/web v1.5.0-rc0` + `@makroz/core v1.3.1`.
+> **Sprint**: `makromania/260630-1340--r-pkg-038-fase17-feedback-fixes` (Laravel sub-batch acumulado al lote RELEASE_AT_END).
+> **Scope**: Laravel package only — scaffolder fixes. **Cross-stack companion**: `@makroz/web` SKILL sync (HALLAZGO-NEW-FASE17-05..13, 9 docs drift observations, no code changes).
+> **Strategy**: BC-safe additive patch (3 scaffolder fixes — 1 CRITICAL typo + 1 HIGH resource config + 1 LOW searchable bogus). Se acumula al lote RELEASE_AT_END — NO tag, NO publish en este sprint. Mario retiene bumpeo + tag + Packagist force-update al cerrar el lote.
+> **Skill sync (R-G-032)**: skill `mk-director-web/SKILL.md` pine 9 docs drift fixes (HALLAZGO-NEW-FASE17-05..13) — ver `.makromania/agency/skills/mk-director-web/SKILL.md`. Skill `mk-director-laravel/SKILL.md` SIN cambios (los 3 fixes son scaffolder-pure, no requieren doc nueva).
+> **Cross-ref**: HALLAZGO-NEW-FASE16-01 (R-PKG-036) pineó `{$moduleName}` PHP interpolation — HALLAZGO-NEW-FASE17-01 corrige el variable name (typo) del fix previo (`{$moduleName}` → `{$scope}`). Cierra el bug class completo.
+
+### Fixed (BC-safe)
+
+- **R-PKG-038 HALLAZGO-NEW-FASE17-01 (CRITICAL scaffolder) — `MakeAuthUserCommand:339` corrige typo `{$moduleName}` → `{$scope}` en el reemplazo `{{apiResourceEntry}}`**.
+  Antes (R-PKG-036 pineó): el comment del array `$factoryReplacements` documentaba el fix PHP interpolation `{$moduleName}`, pero el resto del closure consistentemente usa `{$scope}` (variable definida en el scope del comando, no `{$moduleName}`). El primer pass de `generateStub()` aplicaba `str_replace` al stub; el segundo pass (PHP interpolation runtime) intentaba resolver `{$moduleName}` — pero esa variable NO está definida en el closure, solo `{$scope}`. Resultado: ejecutar `php artisan mk:make:auth-user X --with-crud` explotaba con `ErrorException: Undefined variable $moduleName` cuando se renderizaba el closure que genera el `public $apiResource` para el modelo scaffoldeado.
+  Después: `\$apiResource = \\App\\Modules\\{$scope}\\Http\\Resources\\{$scope}Resource::class;` — variable name corregido, cierre del bug class completo de HALLAZGO-NEW-FASE16-01.
+  **BC strategy**: BC-fix de scaffolder (zero runtime behavior change; pine los stubs limpios). Source-parsing NO detectaba esta clase de bugs (PHP parsea OK `{$moduleName}` como variable válida — solo falla runtime cuando se invoca el closure). Pre-flight e2e scaffolder debería ser obligatorio en CI para makroz/director-laravel (backlog).
+  **RETO impact**: puede regenerar scope con `mk:make:auth-user Admin --with-crud --force` sin workaround manual en el consumer.
+
+- **R-PKG-038 HALLAZGO-NEW-FASE17-03 (HIGH scaffolder) — 4 stubs scaffoldeados pinean `'resource'` explícito en `$mkConfig`**.
+  Antes: `CRUDSmart::autoTransform()` (override del `BaseController::autoTransform()` en `src/Traits/CRUDSmart.php:500`) usa `$this->mkConfig['resource']` para resolver el Resource, NO `$model->apiResource`. El scaffolder `--with-crud` generaba los controllers (Admin/Role/Ability) + Resources (AdminResource/RoleResource/AbilityResource) PERO NO pineaba `'resource'` en `mkConfig`. Resultado: `CRUDSmart::autoTransform()` retornaba Model CRUDO sin transformación. El Resource scaffoldeado era completamente IGNORADO en runtime. Síntoma: `GET /api/admins` retornaba items con keys `id, name, email, email_verified_at, auth_scope, created_at, updated_at, roles, direct_abilities` — FALTABAN `abilities` flat top-level (HALLAZGO-NEW-FASE15-06 contract), `photo_path`, `photo_url`. Items venían como Model serializado + relations loaded raw con pivot data, NO como Resource output.
+  Después: 4 stubs pinean `'resource' => \App\Modules\{Scope}\Http\Resources\{Resource}::class` explícito:
+  - `admin-controller.stub` (HALLAZGO-NEW-FASE17-03 primary target): `resource` → `\App\Modules\{{ModuleName}}\Http\Resources\{{ModuleName}}Resource::class`
+  - `role-controller.stub`: `resource` → `\App\Modules\{{ModuleName}}\Http\Resources\RoleResource::class` (Role es global del paquete)
+  - `ability-controller.stub`: `resource` → `\App\Modules\{{ModuleName}}\Http\Resources\AbilityResource::class` (Ability es global del paquete)
+  - `controller.stub` (genérico, módulo no-auth-user): `resource` → `\App\Modules\{{ModuleName}}\Http\Resources\{{ModuleName}}Resource::class`
+  **BC strategy**: BC-additive (nuevo key en `$mkConfig`, default `null`). CRUDSmart ya tenía el consumer (`$this->mkConfig['resource']` lookup); ahora el scaffolder pinea el path EXPLÍCITO. Single source of truth > dual fallback que puede divergir (BaseController via `property_exists($data, 'apiResource')` vs CRUDSmart via `$mkConfig['resource']`).
+  **Defense-in-depth**: ambos paths pinean Resource out-of-the-box — BaseController::autoTransform() para controllers no-CRUD (AuthController, webhooks, OpenAPI), CRUDSmart::autoTransform() para controllers CRUD. Cero workarounds del consumer.
+  **RETO impact**: puede regenerar Admin module desde 0 con `mk:make:auth-user Admin --with-crud` y `GET /api/admins` ahora retorna items con `abilities` flat top-level + `photo_path` + `photo_url` correctos out-of-the-box. Cero workaround manual.
+
+- **R-PKG-038 HALLAZGO-NEW-FASE17-04 (LOW scaffolder) — `admin-controller.stub` corrige searchable bogus `['name', 'full_name', 'email', 'ci']` → `['name', 'email']`**.
+  Antes: el stub pineaba 4 searchable fields, pero la tabla `admins` default del paquete solo tiene columnas `name` + `email` (no `full_name`, no `ci`). `php artisan mk:status` reportaba 2 warnings: "El campo searchable 'X' no existe en la tabla 'Y'." Search con esos campos retornaba resultados vacíos silenciosamente (sin error, solo false negative).
+  Después: searchable = `['name', 'email']` (solo columnas que existen en tabla default). Si el consumer quiere `full_name` + `ci` searchable, pinear `--profile-fields=full_name,ci` al scaffolder (R-PKG-014) — el scaffolder crea las columnas automáticamente y luego pinea el searchable correspondiente.
+  **BC strategy**: BC-fix de scaffolder (zero runtime behavior change para consumers que regeneraron; consumers existentes pueden opcional limpiar el mkConfig manualmente).
+  **RETO impact**: cero warnings en `mk:status` post-regeneración.
+
+### Workarounds absorbed (consumer side)
+
+- RETO puede regenerar `Admin` scope sin workaround manual en `protected $apiResource = AdminResource::class` (el scaffolder pine el string resuelto correctamente via HALLAZGO-NEW-FASE17-01).
+- RETO puede remover el workaround `'resource' => AdminResource::class` agregado manualmente al `mkConfig` del AdminController/RoleController/AbilityController (HALLAZGO-NEW-FASE17-03 pine el `resource` explícito en los 4 stubs).
+- RETO `mk:status` ya no emite los 2 warnings de "searchable field not in table" (HALLAZGO-NEW-FASE17-04).
+
+### Migration
+
+NO requiere migración. Todos los fixes son scaffolder-only (zero runtime impact en consumers existentes).
+
+### Tests
+
+- **Laravel**: 746/746 verde pre-R-PKG-038 (los 3 fixes son scaffolder-pure, no requieren tests source-parsing — HALLAZGO-NEW-03 cross-project lesson: source-parsing pine INTENCIÓN pero no EFECTIVIDAD). Pre-flight e2e scaffolder pendiente para CI (`mk:make:auth-user SmokeTest --with-crud` + verificar que NO explota; backlog).
+- **Cross-stack (frontend)**: `@makroz/web` SKILL.md pine 9 docs drift fixes (HALLAZGO-NEW-FASE17-05..13). 0 código TS/JS modificado. 159/159 tests verde sin cambios.
+- **RETO e2e (post-regeneración)**: pendiente Mario bumpeo + rebuild para validar `abilities` flat top-level + `photo_path` + `photo_url` + zero `mk:status` warnings.
+
+### Cross-refs
+
+- Feedback source: `.makromania/projects/reto/modules/admin/FEEDBACK-TO-MK-DIRECTOR-fase17.md` (415 líneas, 13 hallazgos).
+- RETO sprint: `makromania/260630-1100--reto-fase17-admin-clean-rebuild-v184`.
+- SDD: `.makromania/projects/mk-director/openspec/changes/2026-06-30-r-pkg-038-fase17-feedback-fixes/`.
+- Skills: `.makromania/agency/skills/mk-director-web/SKILL.md` (9 drift fixes); `mk-director-laravel/SKILL.md` SIN cambios.
+- Rules: R-G-032 (sync), R-G-033 (dogfooding-first), R-MK-001 (MME), R-PKG-024 (envelope).
+- Predecesor: R-PKG-035 (fase 15) + R-PKG-036 (fase 16), ambos ya mergeados en v1.8.3-rc0.
+- Pattern reusable cross-project: HALLAZGO-NEW-FASE17-01 demuestra que **source-parsing no detecta typos en variable interpolation**. La validación que detecta ESTA clase de bugs es e2e scaffolder (correr `mk:make:auth-user X --with-crud` y verificar que NO explota). Pre-flight e2e scaffolder debería ser obligatorio en CI.
+
+---
+
 ## [v1.8.3-rc0] - 2026-06-30 (HALLAZGO-NEW-FASE16 batch) — PATCH — R-PKG-036 RETO fase 16 feedback fixes (Laravel sub-batch)
 
 > **Source**: RETO fase 16 clean rebuild cross-stack sobre `makroz/director-laravel v1.8.3-rc0 (R-PKG-035 pineado)` + `@makroz/web v1.5.0-rc0` + `@makroz/core v1.3.1`.
