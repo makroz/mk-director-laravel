@@ -235,6 +235,22 @@ trait CRUDSmart
             ? \Mk\Director\Managers\CacheManager::remember($cacheKey, $this->getCacheTags(), $this->getCacheTTL(), $resolver)
             : $resolver();
 
+        // R-PKG-036 HALLAZGO-NEW-FASE15-06 fix (extension): si el modelo
+        // extiende `AuthUser` (R-PKG-015 BUG-NEW-06 + R-PKG-022),
+        // pinear `loadMissing(['roles', 'directAbilities'])` después del
+        // paginator para que `getEffectiveAbilities()` (HALLAZGO-06 fix
+        // pineado en v1.8.3-rc0) funcione en el index, NO solo en
+        // single resource (show/me). Defense-in-depth: ZERO costo runtime
+        // para non-AuthUser models (instanceof check).
+        if (
+            is_subclass_of($modelClass, \Mk\Director\Auth\Models\AuthUser::class)
+            || $modelClass === \Mk\Director\Auth\Models\AuthUser::class
+        ) {
+            foreach ($paginator->items() as $item) {
+                $item->loadMissing(['roles', 'directAbilities']);
+            }
+        }
+
         // R-PKG-024 (v1.7.0 GA) — single-level envelope. We pass the
         // paginator directly to sendResponse(); the BaseController
         // auto-extracts items to `data` and pagination metadata to

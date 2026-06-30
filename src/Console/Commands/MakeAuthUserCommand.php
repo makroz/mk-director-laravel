@@ -318,13 +318,25 @@ PHP
             // R-PKG-035 HALLAZGO-NEW-FASE15-07 fix: cuando `--with-crud`
             // está activo, pinear `protected $apiResource = {Scope}Resource::class`
             // para que `BaseController::autoTransform()` aplique el Resource
-            // scaffoldeado out-of-the-box. Pre-v1.8.3 el consumer debía pinearlo
-            // a mano (workaround pineado en RETO `Admin.php` con `public` para
-            // bypassear el `isset()` bug del BaseController).
+            // scaffoldeado out-of-the-box.
+            //
+            // HALLAZGO-NEW-FASE16-01 fix: el value del array usaba
+            // `{{ModuleName}}` literal, que generaba code no-resoluble.
+            // Mismo bug class que PKG-NEW-17 (R-PKG-031). Fix: PHP
+            // interpolation `{$moduleName}`. El primer pass de
+            // `generateStub()` solo aplica str_replace al stub (.php file),
+            // NO a los replacement values; el segundo pass (interpolación
+            // PHP) sí los resuelve.
+            //
+            // HALLAZGO-NEW-FASE16-03 fix: pineamos `public $apiResource`
+            // (revertido del `protected` que pineó R-PKG-035). Razón:
+            // Eloquent __get intercepta property access protected/instance
+            // y retorna null si no está en $attributes. `public` evita
+            // la interceptación y mantiene la forma "Laravel way".
             //
             // Default: vacío (sin --with-crud). --with-crud: apiResource pineado.
             '{{apiResourceEntry}}' => $withCrud
-                ? "    /**\n     * Resource scaffoldeado por el paquete para responses API.\n     * `BaseController::autoTransform()` lo aplica automáticamente al serializar\n     * este modelo (post-R-PKG-035, la prop puede ser `protected` — antes requería\n     * `public` por bug en `isset()` que el paquete fixea en v1.8.3-rc0).\n     */\n    protected \$apiResource = \\App\\Modules\\{{ModuleName}}\\Http\\Resources\\{{ModuleName}}Resource::class;\n\n"
+                ? "    /**\n     * Resource scaffoldeado por el paquete para responses API.\n     * `BaseController::autoTransform()` lo aplica automáticamente al serializar\n     * este modelo. POST-R-PKG-036: pineado como `public` (instance properties\n     * public son accesibles sin Eloquent __get magic intercept).\n     */\n    public \$apiResource = \\App\\Modules\\{$moduleName}\\Http\\Resources\\{$moduleName}Resource::class;\n\n"
                 : '',
             // R-PKG-015 BUG-NEW-06: FK override para `roles()`.
             // R-PKG-022 BUG-NEW-33: extended with `->using(MkRoleUserPivot::class)`
