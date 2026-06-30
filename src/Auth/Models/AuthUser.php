@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Str;
 use Laravel\Sanctum\HasApiTokens;
 use Mk\Director\Auth\Concerns\HasAbilities;
 use Mk\Director\Auth\Concerns\HasRoles;
@@ -48,6 +49,79 @@ abstract class AuthUser extends Authenticatable implements AuthenticatableContra
     use HasTenantMembership;
     use HasUuids;
     use Notifiable;
+
+    /**
+     * R-PKG-035 DB defensive boot (v1.8.3-rc0).
+     *
+     * HALLAZGO-NEW-FASE15 (Mario DB question 2026-06-30): la tabla
+     * `auth_users` existe porque `AuthUser::$table = 'auth_users'` (línea
+     * abajo). Las subclases concretas (Admin, Member, etc.) generadas
+     * por `mk:make:auth-user` DEBEN sobreescribir `protected $table`
+     * con su tabla del scope (e.g. `protected $table = 'admins'`).
+     *
+     * Drift footgun: si el scaffolder falla en pine `protected $table`
+     * (e.g. stub regeneration que borra la línea por error), la
+     * subclase cae al default `'auth_users'` — tabla vacía que el
+     * paquete publica pero NUNCA popula. Resultado: queries de login,
+     * me, refresh retornan `null` o 404 silenciosamente, sin error
+     * claro para el developer.
+     *
+     * Este boot listener pinea un error explícito en runtime si la
+     * subclase NO sobreescribió `$table`. Defense-in-depth (per Mario
+     * feedback: "soluciones de raíz, no parches" — elimina la clase de
+     * bugs).
+     *
+     * BC-safe:
+     * - NO se dispara en la base class `AuthUser` directa (no es
+     *   instanciable — es abstract).
+     * - NO se dispara en subclases que pinean `protected $table`
+     *   correctamente (caso normal post-`mk:make:auth-user --with-crud`).
+     * - SOLO se dispara si la subclase NO pine `protected $table` —
+     *   drift footgun case.
+     */
+    protected static function boot(): void
+    {
+        parent::boot();
+
+        static::preventTableDriftFootgun();
+    }
+
+    /**
+     * Pinear error explícito si una subclase no override `$table`.
+     * Helper separado para mantener `boot()` limpio y testeable.
+     */
+    protected static function preventTableDriftFootgun(): void
+    {
+        // No check para la base class (no instanciable directo).
+        if (static::class === self::class) {
+            return;
+        }
+
+        $reflection = new \ReflectionClass(static::class);
+        if (! $reflection->hasProperty('table')) {
+            return; // No pine $table en ningún ancestor.
+        }
+
+        $property = $reflection->getProperty('table');
+
+        // Si la propiedad `$table` está declarada en la SUBCLASE
+        // (no en ancestor), asumimos que es override consciente.
+        // Si está heredada de `AuthUser` (default `'auth_users'`),
+        // es drift footgun → error explícito.
+        if ($property->class !== static::class) {
+            $expectedTable = Str::snake(Str::pluralStudly(class_basename(static::class)));
+
+            throw new \LogicException(sprintf(
+                '%s extends AuthUser pero NO override protected $table. '.
+                'Si no se sobreescribe, AuthUser usaría la tabla "auth_users" (vacía, no usada). '.
+                'Pineá en tu modelo del scope: protected $table = "%s"; '.
+                'Para regenerar el scaffold completo: php artisan mk:make:auth-user %s --with-crud --force',
+                static::class,
+                $expectedTable,
+                class_basename(static::class),
+            ));
+        }
+    }
 
     /**
      * Tabla por defecto del modelo base. Subclases concretas pueden

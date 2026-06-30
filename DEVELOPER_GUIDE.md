@@ -78,6 +78,62 @@ MK-Director se basa en el principio de **Zero-Coupling** y **Configuración sobr
 >
 > Ver [CHANGELOG.md `## [v1.7.1-rc1]`](CHANGELOG.md) para el detalle completo + sprint `makromania/260628-2030--pkg-new-17-18-and-bug-auto-discover-serve` (PR #40 mergeado a dev 2026-06-29).
 
+### 1.7. Modelos globales vs per-scope y tablas compartidas (R-PKG-035)
+
+Decisión arquitectónica pineada en R-MK-001 (MME): algunos modelos son **per-scope** (viven en `App\Modules\{Scope}\Models`), otros son **globales del paquete** (compartidos por todos los scopes). Pregunta recurrente de consumers: "¿por qué existen estas tablas y cómo identifican a qué scope pertenecen?". Tabla canónica:
+
+| Tabla | Filas por scope | Polimórfica | Quién la usa | Por qué existe |
+|---|---|---|---|---|
+| `users` | 0 (Laravel default) | — | Laravel | Default migration de `0001_01_01_000000_create_users_table.php`. **NO la usa el paquete** — la mantenemos por BC con defaults Laravel (no romper consumers que esperan la tabla). |
+| `auth_users` | 0 (vacía siempre) | — | Base `AuthUser::$table = 'auth_users'` | Default `$table` del modelo abstracto `Mk\Director\Auth\Models\AuthUser`. **Las subclases (Admin, Member, etc.) DEBEN sobreescribirla con `protected $table = '{scope}s'`** vía scaffolder. Si una subclase NO override, **v1.8.3-rc0+ `AuthUser::boot()` defensivo lanza `LogicException`** con mensaje accionable. Antes de v1.8.3, drift footgun: el modelo intentaba usar `auth_users` (tabla vacía) → queries de login/me/refresh retornaban `null` silenciosamente. **Ahora error explícito en runtime**. |
+| `{scope}s` (e.g. `admins`, `members`, `customers`) | Una fila por user | — | Modelo del scope (`Admin`, `Member`, `Customer`) | **Per-scope**. Cada scope es un bounded context autocontenido (R-MK-001). Cross-scope data leak es estructuralmente imposible. |
+| `roles` | Global (4 default) | — | `Mk\Director\Auth\Models\Role` | **Global del paquete** — compartida por todos los scopes. NO crear `App\Modules\Admin\Models\Role`. Usá los globales vía `use Mk\Director\Auth\Models\Role`. |
+| `abilities` | Global (~16 default) | — | `Mk\Director\Auth\Models\Ability` | **Global del paquete** — compartida por todos los scopes. Misma justificación que `roles`. |
+| `role_user` | Polimórfica | ✅ `(role_id, user_id, user_type)` con UNIQUE index | Pivot `MkRoleUserPivot` | **Polimórfica**. `user_type = 'App\Modules\Admin\Models\Admin'` (auto-set por `MkBelongsToMany::from()`). Permite que un admin y un member tengan roles independientes sin colisión. **Cross-scope data leak imposible**. |
+| `ability_user` | Polimórfica | ✅ `(ability_id, user_id, user_type)` con UNIQUE index | Pivot `MkAbilityUserPivot` | **Polimórfica** (idéntica justificación a `role_user`). `user_type` discrimina el scope. |
+| `ability_role` | Global (no polimórfica) | ❌ `(ability_id, role_id)` | Tabla de abilities del paquete | **NO polimórfica — y está BIEN**. Las abilities son globales del paquete, los roles son globales del paquete, por lo tanto el vínculo `ability ↔ role` también es global. La dimensión que cambia por scope es el `user` (cada scope tiene su tabla), y eso lo resuelve `user_type` en `role_user`/`ability_user`. |
+| `personal_access_tokens` | Sanctum v4 | — | `Laravel\Sanctum\PersonalAccessToken` | Sanctum tokens. Si tu scope usa `HasUuids`, aplicá `php artisan mk:fix:sanctum-uuids` para parchear `morphs` → `uuidMorphs`. |
+
+**Implicancia práctica**:
+- Cuando agregues un scope nuevo (e.g. `Member` con `php artisan mk:make:auth-user Member`), el scaffolder crea la tabla `members` + asigna roles via la pivot polimórfica `role_user` con `user_type = 'App\Modules\Member\Models\Member'`. Las roles existentes (4 default: `super-admin`, `admin`, `editor`, `viewer`) son compartidas con scope Admin — un `member` puede tener el rol `viewer` si se lo asignás. Si querés segregar abilities por scope visualmente, usá convención de naming (`admin.admins.view`, `member.profiles.edit`).
+- `AuthUser::boot()` defensivo (R-PKG-035, v1.8.3-rc0+) — si tu scope NO override `protected $table`, lanza error explícito en lugar de usar `auth_users` silenciosamente. Ver § 1.6 de este DEVELOPER_GUIDE para el detalle.
+
+**Cross-ref**: R-MK-001 (MME), R-PKG-021 + R-PKG-022 (polimorfismo triple defensa), R-PKG-035 (DB defensive + helper público).
+
+### 1.8. CORS para Sanctum cookie mode futuro (R-PKG-035 + HALLAZGO-NEW-FASE15-09)
+
+Hoy el paquete funciona con Bearer tokens via `Authorization` header (Laravel default CORS OK). El `@makroz/web` + `@makroz/mobile` están pineando cookies httpOnly como storage backend (`CookieStorageAdapter` + `SecureStore`), pero el flujo actual sigue siendo Bearer header.
+
+**Cuando migres a Sanctum v4 cookie mode** (cookies httpOnly emitidos por el server, browser los manda automáticamente):
+- Laravel default `HandleCors` middleware NO incluye `Access-Control-Allow-Credentials: true` + el origin debe ser específico (NO `*`). Si no lo configurás, el browser bloquea la response.
+
+**Snippet para `config/cors.php`** (futuro, post-v1.8.3 cuando bumpees a Sanctum cookie mode):
+```php
+<?php
+
+return [
+    'paths' => ['api/*', 'sanctum/csrf-cookie'],
+    'allowed_methods' => ['*'],
+    'allowed_origins' => explode(',', env('FRONTEND_ORIGINS', 'http://localhost:3000')),
+    'allowed_origins_patterns' => [],
+    'allowed_headers' => ['*'],
+    'exposed_headers' => [],
+    'max_age' => 0,
+    'supports_credentials' => true,  // ← CRÍTICO para cookies httpOnly cross-origin
+];
+```
+
+**Variables de entorno necesarias** (`.env`):
+```bash
+FRONTEND_ORIGINS="http://localhost:3000,https://admin.tu-dominio.com"
+SANCTUM_STATEFUL_DOMAINS="localhost:3000,admin.tu-dominio.com"
+SESSION_DOMAIN=".tu-dominio.com"
+```
+
+**Por qué NO está pineado por default en el scaffolder**: Bearer flow funciona perfectamente con defaults. Cookie mode es decisión del consumer (YAGNI pinearlo si no se usa). El scaffolder `mk:make:auth-user --with-cookie-mode` (futuro) podría pinearlo automáticamente si Mario lo aprueba en un sprint próximo.
+
+**Cross-ref**: HALLAZGO-NEW-FASE15-09 (R-PKG-035), `mk-director-web/SKILL.md` § CookieStorageAdapter, `mk-director-mobile/SKILL.md` § SecureStore.
+
 ---
 
 ## ⚙️ 2. Configuración (`mk_director.php`)

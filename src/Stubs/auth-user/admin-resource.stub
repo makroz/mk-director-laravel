@@ -14,6 +14,14 @@ use Illuminate\Http\Resources\Json\JsonResource;
  *
  * Solo se incluyen relaciones si están `whenLoaded` para evitar N+1.
  * `photo_url` se calcula via accessor en el modelo (`getPhotoUrlAttribute()`).
+ *
+ * R-PKG-035 HALLAZGO-NEW-FASE15-06 fix: pinear `'abilities' => ...` al
+ * top-level con el helper `getEffectiveAbilities()` del trait `HasAbilities`
+ * (v1.8.3-rc0+). Esto cumple el contrato cross-stack con
+ * `@makroz/web AdminDto.abilities: string[]` que consume
+ * `useMkAuth().hasAbility(ability)` y la sidebar permission-gated.
+ * Pre-v1.8.3 el consumer debía aplanar manualmente
+ * (`$this->roles->flatMap(fn ($r) => $r->abilities->pluck('name'))`).
  */
 class {{ModuleName}}Resource extends JsonResource
 {
@@ -29,11 +37,13 @@ class {{ModuleName}}Resource extends JsonResource
             'photo_path' => $this->photo_path,
             'photo_url' => $this->photo_url,
             'auth_scope' => $this->auth_scope,
+            // HALLAZGO-NEW-FASE15-06: abilities flat top-level — cross-stack contract.
+            'abilities' => $this->getEffectiveAbilities(),
             'roles' => $this->whenLoaded('roles', fn () => $this->roles->map(fn ($r) => [
                 'id' => $r->id,
                 'name' => $r->name,
             ])),
-            'direct_abilities' => $this->whenLoaded('directAbilities', fn () => $this->directAbilities->pluck('name')),
+            'direct_abilities' => $this->whenLoaded('directAbilities', fn () => $this->directAbilities->pluck('name')->all()),
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
         ];
