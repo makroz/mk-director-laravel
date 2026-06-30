@@ -49,6 +49,7 @@ class {{ModuleName}} extends AuthUser
      */
     protected $table = '{{moduleNamePluralLower}}';
 
+    {{apiResourceEntry}}
     /**
      * Columna usada para login. Configurable via `--login-field=<campo>`.
      * Default BC: `email`. Otros casos comunes: `ci`, `phone`, `username`.

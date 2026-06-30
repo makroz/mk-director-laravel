@@ -326,6 +326,39 @@ trait HasAbilities
     }
 
     /**
+     * Devuelve los nombres de abilities efectivos (directos + vía rol) sin
+     * duplicar, como array plano `string[]`. Helper público para que
+     * Resources scaffoldeados (e.g. `AdminResource::toArray()`) puedan
+     * emitir `abilities: string[]` flat al top-level, cumpliendo el
+     * contrato cross-stack con `@makroz/web AdminDto.abilities: string[]`
+     * que consume `useMkAuth().hasAbility(ability)` y la sidebar
+     * permission-gated.
+     *
+     * R-PKG-035 HALLAZGO-NEW-FASE15-06 fix (v1.8.3-rc0): sin este helper,
+     * cada consumer tenía que aplanar manualmente en su Resource:
+     *
+     *     $eff = collect();
+     *     foreach ($this->roles as $r) {
+     *         if ($r->relationLoaded('abilities')) $eff = $eff->merge($r->abilities->pluck('name'));
+     *     }
+     *     if ($this->relationLoaded('directAbilities')) $eff = $eff->merge($this->directAbilities->pluck('name'));
+     *     return ['abilities' => $eff->unique()->values()->all(), ...];
+     *
+     * Ahora el Resource scaffoldeado puede usar:
+     *
+     *     'abilities' => $this->whenLoaded('roles', fn () => $this->getEffectiveAbilities()),
+     *
+     * BC-safe: additive public method. No reemplaza `collectAllAbilityNames()`
+     * (mantenido private como fallback para `canMkLegacy()`).
+     *
+     * @return array<int, string>
+     */
+    public function getEffectiveAbilities(): array
+    {
+        return $this->collectAllAbilityNames()->values()->all();
+    }
+
+    /**
      * Resolve the AbilityResolver from the container, or null if no
      * container is available (unit tests that did not boot the app).
      */

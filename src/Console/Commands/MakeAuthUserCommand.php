@@ -315,6 +315,17 @@ class MakeAuthUserCommand extends Command
     }
 PHP
                 : '',
+            // R-PKG-035 HALLAZGO-NEW-FASE15-07 fix: cuando `--with-crud`
+            // está activo, pinear `protected $apiResource = {Scope}Resource::class`
+            // para que `BaseController::autoTransform()` aplique el Resource
+            // scaffoldeado out-of-the-box. Pre-v1.8.3 el consumer debía pinearlo
+            // a mano (workaround pineado en RETO `Admin.php` con `public` para
+            // bypassear el `isset()` bug del BaseController).
+            //
+            // Default: vacío (sin --with-crud). --with-crud: apiResource pineado.
+            '{{apiResourceEntry}}' => $withCrud
+                ? "    /**\n     * Resource scaffoldeado por el paquete para responses API.\n     * `BaseController::autoTransform()` lo aplica automáticamente al serializar\n     * este modelo (post-R-PKG-035, la prop puede ser `protected` — antes requería\n     * `public` por bug en `isset()` que el paquete fixea en v1.8.3-rc0).\n     */\n    protected \$apiResource = \\App\\Modules\\{{ModuleName}}\\Http\\Resources\\{{ModuleName}}Resource::class;\n\n"
+                : '',
             // R-PKG-015 BUG-NEW-06: FK override para `roles()`.
             // R-PKG-022 BUG-NEW-33: extended with `->using(MkRoleUserPivot::class)`
             // + `MkBelongsToMany::from($relation)` so the auto user_type injection

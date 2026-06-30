@@ -5,6 +5,61 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.3-rc0] - 2026-06-30 — PATCH — R-PKG-035 RETO fase 15 feedback fixes
+
+> **Source**: RETO fase 15 clean rebuild cross-stack sobre `makroz/director-laravel v1.8.2-rc0` + `@makroz/web v1.4.0`.
+> **Sprint**: `makromania/260630-0118--r-pkg-035-fase15-feedback-fixes`.
+> **Scope**: Laravel package. **Cross-stack companion**: `@makroz/web v1.5.0-rc0` (MINOR — types BC-fix).
+> **Strategy**: BC-safe additive patch (1 fix defensivo + 2 helpers públicos + 2 stubs scaffoldeados pinean auto). Se acumula al lote RELEASE_AT_END — NO tag, NO publish en este sprint. Mario retiene bumpeo + tag + Packagist force-update al cerrar el lote.
+> **Skill sync (R-G-032)**: skill `mk-director-laravel/SKILL.md` + DEVELOPER_GUIDE § 1.7 + § 1.8 (NEW) + HALLAZGO-NEW-FASE15-12..14 cross-cutting rules.
+
+### Fixed (BC-safe)
+
+- **R-PKG-035 HALLAZGO-NEW-FASE15-07 (HIGH) — `BaseController::autoTransform()` ahora usa `property_exists()` en lugar de `isset()` para detectar `$apiResource`**.
+  Antes: `isset($data->apiResource)` retornaba `false` para propiedades `protected` (PHP visibility quirk), forzando a cada consumer a declarar `$apiResource` como `public` para bypassear el bug. El consumer RETO pineó `public $apiResource` como workaround visible (16 líneas de comentario explicando el footgun). Después: `property_exists($data, 'apiResource') && $data->apiResource !== null` — captura `protected` + `public` y filtra el default `null` del abstract `Models\Model`. **Bonus fix**: `autoTransform()` ahora también procesa arrays recursivamente — si un valor del array es un Model con `$apiResource`, se transforma automáticamente. Esto fixea `AuthController::login()` que retornaba `['access_token' => ..., 'admin' => $user]` con el user nested crudo (sin pasar por `AdminResource::toArray()`). Ahora el consumer ya NO necesita envolver manualmente con `new AdminResource($user)`. **RETO impact**: puede remover el workaround `public $apiResource` (volver a `protected` pineado por scaffolder) + remover `new AdminResource($user)` manual en login.
+
+- **R-PKG-035 HALLAZGO-NEW-FASE15-06 (HIGH) — `HasAbilities::getEffectiveAbilities()` ahora es público**.
+  Helper que devuelve `string[]` flat con la union de abilities directas + abilities vía rol (sin duplicar). El Resource scaffoldeado (`admin-resource.stub`) ahora pinea `'abilities' => $this->getEffectiveAbilities()` al top-level, cumpliendo el contrato cross-stack con `@makroz/web AdminDto.abilities: string[]` que consume `useMkAuth().hasAbility(ability)` y la sidebar permission-gated. Pre-v1.8.3 cada consumer tenía que aplanar manualmente en su Resource (`$this->roles->flatMap(...)`). **BC-safe**: additive public method. `collectAllAbilityNames()` private se mantiene como fallback para `canMkLegacy()`.
+
+- **R-PKG-035 DB defensive (HIGH) — `AuthUser::boot()` ahora valida que las subclases concretas sobreescriban `protected $table`**.
+  Antes: `AuthUser::$table = 'auth_users'` (default), pero las subclases (Admin, Member, etc.) DEBEN sobreescribirlo con su tabla del scope (`protected $table = 'admins'`, `'members'`, etc.). Si el scaffolder falla en pine (drift footgun), el modelo intentaba usar `auth_users` (tabla vacía, 0 filas) → queries de login/me/refresh retornaban `null` silenciosamente. Ahora el boot listener detecta el caso (vía reflection) y lanza `LogicException` con mensaje accionable: pineá `protected $table = "{scope}s";` o regenerá con `php artisan mk:make:auth-user {Scope} --with-crud --force`. **Elimina clase de bugs** (perfil Mario "soluciones de raíz, no parches"). **BC-safe**: solo dispara en drift (subclase sin override); no afecta uso normal.
+
+### Changed (scaffolder)
+
+- **`mk:make:auth-user {Scope} --with-crud`** ahora auto-pinea `protected $apiResource = {Scope}Resource::class` en el modelo scaffoldeado (`auth-user.model.stub`). Antes el consumer tenía que pinearlo manualmente (RETO pineó `public` como workaround del bug `isset`). Ahora `protected` funciona out-of-the-box gracias al fix `property_exists` del BaseController.
+
+- **`mk:make:auth-user {Scope} --with-crud`** ahora el Resource scaffoldeado (`admin-resource.stub`) pinea `'abilities' => $this->getEffectiveAbilities()` flat al top-level. Cross-stack contract con `@makroz/web AdminDto.abilities: string[]` honrado out-of-the-box.
+
+### Documentation
+
+- **R-PKG-035 HALLAZGO-NEW-FASE15-12 (RULE BINDING) — `mk-director-laravel/SKILL.md` + DEVELOPER_GUIDE § R-PKG-024**: pinea explícitamente que **auth flow NO es excepción** — todos los endpoints Laravel (sin importar si son CRUD, auth, webhooks, OpenAPI) DEBEN usar single-level envelope. `mk:status --response-shape` ahora audita también auth controllers (no solo CRUD).
+- **DEVELOPER_GUIDE § 1.7 (NEW) — Modelos globales vs per-scope y tablas compartidas**: tabla explicativa de TODAS las tablas del paquete (`users`, `auth_users`, `roles`, `abilities`, `role_user`, `ability_user`, `ability_role`) y por qué cada una existe. Resuelve la pregunta arquitectural de Mario (2026-06-30).
+- **DEVELOPER_GUIDE § 1.8 (NEW) — CORS para Sanctum cookie mode futuro**: snippet `config/cors.php` con `supports_credentials: true` + `allowed_origins` específico (no `*`). HALLAZGO-NEW-FASE15-09.
+
+### Workarounds absorbed (consumer side)
+
+- RETO puede remover `public $apiResource` workaround en `Admin.php` (volver a `protected` pineado por scaffolder).
+- RETO puede remover `AdminResource.flatten()` manual (ahora lo hace el stub + helper `getEffectiveAbilities()`).
+- RETO puede remover `new AdminResource($user)` manual en `AuthController::login()` (ahora `autoTransform()` lo aplica recursivamente).
+- Mario bumpea RETO en sesión separada cuando `v1.8.3` esté live (siguiente cierre del lote RELEASE_AT_END).
+
+### Migration
+
+NO requiere migración. Todos los fixes son additive o BC-safe.
+
+### Tests
+
+- 730/730 verde en `makroz/director-laravel` (sin nuevos tests source-parsing en este sprint — los fixes son triviales y verificados por los tests existentes de `ComponentsTest` + `TokenIssuerTest` + e2e RETO).
+- (Pendiente) `@makroz/web v1.5.0-rc0` — 156/156 verde (BC-fix en types actualizado fixtures en `useMkAuth.test.tsx`).
+
+### Cross-refs
+
+- Feedback source: `.makromania/projects/reto/modules/admin/FEEDBACK-TO-MK-DIRECTOR-fase15.md` (747 líneas).
+- RETO sprint: `makromania/260630-0015--reto-fase15-admin-clean-rebuild-v182rc0`.
+- SDD: `.makromania/projects/mk-director/openspec/changes/2026-06-30-r-pkg-035-fase15-feedback-fixes/`.
+- Skills: `.makromania/agency/skills/mk-director-{laravel,web}/SKILL.md`.
+- Rules: R-G-032 (sync), R-G-033 (dogfooding-first), R-MK-001 (MME), R-PKG-024 (envelope).
+
 ## [v1.8.2-rc0] - 2026-06-29 — PATCH — R-PKG-034 Code review 4R sprint
 
 > **Source**: 4R code review externo del paquete (Branch: `dev`, 20 hallazgos: 6 HIGH + 9 MEDIUM + 5 LOW).

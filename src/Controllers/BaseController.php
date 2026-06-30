@@ -194,18 +194,56 @@ abstract class BaseController extends LaravelController
 
     /**
      * Automatic transformation based on Model's apiResource property.
+     *
+     * R-PKG-035 HALLAZGO-NEW-FASE15-07 fix (v1.8.3-rc0):
+     * Previously this method used `isset($data->apiResource)`, which
+     * returns `false` for `protected` properties (PHP visibility quirk)
+     * and forces every consumer model to declare `$apiResource` as
+     * `public` to work — a footgun that broke the cross-stack RBAC
+     * contract (`@makroz/web AdminDto.abilities: string[]`) in RETO
+     * fase 15. The fix uses `property_exists()` which inspects the
+     * declaration regardless of visibility, then we add an explicit
+     * `!== null` check so the abstract `Models\Model::$apiResource = null`
+     * default does not instantiate a Resource of `null`.
+     *
+     * Adicionalmente (v1.8.3-rc0), ahora se procesan arrays recursivamente:
+     * si un valor del array es un Model con `$apiResource`, se transforma.
+     * Esto fixea el caso `AuthController::login()` que retorna un array
+     * `['access_token' => ..., 'admin' => $user]` — antes el user nested
+     * salía como modelo Eloquent crudo (con `password`, `pivot`, etc.) en
+     * vez de pasar por `AdminResource::toArray()`. Ahora se transforma
+     * automáticamente sin que el consumer tenga que envolver manualmente.
      */
     protected function autoTransform($data)
     {
         if ($data instanceof \Illuminate\Database\Eloquent\Model) {
-            return isset($data->apiResource) ? new $data->apiResource($data) : $data;
+            return property_exists($data, 'apiResource') && $data->apiResource !== null
+                ? new $data->apiResource($data)
+                : $data;
         }
 
         if ($data instanceof \Illuminate\Support\Collection || $data instanceof \Illuminate\Pagination\LengthAwarePaginator) {
             $first = $data->first();
-            if ($first && isset($first->apiResource)) {
+            if ($first && property_exists($first, 'apiResource') && $first->apiResource !== null) {
                 return $first->apiResource::collection($data);
             }
+        }
+
+        // HALLAZGO-NEW-FASE15-07 (recursivo): arrays con valores Model.
+        // Casos típicos: AuthController::login() retorna
+        // `['access_token' => ..., 'admin' => $user]`. Antes el user
+        // nested salía crudo. Ahora se transforma cada Model nested.
+        if (is_array($data)) {
+            foreach ($data as $key => $value) {
+                if ($value instanceof \Illuminate\Database\Eloquent\Model
+                    && property_exists($value, 'apiResource')
+                    && $value->apiResource !== null
+                ) {
+                    $data[$key] = new $value->apiResource($value);
+                }
+            }
+
+            return $data;
         }
 
         return $data;
