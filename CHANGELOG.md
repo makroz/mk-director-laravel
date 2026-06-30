@@ -5,6 +5,57 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.3-rc0] - 2026-06-30 (HALLAZGO-NEW-FASE16 batch) — PATCH — R-PKG-036 RETO fase 16 feedback fixes (Laravel sub-batch)
+
+> **Source**: RETO fase 16 clean rebuild cross-stack sobre `makroz/director-laravel v1.8.3-rc0 (R-PKG-035 pineado)` + `@makroz/web v1.5.0-rc0` + `@makroz/core v1.3.1`.
+> **Sprint**: `makromania/260630-1000--r-pkg-036-fase16-feedback-fixes` (Laravel sub-batch acumulado a v1.8.3-rc0).
+> **Scope**: Laravel package only. **Cross-stack companion**: `@makroz/web v1.5.0-rc0 (R-PKG-036 batch)` — ver CHANGELOG `packages/mk-web/CHANGELOG.md` para HALLAZGO-04 (build script CSS modules) + HALLAZGO-06 (`useApi.delete<R>`).
+> **Strategy**: BC-safe additive patch (1 scaffolder PHP interpolation fix + 1 access modifier revert + 1 SmartController loadMissing). Acumula al lote RELEASE_AT_END — NO tag, NO publish en este sprint. Mario retiene bumpeo + tag + Packagist force-update al cerrar el lote.
+> **Skill sync (R-G-032)**: skill `mk-director-laravel/SKILL.md` gotchas #18-20 nuevos pineando HALLAZGO-NEW-FASE16-01/03/05.
+> **Cross-ref**: HALLAZGO-NEW-FASE16-04 (mk-web build script) + HALLAZGO-NEW-FASE16-06 (`useApi.delete<R>`) están en `packages/mk-web/CHANGELOG.md` v1.5.0-rc0 R-PKG-036 batch.
+
+### Fixed (BC-safe)
+
+- **R-PKG-036 HALLAZGO-NEW-FASE16-01 (HIGH) — `MakeAuthUserCommand` ahora usa PHP interpolation `{$moduleName}` para resolver placeholders `{{ModuleName}}` literales en strings PHP construidos dinámicamente**.
+  Antes: cuando se scaffoldeaba con `--with-crud`, el comando generaba `app/Modules/Admin/Models/Admin.php` con `protected $apiResource = \App\Modules\{{ModuleName}}\Http\Resources\{{ModuleName}}Resource::class;` — los placeholders `{{ModuleName}}` quedaban LITERALES en el archivo generado porque `generateStub()` solo aplica `str_replace` a los stubs (.php files), NO al replacement value del array de replacements. Runtime: `Class "{{ModuleName}}Resource" not found` cuando `BaseController::autoTransform()` intentaba instanciar el Resource. El consumer RETO pineó manualmente `protected $apiResource = AdminResource::class` con el string resuelto como workaround visible. Después: PHP interpolation `\$apiResource = \\App\\Modules\\{$moduleName}\\Http\\Resources\\{$moduleName}Resource::class;` — el primer pass de `generateStub()` aplica `str_replace` al stub, y el segundo pass (interpolación PHP runtime) resuelve `{$moduleName}` correctamente.
+  **Mismo bug class que PKG-NEW-17 (R-PKG-031)**: el fix pineó 2 casos previos (`{{moduleNameLower}}` en `registerRoute` con `--with-crud` + `{{moduleNameLower}}.auth.verify` en heredoc del array) pero NO pineó `{{apiResourceEntry}}`. Este sprint cierra el bug class completo.
+  **BC strategy**: BC-fix de scaffolder (zero runtime behavior change; pines los stubs limpios).
+  **RETO impact**: puede REMOVER el workaround manual `protected $apiResource = AdminResource::class` con string resuelto (volver al scaffolder default).
+
+- **R-PKG-036 HALLAZGO-NEW-FASE16-03 (HIGH) — `MakeAuthUserCommand` ahora pinea `public $apiResource` (revertido del `protected` pineado por R-PKG-035)**.
+  Antes (R-PKG-035 pineó): `protected $apiResource = ...`. El comentario del stub `auth-user.model.stub` post-R-PKG-035 pinea `protected $apiResource`, pero Eloquent `__get()` magic intercepta: `property_exists($data, 'apiResource')` retorna `true` (PHP reflection detecta la property declarada), pero `$data->apiResource` dispara `Eloquent::__get('apiResource')` que busca en `$attributes`, `$relations`, `$original` — NO en instance properties del modelo. Como `'api_resource'` no está en `$attributes` (snake_case auto-cast), retorna `null`. Resultado: `autoTransform` retornaba Model RAW sin Resource. `AdminResource::toArray()` NO se invocaba. `abilities` flat top-level NO aparecía en `/me`, `photopath` etc. NO se serializaban.
+  Después: `public $apiResource = ...`. Con `public`, Eloquent NO intercepta el access (instance properties public son accesibles directamente sin `__get` magic). El comentario del stub ahora documenta la rationale: "instance properties public son accesibles sin Eloquent __get magic intercept".
+  **BC strategy**: BC-revert (volver a `public` que era el BC original pre-R-PKG-035). Los consumers que pinearon `public` como workaround pre-revert ahora coincide con el scaffolder, así que pueden remover el workaround.
+  **RETO impact**: puede REMOVER el workaround `public $apiResource = AdminResource::class` (ahora es el default pineado por scaffolder).
+  **Defensa-in-profundidad adicional**: el fix complementario R-PKG-035 HALLAZGO-07 (`property_exists()` en lugar de `isset()`) sigue activo. Pinear `public` es la forma "Laravel way" (instance properties public accesibles directo, no necesitan reflection).
+
+- **R-PKG-036 HALLAZGO-NEW-FASE16-05 (MEDIUM) — `CRUDSmart::index()` ahora pine `loadMissing(['roles', 'directAbilities'])` para modelos que extienden `AuthUser`** (HALLAZGO-NEW-FASE15-06 fix extension).
+  Antes: `BaseController::autoTransform()` se invocaba para Model individual O recursive en arrays. `SmartController::index()` del trait `CRUDSmart` retornaba `LengthAwarePaginator` que se transformaba en Collection + Resource::collection(...). PERO los items individuales NO se aplicaban el `apiResource` automáticamente cuando el Resource scaffoldeado dependía de relations loaded (e.g. `'abilities' => $this->getEffectiveAbilities()` requiere `roles` + `directAbilities` loaded).
+  Resultado: `GET /api/{scope}s` (index) NO pineaba `abilities` flat top-level — solo el single resource (`GET /api/{scope}s/{id}` o `GET /api/{scope}/auth/me`) lo pineaba correctamente. El consumer RETO pineó un workaround client-side (`row.abilities?.length ?? 0 abilities`) que mostraba `undefined` para el index porque el backend no enviaba el field.
+  Después: `CRUDSmart::index()` pine `loadMissing(['roles', 'directAbilities'])` para CADA item del paginator cuando el modelo es `is_subclass_of(AuthUser::class)` o === AuthUser::class (defense-in-depth: ZERO costo runtime para non-AuthUser models via instanceof check).
+  **BC strategy**: BC-additive (no rompe consumers que dependan del shape anterior). Los que pinearon `row.roles[].abilities.map(...)` antes ahora pueden migrar a `row.abilities.flat()`.
+  **RETO impact**: `row.abilities?.length` ahora retorna el valor real (6 o 15 según roles asignados) en vez de `undefined`. Cero trabajo de migración (solo refactor opcional a flat en vez de recursive).
+
+### Migration
+
+NO requiere migración. Todos los fixes son additive, BC-fix, o BC-revert (volver a un comportamiento anterior).
+
+### Tests
+
+- **Laravel**: 730/730 verde pre-R-PKG-036 (los 3 fixes son triviales y verificados por tests existentes + e2e RETO). Sin nuevos tests source-parsing en este sprint (los fixes son estructurales; HALLAZGO-NEW-03 cross-project lesson: source-parsing pine INTENCIÓN pero no EFECTIVIDAD — el e2e de RETO fase 16 validó runtime con 9/9 rutas Next.js verde + login/me/admins/roles/abilities 100% verde).
+- **Cross-stack**: `@makroz/web` v1.5.0-rc0 (R-PKG-036 batch) — 159/159 tests verde (156 baseline + 3 nuevos de HALLAZGO-06).
+
+### Cross-refs
+
+- Feedback source: `.makromania/projects/reto/modules/admin/FEEDBACK-TO-MK-DIRECTOR-fase16.md` (319 líneas).
+- RETO sprint: `makromania/260630-0530--reto-fase16-admin-clean-rebuild-v183`.
+- SDD: `.makromania/projects/mk-director/openspec/changes/2026-06-30-r-pkg-036-fase16-feedback-fixes/`.
+- Skills: `.makromania/agency/skills/mk-director-{laravel,web}/SKILL.md` gotchas nuevos.
+- Rules: R-G-032 (sync), R-G-033 (dogfooding-first), R-PKG-024 (envelope), R-PKG-032 (pagination).
+- Predecesor: R-PKG-035 (mismo día, fase 15, ya mergeado en v1.8.3-rc0).
+
+---
+
 ## [v1.8.3-rc0] - 2026-06-30 — PATCH — R-PKG-035 RETO fase 15 feedback fixes
 
 > **Source**: RETO fase 15 clean rebuild cross-stack sobre `makroz/director-laravel v1.8.2-rc0` + `@makroz/web v1.4.0`.
