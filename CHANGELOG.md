@@ -5,6 +5,41 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.5-rc0] - 2026-07-01 — PATCH — R-PKG-042 RETO fase 18 feedback batch (HALLAZGO-NEW-FASE18-05/07 + R-PKG-039 FASE17-02)
+
+> **Source**: RETO fase 18 clean rebuild + sprint feedback consolidado.
+> **Sprint**: `makromania/2026-07-01-0039--r-pkg-042-feedback-fixes` (este sprint).
+> **Scope**: Laravel package — auth flow hardening + scaffolder batch. **Cross-stack companion**: `@makroz/web` v1.5.0-rc0 (auto-Bearer en useApi + apiBaseUrl opcional del MkAuthProvider).
+> **Strategy**: BC-safe additive (4 cambios: 1 scaffolder, 1 middleware, 1 stub, 1 config). Se acumula al lote RELEASE_AT_END — NO tag, NO publish en este sprint. Mario retiene bumpeo + tag + Packagist force-update al cerrar el lote.
+> **Cross-ref**: HALLAZGO-NEW-FASE18-05 (RETO consumer diagnosticó direct_abilities over-emission), HALLAZGO-NEW-FASE18-07 (scaffolder no pineaba config/cors.php), HALLAZGO-NEW-FASE18-06 confirmado (Bearer no se recibía — fix arquitectural en web companion), R-PKG-039 FASE17-02 (auth envelope opción B).
+
+### Fixed (BC-safe)
+
+- **R-PKG-042 FASE18-05 (LOW) — `auth-user/admin-resource.stub` remueve `direct_abilities` del default Resource**.
+  El campo pineaba `'direct_abilities' => $this->whenLoaded('directAbilities', fn () => ...)` que duplicaba `'abilities' => $this->getEffectiveAbilities()` cuando un admin tenía grants directos que coincidían con los del role (caso común con `super-admin`). Ahora solo `abilities` (unión efectiva via `getEffectiveAbilities()`) y `roles` (relation whenLoaded). Para UIs que necesitan el desglose, pinear el endpoint opt-in con `--with-permissions-endpoint` (ver Added abajo). Cero impacto en consumers que override el Resource para agregar el campo de nuevo (BC).
+
+- **R-PKG-042 FASE18-07 (LOW) — `mk:make:auth-user` ahora pinea `config/cors.php` automáticamente**.
+  Pre-fix, el scaffolder no pineaba `config/cors.php` y los consumers tenían que crearlo a mano (RETO fase 18 fue un caso real — olvidó pinearlo, el browser bloqueó preflight CORS, la app crasheó con `TypeError: Failed to fetch`). Ahora el scaffolder pinea un `config/cors.php` con `paths: ['api/*']`, `allowed_origins` desde `config('mk_director.frontend.frontend_origins')` (default dev-friendly `http://localhost:3000`), `supports_credentials: true` (Sanctum SPA flow). BC: si ya existe `config/cors.php`, NO lo sobreescribe (puede tener custom paths). Override con `--force-cors` (hace backup automático `cors.php.bak.YYYYMMDD-HHMMSS`).
+
+- **R-PKG-039 FASE17-02 (MEDIUM) — `MkAuthenticate` middleware ahora pinea envelope R-PKG-024 en 401 API**.
+  Pre-fix, el middleware tiraba `AuthenticationException` puro → Laravel default a 401 HTML en API (frontend tenía que match-ear `Content-Type: text/html` y parsear JSON ad-hoc). Post-fix: cuando `$request->expectsJson() || $request->is('api/*')`, retorna `JsonResponse` con shape envelope canónico (`{success, message, data, __extraData, debugMsg}`). `__extraData.auth_scope` pinea el scope del middleware para que el frontend sepa qué scope re-autenticar. Web routes (no api, no JSON) mantienen el legacy `AuthenticationException` (Laravel redirect a `/login` via `Handler::unauthenticated`) — CERO BC break para consumers con custom Handler.
+
+### Added (BC-safe additive)
+
+- **R-PKG-042 FASE18-05 — Flag `--with-permissions-endpoint`** al `mk:make:auth-user`.
+  Genera `MePermissionsController` con `GET /api/{scope}/auth/me/permissions` que retorna el desglose completo de abilities (`{direct_abilities, effective_abilities, roles_with_abilities}`). Solo pinearlo si la UI tiene pantalla de "Manage permissions" que necesita el desglose. Default `false` (BC — no pinea nada).
+
+- **R-PKG-042 FASE18-07 — Flag `--force-cors`** al `mk:make:auth-user`.
+  Re-pinea `config/cors.php` aunque ya exista (con backup automático). Default `false` (BC — skip si ya existe).
+
+- **R-PKG-042 FASE18-07 — Config `mk_director.frontend.{frontend_origins, supports_credentials, paths}`**.
+  `frontend_origins` array (default dev-friendly), `supports_credentials` bool (Sanctum SPA), `paths` (default `['api/*']`). Override vía env var `FRONTEND_ORIGINS` (comma-separated). Consumido por el `config/cors.php` scaffoldeado.
+
+### Deprecated
+
+- **`MkAuthMiddleware` (scope-agnostic) — `@deprecated` desde v1.8.5-rc0 (R-PKG-042 FASE17-02)**.
+  Use `MkAuthenticate` (scope-aware, envelope canónico) en su lugar. Slated for removal v2.0.0.
+
 ## [v1.8.4-rc0] - 2026-06-30 — PATCH — R-PKG-038 RETO fase 17 feedback fixes (scaffolder batch)
 
 > **Source**: RETO fase 17 clean rebuild sobre `makroz/director-laravel v1.8.3-rc0` + `@makroz/web v1.5.0-rc0` + `@makroz/core v1.3.1`.

@@ -1,0 +1,60 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Http\Controllers;
+
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Mk\Director\Controllers\BaseController;
+
+/**
+ * Endpoint opt-in `GET /api/{{moduleNameLower}}/auth/me/permissions`
+ * (R-PKG-042 FASE18-05).
+ *
+ * Retorna el desglose completo de abilities del admin actual:
+ *   - `direct_abilities`: grants directos en `ability_user` pivot (sin via role)
+ *   - `effective_abilities`: unión de direct + via roles (= lo que ya viene en /me.abilities)
+ *   - `roles_with_abilities`: detalle de cada role con sus abilities
+ *
+ * **Cuándo pinearlo**: solo si tu UI tiene una pantalla de "Manage permissions"
+ * que necesita mostrar el desglose. Si tu UI solo necesita `effective_abilities`
+ * (gate de UI, sidebar), el default `/me` ya te las da — no pinees este endpoint.
+ *
+ * **Por qué es opt-in, no default**: el campo `direct_abilities` se removió
+ * del default Resource (R-PKG-042 FASE18-05) porque duplicaba `abilities`
+ * cuando un admin tiene grants directos que coinciden con los del role
+ * (caso común con super-admin). Mostrar el desglose solo cuando el UI lo
+ * pide explícitamente evita over-emission en cada login/me.
+ *
+ * **BC**: si tu UI dependía del campo `direct_abilities` en /me, override
+ * el Resource para agregarlo de nuevo (1 línea), o pineá este endpoint
+ * y consumilo. No es BC break — es opt-in.
+ */
+class MePermissionsController extends BaseController
+{
+    /**
+     * GET /api/{{moduleNameLower}}/auth/me/permissions
+     *
+     * Auth: middleware `mk.auth:{{moduleNameLower}}` (route-level).
+     * Ability: el consumer puede agregar `mk.ability:{{moduleNameLower}}.{{moduleNamePluralLower}}.manage-permissions`
+     * si quiere gate a un sub-set de admins (e.g. solo super-admin).
+     */
+    public function show(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        // Eager-load para que cuandoLoaded no devuelva null.
+        $user->loadMissing(['roles.abilities', 'directAbilities']);
+
+        return $this->sendResponse([
+            'direct_abilities' => $user->directAbilities->pluck('name')->all(),
+            'effective_abilities' => $user->getEffectiveAbilities(),
+            'roles_with_abilities' => $user->roles->map(fn ($role) => [
+                'id' => $role->id,
+                'name' => $role->name,
+                'abilities' => $role->abilities->pluck('name')->all(),
+            ])->all(),
+        ], 'Permissions breakdown');
+    }
+}
