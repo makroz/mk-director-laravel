@@ -89,7 +89,15 @@ describe('PKG-NEW-04 + PKG-NEW-05 — auth-controller stub: is_active check', fu
     test('forgot() también consulta is_active (consistencia)', function (): void {
         $stub = readStubRPkg027('src/Stubs/auth-user.auth-controller.stub');
 
-        $count = substr_count($stub, "Schema::hasColumn(\$user?->getTable() ?? '{{moduleNamePluralLower}}', 'is_active')");
+        // R-PKG-040 carry-over (HALLAZGO-NEW-FASE18-01 fix): el patrón viejo
+        // `Schema::hasColumn($user?->getTable() ?? 'fallback' && $user->is_active`
+        // era null-unsafe — PHP no cortocircuita cuando el operando izquierdo es
+        // function call que retorna TRUE. Pineamos el patrón nuevo (null-safe)
+        // aparece 2 veces (login + forgot).
+        $count = substr_count(
+            $stub,
+            "\$user !== null\n            && Schema::hasColumn(\$user->getTable(), 'is_active')"
+        );
         expect($count)->toBeGreaterThanOrEqual(2);
     });
 
