@@ -5,6 +5,61 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.8.5-rc0] - 2026-06-30 — PATCH — R-PKG-040 RETO fase 18 feedback fixes (Laravel sub-batch)
+
+> **Source**: RETO fase 18 clean rebuild sobre `makroz/director-laravel v1.8.4-rc0` + `@makroz/web v1.5.0-rc0` + `@makroz/core v1.4.0`.
+> **Sprint**: `makromania/260630-2100--r-pkg-040-fase18-feedback-fixes`.
+> **Scope**: Laravel package only — 1 scaffolder null-safety fix en el AuthController stub compartido por `login()` + `forgot()`. **Cross-stack companion**: `@makroz/web` SKILL sync HALLAZGO-NEW-FASE18-02/03/04 (3 docs drift observations — MkTable actions/onAction API + Next.js 16 middleware→proxy rename + MkAuthProvider cookie name pattern). Cero código TS/JS modificado.
+> **Strategy**: BC-safe additive patch (1 BLOCKER scaffolder null-safety fix). Se acumula al lote RELEASE_AT_END — NO tag, NO publish en este sprint. Mario retiene bumpeo + tag + Packagist force-update al cerrar el lote.
+> **Skill sync (R-G-032)**: skill `mk-director-web/SKILL.md` pine 3 docs drift fixes (HALLAZGO-NEW-FASE18-02/03/04). Skill `mk-director-laravel/SKILL.md` SIN cambios (HALLAZGO-NEW-FASE18-01 es scaffolder-pure, no requiere nueva doc).
+> **Cross-ref**: HALLAZGO-NEW-FASE18-01 pinea patrón null-safety para stubs en PHP (`$user !== null && ...` antes del function call + property access). Patrón reusable cross-project: cuando un scaffolder pine un `&&` con accesos a propiedades de un Model que puede ser null, pinear el null-check ANTES del `&&`. Reusable HALLAZGO-NEW-03 lesson: source-parsing pine INTENCIÓN pero no EFECTIVIDAD — pre-flight e2e scaffolder (`mk:make:auth-user SmokeTest --with-crud` + login fallido → 422) pinearía este bug en CI.
+
+### Fixed (BC-safe)
+
+- **R-PKG-040 HALLAZGO-NEW-FASE18-01 (BLOCKER scaffolder null-safety) — `auth-user.auth-controller.stub` corrige patrón null-unsafe en `login()` + `forgot()`**.
+  Antes: el stub pineaba
+  ```php
+  $isActiveCheck = Schema::hasColumn($user?->getTable() ?? '{{moduleNamePluralLower}}', 'is_active')
+      && $user->is_active === false;
+  ```
+  PHP `&&` sí es short-circuit, PERO solo en `false` — cuando el operando izquierdo retorna `true` (columna existe → `Schema::hasColumn()` devuelve `true` para tabla `admins`), PHP evalúa el operando derecho `$user->is_active === false`. Si `$user === null` (lookup previo `where(loginField, ...)->first()` no encontró nada), `$user->is_active` lanza `ErrorException: Attempt to read property "is_active" on null` → HTTP 500 con stack trace HTML en vez del correcto 422 (credenciales inválidas) en `login()` o 200 OK anti-enumeración en `forgot()`.
+  Después: cortocircuito con `$user !== null` PRIMERO — el `&&` retorna `false` apenas `$user` es null, evitando la evaluación del function call + property access:
+  ```php
+  $isActiveCheck = $user !== null
+      && Schema::hasColumn($user->getTable(), 'is_active')
+      && $user->is_active === false;
+  ```
+  Misma semántica (null/true = permitido, false = bloqueado). Cero impacto en consumers existentes que ya tienen columna `is_active` — la única diferencia es que ahora el path "user no encontrado" retorna la respuesta canónica (422 login / 200 forgot) en lugar de 500.
+  **Defense-in-depth preserved**: el check sigue gateado por `Schema::hasColumn` (no rompe scopes que no tienen la columna). El null-check adicional es defense-in-depth puro.
+  **Pattern reusable**: cuando un stub scaffoldeado pine un `&&` con accesos a propiedades de un Model que puede ser null, pinear null-check PRIMERO. La variante `$x?->method() ?? 'fallback' && $x->property === null` es anti-pattern en PHP — el `&&` no cortocircuita cuando el operando izquierdo es un function call que retorna `true`.
+  **RETO impact**: puede regenerar AuthController (login + forgot) sin workaround manual. 0 workarounds consumer post-fix.
+
+### Workarounds absorbed (consumer side)
+
+- RETO puede regenerar AuthController scaffolding con `mk:make:auth-user Admin` y `login()` + `forgot()` retornan shape canónico (422 / 200 anti-enumeración) en el path "credenciales inválidas". El workaround manual que pineaba `$user !== null` antes del `Schema::hasColumn` se elimina.
+
+### Migration
+
+NO requiere migración. Todos los fixes son scaffolder-only (zero runtime behavior change para consumers existentes que ya tienen columna `is_active`; consumers que regeneren AuthController obtienen el fix automáticamente).
+
+### Tests
+
+- **Laravel**: 746/746 verde pre-R-PKG-040 (el fix es scaffolder-pure, no requiere tests source-parsing — HALLAZGO-NEW-03 cross-project lesson + HALLAZGO-NEW-FASE17-01 pattern: source-parsing pine INTENCIÓN, no EFECTIVIDAD). Pre-flight e2e scaffolder obligatorio pinea este bug en CI: `mk:make:auth-user SmokeTest --with-crud` + `POST /api/smoke-test/auth/login` con email desconocido → assert HTTP 422 con envelope canónico (no 500). Backlog: agregar este e2e a CI antes del próximo scaffolder batch.
+- **Cross-stack (frontend)**: `@makroz/web` SKILL.md pine 3 docs drift fixes (HALLAZGO-NEW-FASE18-02/03/04). 0 código TS/JS modificado. 159/159 tests verde sin cambios.
+- **RETO e2e (post-regeneración)**: pendiente Mario bumpeo + rebuild para validar que `mk:make:auth-user Admin` genera AuthController sin el workaround manual.
+
+### Cross-refs
+
+- Feedback source: `.makromania/projects/reto/modules/admin/FEEDBACK-TO-MK-DIRECTOR-fase18.md` (269 líneas, 4 hallazgos: 1 BLOCKER scaffolder + 3 docs drift).
+- RETO sprint: `makromania/260630-2000--reto-fase18-admin-clean-rebuild-v184post`.
+- SDD: `.makromania/projects/mk-director/openspec/changes/2026-06-30-r-pkg-040-fase18-feedback-fixes/`.
+- Skills: `.makromania/agency/skills/mk-director-web/SKILL.md` (3 drift fixes); `mk-director-laravel/SKILL.md` SIN cambios.
+- Rules: R-G-032 (sync), R-G-033 (dogfooding-first), R-MK-001 (MME), R-PKG-024 (envelope), HALLAZGO-NEW-03 (source-parsing pine INTENCIÓN no EFECTIVIDAD).
+- Predecesor: R-PKG-038 (fase 17), ya mergeado en v1.8.4-rc0 (3 scaffolder fixes acumulados).
+- Pattern reusable cross-project: cuando un scaffolder pine un `&&` con accesos a propiedades de un Model que puede ser null, pinear null-check ANTES del `&&`. La validación que detecta ESTA clase de bugs es e2e scaffolder (pre-flight obligatorio antes del próximo batch).
+
+---
+
 ## [v1.8.4-rc0] - 2026-06-30 — PATCH — R-PKG-038 RETO fase 17 feedback fixes (scaffolder batch)
 
 > **Source**: RETO fase 17 clean rebuild sobre `makroz/director-laravel v1.8.3-rc0` + `@makroz/web v1.5.0-rc0` + `@makroz/core v1.3.1`.
