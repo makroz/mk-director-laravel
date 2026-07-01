@@ -5,6 +5,41 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v2.0.0] - 2026-07-01 — MAJOR — Cleanup deprecados + refactor arquitectural (R-PKG-044)
+
+> **Strategy**: SIN BC BRIDGE. RETO regenera desde 0 (dogfooding-first, único consumer real).
+> **Coordinated with**: `@makroz/core@2.0.0` + `@makroz/web@2.0.0` + `@makroz/mobile@2.0.0`.
+> **Branch-alias**: `dev-main: 2.0.x-dev`.
+
+### BREAKING CHANGES
+
+- **REMOVED `MkAuthMiddleware` (scope-agnostic)** — pre-v2.0 era `@deprecated` desde v1.8.5-rc0 (R-PKG-042 FASE17-02). Reemplazado por `MkAuthenticate` (scope-aware, envelope R-PKG-024 canónico). El archivo `src/Middleware/MkAuthMiddleware.php` y su test `tests/Unit/MkAuthMiddlewareTest.php` fueron eliminados. Si tu consumer usaba `MkAuthMiddleware`, migrá a `MkAuthenticate:{scope}` (registrado como alias `mk.auth` en `AuthServiceProvider`).
+
+- **`MkAbility` error responses now use single-level envelope** (R-PKG-044 unification) — antes: 401 `{success, message}`, 403 `{success, message}`, 500 `{success, error, message}`. Ahora todos: `{success, message, data: null, __extraData: {code, ...}, debugMsg: []}`. Mismo shape que `MkAuthenticate` 401. La `code` machine-readable vive en `__extraData.code` (e.g. `ERR_MIDDLEWARE_MISCONFIGURED`, `ERR_FORBIDDEN`, `ERR_UNAUTHENTICATED`).
+
+### Migration guide
+
+```php
+// v1.x (scope-agnostic, scope-agnostic, 3 keys shape):
+use Mk\Director\Middleware\MkAuthMiddleware;
+Route::middleware([MkAuthMiddleware::class])->group(...);
+
+// v2.0 (scope-aware, single-level envelope, alias `mk.auth`):
+Route::middleware(['mk.auth:admin'])->group(...);
+```
+
+For MkAbility 401/403/500 responses, the previous free-form `error` key is gone:
+```php
+// v1.x: $response->getContent() === '{"success":false,"error":"ERR_FORBIDDEN","message":"Forbidden."}'
+// v2.0: $response->getContent() === '{"success":false,"message":"Forbidden.","data":null,"__extraData":{"code":"ERR_FORBIDDEN","abilities_required":[...]},"debugMsg":[]}'
+```
+
+### Internal changes (no consumer migration needed)
+
+- `composer.json` `branch-alias.dev-main` bumped to `2.0.x-dev`.
+- `MkAuthenticate` shape unchanged (already canonical from R-PKG-042 FASE17-02).
+- `AuthServiceProvider` alias `mk.auth` → `MkAuthenticate` (unchanged).
+
 ## [v1.8.5-rc0] - 2026-07-01 — PATCH — R-PKG-042 RETO fase 18 feedback batch (HALLAZGO-NEW-FASE18-05/07 + R-PKG-039 FASE17-02)
 
 > **Source**: RETO fase 18 clean rebuild + sprint feedback consolidado.
