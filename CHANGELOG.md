@@ -40,6 +40,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`MkAuthMiddleware` (scope-agnostic) — `@deprecated` desde v1.8.5-rc0 (R-PKG-042 FASE17-02)**.
   Use `MkAuthenticate` (scope-aware, envelope canónico) en su lugar. Slated for removal v2.0.0.
 
+## [v1.8.6-rc0] - 2026-07-01 — PATCH — R-PKG-043 RETO fase 19 feedback batch (HALLAZGO-NEW-FASE19-01/02/03)
+
+> **Source**: RETO fase 19 clean rebuild sobre `makroz/director-laravel v1.8.5-rc0` + `@makroz/web v1.5.0-rc0` + `@makroz/core v1.4.0`.
+> **Sprint**: `makromania/260701-1030--r-pkg-043-fase19-feedback-fixes` (este sprint).
+> **Scope**: Laravel package — scaffolder batch fixes (HALLAZGO-NEW-FASE19-01/02) + `.env.example` reference (HALLAZGO-NEW-FASE19-03). **Cross-stack companion**: `@makroz/web` SKILL sync (HALLAZGO-NEW-FASE19-04..07, 10, 5 docs drifts + 1 type drift).
+> **Strategy**: BC-safe additive (3 fixes del scaffolder / docs, sin BC break para consumers existentes). Se acumula al lote RELEASE_AT_END — NO tag, NO publish en este sprint. Mario retiene bumpeo + tag + Packagist force-update al cerrar el lote.
+> **Cross-ref**: HALLAZGO-NEW-FASE19-01 (RETO consumer diagnosticó `use ...\MePermissionsController` faltante → ReflectionException en route:list), HALLAZGO-NEW-FASE19-02 (route `me/permissions` pineada como path absoluto fuera del prefix group), HALLAZGO-NEW-FASE19-03 (`FRONTEND_ORIGINS` env var pineado en R-PKG-042 FASE18-07 pero NO documentado en `.env.example` del paquete).
+> **Sprint report RETO**: `.makromania/projects/reto/sprints/2026-07-01-fase19.md` + `FEEDBACK-TO-MK-DIRECTOR-fase19.md` (8 hallazgos: 2 scaffolder Laravel + 6 docs drift web + 2 DX improvements RETO-side).
+
+### Fixed (BC-safe additive)
+
+- **HALLAZGO-NEW-FASE19-01 (HIGH) — `MakeAuthUserCommand::generatePermissionsEndpoint()` ahora pinea `use App\Modules\{Scope}\Http\Controllers\MePermissionsController;` en el bloque `use` del routes/api.php scaffoldeado cuando `--with-permissions-endpoint` está activo**.
+
+  Pre-fix: el scaffolder pineaba el route `Route::get('me/permissions', [MePermissionsController::class, 'show'])...` PERO NO pineaba el `use ...\MePermissionsController;` en el bloque `use` statements al inicio del archivo `Http/Routes/api.php`. Runtime symptom: `ReflectionException: Class "MePermissionsController" does not exist` en `php artisan route:list` y `route:cache`. Bloqueante: el consumer no podía booteear el route:list out-of-the-box.
+
+  Post-fix (3 estrategias defensivas, todas pineadas):
+  1. **Primary**: si el archivo routes/api.php ya pinea `use App\Modules\{Scope}\Http\Controllers\AuthController;`, se inserta el import de `MePermissionsController` justo después (mismo bloque).
+  2. **Fallback**: si el consumer customizó el routes y NO pineó AuthController, se busca el último `use ...;` antes del primer `Route::` y se inserta después.
+  3. **Last resort**: si no hay ningún `use` previo, se inserta después del `<?php` inicial.
+
+  BC-safe: si el consumer ya pineó manualmente el import, el `str_replace` lo deja igual (idempotente). Workaround consumer (RETO pino en fase 19): pinear `use App\Modules\Admin\Http\Controllers\MePermissionsController;` manualmente — ya NO necesario post-bumpear.
+
+- **HALLAZGO-NEW-FASE19-02 (HIGH) — `MakeAuthUserCommand::generatePermissionsEndpoint()` ahora pinea la route `me/permissions` DENTRO del bloque `Route::middleware('mk.auth:{scope}')...->group(...)`** que ya contiene `/me` y `/logout` (generado por `auth-user.routes.stub`).
+
+  Pre-fix: el scaffolder pineaba `$routeLine = "\n    Route::get('me/permissions', [MePermissionsController::class, 'show'])->middleware('mk.auth:{$scopeLower}');"` con un `file_put_contents` append al final del archivo. Sin el bloque `Route::prefix('api/{scope}/auth')->group(...)` que contiene el resto del auth flow, la ruta se registraba como `GET /me/permissions` en raíz (no `GET /api/{scope}/auth/me/permissions`), rompiendo la convención cross-stack — frontend `@makroz/web` esperaba `/api/admin/auth/me/permissions`.
+
+  Post-fix: el scaffolder ahora usa `preg_replace` con el pattern `Route::get\(\s*'me'\s*,\s*\[AuthController::class,\s*'me'\]...)` para pinear la línea DESPUÉS de `Route::get('me', [AuthController::class, 'me'])` que ya está dentro del middleware group. Esto garantiza que la ruta queda:
+  - Bajo el prefijo `api/{scope}/auth/` (canónico, vía el Route::prefix del stub).
+  - Bajo el middleware `mk.auth:{scope}` (canónico, vía el Route::middleware del stub).
+  - Mismo path / método que el resto del flujo `/me`, `/logout`.
+
+  **Defense-in-depth** (fallback): si el consumer customizó el routes y `Route::get('me', ...)` no se encuentra, se pinea la ruta con `Route::prefix('api/{scope}/auth')->middleware('mk.auth:{scope}')->group(...)` explícito al final del archivo + warning explícito al scaffolder output. El consumer siempre termina con un route válido (consistente con el canonical contract).
+
+  BC-safe: el path canónico `/api/{scope}/auth/me/permissions` es el que `@makroz/web` `MkAuthProvider` espera vía `useApi().get('/api/admin/auth/me/permissions')`. Workaround consumer (RETO pino en fase 19): pinear la ruta manualmente adentro del grupo — ya NO necesario post-bumpear.
+
+### Added (BC-safe additive)
+
+- **HALLAZGO-NEW-FASE19-03 (MEDIUM) — Nuevo `.env.example` documentando todas las env vars del paquete**.
+
+  Pre-fix: el scaffolder pineaba `config/cors.php` consumiendo `env('FRONTEND_ORIGINS', '...')` (HALLAZGO-NEW-FASE18-07 pineó esto) Y el `mk_director.frontend.*` config leía `env('FRONTEND_*')` y `env('MK_TENANT_*')` y `env('MK_AUTH_RATE_LIMIT_*')`. PERO el paquete NO pineaba un `.env.example` con estas vars documentadas — los consumers descubrían las env vars leyendo el `config/mk_director.php` (cuando ya era tarde).
+
+  Post-fix: `packagist/mk-director-laravel/.env.example` con TODAS las env vars pineadas por el paquete (~30 vars en 9 secciones):
+  - **Frontend CORS**: `FRONTEND_ORIGINS`, `FRONTEND_SUPPORTS_CREDENTIALS` (HALLAZGO-NEW-FASE18-07).
+  - **Auth / Sanctum**: `MK_AUTH_USER_MODEL`, `MK_LOGIN_FIELD`, `MK_AUTO_DISCOVER_ABILITIES` (R-PKG-031 BUG-NEW-auto-discover-serve), `MK_AI_ANALYSIS`.
+  - **Auth rate limiting**: `MK_AUTH_RATE_LIMIT_LOGIN/FORGOT/RESET` (`--with-auth-rbac`).
+  - **Cache**: `MK_CACHE_STORE`, `MK_CACHE_ALLOW_FULL_CLEAR`, `MK_CACHE_TTL` (PKG-NEW-14).
+  - **Multi-tenant**: `MK_TENANT_ENABLED/RESOLVER/HEADER/MODEL/STRICT` (`MkMultiTenantPlugin` opt-in).
+  - **Module loader**: `MK_MODULES_PATH`.
+  - **List / Pagination**: `MK_PAGINATION_TYPE`, `MK_LIST_DEFAULT_PER_PAGE`, `MK_LIST_MAX_PER_PAGE`, `MK_SEARCH_MIN_CHARS`.
+  - **Debug / Diagnostics**: `MK_DIRECTOR_DEBUG`, `MK_DIRECTOR_DEBUG_EXPLAIN_ENABLED` (HALLAZGO-NEW-FASE14).
+  - **Cross-cutting**: `MK_AUTO_CACHE`, `MK_DYNAMIC_INCLUDES`, `MK_DYNAMIC_JOINS`, `MK_FILTERS`, `MK_SEARCH`, `MK_REMEMBER_STATE`, `MK_FILE_WEBP`, `MK_PROGRESSIVE_CODES_TABLE`.
+
+  Cada var documentada con: default value, descripción de cuándo pinearla, ejemplo dev/staging/prod. Defense-in-depth: las defaults del paquete pineadas son dev-friendly (no rompen pre-pinear nada). Las vars de prod (`FRONTEND_ORIGINS` con dominio real, `MK_TENANT_*` habilitados) requieren pineado explícito del consumer.
+
+  BC-safe: el archivo es solo referencia (no se commitea al `.env` del consumer). El consumer copia `cp vendor/makroz/director-laravel/.env.example .env` o lee via `php -r "echo file_get_contents('vendor/makroz/director-laravel/.env.example')"`. Workaround consumer (RETO pino en fase 19): pinear `FRONTEND_ORIGINS=http://localhost:3000,http://127.0.0.1:3000` en `.env` manualmente — ya documentado out-of-the-box post-bumpear.
+
+### Cross-references
+
+- **RETO consumer feedback**: `.makromania/projects/reto/modules/admin/FEEDBACK-TO-MK-DIRECTOR-fase19.md`.
+- **Sprint report**: `.makromania/projects/reto/sprints/2026-07-01-fase19.md`.
+- **Cross-stack companion**: `@makroz/web` v1.5.0 SKILL sync (R-PKG-043 — HALLAZGO-NEW-FASE19-04..07, 10).
+- **Tooling decision pendiente**: cambiar `package.json` de `@makroz/web` `"types": "./dist/index.d.ts"` → `"types": "./src/index.ts"` para consumo source-direct (HALLAZGO-NEW-FASE19-07). **Mario retiene esta decisión** — afecta a TODOS los consumers, no solo RETO. Pineado como `R-PKG-043-TOOLING-DECISION`.
+
 ## [v1.8.4-rc0] - 2026-06-30 — PATCH — R-PKG-038 RETO fase 17 feedback fixes (scaffolder batch)
 
 > **Source**: RETO fase 17 clean rebuild sobre `makroz/director-laravel v1.8.3-rc0` + `@makroz/web v1.5.0-rc0` + `@makroz/core v1.3.1`.

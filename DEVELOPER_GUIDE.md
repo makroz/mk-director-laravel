@@ -1725,6 +1725,89 @@ public function roles(): BelongsToMany
 
 ---
 
+### 3.14 R-PKG-043 RETO fase 19 feedback fixes (`--with-permissions-endpoint` scaffolder hardening + `.env.example` reference)
+
+> **Sprint**: `makromania/260701-1030--r-pkg-043-fase19-feedback-fixes`.
+> **Source**: RETO fase 19 clean rebuild sobre v1.8.5-rc0.
+> **Cross-stack companion**: `@makroz/web` SKILL sync (R-PKG-043 docs batch — HALLAZGO-NEW-FASE19-04..07, 10).
+
+#### 3.14.1 `MakeAuthUserCommand` ahora pinea `use ...\MePermissionsController;` (HALLAZGO-NEW-FASE19-01, HIGH)
+
+Pre-R-PKG-043, el scaffolder pineaba el route `Route::get('me/permissions', [MePermissionsController::class, 'show'])` en `Http/Routes/api.php` pero **NO pineaba el `use App\Modules\{Scope}\Http\Controllers\MePermissionsController;`** en el bloque `use` statements al inicio del archivo.
+
+**Síntoma runtime**: `ReflectionException: Class "MePermissionsController" does not exist` en `php artisan route:list` / `route:cache`. Bloqueante — el consumer no podía bootear el route:list out-of-the-box.
+
+**Post-R-PKG-043 (3 estrategias defensivas)**:
+
+1. **Primary**: si `Http/Routes/api.php` ya pineó `use App\Modules\{Scope}\Http\Controllers\AuthController;` (canónico del scaffolder), insertar el import de `MePermissionsController` justo después.
+2. **Fallback**: si el consumer customizó el routes sin AuthController import, buscar el último `use ...;` antes del primer `Route::` y pinear después.
+3. **Last resort**: pinear después del `<?php` inicial.
+
+Idempotente: si el consumer ya pineó manualmente el import, el `str_replace` no duplica.
+
+**Workaround consumer pre-bumpear** (RETO pino en fase 19):
+
+```php
+// app/Modules/Admin/Http/Routes/api.php
+use App\Modules\Admin\Http\Controllers\AuthController;
+use App\Modules\Admin\Http\Controllers\MePermissionsController;  // ← agregado manualmente
+use Illuminate\Support\Facades\Route;
+```
+
+#### 3.14.2 Route `me/permissions` pineada DENTRO del prefix group (HALLAZGO-NEW-FASE19-02, HIGH)
+
+Pre-R-PKG-043, el scaffolder pineaba el route con `file_put_contents` append al final del archivo `Http/Routes/api.php`. Sin el bloque `Route::prefix('api/{scope}/auth')->group(...)` que contiene el resto del auth flow (generado por `auth-user.routes.stub`), la ruta se registraba como **`GET /me/permissions`** (path absoluto en raíz) en vez de **`GET /api/{scope}/auth/me/permissions`**.
+
+**Síntoma runtime**: `php artisan route:list` muestra `GET|HEAD me/permissions` en vez de `GET|HEAD api/admin/auth/me/permissions`. El frontend `@makroz/web` esperaba `/api/admin/auth/me/permissions` (canónico cross-stack) → 404 silent o 401 según middleware.
+
+**Post-R-PKG-043**: el scaffolder ahora usa `preg_replace` con el pattern `Route::get\(\s*'me'\s*,\s*\[AuthController::class,\s*'me'\]` para pinear la línea **DESPUÉS** de `Route::get('me', [AuthController::class, 'me'])` que ya está dentro del bloque `Route::middleware('mk.auth:{scope}')...->group(...)`. Esto garantiza:
+
+- **Path canónico**: `GET /api/{scope}/auth/me/permissions` (vía `Route::prefix` del stub).
+- **Middleware canónico**: `mk.auth:{scope}` (vía `Route::middleware` del stub).
+- **Consistencia con `/me` y `/logout`**: misma sintaxis que el resto del flow.
+
+**Defense-in-depth fallback**: si el consumer customizó el routes y `Route::get('me', ...)` no se encuentra, se pinea el route con `Route::prefix('api/{scope}/auth')->middleware('mk.auth:{scope}')->group(function () {...})` explícito al final del archivo + warning al scaffolder output.
+
+**Workaround consumer pre-bumpear** (RETO pino en fase 19):
+
+```php
+// app/Modules/Admin/Http/Routes/api.php — mover manualmente la route DENTRO del group
+Route::middleware('mk.auth:admin')->group(function () {
+    Route::post('logout', [AuthController::class, 'logout']);
+    Route::get('me', [AuthController::class, 'me']);
+    Route::get('me/permissions', [MePermissionsController::class, 'show']);  // ← movido aquí
+});
+```
+
+#### 3.14.3 Nuevo `.env.example` documentando env vars del paquete (HALLAZGO-NEW-FASE19-03, MEDIUM)
+
+Pre-R-PKG-043, el scaffolder pineaba `config/cors.php` consumiendo `env('FRONTEND_ORIGINS', ...)` (HALLAZGO-NEW-FASE18-07) Y el `mk_director.frontend.*` config leía `env('MK_TENANT_*')`, `env('MK_AUTH_RATE_LIMIT_*')`, `env('MK_CACHE_*')`. PERO **NO había un `.env.example` en el paquete** — los consumers descubrían las env vars leyendo el config PHP (post-boot).
+
+**Post-R-PKG-043**: `packagist/mk-director-laravel/.env.example` con todas las env vars en 9 secciones (Frontend CORS, Auth/Sanctum, Rate limiting, Cache, Multi-tenant, Module loader, List/Pagination, Debug, Cross-cutting). Cada var con default value + descripción + ejemplo dev/staging/prod.
+
+```bash
+# Comma-separated, sin espacios alrededor de comas.
+FRONTEND_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+
+# Sanctum SPA flow (cookie-based) requiere true. Bearer-only puede false.
+FRONTEND_SUPPORTS_CREDENTIALS=true
+```
+
+**Conveniencia operacional**:
+
+```bash
+# El consumer puede listar todas las env vars disponibles:
+grep -E '^[A-Z_]+=' vendor/makroz/director-laravel/.env.example
+
+# O pinearlas al .env del consumer (cross-check):
+diff <(grep -oE "^[A-Z_]+" .env | sort) \
+     <(grep -oE "^[A-Z_]+" vendor/makroz/director-laravel/.env.example | sort)
+```
+
+**Workaround consumer pre-bumpear**: pinear `FRONTEND_ORIGINS` en `.env` manualmente vía `grep mk-director config/mk_director.php`. Ya documentado out-of-the-box post-bumpear.
+
+---
+
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)
 
 Tanto para **Next.js** como para **React Native**, el consumo de listas es estandarizado mediante parámetros URL:
