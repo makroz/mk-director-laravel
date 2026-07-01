@@ -32,6 +32,12 @@ use Symfony\Component\HttpFoundation\Response;
  *   code `ERR_MIDDLEWARE_MISCONFIGURED`. Allowing an empty-abilities
  *   check to silently pass is a privilege-escalation trap: the route
  *   would be unguarded while looking configured.
+ *
+ * Envelope (R-PKG-024 + R-PKG-044): every error response uses the
+ * canonical single-level envelope shape with `__extraData.code` for
+ * the machine-readable error identifier — same shape as
+ * `MkAuthenticate` 401, so the frontend can branch on the code
+ * without parsing free-form messages.
  */
 class MkAbility
 {
@@ -51,20 +57,22 @@ class MkAbility
         }
 
         if ($normalized === []) {
-            return new JsonResponse([
-                'success' => false,
-                'error' => 'ERR_MIDDLEWARE_MISCONFIGURED',
-                'message' => 'MkAbility middleware requires at least one ability.',
-            ], 500);
+            return $this->errorResponse(
+                500,
+                'MkAbility middleware requires at least one ability.',
+                'ERR_MIDDLEWARE_MISCONFIGURED',
+                ['abilities_received' => $abilities],
+            );
         }
 
         $user = $request->user();
 
         if ($user === null) {
-            return new JsonResponse([
-                'success' => false,
-                'message' => 'Unauthenticated.',
-            ], 401);
+            return $this->errorResponse(
+                401,
+                'Unauthenticated.',
+                'ERR_UNAUTHENTICATED',
+            );
         }
 
         // OR semantics: any of the listed abilities is enough.
@@ -96,9 +104,32 @@ class MkAbility
             }
         }
 
+        return $this->errorResponse(
+            403,
+            'Forbidden.',
+            'ERR_FORBIDDEN',
+            ['abilities_required' => $normalized],
+        );
+    }
+
+    /**
+     * Build a single-level-envelope error response (R-PKG-024 +
+     * R-PKG-044) consistent with `MkAuthenticate`. The `__extraData.code`
+     * is the machine-readable identifier the frontend branches on.
+     *
+     * @param  array<string, mixed>  $extra
+     */
+    private function errorResponse(int $status, string $message, string $code, array $extra = []): JsonResponse
+    {
         return new JsonResponse([
             'success' => false,
-            'message' => 'Forbidden.',
-        ], 403);
+            'message' => $message,
+            'data' => null,
+            '__extraData' => array_merge(
+                ['code' => $code],
+                $extra,
+            ),
+            'debugMsg' => [],
+        ], $status);
     }
 }
