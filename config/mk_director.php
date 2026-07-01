@@ -305,4 +305,41 @@ return [
         'model' => env('MK_TENANT_MODEL', null), // e.g. App\Models\Tenant
         'strict' => env('MK_TENANT_STRICT', true),
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Frontend CORS (R-PKG-042 FASE18-07)
+    |--------------------------------------------------------------------------
+    |
+    | El scaffolder `mk:make:auth-user` pinea `config/cors.php` con `paths:`
+    | apuntando a `['api/*']` (los endpoints del paquete) y los `allowed_origins`
+    | leídos desde esta config. Sin esta config pineada, el consumer debe
+    | agregar manualmente `config/cors.php` (riesgo de olvidar) o sufrir
+    | errores CORS silenciosos en dev (el browser bloquea preflight y la app
+    | muestra `TypeError: Failed to fetch` en vez del error real).
+    |
+    | `frontend_origins`: array de origins permitidos (e.g. `http://localhost:3000`
+    | para Next.js dev, `https://admin.example.com` para prod). Default dev-friendly
+    | para que el scaffolder pinee un `config/cors.php` que funcione out-of-the-box
+    | en local. **Override en prod vía env var** (`FRONTEND_ORIGINS=https://admin.example.com,https://app.example.com`).
+    |
+    | `supports_credentials`: si el consumer usa Sanctum SPA flow (cookie-based
+    | auth), necesita `true`. Default `true` consistente con el patrón canónico
+    | de Sanctum v4. Si no usás cookies, podés setear `false` y `allowed_headers`
+    | no necesita `Authorization` (CORS lo bloquea).
+    |
+    | El scaffolder pinea un `config/cors.php` que lee estos valores via
+    | `env('FRONTEND_ORIGINS', implode(',', config('mk_director.frontend.frontend_origins')))`.
+    | Si querés override granular (paths custom, methods custom, etc.), publicá
+    | el config con `php artisan vendor:publish --tag=mk-director-cors` y editá.
+    */
+    'frontend' => [
+        'frontend_origins' => array_filter(array_map('trim', explode(',', (string) env('FRONTEND_ORIGINS', 'http://localhost:3000,http://127.0.0.1:3000')))),
+        'supports_credentials' => (bool) env('FRONTEND_SUPPORTS_CREDENTIALS', true),
+        // Paths CORS allow-list. Default `['api/*']` cubre todos los endpoints
+        // del paquete. Sumá `'sanctum/csrf-cookie'` si usás Sanctum SPA flow
+        // (cookie-based auth) — el scaffolder ya lo pinea automáticamente
+        // cuando el scope se crea con `--with-auth-rbac`.
+        'paths' => ['api/*'],
+    ],
 ];

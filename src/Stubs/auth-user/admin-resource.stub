@@ -22,6 +22,17 @@ use Illuminate\Http\Resources\Json\JsonResource;
  * `useMkAuth().hasAbility(ability)` y la sidebar permission-gated.
  * Pre-v1.8.3 el consumer debía aplanar manualmente
  * (`$this->roles->flatMap(fn ($r) => $r->abilities->pluck('name'))`).
+ *
+ * R-PKG-042 FASE18-05 fix: `direct_abilities` se removió del default.
+ * El campo duplicaba `abilities` (que ya es la unión efectiva via
+ * `getEffectiveAbilities()`) y solo tenía sentido si el admin tenía
+ * grants directos distintos a los del role — caso raro. Para el flujo
+ * de "ver grants directos" (e.g. pantalla admin de permissions) pineá
+ * el método opt-in `permissions()` que genera `mk:make:auth-user` con
+ * `--with-permissions-endpoint` (HALLAZGO-NEW-FASE18-05). El endpoint
+ * queda en `GET /api/{scope}/auth/me/permissions` y retorna
+ * `{direct_abilities, effective_abilities, roles_with_abilities}` —
+ * un shape dedicado, no un campo extra en /me.
  */
 class {{ModuleName}}Resource extends JsonResource
 {
@@ -43,7 +54,6 @@ class {{ModuleName}}Resource extends JsonResource
                 'id' => $r->id,
                 'name' => $r->name,
             ])),
-            'direct_abilities' => $this->whenLoaded('directAbilities', fn () => $this->directAbilities->pluck('name')->all()),
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
         ];

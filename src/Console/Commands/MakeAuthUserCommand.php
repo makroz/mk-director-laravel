@@ -137,6 +137,8 @@ class MakeAuthUserCommand extends Command
         {--login-field=email : Campo usado para login (default: email). BC: si no se pasa, idéntico a v1.4.0. Valores comunes: email, ci, phone, username, documento.}
         {--with-auth-rbac : Habilita RBAC integration (ability checks en /me y /logout), rate limiting en /login, /forgot, /reset, y audit log via AuthEvent (R-PKG-010). Default BC: false. Configurar abilities + rate_limits en config/mk_director.php.}
         {--with-crud : Genera CRUD completo del scope + RBAC triada (AdminController + RoleController + AbilityController + DTOs + Repository + Service + Factory + Seeder + Requests + Resources + ServiceProvider binding). Default BC: false. Ortogonal con --with-auth-rbac, --login-field, --profile-fields. Spec: R-PKG-014.}
+        {--with-permissions-endpoint : Genera endpoint opt-in `GET /api/{scope}/auth/me/permissions` (MePermissionsController) que retorna el desglose de abilities (direct + via roles). Opt-in porque pinea un controller extra; pinearlo solo si tu UI tiene pantalla de "Manage permissions". Default BC: false. (R-PKG-042 FASE18-05).}
+        {--force-cors : Re-pinear `config/cors.php` aunque ya exista. Default: skip si ya existe (BC). (R-PKG-042 FASE18-07).}
         {--profile-fields= : Campos adicionales para el perfil del scope (CSV con sintaxis key[:type], default: ninguno = BC). Cada field se agrega como columna del tipo correspondiente en la tabla del scope, en $fillable del modelo, y se expone en /me + PATCH /me + /register. Sin tipo = string (BC con R-PKG-011). Tipos soportados: string, text, int, decimal, bool, date, datetime, json (R-PKG-012). Ortogonal con --login-field, --with-auth-rbac y --verify-email. Ej: --profile-fields=name,birthdate:date,age:int (R-PKG-011 + R-PKG-012).}
         {--profile-fields-required= : Override del validation default a `required` para profile fields específicos (CSV). Default: ninguno (todos nullable). Ej: --profile-fields-required=full_name,email. Solo aplica si el field está en --profile-fields. (R-PKG-014 BUG-03 fix)}
         {--verify-email : Habilita verificación por email: columna email_verified_at, endpoints /email/verify/<id>/<hash> y /email/resend, dispatch de Illuminate\Auth\Notifications\VerifyEmail en /register. Default BC: false. Aplican cuando --login-field=email (R-PKG-011).}';
@@ -156,6 +158,10 @@ class MakeAuthUserCommand extends Command
         $loginField = $this->resolveLoginField((string) $this->option('login-field'));
         $withAuthRbac = (bool) $this->option('with-auth-rbac');
         $withCrud = (bool) $this->option('with-crud');
+        // R-PKG-042 FASE18-05: opt-in endpoint para desglose de abilities.
+        $withPermissionsEndpoint = (bool) $this->option('with-permissions-endpoint');
+        // R-PKG-042 FASE18-07: force re-pinear config/cors.php aunque exista.
+        $forceCors = (bool) $this->option('force-cors');
         $profileFieldsRaw = $this->resolveProfileFields((string) $this->option('profile-fields'), $loginField);
         $verifyEmailRequested = (bool) $this->option('verify-email');
         $requiredFields = $this->resolveRequiredProfileFields((string) $this->option('profile-fields-required'), $profileFieldsRaw);
@@ -567,6 +573,21 @@ PHP
         $this->newLine();
         $this->info('🔌 Auto-registrando ServiceProvider:');
         $this->registerServiceProvider($scope);
+
+        // ── R-PKG-042 FASE18-07: pinear config/cors.php si no existe ─────
+        // El scaffolder pinea un CORS allow-list canónico para que las SPAs
+        // (Next.js, React, Vue) puedan pegarle a `/api/*` sin errores de
+        // preflight. BC: si ya existe config/cors.php, NO lo sobreescribimos
+        // (puede tener custom paths/methods/headers que el consumer pineó).
+        // Override con `--force-cors`.
+        $this->ensureCorsConfig($forceCors);
+
+        // ── R-PKG-042 FASE18-05: pinear MePermissionsController si --with-permissions-endpoint ─
+        // Endpoint opt-in para desglose de abilities (no se pinea por default
+        // porque el campo `direct_abilities` se removió del Resource default).
+        if ($withPermissionsEndpoint) {
+            $this->generatePermissionsEndpoint($scope, $scopeLower);
+        }
 
         // ── BUG-10 fix (R-PKG-014): check storage:link si disk=public ───
         $this->checkStorageLink();
@@ -2281,6 +2302,123 @@ PHP,
         if (func_num_args() >= 4) {
             // Print extra step for RBAC if applicable.
             // (Detected by checking the actual generated controller contents later.)
+        }
+    }
+
+    /**
+     * R-PKG-042 FASE18-07: pinea `config/cors.php` con paths CORS allow-list
+     * canónicos para el paquete. Si ya existe, NO lo sobreescribe (BC — el
+     * consumer puede tener custom paths/methods/headers). Override con
+     * `--force-cors`.
+     *
+     ** Por qué este método existe: pre-R-PKG-042, el scaffolder no pineaba
+     * `config/cors.php` y los consumers tenían que crearlo a mano. RETO
+     * fase 18 fue un caso real donde se olvidó y la app crasheaba con
+     * `TypeError: Failed to fetch` (CORS preflight bloqueado por browser).
+     * El HALLAZGO-NEW-FASE18-07 lo detectó; este fix es la solución de raíz
+     * (scaffolder pinea automáticamente, no espera que el dev lo haga).
+     */
+    protected function ensureCorsConfig(bool $forceCors): void
+    {
+        $corsPath = function_exists('config_path') ? config_path('cors.php') : 'config/cors.php';
+
+        if (file_exists($corsPath) && ! $forceCors) {
+            // Ya existe — respetamos BC. Sugerimos verificar que tiene los
+            // paths correctos en el log de "siguientes pasos".
+            return;
+        }
+
+        if (! file_exists($corsPath)) {
+            $this->newLine();
+            $this->info('🌐 Pineando config/cors.php (R-PKG-042 FASE18-07):');
+        } else {
+            $this->newLine();
+            $this->info('🌐 Re-pineando config/cors.php (--force-cors):');
+            // Backup antes de sobreescribir (defense-in-depth).
+            $backupPath = $corsPath.'.bak.'.date('Ymd-His');
+            if (! copy($corsPath, $backupPath)) {
+                $this->warn("⚠️  No se pudo crear backup de cors.php en {$backupPath}. Continuando de todos modos.");
+            } else {
+                $this->line("   📁 Backup: {$backupPath}");
+            }
+        }
+
+        $stubPath = __DIR__.'/../../Stubs/cors.php.stub';
+        if (! file_exists($stubPath)) {
+            $this->warn("⚠️  Stub cors.php.stub no encontrado en {$stubPath}. Skipping CORS scaffolding.");
+
+            return;
+        }
+
+        $stubContent = file_get_contents($stubPath);
+        $extraCorsPaths = $this->option('with-auth-rbac')
+            ? "['sanctum/csrf-cookie']"
+            : "[]";
+        $rendered = str_replace('{{extraCorsPaths}}', $extraCorsPaths, $stubContent);
+
+        // Crear el directorio config/ si no existe (puede no existir en fresh
+        // installs de Laravel 11+ si el dev removió config/ por mistake).
+        $configDir = dirname($corsPath);
+        if (! is_dir($configDir)) {
+            mkdir($configDir, 0755, true);
+        }
+
+        if (file_put_contents($corsPath, $rendered) === false) {
+            $this->warn("⚠️  No se pudo escribir {$corsPath}. Skipping CORS scaffolding.");
+
+            return;
+        }
+
+        $this->line("   📄 {$corsPath}");
+        $this->line('   💡 Configurá FRONTEND_ORIGINS en tu .env para prod (default localhost:3000).');
+    }
+
+    /**
+     * R-PKG-042 FASE18-05: pinear `MePermissionsController` opt-in que retorna
+     * el desglose completo de abilities (direct + via roles). Solo se pinea
+     * si el consumer pasa `--with-permissions-endpoint` (default false, BC).
+     *
+     ** Por qué opt-in: el campo `direct_abilities` se removió del default
+     * Resource (over-emission cuando un admin tiene grants directos que
+     * coinciden con los del role). El endpoint opt-in existe para UIs que
+     * necesitan el desglose (pantalla admin de permissions).
+     */
+    protected function generatePermissionsEndpoint(string $scope, string $scopeLower): void
+    {
+        $basePath = app_path("Modules/{$scope}");
+
+        $this->newLine();
+        $this->info('🔐 Pineando MePermissionsController (R-PKG-042 FASE18-05):');
+
+        // Reusar el helper generateStub de la clase.
+        $this->generateStub(
+            $scope,
+            $scopeLower,
+            Str::plural($scopeLower),
+            (string) $this->option('login-field'),
+            'auth-user/me-permissions-controller.stub',
+            'Http/Controllers',
+            'MePermissionsController.php',
+            []
+        );
+        $this->line('   📄 Http/Controllers/MePermissionsController.php');
+
+        // Pinear la ruta `GET /api/{scope}/auth/me/permissions` en el routes/api.php
+        // existente. Si el consumer no quiere, puede borrar el controller + ruta
+        // manualmente. El scaffolder lo pinea con `mk.auth:{scope}` middleware
+        // (consistente con /me y /logout).
+        $routesPath = "{$basePath}/Http/Routes/api.php";
+        if (file_exists($routesPath)) {
+            $routeLine = "\n    Route::get('me/permissions', [MePermissionsController::class, 'show'])->middleware('mk.auth:{$scopeLower}');";
+            $routesContent = file_get_contents($routesPath);
+            if (! str_contains($routesContent, "me/permissions")) {
+                file_put_contents($routesPath, $routesContent.$routeLine."\n");
+                $this->line("   📄 Route GET /api/{$scopeLower}/auth/me/permissions agregada a Http/Routes/api.php");
+            } else {
+                $this->line('   📄 Route ya existe, skipping.');
+            }
+        } else {
+            $this->warn("   ⚠️  No se encontró {$routesPath}. Agregá la ruta manualmente.");
         }
     }
 }

@@ -1,0 +1,99 @@
+<?php
+
+declare(strict_types=1);
+
+/*
+ * CORS config scaffoldeado por `mk:make:auth-user` (R-PKG-042 FASE18-07).
+ *
+ * **Por qué este archivo existe**: cada consumer de `makroz/director-laravel`
+ * que sirve una SPA (Next.js, React, Vue) necesita CORS allow-list para
+ * los endpoints `/api/*`. Pre-R-PKG-042 el scaffolder NO lo pineaba, así
+ * que cada consumer tenía que crearlo a mano (y muchos olvidaban — RETO
+ * fase 18 fue un caso real, HALLAZGO-NEW-FASE18-07).
+ *
+ * **Qué hace este archivo**:
+ *   - `paths`: `['api/*']` cubre todos los endpoints del paquete.
+ *     Si usás Sanctum SPA flow (cookie-based), sumá `'sanctum/csrf-cookie'`.
+ *   - `allowed_origins`: lee desde `config('mk_director.frontend.frontend_origins')`
+ *     (que a su vez lee de `FRONTEND_ORIGINS` env var). Default dev-friendly
+ *     para `localhost:3000` y `127.0.0.1:3000` (Next.js dev server).
+ *   - `supports_credentials`: `true` para Sanctum SPA. Si NO usás cookies,
+ *     setear `false` y `allowed_headers` no necesita `Authorization`.
+ *   - `allowed_methods` / `allowed_headers`: explícitos (no `*`) para
+ *     evitar CORS error silencioso en algunos browsers cuando se usa
+ *     `Authorization` header con credentials.
+ *
+ * **Override**:
+ *   - Env var: `FRONTEND_ORIGINS=https://admin.example.com,https://app.example.com`
+ *     (comma-separated, sin espacios) para prod.
+ *   - Publicar el config: `php artisan vendor:publish --tag=mk-director-cors`
+ *     y editar `config/cors.php` directamente.
+ *   - Granular override: agregar paths específicos, methods, headers en
+ *     este mismo archivo (Laravel CORS permite `allowed_origins_patterns`
+ *     para wildcards, `exposed_headers` para que el browser exponga headers
+ *     custom al JS, etc.).
+ *
+ * **R-PKG-042 carry-over**: si el scaffolder pineó este archivo y querés
+ * reset a package default, borrá el archivo y re-ejecutá `mk:make:auth-user`
+ * con `--force-cors` (próximo sprint, backlog).
+ */
+
+return [
+    /*
+    | Paths allow-list. `api/*` cubre todos los endpoints del paquete.
+    | Sumá `'sanctum/csrf-cookie'` si usás Sanctum SPA flow.
+    | Sumá `'livewire/*'` si usás Livewire (no aplica al paquete).
+    */
+    'paths' => array_merge(
+        config('mk_director.frontend.paths', ['api/*']),
+        {{extraCorsPaths}}
+    ),
+
+    /*
+    | Allowed request methods. Default RESTful + preflight.
+    */
+    'allowed_methods' => ['*'],
+
+    /*
+    | Allowed origins. Lee del env var `FRONTEND_ORIGINS` (comma-separated)
+    | o del default en `config/mk_director.php`. Si necesitás wildcards
+    | (e.g. `https://*.example.com`), usá `allowed_origins_patterns` abajo.
+    */
+    'allowed_origins' => config('mk_director.frontend.frontend_origins', [
+        'http://localhost:3000',
+        'http://127.0.0.1:3000',
+    ]),
+
+    /*
+    | Wildcard origins (e.g. `https://*.example.com` para subdominios
+    | dinámicos). Dejar vacío si no se necesita.
+    */
+    'allowed_origins_patterns' => [],
+
+    /*
+    | Allowed request headers. Por defecto todos (`*`).
+    | Si `supports_credentials` es `true`, NO se puede usar `*` para
+    | `allowed_headers` en algunos browsers — explícito es más seguro.
+    */
+    'allowed_headers' => ['*'],
+
+    /*
+    | Exposed headers — los que el browser expone al JS. Útil si tu SPA
+    | lee headers custom del response (e.g. `X-Request-Id`, `X-RateLimit-Remaining`).
+    */
+    'exposed_headers' => [],
+
+    /*
+    | Max age (en segundos) del preflight cache. Default 1 día.
+    | Si tu API cambia CORS config seguido, bajá a 0 (no cache).
+    */
+    'max_age' => 86400,
+
+    /*
+    | `supports_credentials` indica si el browser puede enviar credentials
+    | (cookies, Authorization header). Para Sanctum SPA flow con cookies,
+    | necesita `true`. Si usás solo Bearer tokens (no cookies), podés
+    | setear `false` y la config es más permisiva.
+    */
+    'supports_credentials' => (bool) config('mk_director.frontend.supports_credentials', true),
+];
