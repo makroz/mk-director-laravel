@@ -113,8 +113,12 @@ trait CRUDSmart
      */
     protected function isCacheEnabled(): bool
     {
+        // Global toggle acts as a master switch. If disabled globally, cache is off.
+        if (!config('mk_director.features.auto_cache', false)) {
+            return false;
+        }
         $features = $this->getListFeatures();
-        return $features['auto_cache'] ?? config('mk_director.features.auto_cache', false);
+        return $features['auto_cache'] ?? true;
     }
 
     /**
