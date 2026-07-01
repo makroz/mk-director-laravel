@@ -2407,15 +2407,89 @@ PHP,
         // existente. Si el consumer no quiere, puede borrar el controller + ruta
         // manualmente. El scaffolder lo pinea con `mk.auth:{scope}` middleware
         // (consistente con /me y /logout).
+        //
+        // HALLAZGO-NEW-FASE19-02 (R-PKG-043): pinear la ruta DENTRO del bloque
+        // `Route::middleware('mk.auth:{scope}')...->group(...)` que ya contiene
+        // `/me` y `/logout` (canónico desde auth-user.routes.stub). Pre-fix, la
+        // ruta se pineá como path absoluto `me/permissions` en raíz del archivo,
+        // registrando `GET /me/permissions` (sin prefijo /api/admin/auth/), lo
+        // que rompía la convención cross-stack (frontend esperaba
+        // `/api/admin/auth/me/permissions`).
+        //
+        // HALLAZGO-NEW-FASE19-01 (R-PKG-043): pinear `use ...\MePermissionsController;`
+        // en el bloque `use` del inicio del archivo. Pre-fix, el scaffolder NO
+        // pineaba el import, lo que causaba `ReflectionException: Class
+        // "MePermissionsController" does not exist` en `php artisan route:list`.
         $routesPath = "{$basePath}/Http/Routes/api.php";
         if (file_exists($routesPath)) {
-            $routeLine = "\n    Route::get('me/permissions', [MePermissionsController::class, 'show'])->middleware('mk.auth:{$scopeLower}');";
             $routesContent = file_get_contents($routesPath);
-            if (! str_contains($routesContent, "me/permissions")) {
-                file_put_contents($routesPath, $routesContent.$routeLine."\n");
-                $this->line("   📄 Route GET /api/{$scopeLower}/auth/me/permissions agregada a Http/Routes/api.php");
+
+            if (str_contains($routesContent, "me/permissions")) {
+                $this->line('   📄 Route ya existe, skipping me/permissions.');
             } else {
-                $this->line('   📄 Route ya existe, skipping.');
+                // 1. Insertar `use ...\MePermissionsController;` después del bloque `use`
+                //    existente (justo después del import de `AuthController` si existe,
+                //    o del último `use` del namespace como fallback).
+                $useStatement = "use App\\Modules\\{$scope}\\Http\\Controllers\\MePermissionsController;";
+                $insertedUse = false;
+
+                if (str_contains($routesContent, "use App\\Modules\\{$scope}\\Http\\Controllers\\AuthController;")) {
+                    $routesContent = str_replace(
+                        "use App\\Modules\\{$scope}\\Http\\Controllers\\AuthController;",
+                        "use App\\Modules\\{$scope}\\Http\\Controllers\\AuthController;\n{$useStatement}",
+                        $routesContent
+                    );
+                    $insertedUse = true;
+                } else {
+                    // Fallback: insertar después del último `use App\...;` o después de `<?php`
+                    // si no hay ninguno. Buscamos el último `use ...;` antes del primer `Route::`.
+                    if (preg_match('/(use [^;]+;)(?!.*use [^;]+;)/s', $routesContent, $matches)) {
+                        $routesContent = preg_replace(
+                            '/(use [^;]+;)(?!.*use [^;]+;)/s',
+                            "$1\n{$useStatement}",
+                            $routesContent,
+                            1
+                        );
+                        $insertedUse = true;
+                    }
+                }
+
+                if (! $insertedUse) {
+                    // Último fallback: pinear después del `<?php` (start-of-file).
+                    $routesContent = preg_replace(
+                        '/(<\?php[^\n]*\n)/',
+                        "$1\n{$useStatement}\n",
+                        $routesContent,
+                        1
+                    );
+                }
+
+                // 2. Insertar la ruta DENTRO del bloque middleware 'mk.auth:{scopeLower}'.
+                //    Estrategia: pinear inmediatamente después de `Route::get('me', ...)`,
+                //    que es la última ruta pineada por auth-user.routes.stub antes del
+                //    cierre `});` del middleware group. Esto garantiza que la ruta queda
+                //    bajo el prefijo `api/{scopeLower}/auth/` Y bajo el middleware
+                //    `mk.auth:{scopeLower}` (canónico).
+                $routeLine = "        Route::get('me/permissions', [MePermissionsController::class, 'show']);";
+                $meRoutePattern = "/(Route::get\\(\\s*'me'\\s*,\\s*\\[AuthController::class,\\s*'me'\\]\\)(\\(?[^)]*\\))?\\s*;)/";
+
+                if (preg_match($meRoutePattern, $routesContent)) {
+                    $routesContent = preg_replace(
+                        $meRoutePattern,
+                        "$1\n{$routeLine}",
+                        $routesContent,
+                        1
+                    );
+                    file_put_contents($routesPath, $routesContent);
+                    $this->line("   📄 Route GET /api/{$scopeLower}/auth/me/permissions pineada ADENTRO del middleware group 'mk.auth:{$scopeLower}' + use statement pineado.");
+                } else {
+                    // Fallback si la línea `Route::get('me', ...)` no se encontró
+                    // (consumer customizó el routes). Pinear la ruta al final del
+                    // archivo con middleware explícito + advertir al consumer.
+                    $routeLineWithMiddleware = "\nRoute::prefix('api/{$scopeLower}/auth')->middleware('mk.auth:{$scopeLower}')->group(function () {\n    Route::get('me/permissions', [MePermissionsController::class, 'show']);\n});\n";
+                    file_put_contents($routesPath, $routesContent.$routeLineWithMiddleware);
+                    $this->warn("   ⚠️  No se encontró `Route::get('me', ...)` canónico. Route pineada con prefix+middleware explícito al final del archivo. Verificar manualmente que quede dentro del bloque correcto.");
+                }
             }
         } else {
             $this->warn("   ⚠️  No se encontró {$routesPath}. Agregá la ruta manualmente.");
