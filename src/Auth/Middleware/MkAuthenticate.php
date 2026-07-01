@@ -15,9 +15,9 @@ use Symfony\Component\HttpFoundation\Response;
  * Scope-aware Sanctum middleware (R-PKG-024 + R-PKG-042 FASE17-02 envelope hardening).
  *
  * **Canonical auth middleware for mk-director**. Use this for any new route
- * that requires auth — the legacy `MkAuthMiddleware` (scope-agnostic) and
- * `MkAbility` (ability-only) are kept BC for v1.9.x and slated for removal
- * in v2.0.0.
+ * that requires auth. The legacy scope-agnostic `MkAuthMiddleware` and the
+ * `MkAbility` middleware were REMOVED in v2.0.0 — see the
+ * `UPGRADE_2.0.md` migration guide in the package docs.
  *
  * Usage:
  *   Route::middleware(['mk.auth:admin'])->group(...);
@@ -38,14 +38,6 @@ use Symfony\Component\HttpFoundation\Response;
  * additive. Si el consumer pineó un custom `Handler::render()` que matchea
  * `AuthenticationException`, ese override gana (Laravel render pipeline
  * respeta el custom).
- *
- * **Por qué opción B** (R-PKG-042 decisión arquitectural): había 3
- * middlewares auth-related con shapes JSON distintos (MkAuthenticate canónico
- * scope-aware, MkAuthMiddleware legacy scope-agnostic, MkAbility). Pinear
- * un handler global que transforma los 3 rompe BC para TODOS los consumers.
- * Extender MkAuthenticate para pinear envelope R-PKG-024 es estrictamente
- * additive (cambia shape solo en api/* + expectsJson) y marca los legacy
- * como `@deprecated` con migration path claro.
  */
 class MkAuthenticate
 {
