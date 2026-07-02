@@ -184,10 +184,19 @@ trait CRUDSmart
     }
 
     /**
+     * Cached PluginManager instance — avoids redundant setup per hook call.
+     */
+    private ?PluginManager $pluginManagerInstance = null;
+
+    /**
      * Obtener el PluginManager
      */
     protected function getPluginManager(): PluginManager
     {
+        if ($this->pluginManagerInstance !== null) {
+            return $this->pluginManagerInstance;
+        }
+
         $manager = app(PluginManager::class);
 
         // Set the controller context
@@ -201,6 +210,7 @@ trait CRUDSmart
         // Validate Requirements (Only in debug mode)
         $manager->validateRequirements($this->getFillable());
 
+        $this->pluginManagerInstance = $manager;
         return $manager;
     }
 

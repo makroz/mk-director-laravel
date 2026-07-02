@@ -6,7 +6,7 @@ namespace Mk\Director;
 
 use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Artisan;
-use Illuminate\Support\Facades\Cache;
+use Mk\Director\Managers\CacheManager;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
@@ -268,7 +268,7 @@ class MkServiceProvider extends ServiceProvider
      * does NOT match `REPLACE`, `TRUNCATE`, raw stored-procedure calls, or
      * Eloquent `upsert()` (which uses `INSERT ... ON DUPLICATE KEY UPDATE`).
      * Those mutations will not invalidate the cache. Documented so callers
-     * can `Cache::tags([$table . '_all'])->flush()` manually if needed.
+     * can `CacheManager::flush([$table])` manually if needed.
      */
     protected function registerGlobalCacheListener()
     {
@@ -313,7 +313,7 @@ class MkServiceProvider extends ServiceProvider
                 if ($table === null) {
                     return;  // TRUNCATE without a table name — skip.
                 }
-                Cache::tags([$table.'_all'])->flush();
+                CacheManager::flush([$table]);
 
                 if (config('mk_director.debug', false)) {
                     Log::info("MK-Director: Cache flushed for table [{$table}] due to write operation.");

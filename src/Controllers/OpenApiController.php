@@ -6,7 +6,7 @@ namespace Mk\Director\Controllers;
 
 use Illuminate\Http\JsonResponse;
 use Illuminate\Routing\Controller as BaseController;
-use Illuminate\Support\Facades\Cache;
+use Mk\Director\Managers\CacheManager;
 use Mk\Director\Services\OpenApiGeneratorService;
 
 class OpenApiController extends BaseController
@@ -41,8 +41,9 @@ class OpenApiController extends BaseController
     {
         $ttl = (int) config('mk_director.openapi.cache_ttl', self::DEFAULT_TTL);
 
-        $spec = Cache::remember(
+        $spec = CacheManager::remember(
             self::CACHE_KEY,
+            [],
             $ttl,
             fn (): array => $generator->generate(),
         );
