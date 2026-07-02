@@ -62,14 +62,21 @@ class SearchManager implements SearchManagerInterface
         }
 
         return $query->where(function ($q) use ($terms, $searchBy) {
-            foreach ($terms as $term) {
-                foreach ($searchBy as $index => $column) {
-                    if ($index === 0) {
-                        $this->strategy->apply($q, $column, $term);
-                    } else {
-                        $this->strategy->applyOr($q, $column, $term);
+            foreach ($terms as $termIndex => $term) {
+                // R-PKG-034 P0-FIX-2: each term is wrapped in its own
+                // group. The first term uses `where(fn)` (AND), subsequent
+                // terms use `orWhere(fn)` — so multiple terms are ORed.
+                // Within each term-group, columns are always ORed.
+                $method = $termIndex === 0 ? 'where' : 'orWhere';
+                $q->{$method}(function ($termQuery) use ($term, $searchBy) {
+                    foreach ($searchBy as $colIndex => $column) {
+                        if ($colIndex === 0) {
+                            $this->strategy->apply($termQuery, $column, $term);
+                        } else {
+                            $this->strategy->applyOr($termQuery, $column, $term);
+                        }
                     }
-                }
+                });
             }
         });
     }
