@@ -130,16 +130,31 @@ trait CRUDSmart
     }
 
     /**
-     * Obtener etiquetas (tags) para el caché, por defecto es el nombre de la tabla
+     * Obtener etiquetas (tags) para el caché, por defecto es el nombre de la tabla.
+     *
+     * R-PKG-024 P0-FIX-1: when a tenant is active (via TenantContext),
+     * the tag array includes `tenant:{id}` so that cache invalidation
+     * on write operations is scoped per-tenant instead of global
+     * per-table. Without this, Tenant A's write flushes Tenant B's
+     * cache — a performance bug in multi-tenant deployments.
      */
     protected function getCacheTags(): array
     {
         if (isset($this->mkConfig['cache_tags'])) {
-            return (array) $this->mkConfig['cache_tags'];
+            $tags = (array) $this->mkConfig['cache_tags'];
+        } else {
+            $modelClass = $this->getModel();
+            $tags = [(new $modelClass)->getTable()];
         }
-        
-        $modelClass = $this->getModel();
-        return [(new $modelClass)->getTable()];
+
+        // Scope tags to the active tenant when available
+        $tenantContext = app(\Mk\Director\Tenancy\TenantContext::class);
+        $tenantId = $tenantContext->current();
+        if ($tenantId !== null) {
+            $tags[] = 'tenant:' . $tenantId;
+        }
+
+        return $tags;
     }
 
     /**
