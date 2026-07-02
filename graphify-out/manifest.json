@@ -1,0 +1,967 @@
+{
+  "bin/migrate-1.1-to-1.2.php": {
+    "mtime": 1782660262.3878794,
+    "ast_hash": "cdb30e421d232287c4ad1793f0c8f091",
+    "semantic_hash": ""
+  },
+  "composer.json": {
+    "mtime": 1782933843.9863384,
+    "ast_hash": "106103b34e539313f83012e0a6edb8e6",
+    "semantic_hash": ""
+  },
+  "config/auth_defaults.php": {
+    "mtime": 1781227307.0,
+    "ast_hash": "12b91d8596da673ddb1682660a7ed5c2",
+    "semantic_hash": ""
+  },
+  "config/mk_director.php": {
+    "mtime": 1782888547.2925797,
+    "ast_hash": "c605d0892940d7d8b9a52ea6fa480a62",
+    "semantic_hash": ""
+  },
+  "pint.json": {
+    "mtime": 1782293672.5842156,
+    "ast_hash": "5c5189d78fc4926c694341f38802d9c3",
+    "semantic_hash": ""
+  },
+  "src/Auth/Attributes/Ability.php": {
+    "mtime": 1782660262.3883803,
+    "ast_hash": "f08c7cf9ad96f728951cbc998ddd3bfc",
+    "semantic_hash": ""
+  },
+  "src/Auth/AuthServiceProvider.php": {
+    "mtime": 1781227307.0,
+    "ast_hash": "deb63a3c5b135765cf5280bf78ac58e5",
+    "semantic_hash": ""
+  },
+  "src/Auth/Concerns/ChecksAbilities.php": {
+    "mtime": 1782660262.388647,
+    "ast_hash": "0527627269710cd38dbda1c116e1bf32",
+    "semantic_hash": ""
+  },
+  "src/Auth/Concerns/HasAbilities.php": {
+    "mtime": 1782803974.9848967,
+    "ast_hash": "9ce4454ed11bb1edb2105694cc6986d7",
+    "semantic_hash": ""
+  },
+  "src/Auth/Concerns/HasRoles.php": {
+    "mtime": 1782803974.9852328,
+    "ast_hash": "29e26ca8f9fca8b8adaabe2c83e35421",
+    "semantic_hash": ""
+  },
+  "src/Auth/Database/Migrations/2026_06_10_000001_create_auth_users_table.php": {
+    "mtime": 1782293672.5851855,
+    "ast_hash": "d80f87fa7494b147b89d9fc078e598ea",
+    "semantic_hash": ""
+  },
+  "src/Auth/Database/Migrations/2026_06_10_000002_create_roles_table.php": {
+    "mtime": 1781227307.0,
+    "ast_hash": "ab114eddb2b2681aa7ea247c6301a0bb",
+    "semantic_hash": ""
+  },
+  "src/Auth/Database/Migrations/2026_06_10_000003_create_abilities_table.php": {
+    "mtime": 1781227307.0,
+    "ast_hash": "fdea2819193f0c4facfd38817b14cb96",
+    "semantic_hash": ""
+  },
+  "src/Auth/Database/Migrations/2026_06_10_000004_create_role_user_table.php": {
+    "mtime": 1781913519.6057234,
+    "ast_hash": "bdfa0819b847223c39a0b2251847dcf6",
+    "semantic_hash": ""
+  },
+  "src/Auth/Database/Migrations/2026_06_10_000005_create_ability_role_table.php": {
+    "mtime": 1781227307.0,
+    "ast_hash": "483085b48da6bdad2c65974c26deff15",
+    "semantic_hash": ""
+  },
+  "src/Auth/Database/Migrations/2026_06_10_000007_create_ability_user_table.php": {
+    "mtime": 1782660262.388942,
+    "ast_hash": "d047888c5225c1bc50c687924fa2ad4f",
+    "semantic_hash": ""
+  },
+  "src/Auth/Database/Seeders/AbilitySeeder.php": {
+    "mtime": 1781227307.0,
+    "ast_hash": "52e3ed3d347d9e03cbaf568a47b0d86e",
+    "semantic_hash": ""
+  },
+  "src/Auth/Events/AuthEvent.php": {
+    "mtime": 1782660262.3892198,
+    "ast_hash": "f0a94ed33567c25a8f965d71ec8052c6",
+    "semantic_hash": ""
+  },
+  "src/Auth/Exceptions/ScopeMismatchException.php": {
+    "mtime": 1781227307.0,
+    "ast_hash": "0a379fb393e5e2055af888094567d7ef",
+    "semantic_hash": ""
+  },
+  "src/Auth/Middleware/MkAbility.php": {
+    "mtime": 1782933843.9866266,
+    "ast_hash": "ebd6e55e2090eff91ffbe027cd0624be",
+    "semantic_hash": ""
+  },
+  "src/Auth/Middleware/MkAuthenticate.php": {
+    "mtime": 1782933843.9869125,
+    "ast_hash": "019aef61607ef19d77c094f1adc69148",
+    "semantic_hash": ""
+  },
+  "src/Auth/Models/Ability.php": {
+    "mtime": 1781227307.0,
+    "ast_hash": "565eaeb874cedd71dfde6c5fa511c613",
+    "semantic_hash": ""
+  },
+  "src/Auth/Models/AuthUser.php": {
+    "mtime": 1782805387.3421712,
+    "ast_hash": "c1e2e3fd45dd5cb95cce93486350af14",
+    "semantic_hash": ""
+  },
+  "src/Auth/Models/Role.php": {
+    "mtime": 1781227307.0,
+    "ast_hash": "7d85d351c78d78ba77365e973b5d6705",
+    "semantic_hash": ""
+  },
+  "src/Auth/Pivots/MkAbilityUserPivot.php": {
+    "mtime": 1782660262.3907602,
+    "ast_hash": "fa4bcbbdd80f23a18c8eeabf77d16de8",
+    "semantic_hash": ""
+  },
+  "src/Auth/Pivots/MkPivot.php": {
+    "mtime": 1782579378.9630342,
+    "ast_hash": "a6ea51a0bb218ec083a326f8d2fe2d43",
+    "semantic_hash": ""
+  },
+  "src/Auth/Pivots/MkRoleUserPivot.php": {
+    "mtime": 1782660262.391328,
+    "ast_hash": "52073b33c93fba414908ace539b8c1dd",
+    "semantic_hash": ""
+  },
+  "src/Auth/Services/AbilityResolver.php": {
+    "mtime": 1782660262.3917046,
+    "ast_hash": "20bf8515cd7b3c929cb79333d51b2b25",
+    "semantic_hash": ""
+  },
+  "src/Auth/Services/AuthScopeResolver.php": {
+    "mtime": 1782660262.3920002,
+    "ast_hash": "e7388123860b273cebb8185e14b8c955",
+    "semantic_hash": ""
+  },
+  "src/Auth/Services/InvalidRefreshTokenException.php": {
+    "mtime": 1782660262.392366,
+    "ast_hash": "472ec634220891f5986d57ab41aa18b8",
+    "semantic_hash": ""
+  },
+  "src/Auth/Services/RefreshTokenParser.php": {
+    "mtime": 1782660262.3926904,
+    "ast_hash": "98989f1bcf625e04396fcd983b34648f",
+    "semantic_hash": ""
+  },
+  "src/Auth/Services/TokenIssuer.php": {
+    "mtime": 1782660262.393133,
+    "ast_hash": "5e5571c5ad16dd84ea3bd4b3aefc912d",
+    "semantic_hash": ""
+  },
+  "src/Console/Commands/AuthCreateSuperAdminCommand.php": {
+    "mtime": 1782688256.358016,
+    "ast_hash": "d4bcfe8792cbc252f1b7f8dda80211c6",
+    "semantic_hash": ""
+  },
+  "src/Console/Commands/DiscoverAbilitiesCommand.php": {
+    "mtime": 1782803974.9857934,
+    "ast_hash": "bc22ee01f5bb78b7dc0b54ed7a54d20b",
+    "semantic_hash": ""
+  },
+  "src/Console/Commands/FixSanctumUuidsCommand.php": {
+    "mtime": 1782660291.7604673,
+    "ast_hash": "7c823798575bfcc6aa0edf1abc058e4c",
+    "semantic_hash": ""
+  },
+  "src/Console/Commands/GenerateDocsCommand.php": {
+    "mtime": 1782660291.7606478,
+    "ast_hash": "6dd099b96a4b06c49387701cd7186dca",
+    "semantic_hash": ""
+  },
+  "src/Console/Commands/LintBoundariesCommand.php": {
+    "mtime": 1782660291.7610145,
+    "ast_hash": "dde0e1074b6d1e5d47b7a0b01b239efe",
+    "semantic_hash": ""
+  },
+  "src/Console/Commands/MakeAuthUserCommand.php": {
+    "mtime": 1782929215.3005881,
+    "ast_hash": "36e8c8eeea3f32a3e2569eb63cf642c0",
+    "semantic_hash": ""
+  },
+  "src/Console/Commands/MakeDTOCommand.php": {
+    "mtime": 1782660291.7618494,
+    "ast_hash": "8d13eae9d7edb903a134c3b78f010927",
+    "semantic_hash": ""
+  },
+  "src/Console/Commands/MakeModuleCommand.php": {
+    "mtime": 1782361973.6487486,
+    "ast_hash": "a2464f12717de4a2ca75483a92e20fdc",
+    "semantic_hash": ""
+  },
+  "src/Console/Commands/MakeServiceCommand.php": {
+    "mtime": 1782660291.7620108,
+    "ast_hash": "484fa8d3c45be7cddfeb21ff08895243",
+    "semantic_hash": ""
+  },
+  "src/Console/Commands/MkCheckCommand.php": {
+    "mtime": 1782690407.7897048,
+    "ast_hash": "34e319d6b01e714878e0db680276d43f",
+    "semantic_hash": ""
+  },
+  "src/Console/Commands/MkSkillDeployCommand.php": {
+    "mtime": 1782307262.7554722,
+    "ast_hash": "d0eb549c5734cd31f8f09537c802982a",
+    "semantic_hash": ""
+  },
+  "src/Console/Commands/MkSkillListCommand.php": {
+    "mtime": 1782307262.755734,
+    "ast_hash": "dbc72a5a03a10b3a61814684c7fa44ca",
+    "semantic_hash": ""
+  },
+  "src/Console/Commands/MkUpdateCommand.php": {
+    "mtime": 1782655556.2418032,
+    "ast_hash": "4579f43e646c0142f481ea3a04b40b96",
+    "semantic_hash": ""
+  },
+  "src/Console/Commands/SecurityLintCommand.php": {
+    "mtime": 1782660291.7625682,
+    "ast_hash": "c1856a9f4625d8f12c3dde39f692bd66",
+    "semantic_hash": ""
+  },
+  "src/Contracts/ListManagerInterface.php": {
+    "mtime": 1782660291.7627115,
+    "ast_hash": "a08f3d706ea46f50bfa5b400991fd130",
+    "semantic_hash": ""
+  },
+  "src/Contracts/MkModuleServiceInterface.php": {
+    "mtime": 1782803974.9865005,
+    "ast_hash": "884d5a762bac1876ae45ee2cdd985fb7",
+    "semantic_hash": ""
+  },
+  "src/Contracts/MkPluginInterface.php": {
+    "mtime": 1782660291.7629826,
+    "ast_hash": "d83c4bb45dd3191b52e9430a07370b93",
+    "semantic_hash": ""
+  },
+  "src/Contracts/SearchManagerInterface.php": {
+    "mtime": 1781913519.6103888,
+    "ast_hash": "0e2bfac8f99ff5d81ebe285a187a159a",
+    "semantic_hash": ""
+  },
+  "src/Contracts/SearchStrategyInterface.php": {
+    "mtime": 1781913519.6105285,
+    "ast_hash": "e5fb85c6b74ff085f5bfac26bd9fde2e",
+    "semantic_hash": ""
+  },
+  "src/Controllers/BaseController.php": {
+    "mtime": 1782803974.9867992,
+    "ast_hash": "a0747882ec25a749f9acd16e05fa35aa",
+    "semantic_hash": ""
+  },
+  "src/Controllers/Controller.php": {
+    "mtime": 1782690407.7900593,
+    "ast_hash": "4bffc397b799a82d9117654f43eea7ae",
+    "semantic_hash": ""
+  },
+  "src/Controllers/OpenApiController.php": {
+    "mtime": 1782977303.394849,
+    "ast_hash": "938da75eb98b00846652e5f151952e28",
+    "semantic_hash": ""
+  },
+  "src/Controllers/SmartController.php": {
+    "mtime": 1782660291.7636883,
+    "ast_hash": "75183f34e132d88477f4167940628fe0",
+    "semantic_hash": ""
+  },
+  "src/DTOs/DTOFactory.php": {
+    "mtime": 1782660291.7638872,
+    "ast_hash": "08de6bad51703377baee196681287d39",
+    "semantic_hash": ""
+  },
+  "src/DTOs/MkDTO.php": {
+    "mtime": 1782660291.76417,
+    "ast_hash": "9f29113d09a3acd3016f4e4a797ee758",
+    "semantic_hash": ""
+  },
+  "src/Database/Eloquent/Relations/MkBelongsToMany.php": {
+    "mtime": 1782660291.764401,
+    "ast_hash": "5170f337284bc0fdc7190b3927cedf94",
+    "semantic_hash": ""
+  },
+  "src/Managers/CacheManager.php": {
+    "mtime": 1782660291.7645667,
+    "ast_hash": "d51c8c7c2aee205c1a0dea8e82973bd5",
+    "semantic_hash": ""
+  },
+  "src/Managers/ListManager.php": {
+    "mtime": 1782710510.4669938,
+    "ast_hash": "8647167ef469abf426171ffdbbfd19a3",
+    "semantic_hash": ""
+  },
+  "src/Managers/PluginManager.php": {
+    "mtime": 1782660291.7650735,
+    "ast_hash": "69ab5dd74aca342e9d04111725304395",
+    "semantic_hash": ""
+  },
+  "src/Managers/SearchManager.php": {
+    "mtime": 1782957689.866947,
+    "ast_hash": "4c47caf5e118870b23a48c958bdd7a8f",
+    "semantic_hash": ""
+  },
+  "src/MkServiceProvider.php": {
+    "mtime": 1782977300.6072662,
+    "ast_hash": "5e1c2be7b9ab0856cf855140490b4907",
+    "semantic_hash": ""
+  },
+  "src/Models/BaseModelBuilder.php": {
+    "mtime": 1782977293.8545477,
+    "ast_hash": "5e868e3354e234dbc140fac0f08c4eb1",
+    "semantic_hash": ""
+  },
+  "src/Models/Model.php": {
+    "mtime": 1782660291.7657151,
+    "ast_hash": "c9d2639a64c773420759e5e5a48b0238",
+    "semantic_hash": ""
+  },
+  "src/ModuleLoader/ModuleLoaderServiceProvider.php": {
+    "mtime": 1782293672.5919144,
+    "ast_hash": "66cd27612b0c3fae52f08032bf6f071d",
+    "semantic_hash": ""
+  },
+  "src/ModuleLoader/ModuleProviderRegistry.php": {
+    "mtime": 1782660291.7659135,
+    "ast_hash": "2c82eb90edf1bfdadca684f92dee434f",
+    "semantic_hash": ""
+  },
+  "src/Plugins/Enterprise/MkAuditLoggerPlugin.php": {
+    "mtime": 1782660291.7660747,
+    "ast_hash": "91c52c01eedca41ec047c34019b38a31",
+    "semantic_hash": ""
+  },
+  "src/Plugins/Enterprise/MkMultiTenantPlugin.php": {
+    "mtime": 1782660291.766343,
+    "ast_hash": "9861e89944c3e231bc7e08c6a9b9da10",
+    "semantic_hash": ""
+  },
+  "src/Plugins/FileStoragePlugin.php": {
+    "mtime": 1782660291.7664993,
+    "ast_hash": "f738fd53e18cc30db8e284fcdeb216be",
+    "semantic_hash": ""
+  },
+  "src/Services/ModuleRouteExtractor.php": {
+    "mtime": 1782660291.7666445,
+    "ast_hash": "60936f501b9a259622b0a88df93c2679",
+    "semantic_hash": ""
+  },
+  "src/Services/OpenApiGeneratorService.php": {
+    "mtime": 1782690407.790619,
+    "ast_hash": "70e7a7ed838ddb37e4242e854f517524",
+    "semantic_hash": ""
+  },
+  "src/Strategies/ExactSearchStrategy.php": {
+    "mtime": 1781913519.615286,
+    "ast_hash": "4074a8f83c2cbfa4eb6494b5f259abf1",
+    "semantic_hash": ""
+  },
+  "src/Strategies/LikeSearchStrategy.php": {
+    "mtime": 1782660291.767004,
+    "ast_hash": "3050af32f42df36537f85af1f53cdac2",
+    "semantic_hash": ""
+  },
+  "src/Tenancy/Concerns/HasTenantMembership.php": {
+    "mtime": 1782660291.7681293,
+    "ast_hash": "af95baa31a9f7099fed6598b3832cfb2",
+    "semantic_hash": ""
+  },
+  "src/Tenancy/HasTenantScope.php": {
+    "mtime": 1782660291.7683764,
+    "ast_hash": "48e6f25dcf78d8101eb9701b1e066dfb",
+    "semantic_hash": ""
+  },
+  "src/Tenancy/TenantContext.php": {
+    "mtime": 1782660291.7685173,
+    "ast_hash": "cc9478a22cafc90e9664700a0d64ce9f",
+    "semantic_hash": ""
+  },
+  "src/Tenancy/TenantResolver.php": {
+    "mtime": 1782660291.7686946,
+    "ast_hash": "3706038682071b47f5b395f1dc99f93f",
+    "semantic_hash": ""
+  },
+  "src/Tenancy/TenantScope.php": {
+    "mtime": 1781913519.6167452,
+    "ast_hash": "9472bf08e1940f9d25ee51d09d51586e",
+    "semantic_hash": ""
+  },
+  "src/Traits/CRUDSmart.php": {
+    "mtime": 1782958694.9350283,
+    "ast_hash": "0896b4e9c12f163046a407ba85f0d04a",
+    "semantic_hash": ""
+  },
+  "src/Traits/CacheTrait.php": {
+    "mtime": 1782977286.6652372,
+    "ast_hash": "b0beb29e44ec86d9d084bb64d5748e4a",
+    "semantic_hash": ""
+  },
+  "src/Traits/HasProgressiveCode.php": {
+    "mtime": 1782660291.769311,
+    "ast_hash": "3dc50c91a9bdd1f5329662a3a476581d",
+    "semantic_hash": ""
+  },
+  "src/Utils/Logger.php": {
+    "mtime": 1782660291.7694576,
+    "ast_hash": "7e341221737b2308ad66e88952f5cfc7",
+    "semantic_hash": ""
+  },
+  "tests/Feature/AdminUserFactoryStubTest.php": {
+    "mtime": 1782660291.769653,
+    "ast_hash": "36d64643dcf18ec57cf05d6c1cf8f17a",
+    "semantic_hash": ""
+  },
+  "tests/Feature/AuthUserFeedbackAuditTest.php": {
+    "mtime": 1782681271.783416,
+    "ast_hash": "e011686ce16501fe8c86008e0e4577fb",
+    "semantic_hash": ""
+  },
+  "tests/Feature/BaseControllerSingleLevelEnvelopeE2ETest.php": {
+    "mtime": 1782710510.4674227,
+    "ast_hash": "0626aa7b71b625bf96d8f050a65e30fe",
+    "semantic_hash": ""
+  },
+  "tests/Feature/DiscoverAbilitiesCommandTest.php": {
+    "mtime": 1782660291.7701936,
+    "ast_hash": "8291fbadf6535ed3dd92746cd0fb16c3",
+    "semantic_hash": ""
+  },
+  "tests/Feature/Fase4FeedbackAuditTest.php": {
+    "mtime": 1782660291.7704065,
+    "ast_hash": "758430534966435f8174387d50763182",
+    "semantic_hash": ""
+  },
+  "tests/Feature/MakeAuthUserCommandBuildRegisterTransactionTest.php": {
+    "mtime": 1782660291.7705543,
+    "ast_hash": "d1bdddb3fd19794871da01259207c8af",
+    "semantic_hash": ""
+  },
+  "tests/Feature/MakeAuthUserCommandRPkg031E2ETest.php": {
+    "mtime": 1782711742.5664086,
+    "ast_hash": "2b3a292ca6281c85ccdaef9f351e5389",
+    "semantic_hash": ""
+  },
+  "tests/Feature/MkModuleWithRbacTest.php": {
+    "mtime": 1782361973.6546347,
+    "ast_hash": "5693892f417dd18801f4e3b01a8bca9b",
+    "semantic_hash": ""
+  },
+  "tests/MkLaravelTestCase.php": {
+    "mtime": 1782660291.7707326,
+    "ast_hash": "06c7684d7db3fe82e33950840c4f6276",
+    "semantic_hash": ""
+  },
+  "tests/Pest.php": {
+    "mtime": 1782660291.770857,
+    "ast_hash": "1c318ae7164a26763583c9d8f6ed4d6a",
+    "semantic_hash": ""
+  },
+  "tests/TestCase.php": {
+    "mtime": 1782660291.7709885,
+    "ast_hash": "e832cba5e4bb430ac045967f03129ec0",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Auth/AbilityResolverTest.php": {
+    "mtime": 1782660291.7712564,
+    "ast_hash": "6b9ced0dc1591afe25d0a7fc9e08f773",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Auth/AbilityUserMigrationTest.php": {
+    "mtime": 1782660291.7714036,
+    "ast_hash": "b217a9ab50a509e55fa0f97905ad42bd",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Auth/AuthEventTest.php": {
+    "mtime": 1782660291.771544,
+    "ast_hash": "40d27c6d20c9cf024509fb4e16c7f8b6",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Auth/AuthUserDocblockTest.php": {
+    "mtime": 1782660291.7716763,
+    "ast_hash": "47a55f5d813e4e8db5ea2b4fb441e4ae",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Auth/AuthUserLoginFieldTest.php": {
+    "mtime": 1782660291.7718444,
+    "ast_hash": "d2b99733f50579e6ae363d6d117afac2",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Auth/AuthUserProfileFieldsTest.php": {
+    "mtime": 1782660291.7720942,
+    "ast_hash": "7f5c20ec735d68be8f2849f316ff2d5a",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Auth/AuthUserProfileFieldsTypesTest.php": {
+    "mtime": 1782660291.772347,
+    "ast_hash": "c2219b6484b4ea34270ac508992220c5",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Auth/AuthUserSafeLogoutGuardResetTest.php": {
+    "mtime": 1782805387.3434958,
+    "ast_hash": "604c8ab31a13e8b59ff98f7ed0ca6785",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Auth/AuthUserSafeLogoutTest.php": {
+    "mtime": 1782673064.858387,
+    "ast_hash": "d3a41c6bdb00dbe09784c15781786a21",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Auth/BugNew31MkBelongsToManyTest.php": {
+    "mtime": 1782660291.7725282,
+    "ast_hash": "3e8bb98429fe686de2f94aa2cee7a32e",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Auth/HallazgoNew01PivotTest.php": {
+    "mtime": 1782660291.772702,
+    "ast_hash": "3773fc5006b2b2410c8465971215e316",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Auth/HasAbilitiesDelegationTest.php": {
+    "mtime": 1782660291.772963,
+    "ast_hash": "4df7dd40b9b99f0ad8d19206a30cc7d6",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Auth/MkAbilityMiddlewareTest.php": {
+    "mtime": 1782933843.987709,
+    "ast_hash": "592b55f271b407d6ad4aaa8af88df5e3",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Auth/MkAuthenticateEagerLoadTest.php": {
+    "mtime": 1782660291.7732713,
+    "ast_hash": "e7d463e70c8998768d0c5727198bd006",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Auth/RefreshTokenParserTest.php": {
+    "mtime": 1782660291.7734017,
+    "ast_hash": "1fcdc670e5d74dead083b85a267b2c00",
+    "semantic_hash": ""
+  },
+  "tests/Unit/AuthScopeResolverTest.php": {
+    "mtime": 1782660291.7735486,
+    "ast_hash": "61a5334b46d404a642dae6d57cd1d5a1",
+    "semantic_hash": ""
+  },
+  "tests/Unit/AuthUserMigrationTest.php": {
+    "mtime": 1782660291.7736845,
+    "ast_hash": "61de82eeb4fa1c9d90d171140d5f5989",
+    "semantic_hash": ""
+  },
+  "tests/Unit/BaseControllerDebugGateTest.php": {
+    "mtime": 1782660291.7738647,
+    "ast_hash": "f0e99258a08da6829d0261c447fed0b6",
+    "semantic_hash": ""
+  },
+  "tests/Unit/BoundariesLintTest.php": {
+    "mtime": 1782660291.7740471,
+    "ast_hash": "f482fbb4d7b8965f39d15173428957e0",
+    "semantic_hash": ""
+  },
+  "tests/Unit/CRUDSmartCacheTagsTest.php": {
+    "mtime": 1782660291.7741878,
+    "ast_hash": "67f5b346a7ed8cdf6c56ac3a019a7057",
+    "semantic_hash": ""
+  },
+  "tests/Unit/CRUDSmartIndexTopLevelTest.php": {
+    "mtime": 1782690407.7913113,
+    "ast_hash": "0b72f8708a970e444e00fec3f171b154",
+    "semantic_hash": ""
+  },
+  "tests/Unit/ComponentsTest.php": {
+    "mtime": 1782660291.7744966,
+    "ast_hash": "57b9994889a93eeb14b01033dfa5640f",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/AuthCreateSuperAdminCommandTest.php": {
+    "mtime": 1782505738.2728517,
+    "ast_hash": "f4ed02b5a722c35460340fc622463cd1",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/AuthCreateSuperAdminRolesTest.php": {
+    "mtime": 1782660291.7747114,
+    "ast_hash": "a159954a904b93828e3de5d6208e8cfa",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/BugNew29DiscoverAbilitiesSchemaAwareTest.php": {
+    "mtime": 1782660291.7748528,
+    "ast_hash": "326c6425a54a81a02315595842a8dffc",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/BugNew30CreateSuperAdminSeederTest.php": {
+    "mtime": 1782579378.9660316,
+    "ast_hash": "5df16cfa92020b5752f9d71295af5412",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/LintBoundariesDtoLayoutTest.php": {
+    "mtime": 1782660291.7749965,
+    "ast_hash": "cc24d472c8ed3356652550a9810f3770",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/MakeAuthUserAuditFixesTest.php": {
+    "mtime": 1782660291.7751806,
+    "ast_hash": "291a7758c8ae0360baefccf72ece8e74",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/MakeAuthUserAuthRbacTest.php": {
+    "mtime": 1782660291.7754397,
+    "ast_hash": "2bbde8fdcb574d51a04755ee374cdcb9",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/MakeAuthUserBugfixesTest.php": {
+    "mtime": 1782681271.7838073,
+    "ast_hash": "e4fb65fef92fa0a5bcb039b410719564",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/MakeAuthUserCommandTest.php": {
+    "mtime": 1782660291.7761402,
+    "ast_hash": "5615a9130f4381f8cd44042aa0ffff15",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/MakeAuthUserLoginFieldTest.php": {
+    "mtime": 1782681271.7841702,
+    "ast_hash": "5ddbf52887c1e6d218cbe924cd21161a",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/MakeAuthUserPKgNew17FixesTest.php": {
+    "mtime": 1782707367.3270342,
+    "ast_hash": "015b95a9c2b7d3932f51a25ce012a66a",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/MakeAuthUserProfileFieldsTest.php": {
+    "mtime": 1782660291.7765512,
+    "ast_hash": "eafa2603a4b6055d612fe0dda4a00bb2",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/MakeAuthUserProfileFieldsTypesTest.php": {
+    "mtime": 1782660291.7767537,
+    "ast_hash": "e7841e62371bc7ed3580b43d945f01bf",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/MakeAuthUserRPkg027FixesTest.php": {
+    "mtime": 1782880861.6016219,
+    "ast_hash": "49a831ffa8d8a83c620706320569aa0f",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/MakeAuthUserRPkg029FixesTest.php": {
+    "mtime": 1782681271.7848752,
+    "ast_hash": "250b95b8145f40629c6399f7d75a59b2",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/MakeAuthUserRPkg031FixesTest.php": {
+    "mtime": 1782711713.0671053,
+    "ast_hash": "4b40e7d87b31d0f8748fba4c32209e31",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/MakeAuthUserVerifyEmailTest.php": {
+    "mtime": 1782711713.0724096,
+    "ast_hash": "73445b6abe68082bd5875e9e9986caaa",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/MakeAuthUserWithCrudFlagTest.php": {
+    "mtime": 1782677133.096659,
+    "ast_hash": "eab39f5f9d1056389453aadfcf46f030",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/MakeAuthUserWithCrudMkBelongsToManyTest.php": {
+    "mtime": 1782660291.7773354,
+    "ast_hash": "274ec6035543d8190018ad74d120ef54",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/MkCheckCommandResponseShapeTest.php": {
+    "mtime": 1782660291.7774801,
+    "ast_hash": "10d79c644ad83713178fc38e2a76d408",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/MkSkillDeployCommandTest.php": {
+    "mtime": 1782307262.7592494,
+    "ast_hash": "0b28812f135f23fdd5cd9b7485426552",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/MkSkillListCommandTest.php": {
+    "mtime": 1782307262.7594604,
+    "ast_hash": "17c683c0c2f180fb5df43f4e6ecb0057",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/RPackage042RegressionGuardsTest.php": {
+    "mtime": 1782888547.2966487,
+    "ast_hash": "61ad266605c57e5b4ec38486c715f41e",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Console/RegisterGlobalCacheListenerRegexTest.php": {
+    "mtime": 1782660291.7776508,
+    "ast_hash": "048561f90b4fec7b2bf809bdb388fea6",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Controllers/BaseControllerGetDebugDataTest.php": {
+    "mtime": 1782660291.7778816,
+    "ast_hash": "a027235ed97b1afab01c3559f2a2f057",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Controllers/BaseControllerPKgNew18FixesTest.php": {
+    "mtime": 1782710510.4677474,
+    "ast_hash": "aed045f17155718fbb5c6aebbc0c5519",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Controllers/BaseControllerPaginationEnvelopeTest.php": {
+    "mtime": 1782710510.4680257,
+    "ast_hash": "56603432cd10739cf0a7fa74ddea78a5",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Controllers/BaseControllerSendResponseExtraTest.php": {
+    "mtime": 1782690407.7915041,
+    "ast_hash": "7e5c78d36fac7593a2649f0abb0de20d",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Controllers/BaseControllerSingleLevelEnvelopeTest.php": {
+    "mtime": 1782690407.7918005,
+    "ast_hash": "3d24f13a1f688304d7a4e164df7d7189",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Controllers/CRUDSmartAutoTransformDelegationTest.php": {
+    "mtime": 1782953313.1865728,
+    "ast_hash": "6d772bafc952dde6f4fdf725bda1c2cc",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Controllers/ControllerIndexTopLevelTest.php": {
+    "mtime": 1782690407.7919211,
+    "ast_hash": "fbf163178a39a62d0fffc6002cfb28c3",
+    "semantic_hash": ""
+  },
+  "tests/Unit/DTOFactoryDateCastTest.php": {
+    "mtime": 1782660291.778465,
+    "ast_hash": "a3c29e6051d27223bb74faabd8a5c4f5",
+    "semantic_hash": ""
+  },
+  "tests/Unit/DTOFactoryTest.php": {
+    "mtime": 1782660291.7786617,
+    "ast_hash": "460a8de1cac4cf98cf1b274d131f124e",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Database/Eloquent/Relations/MkBelongsToFromNoDeprecatedTest.php": {
+    "mtime": 1782660291.7788777,
+    "ast_hash": "e606096943919a8a3e98a51847ce16a0",
+    "semantic_hash": ""
+  },
+  "tests/Unit/HasAbilitiesTest.php": {
+    "mtime": 1782660291.779085,
+    "ast_hash": "39d332b25ccdc612eb2b7f2b288f708c",
+    "semantic_hash": ""
+  },
+  "tests/Unit/ListManagerSecurityTest.php": {
+    "mtime": 1782660291.7792203,
+    "ast_hash": "ac432026eb58b90611a41e78d519c2b6",
+    "semantic_hash": ""
+  },
+  "tests/Unit/ListManagerTest.php": {
+    "mtime": 1782660291.7793608,
+    "ast_hash": "70ccf132366948db0151f2745f960a51",
+    "semantic_hash": ""
+  },
+  "tests/Unit/MakeAuthUserCommandRegisteredTest.php": {
+    "mtime": 1782660291.779527,
+    "ast_hash": "bb15ec7276a3af890d3512e76b9ed385",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Managers/CacheManagerFlushTest.php": {
+    "mtime": 1782660291.7797048,
+    "ast_hash": "6e08f01b406ab054f46ab41c3b91e462",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Managers/ListManagerHardeningTest.php": {
+    "mtime": 1782660291.7799106,
+    "ast_hash": "9efe705fbbdc87ff82967d415172c93a",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Managers/ListManagerPaginationEnvelopeTest.php": {
+    "mtime": 1782710510.4683957,
+    "ast_hash": "fd134f6c298f056a8460f39967350eea",
+    "semantic_hash": ""
+  },
+  "tests/Unit/MkAuthenticateTest.php": {
+    "mtime": 1782660291.7802272,
+    "ast_hash": "9f5a3c5a068d7cfcda8f7450ab647a56",
+    "semantic_hash": ""
+  },
+  "tests/Unit/MkCheckCommandAuthWarningTest.php": {
+    "mtime": 1782660291.7804165,
+    "ast_hash": "b329182c2b5a3f64f58bf842fd12f3f8",
+    "semantic_hash": ""
+  },
+  "tests/Unit/MkDirectorConfigDefaultsTest.php": {
+    "mtime": 1782690407.7921379,
+    "ast_hash": "d6e07934ee287ecdf1b8cc55031f1a79",
+    "semantic_hash": ""
+  },
+  "tests/Unit/MkLaravelTestCaseSmokeTest.php": {
+    "mtime": 1782660291.780568,
+    "ast_hash": "9c8bd5d402b123f297b42dca5a96aaf4",
+    "semantic_hash": ""
+  },
+  "tests/Unit/MkServiceProviderAutoDiscoverAbilitiesFixesTest.php": {
+    "mtime": 1782707367.3274581,
+    "ast_hash": "76a7521aaf2a9b5cff7ffae64920805f",
+    "semantic_hash": ""
+  },
+  "tests/Unit/MkServiceProviderAutoDiscoverAbilitiesRefreshDatabaseTest.php": {
+    "mtime": 1782805387.3439186,
+    "ast_hash": "0d7397b38b2143ec2a7f93e9db51b65b",
+    "semantic_hash": ""
+  },
+  "tests/Unit/MkServiceProviderCacheListenerTest.php": {
+    "mtime": 1782660291.7807796,
+    "ast_hash": "832901faf9ade78297f29e8d5f676bab",
+    "semantic_hash": ""
+  },
+  "tests/Unit/MkServiceProviderTest.php": {
+    "mtime": 1782660291.7809114,
+    "ast_hash": "f0bb963172e8e38b8e9f034f6554b46d",
+    "semantic_hash": ""
+  },
+  "tests/Unit/MkSkillCommandsTest.php": {
+    "mtime": 1782307262.7602994,
+    "ast_hash": "01e9399c6ca31dc6bae92c8bdcdf1697",
+    "semantic_hash": ""
+  },
+  "tests/Unit/MkUpdateCommandTest.php": {
+    "mtime": 1782660291.7811165,
+    "ast_hash": "2f48969b6554263cccf5efef64bd66ca",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Performance/PerformanceImprovementsTest.php": {
+    "mtime": 1782660291.7813206,
+    "ast_hash": "030b581f9da01bc9d0d928d4bf105530",
+    "semantic_hash": ""
+  },
+  "tests/Unit/PluginManagerTest.php": {
+    "mtime": 1782660291.7815154,
+    "ast_hash": "aa8074c1d9cdf4395a574f560c0f7722",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Plugins/MkMultiTenantPluginResolveTenantIdTest.php": {
+    "mtime": 1782660291.7816527,
+    "ast_hash": "f3a5fa249aafa29d47af86a90f1df7e4",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Process/UpgradeDocumentationTest.php": {
+    "mtime": 1782660291.7817967,
+    "ast_hash": "5e112553828cc79010a80650c44becd6",
+    "semantic_hash": ""
+  },
+  "tests/Unit/RPkg034CodeReviewFixesTest.php": {
+    "mtime": 1782803974.988114,
+    "ast_hash": "fd4124911731e10d445a8c3ff272882a",
+    "semantic_hash": ""
+  },
+  "tests/Unit/RoleUserMigrationTest.php": {
+    "mtime": 1782660291.7819312,
+    "ast_hash": "2bd200b44fa8746708e155661a7657d1",
+    "semantic_hash": ""
+  },
+  "tests/Unit/SecurityLintCommandTest.php": {
+    "mtime": 1782660291.7820952,
+    "ast_hash": "c47a220d5f432ad377eeca8558dac493",
+    "semantic_hash": ""
+  },
+  "tests/Unit/StrictTypesTest.php": {
+    "mtime": 1782660291.7822325,
+    "ast_hash": "457a5b9d77555b16264edb8da75550c5",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Tenancy/AuthUserUsesHasTenantMembershipTest.php": {
+    "mtime": 1782660291.782374,
+    "ast_hash": "baf243a447dc91f3c719d2189616c082",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Tenancy/HasTenantMembershipTest.php": {
+    "mtime": 1782660291.7825096,
+    "ast_hash": "b5a56c3675570d8140a0c9b5ba4bc0d0",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Tenancy/HasTenantScopeAccessorTest.php": {
+    "mtime": 1782660291.7826474,
+    "ast_hash": "4a87163d9313921df3a9455f71506fb1",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Tenancy/HasTenantScopeOptInTest.php": {
+    "mtime": 1782661706.4466608,
+    "ast_hash": "60d9ef1d9029893c93145fa52939fd67",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Tenancy/HasTenantScopeTest.php": {
+    "mtime": 1782660291.7829843,
+    "ast_hash": "eba0eeb99d58f8579fa45842304a818e",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Tenancy/MkMultiTenantPluginExclusivityTest.php": {
+    "mtime": 1782660291.7831209,
+    "ast_hash": "59cf347bf8b45454fa0407f4693d06aa",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Tenancy/MkMultiTenantPluginStrictDeleteTest.php": {
+    "mtime": 1782660291.7832537,
+    "ast_hash": "f5613fc1415ae9c29470362772662345",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Tenancy/MkMultiTenantPluginWhitelistTest.php": {
+    "mtime": 1782660291.7833807,
+    "ast_hash": "e94c65d81dddd4603d4b30f7ebe709ee",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Tenancy/TenantContextFlushTest.php": {
+    "mtime": 1782660291.7835126,
+    "ast_hash": "9b89f5c3f68557c253d2eeaef5b31ffc",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Tenancy/TenantContextTest.php": {
+    "mtime": 1782660291.7836444,
+    "ast_hash": "6062b84038ff7cfb374200c93c92f996",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Tenancy/TenantResolverMembershipTest.php": {
+    "mtime": 1782660291.783784,
+    "ast_hash": "ba814046d73668d3fd0ed5d36a8cf64a",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Tenancy/TenantResolverTest.php": {
+    "mtime": 1782660291.783945,
+    "ast_hash": "36a8d954ed7f03946e785d2b62e99317",
+    "semantic_hash": ""
+  },
+  "tests/Unit/Tenancy/TenantScopeTest.php": {
+    "mtime": 1782660291.7840688,
+    "ast_hash": "cc6e114b66f7f407b90bfb59574d319c",
+    "semantic_hash": ""
+  },
+  "tests/Unit/TokenIssuerTest.php": {
+    "mtime": 1782660291.7842357,
+    "ast_hash": "dc9bbc31994685df960a451f1aad0378",
+    "semantic_hash": ""
+  },
+  "CHANGELOG.md": {
+    "mtime": 1782933843.9857292,
+    "ast_hash": "a7b51a2f456af51be0b3b6b118b23400",
+    "semantic_hash": ""
+  },
+  "DEVELOPER_GUIDE.md": {
+    "mtime": 1782929215.299889,
+    "ast_hash": "17ec0686138ad705a10b8ff5a382cbf3",
+    "semantic_hash": ""
+  },
+  "README.md": {
+    "mtime": 1782805387.3417845,
+    "ast_hash": "e56b65c5a00fe6de83b576f388464f55",
+    "semantic_hash": ""
+  },
+  "docs/UPGRADE_1.2.md": {
+    "mtime": 1782572580.1266954,
+    "ast_hash": "0ee4671e3008727da9904abe6c5558de",
+    "semantic_hash": ""
+  }
+}
