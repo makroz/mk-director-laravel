@@ -138,18 +138,13 @@ function runLintOn(string $modulesPath): int
     $ref = new ReflectionClass($command);
 
     $discover = $ref->getMethod('discoverModules');
-    $discover->setAccessible(true);
     $modules = $discover->invoke($command, $modulesPath);
     expect($modules)->not->toBeEmpty();
 
     $extract = $ref->getMethod('extractUseStatements');
-    $extract->setAccessible(true);
     $extractTarget = $ref->getMethod('extractTargetModule');
-    $extractTarget->setAccessible(true);
     $isAllowed = $ref->getMethod('isAllowedExternal');
-    $isAllowed->setAccessible(true);
     $phpFiles = $ref->getMethod('phpFiles');
-    $phpFiles->setAccessible(true);
 
     foreach ($modules as $sourceModule) {
         $modulePath = $modulesPath . '/' . $sourceModule;

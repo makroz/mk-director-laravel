@@ -15,7 +15,10 @@ class CacheManager
     public static function remember(string $cacheKey, array $tags, int $ttlSeconds, callable $callback)
     {
         $store = config('mk_director.cache.store');
-        $cache = $store ? Cache::store($store) : Cache::store();
+        $facadeRoot = Cache::getFacadeRoot();
+        $cache = method_exists($facadeRoot, 'store')
+            ? ($store ? Cache::store($store) : Cache::store())
+            : $facadeRoot;
         
         $key = 'mk_dir_' . $cacheKey;
 
@@ -24,7 +27,7 @@ class CacheManager
         }
 
         // Fallback for file/database cache drivers
-        $fallbackKey = $tags[0] . '_' . $key;
+        $fallbackKey = empty($tags) ? $key : ($tags[0] . '_' . $key);
         return $cache->remember($fallbackKey, $ttlSeconds, $callback);
     }
 
@@ -53,7 +56,10 @@ class CacheManager
     public static function flush(array $tags): void
     {
         $store = config('mk_director.cache.store');
-        $cache = $store ? Cache::store($store) : Cache::store();
+        $facadeRoot = Cache::getFacadeRoot();
+        $cache = method_exists($facadeRoot, 'store')
+            ? ($store ? Cache::store($store) : Cache::store())
+            : $facadeRoot;
 
         if (self::storeSupportsTags($cache)) {
             $cache->tags($tags)->flush();

@@ -313,7 +313,7 @@ class MkServiceProvider extends ServiceProvider
                 if ($table === null) {
                     return;  // TRUNCATE without a table name — skip.
                 }
-                CacheManager::flush([$table]);
+                CacheManager::flush([$table . '_all']);
 
                 if (config('mk_director.debug', false)) {
                     Log::info("MK-Director: Cache flushed for table [{$table}] due to write operation.");

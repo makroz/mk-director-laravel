@@ -103,7 +103,6 @@ test('HasTenantScope does not register the global scope when tenant.enabled is f
     $cls::clearBootedModels();
     $ref = new \ReflectionClass(Model::class);
     $prop = $ref->getProperty('globalScopes');
-    $prop->setAccessible(true);
     $prop->setValue(null, []);
 
     // Trigger the static boot hook.
@@ -137,7 +136,6 @@ test('HasTenantScope registers the global scope when tenant.enabled is true and 
     $cls::clearBootedModels();
     $ref = new \ReflectionClass(Model::class);
     $prop = $ref->getProperty('globalScopes');
-    $prop->setAccessible(true);
     $prop->setValue(null, []);
 
     // Trigger the boot hook.
@@ -162,7 +160,6 @@ test('HasTenantScope is a no-op when no container is bound (CLI without app)', f
     $cls::clearBootedModels();
     $ref = new \ReflectionClass(Model::class);
     $prop = $ref->getProperty('globalScopes');
-    $prop->setAccessible(true);
     $prop->setValue(null, []);
 
     $cls::bootHasTenantScope();

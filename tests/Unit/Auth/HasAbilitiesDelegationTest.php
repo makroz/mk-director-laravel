@@ -155,7 +155,6 @@ test('giveAbilityTo() invalidates the AbilityResolver cache', function () {
     // isolates the contract under test (the mutation MUST invalidate)
     // from the DB side-effects that need a live database.
     $reflection = new \ReflectionMethod($user, 'invalidateAbilityCache');
-    $reflection->setAccessible(true);
     $reflection->invoke($user);
 });
 

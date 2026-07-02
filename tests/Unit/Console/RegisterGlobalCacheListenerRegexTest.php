@@ -65,7 +65,6 @@ test('registerGlobalCacheListener still requires whitespace after verb (regressi
 test('registerGlobalCacheListener still extracts table name from match group (regression guard)', function () {
     $source = serviceProviderSource();
 
-    // The code reads `$matches[5]` (after the broadening) to get the
-    // table name and calls `Cache::tags([$table.'_all'])->flush()`.
-    expect($source)->toContain("Cache::tags([\$table.'_all'])->flush()");
+    // table name and calls `CacheManager::flush([$table . '_all'])`.
+    expect($source)->toContain("CacheManager::flush([\$table . '_all'])");
 });
