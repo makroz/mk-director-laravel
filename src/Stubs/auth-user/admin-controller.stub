@@ -36,11 +36,15 @@ class {{ModuleName}}Controller extends SmartController
      */
     protected array $mkConfig = [
         'model'           => {{ModuleName}}::class,
-        // HALLAZGO-NEW-FASE17-03 fix: pinear `resource` explícito para que
-        // `CRUDSmart::autoTransform()` (override del BaseController) emita
-        // el Resource scaffoldeado. Sin esto, `autoTransform()` retorna
-        // el Model crudo porque `$mkConfig['resource']` es null, e ignora
-        // completamente el Resource scaffoldeado (`{Scope}Resource`).
+        // HALLAZGO-NEW-FASE17-03 fix: pinear `resource` explícito como BC
+        // fallback path. R-PKG-044 v2.0.0 canónico es per-model
+        // `public $apiResource` en {{ModuleName}}::class (aplicado por
+        // BaseController::autoTransform, see HALLAZGO-NEW-FASE15-07).
+        // Este `resource` per-controller se mantiene como BC para
+        // `CRUDSmart::autoTransform` (thin wrapper @deprecated).
+        // Sin esto, cuando el wrapper delega al canónico y el modelo
+        // NO pinea `$apiResource`, `autoTransform()` retorna el Model crudo
+        // porque `property_exists()` da false (modelo sin API Resource).
         'resource'        => \App\Modules\{{ModuleName}}\Http\Resources\{{ModuleName}}Resource::class,
         'service'         => {{ModuleName}}Service::class,
         'store_request'   => StoreAdminRequest::class,

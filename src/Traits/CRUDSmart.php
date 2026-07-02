@@ -499,28 +499,54 @@ trait CRUDSmart
     }
 
     /**
-     * Auto transformar con resource si está configurado
+     * Auto transformar con resource si está configurado.
+     *
+     * @deprecated since R-PKG-044 v2.0.0 — use `parent::autoTransform()`
+     * (BaseController::autoTransform) which is the canonical SSoT.
+     *
+     * The canonical pattern (v2.0.0+) is per-model `public $apiResource`
+     * declaration (see HALLAZGO-NEW-FASE15-07 + R-PKG-035/036):
+     * - BaseController::autoTransform() uses `property_exists($data, 'apiResource')`
+     *   + recursive array handling for nested Model values.
+     * - Each model owns its own Resource (DRY, scaffolder-driven).
+     *
+     * This wrapper keeps BC for legacy consumers that still use the
+     * `mkConfig['resource']` per-controller pattern. When `$this->getResource()`
+     * is set, this legacy path is used. Otherwise we delegate to the
+     * parent (BaseController::autoTransform) which checks per-model
+     * `$apiResource`.
+     *
+     ** MIGRATION (RETO 2.0.0+):
+     *   - Replace `protected array $mkConfig = ['resource' => FooResource::class]`
+     *     on SmartController subclasses with `public $apiResource = FooResource::class`
+     *     on the Eloquent model itself (the scaffolder already does this since R-PKG-035).
+     *   - Drop any custom `autoTransform()` override in your controllers —
+     *     BaseController::autoTransform handles Model / Collection / Paginator
+     *     / array-with-nested-Model uniformly.
      */
     protected function autoTransform($data)
     {
         $resourceClass = $this->getResource();
 
-        if (!$resourceClass || !class_exists($resourceClass)) {
-            return $data;
+        if ($resourceClass && class_exists($resourceClass)) {
+            // Legacy BC path: per-controller `mkConfig['resource']`.
+            // Single model
+            if ($data instanceof Model) {
+                return new $resourceClass($data);
+            }
+
+            // Collection or Paginator wrappers
+            if ($data instanceof \Illuminate\Support\Collection ||
+                $data instanceof \Illuminate\Contracts\Pagination\Paginator ||
+                $data instanceof \Illuminate\Contracts\Pagination\CursorPaginator) {
+                return $resourceClass::collection($data);
+            }
         }
 
-        // Single model
-        if ($data instanceof Model) {
-            return new $resourceClass($data);
-        }
-
-        // Collection or Paginator wrappers
-        if ($data instanceof \Illuminate\Support\Collection || 
-            $data instanceof \Illuminate\Contracts\Pagination\Paginator || 
-            $data instanceof \Illuminate\Contracts\Pagination\CursorPaginator) {
-            return $resourceClass::collection($data);
-        }
-
-        return $data;
+        // Canonical path (R-PKG-044 v2.0.0): delegate to BaseController::autoTransform
+        // which uses per-model `public $apiResource` + recursive array handling
+        // (HALLAZGO-NEW-FASE15-07). This is the path RETO and all v2.0.0+ consumers
+        // should rely on.
+        return parent::autoTransform($data);
     }
 }
