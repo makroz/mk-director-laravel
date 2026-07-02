@@ -31,8 +31,11 @@ class RoleController extends SmartController
      */
     protected array $mkConfig = [
         'model'           => Role::class,
-        // HALLAZGO-NEW-FASE17-03 fix: pinear `resource` explícito para que
-        // `CRUDSmart::autoTransform()` emita el RoleResource scaffoldeado.
+        // HALLAZGO-NEW-FASE17-03 fix: pinear `resource` explícito como BC
+        // fallback path. R-PKG-044 v2.0.0 canónico es per-model
+        // `public $apiResource` en Role::class (aplicado por BaseController::autoTransform,
+        // see HALLAZGO-NEW-FASE15-07). Este `resource` per-controller se mantiene
+        // como BC para `CRUDSmart::autoTransform` (thin wrapper @deprecated).
         'resource'        => \App\Modules\{{ModuleName}}\Http\Resources\RoleResource::class,
         'service'         => {{ModuleName}}Service::class,
         'searchable'      => ['name'],
