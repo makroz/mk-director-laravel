@@ -6,7 +6,6 @@ namespace Mk\Director;
 
 use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Artisan;
-use Mk\Director\Managers\CacheManager;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
@@ -28,6 +27,7 @@ use Mk\Director\Console\Commands\MkSkillListCommand;
 use Mk\Director\Console\Commands\MkUpdateCommand;
 use Mk\Director\Console\Commands\SecurityLintCommand;
 use Mk\Director\Controllers\OpenApiController;
+use Mk\Director\Managers\CacheManager;
 use Mk\Director\Managers\PluginManager;
 use Mk\Director\Tenancy\TenantContext;
 use Mk\Director\Tenancy\TenantResolver;
@@ -241,12 +241,37 @@ class MkServiceProvider extends ServiceProvider
     }
 
     /**
-     * Registra los endpoints opcionales de OpenAPI / Swagger
+     * Registra los endpoints opcionales de OpenAPI / Swagger.
+     *
+     * F1.4 (LAR-04 HIGH): las rutas están GATEADAS por
+     * `config('mk_director.openapi.enabled', false)` (default OFF — opt-in).
+     * Pre-fix, las rutas se registraban incondicionalmente para todos los
+     * consumers — fugas de schema de la API a usuarios anónimos en prod.
+     *
+     * Acepta `config('mk_director.openapi.middleware', [])` como array de
+     * middleware que se aplican al `Route::group` (típicamente `mk.auth:admin`
+     * para forzar auth, o `auth.basic` para HTTP Basic en escenarios B2B).
+     *
+     * Para activar:
+     *   - Pinear en .env: `MK_OPENAPI_ENABLED=true`
+     *   - O en `config/mk_director.php` publicado:
+     *       `'openapi' => ['enabled' => true, 'middleware' => ['mk.auth:admin']]`
      */
     protected function registerOpenApiRoutes()
     {
-        // En un entorno de producción B2B se leería desde la config. Por defecto expuestos bajo /mk/
-        Route::group(['prefix' => 'mk'], function () {
+        if (! (bool) config('mk_director.openapi.enabled', false)) {
+            return;
+        }
+
+        // F1.4: middleware opcional pineado por config. El consumer decide
+        // si quiere las rutas públicas (default vacío) o gateadas con
+        // mk.auth:{scope} / auth.basic / etc.
+        $middleware = (array) config('mk_director.openapi.middleware', []);
+
+        Route::group([
+            'prefix' => 'mk',
+            'middleware' => $middleware,
+        ], function () {
             Route::get('openapi.json', [OpenApiController::class, 'spec'])->name('mk.openapi.spec');
             Route::get('docs', [OpenApiController::class, 'docs'])->name('mk.openapi.docs');
         });
@@ -313,7 +338,7 @@ class MkServiceProvider extends ServiceProvider
                 if ($table === null) {
                     return;  // TRUNCATE without a table name — skip.
                 }
-                CacheManager::flush([$table . '_all']);
+                CacheManager::flush([$table.'_all']);
 
                 if (config('mk_director.debug', false)) {
                     Log::info("MK-Director: Cache flushed for table [{$table}] due to write operation.");

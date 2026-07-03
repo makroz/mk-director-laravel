@@ -398,4 +398,34 @@ return [
         // cuando el scope se crea con `--with-auth-rbac`.
         'paths' => ['api/*'],
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | OpenAPI / Swagger (LAR-04)
+    |--------------------------------------------------------------------------
+    |
+    | F1.4: las rutas `GET /mk/openapi.json` y `GET /mk/docs` ahora están
+    | GATEADAS por `enabled` (default `false` — opt-in).
+    |
+    | Pre-fix, las rutas salían siempre públicas para cualquier consumer
+    | que tuviera `mk-director-laravel` instalado — fuga del schema
+    | completo de la API (rutas, params, modelos) accesible sin auth en
+    | prod. Ahora tenés que pinear explícito para habilitar:
+    |
+    |   - .env:  MK_OPENAPI_ENABLED=true
+    |   - o `config/mk_director.php` publicado:
+    |       `'openapi' => ['enabled' => true, 'middleware' => ['mk.auth:admin']]`
+    |
+    | `middleware` es un array opcional de middleware que se aplican al
+    | `Route::group` que envuelve las rutas. Útil para forzar `mk.auth:{scope}`,
+    | `auth.basic`, o `web` (si querés sesiones en vez de tokens Sanctum).
+    | Default array vacío = sin middleware extra.
+    |
+    | Ver CHANGELOG [Unreleased] (entrada `LAR-04`) para el rationale
+    | completo + audit source.
+    */
+    'openapi' => [
+        'enabled' => filter_var(env('MK_OPENAPI_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
+        'middleware' => array_values(array_filter(array_map('trim', explode(',', (string) env('MK_OPENAPI_MIDDLEWARE', ''))))),
+    ],
 ];
