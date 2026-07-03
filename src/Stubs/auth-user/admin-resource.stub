@@ -18,7 +18,7 @@ use Illuminate\Http\Resources\Json\JsonResource;
  * R-PKG-035 HALLAZGO-NEW-FASE15-06 fix: pinear `'abilities' => ...` al
  * top-level con el helper `getEffectiveAbilities()` del trait `HasAbilities`
  * (v1.8.3-rc0+). Esto cumple el contrato cross-stack con
- * `@makroz/web AdminDto.abilities: string[]` que consume
+ * `@makroz/web AuthUserDto.abilities: string[]` que consume
  * `useMkAuth().hasAbility(ability)` y la sidebar permission-gated.
  * Pre-v1.8.3 el consumer debía aplanar manualmente
  * (`$this->roles->flatMap(fn ($r) => $r->abilities->pluck('name'))`).

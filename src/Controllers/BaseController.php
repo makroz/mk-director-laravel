@@ -200,7 +200,7 @@ abstract class BaseController extends LaravelController
      * returns `false` for `protected` properties (PHP visibility quirk)
      * and forces every consumer model to declare `$apiResource` as
      * `public` to work — a footgun that broke the cross-stack RBAC
-     * contract (`@makroz/web AdminDto.abilities: string[]`) in RETO
+     * contract (`@makroz/web AuthUserDto.abilities: string[]`) in RETO
      * fase 15. The fix uses `property_exists()` which inspects the
      * declaration regardless of visibility, then we add an explicit
      * `!== null` check so the abstract `Models\Model::$apiResource = null`

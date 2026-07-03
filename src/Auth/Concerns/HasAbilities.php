@@ -330,7 +330,7 @@ trait HasAbilities
      * duplicar, como array plano `string[]`. Helper público para que
      * Resources scaffoldeados (e.g. `AdminResource::toArray()`) puedan
      * emitir `abilities: string[]` flat al top-level, cumpliendo el
-     * contrato cross-stack con `@makroz/web AdminDto.abilities: string[]`
+     * contrato cross-stack con `@makroz/web AuthUserDto.abilities: string[]`
      * que consume `useMkAuth().hasAbility(ability)` y la sidebar
      * permission-gated.
      *

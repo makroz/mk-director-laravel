@@ -5,6 +5,22 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — Cross-stack sync: `AdminDto` → `AuthUserDto` (R-PKG-044)
+
+> **Coordinated with**: `@makroz/core@2.0.0` + `@makroz/web@2.0.0` + `@makroz/mobile@2.0.0`.
+> **Consumer impact**: **NONE** — runtime behavior unchanged (the package still emits `abilities: string[]` flat top-level via `getEffectiveAbilities()`). Only doc comments in code that referenced the renamed TS type were updated.
+
+### Changed (cross-stack doc sync, no breaking change)
+
+- 3 doc comments updated to reference `@makroz/web AuthUserDto.abilities: string[]` (was `AdminDto`):
+  - `src/Stubs/auth-user/admin-resource.stub:21`
+  - `src/Auth/Concerns/HasAbilities.php:333`
+  - `src/Controllers/BaseController.php:203`
+
+**Why**: the `@makroz/web` package renamed `AdminDto` to `AuthUserDto` (the DTO is scope-agnostic via its `auth_scope: string` field — `Admin` was a misnomer). The cross-stack contract value (`abilities: string[]`) is unchanged. R-G-032 (docs/skills sync) requires updating every reference.
+
+**Note on historical CHANGELOG entries**: the two mentions of "cross-stack contract con `@makroz/web AdminDto.abilities: string[]`" in the **`[v1.8.3-rc0]`** entry below (lines ~268 and ~277) are **intentionally preserved** — those are audit-trail records of what shipped in v1.8.3-rc0 and must NOT be rewritten (rewriting CHANGELOG history breaks the legal/contractual audit trail that downstream consumers rely on). The name was correct AT THAT POINT IN TIME; it became inaccurate later when the `@makroz/web` package renamed the type in R-PKG-044 v2.0.0. The `[Unreleased]` entry above (this one) is the authoritative replacement anchor.
+
 ## [v2.0.0] - 2026-07-01 — MAJOR — Cleanup deprecados + refactor arquitectural (R-PKG-044)
 
 > **Strategy**: SIN BC BRIDGE. RETO regenera desde 0 (dogfooding-first, único consumer real).
