@@ -65,6 +65,11 @@ test('registerGlobalCacheListener still requires whitespace after verb (regressi
 test('registerGlobalCacheListener still extracts table name from match group (regression guard)', function () {
     $source = serviceProviderSource();
 
-    // table name and calls `CacheManager::flush([$table . '_all'])`.
-    expect($source)->toContain("CacheManager::flush([\$table . '_all'])");
+    // Pineando contra formatting whitespace-fragile. La regla pint
+    // `concat_space` cambió `'a'.'b'` → `'a'.'b'` (sin espacio alrededor
+    // del `.`), así que el toContain original
+    // ("CacheManager::flush([\$table . '_all'])") se rompe post-format.
+    // Usamos regex tolerante (puede o no haber whitespace alrededor del
+    // `.` de concatenación) — la invariante es que el flush pasa `$table._all`.
+    expect($source)->toMatch('/CacheManager::flush\(\[\s*\$table\s*\.\s*\'_all\'\s*\]\)/');
 });
