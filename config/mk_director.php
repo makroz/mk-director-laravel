@@ -168,6 +168,62 @@ return [
             'forgot' => env('MK_AUTH_RATE_LIMIT_FORGOT', '3,1'),
             'reset' => env('MK_AUTH_RATE_LIMIT_RESET', '3,1'),
         ],
+
+        // F1.3 (LAR-02 + LAR-08 + XPK-12 HIGH) — Real auth config merge.
+        // Pre-fix, estas claves vivían en `config/auth_defaults.php`
+        // (orphaned file — MkServiceProvider solo carga mk_director.php vía
+        // `mergeConfigFrom`). El consumer podía pinear `mk_director.php`,
+        // pero las claves `auth.guards/admin`, `auth.tables.abilities`, etc.
+        // CAÍAN al fallback default en runtime — no se leían del env. El
+        // toggle `auth.refresh.rotate_on_refresh` (consumido por
+        // TokenIssuer para rotación B2B) NI EXISTÍA en la config canónica.
+        //
+        // Moverlas al único archivo pineable (`php artisan vendor:publish
+        // --tag=mk-config`) es la Single Source of Truth que los tests del
+        // consumer esperaban — `XPK-12` fix.
+        //
+        // BC: los nombres de claves (`auth.ttl.access_seconds`,
+        // `auth.tables.abilities`) matchean lo que el stub de
+        // `mk:make:auth-user` y TokenIssuer ya leen, así que el merge es
+        // purely additive para consumers existentes.
+        'guards' => [
+            // Mapea scope lógico → guard name de Laravel. Default BC: ambos
+            // scopes consumen el guard `web` (consistente con la doc del
+            // paquete hasta v2.0.0). Consumer puede override con
+            // MK_AUTH_GUARD_ADMIN=sanctum y MK_AUTH_GUARD_MEMBER=web.
+            'admin' => env('MK_AUTH_GUARD_ADMIN', 'web'),
+            'member' => env('MK_AUTH_GUARD_MEMBER', 'web'),
+        ],
+        'tables' => [
+            // Nombres de tablas para roles/abilities/pivots. Default BC:
+            // convención del paquete hasta v2.0.0. Consumer puede override
+            // (típico cuando se usan prefijos de schema, e.g. `admin.roles`).
+            'roles' => env('MK_AUTH_TABLES_ROLES', 'roles'),
+            'abilities' => env('MK_AUTH_TABLES_ABILITIES', 'abilities'),
+            'role_user' => env('MK_AUTH_TABLES_ROLE_USER', 'role_user'),
+            'ability_role' => env('MK_AUTH_TABLES_ABILITY_ROLE', 'ability_role'),
+        ],
+        'ttl' => [
+            // TTL corto para access tokens (Sanctum PersonalAccessToken).
+            // Default BC: 15 minutos.
+            'access_seconds' => (int) env('MK_AUTH_TTL_ACCESS_SECONDS', 15 * 60),
+            // TTL largo para refresh tokens. Default BC: 7 días.
+            'refresh_seconds' => (int) env('MK_AUTH_TTL_REFRESH_SECONDS', 7 * 24 * 60 * 60),
+        ],
+        'refresh' => [
+            // Si `true`, el refresh_token se invalida después de cada uso
+            // y se emite uno nuevo (recomendado para B2B). Default BC: false
+            // (mantiene el mismo refresh_token a lo largo de múltiples usos).
+            //
+            // FILTER_VALIDATE_BOOLEAN respeta los env vars typeados: 'true',
+            // '1', 'yes' → true; 'false', '0', 'no', '' → false. Sin este
+            // cast, (bool) 'false' sigue siendo `true` en PHP (string
+            // no-vacío es truthy), así que la rotación se activaría por error.
+            'rotate_on_refresh' => filter_var(
+                env('MK_AUTH_REFRESH_ROTATE_ON_REFRESH', false),
+                FILTER_VALIDATE_BOOLEAN,
+            ),
+        ],
     ],
 
     /*
