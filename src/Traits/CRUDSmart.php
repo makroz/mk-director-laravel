@@ -4,17 +4,23 @@ declare(strict_types=1);
 
 namespace Mk\Director\Traits;
 
+use Illuminate\Contracts\Pagination\CursorPaginator;
+use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
-use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Collection;
+use Illuminate\Validation\ValidationException;
+use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Contracts\MkModuleServiceInterface;
+use Mk\Director\DTOs\DTOFactory;
+use Mk\Director\Managers\CacheManager;
 use Mk\Director\Managers\ListManager;
 use Mk\Director\Managers\PluginManager;
-use Mk\Director\DTOs\DTOFactory;
+use Mk\Director\Tenancy\TenantContext;
 
 /**
  * CRUDSmart Trait - Lógica CRUD automática basada en configuración
- * 
+ *
  * Este trait proporciona métodos automáticos de CRUD que leen la configuración
  * del controller y ejecutan automáticamente el flujo completo.
  */
@@ -39,8 +45,8 @@ trait CRUDSmart
     protected function getService(): ?MkModuleServiceInterface
     {
         $serviceClass = $this->mkConfig['service'] ?? null;
-        
-        if (!$serviceClass) {
+
+        if (! $serviceClass) {
             return null;
         }
 
@@ -114,10 +120,11 @@ trait CRUDSmart
     protected function isCacheEnabled(): bool
     {
         // Global toggle acts as a master switch. If disabled globally, cache is off.
-        if (!config('mk_director.features.auto_cache', false)) {
+        if (! config('mk_director.features.auto_cache', false)) {
             return false;
         }
         $features = $this->getListFeatures();
+
         return $features['auto_cache'] ?? true;
     }
 
@@ -148,10 +155,10 @@ trait CRUDSmart
         }
 
         // Scope tags to the active tenant when available
-        $tenantContext = app(\Mk\Director\Tenancy\TenantContext::class);
+        $tenantContext = app(TenantContext::class);
         $tenantId = $tenantContext->current();
         if ($tenantId !== null) {
-            $tags[] = 'tenant:' . $tenantId;
+            $tags[] = 'tenant:'.$tenantId;
         }
 
         return $tags;
@@ -180,6 +187,7 @@ trait CRUDSmart
     {
         $modelClass = $this->getModel();
         $model = new $modelClass;
+
         return $model->getFillable();
     }
 
@@ -211,6 +219,7 @@ trait CRUDSmart
         $manager->validateRequirements($this->getFillable());
 
         $this->pluginManagerInstance = $manager;
+
         return $manager;
     }
 
@@ -221,7 +230,7 @@ trait CRUDSmart
     {
         $modelClass = $this->getModel();
         $model = new $modelClass;
-        
+
         // Apply service hook beforeList
         $service = $this->getService();
         if ($service && method_exists($service, 'beforeList')) {
@@ -250,18 +259,19 @@ trait CRUDSmart
         $perPage = ListManager::getPerPage($request);
         $page = $request->query('page', 1);
         $cursor = $request->query('cursor', '');
-        $cacheKey = md5($query->toSql() . serialize($query->getBindings()) . 'page:' . $page . 'cursor:' . $cursor . 'perPage:' . $perPage);
+        $cacheKey = md5($query->toSql().serialize($query->getBindings()).'page:'.$page.'cursor:'.$cursor.'perPage:'.$perPage);
 
-        $resolver = function() use ($query, $perPage, $listFeatures) {
+        $resolver = function () use ($query, $perPage, $listFeatures) {
             $paginationType = $listFeatures['pagination_type'] ?? config('mk_director.features.pagination_type', 'length_aware');
             if ($paginationType === 'cursor') {
                 return $query->cursorPaginate($perPage);
             }
+
             return $query->paginate($perPage);
         };
 
         $paginator = $this->isCacheEnabled()
-            ? \Mk\Director\Managers\CacheManager::remember($cacheKey, $this->getCacheTags(), $this->getCacheTTL(), $resolver)
+            ? CacheManager::remember($cacheKey, $this->getCacheTags(), $this->getCacheTTL(), $resolver)
             : $resolver();
 
         // R-PKG-036 HALLAZGO-NEW-FASE15-06 fix (extension): si el modelo
@@ -272,8 +282,8 @@ trait CRUDSmart
         // single resource (show/me). Defense-in-depth: ZERO costo runtime
         // para non-AuthUser models (instanceof check).
         if (
-            is_subclass_of($modelClass, \Mk\Director\Auth\Models\AuthUser::class)
-            || $modelClass === \Mk\Director\Auth\Models\AuthUser::class
+            is_subclass_of($modelClass, AuthUser::class)
+            || $modelClass === AuthUser::class
         ) {
             foreach ($paginator->items() as $item) {
                 $item->loadMissing(['roles', 'directAbilities']);
@@ -329,19 +339,19 @@ trait CRUDSmart
         // Apply dynamic includes/counts if any
         $listFeatures = $this->getListFeatures();
         $useIncludes = $listFeatures['dynamic_includes'] ?? config('mk_director.features.dynamic_includes', true);
-        
+
         if ($useIncludes) {
             $query = ListManager::applyIncludes($request, $query, $this->getAllowedIncludes(), $this->getAllowedWithCount());
         }
 
-        $resolver = function() use ($id, $query) {
+        $resolver = function () use ($id, $query) {
             return $query->findOrFail($id);
         };
 
-        $cacheKey = md5($query->toSql() . serialize($query->getBindings()) . 'show_id:' . $id);
+        $cacheKey = md5($query->toSql().serialize($query->getBindings()).'show_id:'.$id);
 
         $model = $this->isCacheEnabled()
-            ? \Mk\Director\Managers\CacheManager::remember($cacheKey, $this->getCacheTags(), $this->getCacheTTL(), $resolver)
+            ? CacheManager::remember($cacheKey, $this->getCacheTags(), $this->getCacheTTL(), $resolver)
             : $resolver();
 
         // Apply service hook beforeShow
@@ -368,7 +378,7 @@ trait CRUDSmart
 
         // Apply service hook beforeCreate
         $input = $request->all();
-        
+
         // Plugin Hook: beforeSave
         $this->getPluginManager()->fireBeforeSave($request, $input, 'create');
 
@@ -396,7 +406,7 @@ trait CRUDSmart
 
         // Auto-invalidate cache if enabled
         if ($this->isCacheEnabled()) {
-            \Mk\Director\Managers\CacheManager::flush($this->getCacheTags());
+            CacheManager::flush($this->getCacheTags());
         }
 
         // Auto transform with resource
@@ -412,13 +422,30 @@ trait CRUDSmart
      * PUT/PATCH /resource/{id} - Actualizar
      *
      * R-PKG-016 BUG-NEW-20 fix: ver show() — acepta string|int para UUIDs.
+     *
+     * LAR-01 IDOR fix (2026-07-03 audit): mirror the `show()` pattern —
+     * build a query, fire `beforeQuery` plugins (so MkMultiTenantPlugin can
+     * inject the tenant filter), THEN `findOrFail`. The previous
+     * `$modelClass::findOrFail($id)` static call bypassed every
+     * `beforeQuery` hook, letting any authenticated tenant write
+     * another tenant's row.
      */
     public function update(Request $request, string|int $id)
     {
         $modelClass = $this->getModel();
         $service = $this->getService();
 
-        $model = $modelClass::findOrFail($id);
+        // Build query + eager loading (mirrors show() so any beforeQuery
+        // plugin sees the same builder shape).
+        $query = $modelClass::query();
+        $query->with($this->getWith());
+        $query->withCount($this->getWithCount());
+
+        // Plugin Hook: beforeQuery — MUST run before findOrFail so plugins
+        // like MkMultiTenantPlugin can scope the lookup (LAR-01 IDOR fix).
+        $this->getPluginManager()->fireBeforeQuery($query, $request);
+
+        $model = $query->findOrFail($id);
 
         // Get input
         $input = $request->all();
@@ -452,7 +479,7 @@ trait CRUDSmart
 
         // Auto-invalidate cache if enabled
         if ($this->isCacheEnabled()) {
-            \Mk\Director\Managers\CacheManager::flush($this->getCacheTags());
+            CacheManager::flush($this->getCacheTags());
         }
 
         // Auto transform with resource
@@ -468,13 +495,28 @@ trait CRUDSmart
      * DELETE /resource/{id} - Eliminar
      *
      * R-PKG-016 BUG-NEW-20 fix: ver show() — acepta string|int para UUIDs.
+     *
+     * LAR-01 IDOR fix (2026-07-03 audit): mirror the `show()` pattern —
+     * build a query, fire `beforeQuery` plugins (so MkMultiTenantPlugin can
+     * inject the tenant filter), THEN `findOrFail`. Without this, any
+     * authenticated tenant could delete another tenant's row.
      */
     public function destroy(Request $request, string|int $id)
     {
         $modelClass = $this->getModel();
         $service = $this->getService();
 
-        $model = $modelClass::findOrFail($id);
+        // Build query + eager loading (mirrors show() so any beforeQuery
+        // plugin sees the same builder shape).
+        $query = $modelClass::query();
+        $query->with($this->getWith());
+        $query->withCount($this->getWithCount());
+
+        // Plugin Hook: beforeQuery — MUST run before findOrFail so plugins
+        // like MkMultiTenantPlugin can scope the lookup (LAR-01 IDOR fix).
+        $this->getPluginManager()->fireBeforeQuery($query, $request);
+
+        $model = $query->findOrFail($id);
 
         // Plugin Hook: beforeDelete
         $this->getPluginManager()->fireBeforeDelete($model, $request);
@@ -499,7 +541,7 @@ trait CRUDSmart
 
         // Auto-invalidate cache if enabled
         if ($this->isCacheEnabled()) {
-            \Mk\Director\Managers\CacheManager::flush($this->getCacheTags());
+            CacheManager::flush($this->getCacheTags());
         }
 
         return $this->sendResponse(true, 'Eliminado con éxito');
@@ -517,8 +559,8 @@ trait CRUDSmart
         try {
             return DTOFactory::makeFromArray($input, $modelClass, $dtoClass, $enumMap);
         } catch (\InvalidArgumentException $e) {
-            throw \Illuminate\Validation\ValidationException::withMessages([
-                'payload' => $e->getMessage()
+            throw ValidationException::withMessages([
+                'payload' => $e->getMessage(),
             ]);
         }
     }
@@ -561,9 +603,9 @@ trait CRUDSmart
             }
 
             // Collection or Paginator wrappers
-            if ($data instanceof \Illuminate\Support\Collection ||
-                $data instanceof \Illuminate\Contracts\Pagination\Paginator ||
-                $data instanceof \Illuminate\Contracts\Pagination\CursorPaginator) {
+            if ($data instanceof Collection ||
+                $data instanceof Paginator ||
+                $data instanceof CursorPaginator) {
                 return $resourceClass::collection($data);
             }
         }
