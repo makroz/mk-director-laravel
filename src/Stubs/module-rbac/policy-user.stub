@@ -1,0 +1,67 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Policies;
+
+use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
+
+/**
+ * {{ModuleName}}Policy — autorización para CRUD + assignRole/revokeRole.
+ *
+ * Generado por `php artisan mk:module {{ModuleName}} --with-rbac`.
+ *
+ * Convenciones (RBAC-004, R-PKG-008):
+ *   - `before()` da bypass total al role `super-admin` (estándar de facto).
+ *   - Default-deny: cada método retorna `hasAbility('{scope}.{resource}.{action}')`.
+ *   - Convención de ability name: `{moduleNameLower}.{moduleNamePluralLower}.{action}`.
+ *
+ * Spec: RBAC-004 (R-PKG-008).
+ */
+class {{ModuleName}}Policy
+{
+    /**
+     * Super-admin bypass — corta antes de evaluar la ability específica.
+     * Retornar `true` → siempre permite. Retornar `null` → sigue con el
+     * método específico. Retornar `false` → siempre deniega.
+     */
+    public function before({{ModuleName}} $user, string $ability): ?bool
+    {
+        return $user->hasRole('super-admin') ? true : null;
+    }
+
+    public function viewAny({{ModuleName}} $user): bool
+    {
+        return $user->hasAbility('{{moduleNameLower}}.{{moduleNamePluralLower}}.viewAny');
+    }
+
+    public function view({{ModuleName}} $user, {{ModuleName}} $model): bool
+    {
+        return $user->hasAbility('{{moduleNameLower}}.{{moduleNamePluralLower}}.view');
+    }
+
+    public function create({{ModuleName}} $user): bool
+    {
+        return $user->hasAbility('{{moduleNameLower}}.{{moduleNamePluralLower}}.create');
+    }
+
+    public function update({{ModuleName}} $user, {{ModuleName}} $model): bool
+    {
+        return $user->hasAbility('{{moduleNameLower}}.{{moduleNamePluralLower}}.update');
+    }
+
+    public function delete({{ModuleName}} $user, {{ModuleName}} $model): bool
+    {
+        return $user->hasAbility('{{moduleNameLower}}.{{moduleNamePluralLower}}.delete');
+    }
+
+    public function assignRole({{ModuleName}} $user): bool
+    {
+        return $user->hasAbility('{{moduleNameLower}}.{{moduleNamePluralLower}}.assignRole');
+    }
+
+    public function revokeRole({{ModuleName}} $user): bool
+    {
+        return $user->hasAbility('{{moduleNameLower}}.{{moduleNamePluralLower}}.revokeRole');
+    }
+}

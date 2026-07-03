@@ -128,5 +128,5 @@ test('cache listener still tags cache flushes by table_all (regression guard for
     // hardening sprint must NOT change the tag naming (consumers depend
     // on it) — only add the system-tables filter and the write-only gate.
     expect($body)->toContain("_all");
-    expect($body)->toContain("->flush()");
+    expect($body)->toContain("CacheManager::flush");
 });

@@ -1,0 +1,73 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Repositories\Contracts;
+
+use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
+use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+
+/**
+ * Contrato del Repository de {{ModuleName}} users.
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ *
+ * ¿Por qué interface?: permite mockear el Repository en tests sin tocar
+ * implementaciones reales. El Service depende de este contrato, NO de la
+ * implementación concreta.
+ */
+interface {{ModuleName}}RepositoryInterface
+{
+    /**
+     * Lista {{moduleNamePluralLower}} con paginación + filtros.
+     *
+     * @param  array{
+     *     search?: string|null,
+     *     is_active?: bool|null,
+     *     role_ids?: array<int, int>|null,
+     *     per_page?: int,
+     *     page?: int,
+     * }  $filters
+     */
+    public function paginate(array $filters): LengthAwarePaginator;
+
+    /**
+     * Encuentra un {{ModuleName}} por ID con relaciones opcionales.
+     *
+     * @param  array<int, string>  $with
+     */
+    public function findById(string $id, array $with = []): ?{{ModuleName}};
+
+    /**
+     * Crea un nuevo {{ModuleName}}.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    public function create(array $data): {{ModuleName}};
+
+    /**
+     * Actualiza un {{ModuleName}} existente.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    public function update({{ModuleName}} ${{moduleNameLower}}, array $data): {{ModuleName}};
+
+    /**
+     * Elimina un {{ModuleName}} y limpia su foto del storage.
+     */
+    public function delete({{ModuleName}} ${{moduleNameLower}}): bool;
+
+    /**
+     * Sincroniza los roles del {{ModuleName}} (por nombre).
+     *
+     * @param  array<int, string>  $roleNames
+     */
+    public function syncRoles({{ModuleName}} ${{moduleNameLower}}, array $roleNames): {{ModuleName}};
+
+    /**
+     * Sincroniza abilities directas del {{ModuleName}} (por nombre).
+     *
+     * @param  array<int, string>  $abilityNames
+     */
+    public function syncDirectAbilities({{ModuleName}} ${{moduleNameLower}}, array $abilityNames): {{ModuleName}};
+}

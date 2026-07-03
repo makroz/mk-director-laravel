@@ -1,0 +1,76 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Controllers;
+
+use App\Modules\{{ModuleName}}\Models\Role;
+use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
+use App\Modules\{{ModuleName}}\Services\RbacService;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Mk\Director\Controllers\SmartController;
+
+/**
+ * {{ModuleName}}Controller — CRUD estándar + asignación/revocación de roles.
+ *
+ * Generado por `php artisan mk:module {{ModuleName}} --with-rbac`.
+ * Extiende `SmartController` para el CRUD; los endpoints `assignRole` /
+ * `revokeRole` son específicos del RBAC triad.
+ *
+ * Spec: RBAC-001, RBAC-005 (R-PKG-008).
+ */
+class {{ModuleName}}Controller extends SmartController
+{
+    protected array $mkConfig = [
+        'model'           => {{ModuleName}}::class,
+        'service'         => RbacService::class,
+        'searchable'      => ['name', 'email'],
+        'with'            => ['roles'],
+        'allowedIncludes' => ['roles', 'roles.abilities'],
+        'features'        => [
+            'auto_cache'    => true,
+            'remember_state' => true,
+        ],
+    ];
+
+    /**
+     * POST /api/{{moduleNamePluralLower}}/{id}/roles/{roleId}
+     * Asigna un role a un user. Autorizado por `{{ModuleName}}Policy::assignRole`.
+     */
+    public function assignRole(int $id, int $roleId, RbacService $rbac): JsonResponse
+    {
+        $user = {{ModuleName}}::findOrFail($id);
+        $role = Role::findOrFail($roleId);
+
+        $this->authorize('assignRole', $user);
+
+        $rbac->assignRole($user, $role);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Role asignado.',
+            'data'    => $user->fresh()->load('roles'),
+        ]);
+    }
+
+    /**
+     * DELETE /api/{{moduleNamePluralLower}}/{id}/roles/{roleId}
+     * Revoca un role de un user. Autorizado por `{{ModuleName}}Policy::revokeRole`.
+     */
+    public function revokeRole(int $id, int $roleId, RbacService $rbac): JsonResponse
+    {
+        $user = {{ModuleName}}::findOrFail($id);
+        $role = Role::findOrFail($roleId);
+
+        $this->authorize('revokeRole', $user);
+
+        $rbac->revokeRole($user, $role);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Role revocado.',
+            'data'    => $user->fresh()->load('roles'),
+        ]);
+    }
+}

@@ -79,7 +79,8 @@ test('MkAbility returns 500 ERR_MIDDLEWARE_MISCONFIGURED when no abilities are p
     expect($response->getStatusCode())->toBe(500);
 
     $data = json_decode($response->getContent(), true);
-    expect($data['error'])->toBe('ERR_MIDDLEWARE_MISCONFIGURED');
+    // R-PKG-044: shape is now single-level envelope with __extraData.code
+    expect($data['__extraData']['code'])->toBe('ERR_MIDDLEWARE_MISCONFIGURED');
     expect($data['success'])->toBeFalse();
 });
 
@@ -177,6 +178,8 @@ test('MkAbility returns 403 when no ability matches', function () {
     expect($response->getStatusCode())->toBe(403);
     $data = json_decode($response->getContent(), true);
     expect($data['message'])->toBe('Forbidden.');
+    // R-PKG-044: single-level envelope
+    expect($data['__extraData']['code'])->toBe('ERR_FORBIDDEN');
 });
 
 test('MkAbility accepts comma-separated ability strings (single argument)', function () {

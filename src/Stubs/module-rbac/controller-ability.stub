@@ -1,0 +1,39 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Controllers;
+
+use App\Modules\{{ModuleName}}\Models\Ability;
+use Mk\Director\Controllers\SmartController;
+
+/**
+ * AbilityController — CRUD expuesto pero read-only por default.
+ *
+ * Generado por `php artisan mk:module {{ModuleName}} --with-rbac`.
+ *
+ * NOTA: las abilities se crean/gestionan vía:
+ *   - `mk:discover-abilities` (R-PKG-007) — auto-descubrir desde controllers
+ *   - `RoleController::syncAbilities` — vincular a un role
+ *
+ * El controller igual expone los 5 endpoints estándar (index/show/store/
+ * update/destroy) — la policy `AbilityPolicy` deniega `create/update/delete`
+ * por default (default-deny). Solo el role `super-admin` (vía `before()`)
+ * puede escribir.
+ *
+ * Spec: RBAC-004 (R-PKG-008).
+ */
+class AbilityController extends SmartController
+{
+    protected array $mkConfig = [
+        'model'           => Ability::class,
+        'service'         => \App\Modules\{{ModuleName}}\Services\RbacService::class,
+        'searchable'      => ['name', 'description'],
+        'with'            => ['roles'],
+        'allowedIncludes' => ['roles'],
+        'features'        => [
+            'auto_cache'    => true,
+            'remember_state' => true,
+        ],
+    ];
+}

@@ -1,8 +1,10 @@
 <?php
 
+declare(strict_types=1);
+
 /**
  * MK-Director Configuration
- * 
+ *
  * Configuración centralizada para el paquete mk-laravel.
  * Publicar con: php artisan vendor:publish --tag=mk-config
  */
@@ -45,29 +47,127 @@ return [
     | Enable or disable core ecosystem features.
     */
     'features' => [
-        'auto_cache'       => env('MK_AUTO_CACHE', false),
-        'dynamic_joins'    => env('MK_DYNAMIC_JOINS', true),
-        'file_webp'        => env('MK_FILE_WEBP', true),
-        'ai_analysis'      => env('MK_AI_ANALYSIS', false),
-        
+        'auto_cache' => env('MK_AUTO_CACHE', false),
+        'dynamic_joins' => env('MK_DYNAMIC_JOINS', true),
+        'file_webp' => env('MK_FILE_WEBP', true),
+        'ai_analysis' => env('MK_AI_ANALYSIS', false),
+
         // ListManager HTTP Toggle Settings
         'dynamic_includes' => env('MK_DYNAMIC_INCLUDES', true),
-        'filters'          => env('MK_FILTERS', true),
-        'sorting'          => env('MK_SORTING', true),
-        'search'           => env('MK_SEARCH', true),
-        'remember_state'   => env('MK_REMEMBER_STATE', false),
-        'pagination_type'  => env('MK_PAGINATION_TYPE', 'length_aware'), // Options: length_aware, cursor
+        'filters' => env('MK_FILTERS', true),
+        'sorting' => env('MK_SORTING', true),
+        'search' => env('MK_SEARCH', true),
+        'remember_state' => env('MK_REMEMBER_STATE', false),
+        'pagination_type' => env('MK_PAGINATION_TYPE', 'length_aware'), // Options: length_aware, cursor
+
+        // R-PKG-007: auto-run `mk:discover-abilities` on every boot.
+        // Solo usar en sandbox/dev. Idempotente (UPSERT), pero agrega overhead.
+        'auto_discover_abilities' => env('MK_AUTO_DISCOVER_ABILITIES', false),
     ],
 
     /*
     |--------------------------------------------------------------------------
-    | Auth Scope (Experimental)
+    | Module Discovery Paths
     |--------------------------------------------------------------------------
-    | Define the user interface or class for authorization checks.
+    |
+    | Path(s) donde viven los módulos del consumer. Usado por:
+    |   - `mk:module` scaffolder para localizar `app/Modules/`.
+    |   - `mk:discover-abilities` (R-PKG-007) para escanear controllers
+    |     y providers cuando el provider NO implementa `discoverAbilities()`.
+    |
+    | Default: `app_path('Modules')` — match la convención generada por
+    | `mk:module {Name}`. Override per-project via `.env`:
+    |   `MK_MODULES_PATH=custom/Modules`
+    | o vía `config/mk_director.php` publicado.
+    */
+    'paths' => [
+        'modules' => env('MK_MODULES_PATH', app_path('Modules')),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Auth Scope
+    |--------------------------------------------------------------------------
+    |
+    | Config del scope de autenticación del consumer. Estos valores son
+    | **opcionales** — quedan en null por default para que cada consumer
+    | (que respeta DDD) defina su propio modelo de usuario y su propio
+    | default_user_type en su `config/mk_director.php` publicado.
+    |
+    | El paquete NO hardcodea:
+    |   - `\App\Models\User` (modelo default de Laravel, que rompe MME
+    |     porque los modelos viven en `App\Modules\<Scope>\Models`).
+    |   - un módulo específico del paquete (rompe DDD — el paquete no
+    |     debe conocer los modelos concretos del consumer).
+    |
+    | `user_model`       — modelo Eloquent concreto que el consumer usa
+    |                       como user autenticable (ej:
+    |                       `App\Modules\Admin\Models\Admin`). Override
+    |                       por entorno vía `MK_AUTH_USER_MODEL`.
+    |
+    | `default_user_type` — clase que mk-director usa cuando un endpoint
+    |                       no especifica un type concreto. Override por
+    |                       entorno vía `MK_AUTH_DEFAULT_USER_TYPE`. Si
+    |                       queda null, el consumer debe setearlo
+    |                       explícitamente en su config publicado.
+    |
+    | Ambos son null por default. Razón: mk-director es multi-tenant por
+    | scope (Admin, Member, Customer, etc.) y el modelo concreto depende
+    | de la decisión de arquitectura del consumer, no del paquete.
+    |
+    | Generá un scope concreto con: `php artisan mk:make:auth-user {Scope}`.
     */
     'auth' => [
-        'user_model' => \App\Models\User::class,
-        'default_user_type' => env('MK_AUTH_DEFAULT_USER_TYPE', 'App\\Modules\\Admin\\Models\\Admin'),
+        'user_model' => env('MK_AUTH_USER_MODEL'),
+        'default_user_type' => env('MK_AUTH_DEFAULT_USER_TYPE'),
+
+        // R-PKG-009: campo de login default para scopes nuevos generados con
+        // `mk:make:auth-user {Scope}`. Default BC: `email`. Otros casos
+        // comunes: `ci` (Bolivia), `phone`, `username`, `documento`.
+        //
+        // NOTA: Este config es el DEFAULT para el scaffolder. Cada subclase
+        // concreta (Admin, Member) puede override `$loginField` en su propio
+        // modelo (via `--login-field=<campo>` al ejecutar mk:make:auth-user).
+        // El config se usa en `MkAuthenticate` para resolver `auth_identifier`
+        // cuando el token no trae ability explícita.
+        'login_field' => env('MK_LOGIN_FIELD', 'email'),
+
+        // R-PKG-010: ability checks opcionales en endpoints privados del
+        // AuthController generado con `mk:make:auth-user --with-auth-rbac`.
+        //
+        // Default BC: `null` en TODAS las abilities → no se hace check
+        // (idem v1.4.0 / v1.5.0-rc3 sin --with-auth-rbac).
+        //
+        // Configurar via env o publicando config:
+        //   MK_AUTH_ABILITY_ME=auth.me.read
+        //   MK_AUTH_ABILITY_LOGOUT=auth.logout
+        //
+        // El consumer puede usar cualquier naming convention. Convención
+        // recomendada: `{scope}.{endpoint}.{action}` (ej: `admin.me.read`).
+        //
+        // El ability check usa `Mk\Director\Auth\Services\AbilityResolver`
+        // (existente, con cache por user + Sanctum short-circuit).
+        'abilities' => [
+            'me' => env('MK_AUTH_ABILITY_ME'),
+            'logout' => env('MK_AUTH_ABILITY_LOGOUT'),
+        ],
+
+        // R-PKG-010: rate limits por endpoint público del AuthController.
+        // Aplican via middleware `throttle:{limit},{minutes}` solo cuando
+        // el scope se genera con `--with-auth-rbac`.
+        //
+        // Default seguro:
+        //   login   = 5 attempts / minuto (anti brute-force)
+        //   forgot  = 3 attempts / minuto (anti enumeration)
+        //   reset   = 3 attempts / minuto (anti abuse)
+        //
+        // El consumer puede customizar via env o config publicada.
+        // Rate limit agresivo puede bloquear usuarios reales — tunable.
+        'rate_limits' => [
+            'login' => env('MK_AUTH_RATE_LIMIT_LOGIN', '5,1'),
+            'forgot' => env('MK_AUTH_RATE_LIMIT_FORGOT', '3,1'),
+            'reset' => env('MK_AUTH_RATE_LIMIT_RESET', '3,1'),
+        ],
     ],
 
     /*
@@ -87,7 +187,80 @@ return [
     */
     'cache' => [
         'default_ttl' => env('MK_CACHE_TTL', 3600),
-        'store'       => env('MK_CACHE_STORE', null), // Configured in cache.php
+        'store' => env('MK_CACHE_STORE', null), // Configured in cache.php
+
+        // R-PKG-024 (rc13): gate for `CacheManager::flush()` fallback path.
+        // When the cache driver does NOT support tags (e.g. file/database
+        // cache in dev), the only way to invalidate is `$cache->clear()`
+        // which wipes the ENTIRE application cache (not just this module's
+        // keys). This is a "nuke" — opt-in via this flag.
+        //
+        // Default `false` (safe). Set to `true` ONLY in dev environments
+        // that use file/database cache AND understand the nuke risk.
+        // Production MUST use a cache store that supports tags (Redis,
+        // Memcached) — see `cache.store` config above.
+        'allow_full_clear' => env('MK_CACHE_ALLOW_FULL_CLEAR', false),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Response Envelope
+    |--------------------------------------------------------------------------
+    |
+    | R-PKG-024 (v1.7.0 GA) — SINGLE-LEVEL ENVELOPE. The canonical shape is:
+    |
+    |   {
+    |     "success": true,
+    |     "message": "...",
+    |     "data": [...items...],          // ← array directo para colecciones
+    |     "__extraData": { ... },         // ← SIEMPRE top-level (sibling de `data`)
+    |     "debugMsg": []
+    |   }
+    |
+    | PROHIBIDO:
+    |   ❌ `data: { data: [...], links, meta }` (Laravel paginator nested → data.data)
+    |   ❌ `data: { data: {...resource...} }` (resource nested → data.data)
+    |   ❌ `__extraData` nested inside `data`
+    |
+    | The R-PKG-023 rc12 opt-in flag (removed in v1.7.0) is no longer
+    | referenced. The legacy nested shape is gone — the envelope is always
+    | single-level.
+    |
+    | Migration from rc11/rc12: see CHANGELOG.md `## [v1.7.0] - GA - Single-level
+    | envelope (R-PKG-024)` for the migration guide.
+    |
+    | @see https://github.com/makroz/mk-director-laravel/blob/main/CHANGELOG.md
+    */
+    'response' => [
+        // R-PKG-024: the rc12 opt-in flag (removed in v1.7.0 GA) is no
+        // longer referenced here. The envelope is always single-level (no
+        // `data.data`, no nested `__extraData`). Consumers that ran rc12
+        // with the flag on see no change. Consumers that ran rc12 with the
+        // flag off see the new shape — RETO migration tracked in sprint
+        // `2026-06-28-fase-12-retos-bump-v170`.
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Debug
+    |--------------------------------------------------------------------------
+    |
+    | R-PKG-024 (rc13, lifted forward — unrelated to envelope change): gate
+    | for the optional `EXPLAIN` query analysis in `BaseController::getDebugData()`.
+    | When this flag is `false` (default), slow-query candidates are logged via
+    | `Log::debug()` for offline analysis — no `EXPLAIN` is executed against the
+    | database. When the flag is `true`, the SQL is logged as a `warning` so a
+    | developer can
+    | run `EXPLAIN` manually in a safe environment.
+    |
+    | The previous behavior (rc12 and earlier) interpolated the query
+    | directly into `DB::select("EXPLAIN " . $query)`, which is a SQL
+    | injection vector if the query contains user-controlled values.
+    | This flag prevents the unsafe path by default. See CHANGELOG rc13.
+    */
+    'debug' => [
+        'enabled' => env('MK_DIRECTOR_DEBUG', false),
+        'explain_enabled' => env('MK_DIRECTOR_DEBUG_EXPLAIN_ENABLED', false),
     ],
 
     /*
@@ -126,10 +299,47 @@ return [
     | that should run without a tenant.
     */
     'tenant' => [
-        'enabled'     => env('MK_TENANT_ENABLED', false),
-        'resolver'    => env('MK_TENANT_RESOLVER', 'header'),
+        'enabled' => env('MK_TENANT_ENABLED', false),
+        'resolver' => env('MK_TENANT_RESOLVER', 'header'),
         'header_name' => env('MK_TENANT_HEADER', 'X-Tenant-ID'),
-        'model'       => env('MK_TENANT_MODEL', null), // e.g. App\Models\Tenant
-        'strict'      => env('MK_TENANT_STRICT', true),
+        'model' => env('MK_TENANT_MODEL', null), // e.g. App\Models\Tenant
+        'strict' => env('MK_TENANT_STRICT', true),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Frontend CORS (R-PKG-042 FASE18-07)
+    |--------------------------------------------------------------------------
+    |
+    | El scaffolder `mk:make:auth-user` pinea `config/cors.php` con `paths:`
+    | apuntando a `['api/*']` (los endpoints del paquete) y los `allowed_origins`
+    | leídos desde esta config. Sin esta config pineada, el consumer debe
+    | agregar manualmente `config/cors.php` (riesgo de olvidar) o sufrir
+    | errores CORS silenciosos en dev (el browser bloquea preflight y la app
+    | muestra `TypeError: Failed to fetch` en vez del error real).
+    |
+    | `frontend_origins`: array de origins permitidos (e.g. `http://localhost:3000`
+    | para Next.js dev, `https://admin.example.com` para prod). Default dev-friendly
+    | para que el scaffolder pinee un `config/cors.php` que funcione out-of-the-box
+    | en local. **Override en prod vía env var** (`FRONTEND_ORIGINS=https://admin.example.com,https://app.example.com`).
+    |
+    | `supports_credentials`: si el consumer usa Sanctum SPA flow (cookie-based
+    | auth), necesita `true`. Default `true` consistente con el patrón canónico
+    | de Sanctum v4. Si no usás cookies, podés setear `false` y `allowed_headers`
+    | no necesita `Authorization` (CORS lo bloquea).
+    |
+    | El scaffolder pinea un `config/cors.php` que lee estos valores via
+    | `env('FRONTEND_ORIGINS', implode(',', config('mk_director.frontend.frontend_origins')))`.
+    | Si querés override granular (paths custom, methods custom, etc.), publicá
+    | el config con `php artisan vendor:publish --tag=mk-director-cors` y editá.
+    */
+    'frontend' => [
+        'frontend_origins' => array_filter(array_map('trim', explode(',', (string) env('FRONTEND_ORIGINS', 'http://localhost:3000,http://127.0.0.1:3000')))),
+        'supports_credentials' => (bool) env('FRONTEND_SUPPORTS_CREDENTIALS', true),
+        // Paths CORS allow-list. Default `['api/*']` cubre todos los endpoints
+        // del paquete. Sumá `'sanctum/csrf-cookie'` si usás Sanctum SPA flow
+        // (cookie-based auth) — el scaffolder ya lo pinea automáticamente
+        // cuando el scope se crea con `--with-auth-rbac`.
+        'paths' => ['api/*'],
     ],
 ];

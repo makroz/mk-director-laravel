@@ -1,0 +1,39 @@
+<?php
+
+declare(strict_types=1);
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+/**
+ * Crea `{moduleNameLower}_users` — users del bounded context RBAC de
+ * `{{ModuleName}}`. Generado por `php artisan mk:module {{ModuleName}} --with-rbac`.
+ *
+ * NO confundir con la tabla `{{moduleNamePluralLower}}` que genera
+ * `mk:make:auth-user {{ModuleName}}` — esa es para login scope (extends
+ * AuthUser, con `auth_scope`), esta es para users internos del módulo
+ * RBAC (extends Authenticatable, sin `auth_scope`).
+ *
+ * Spec: RBAC-001..005 (R-PKG-008).
+ */
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('{{moduleNameLower}}_users', function (Blueprint $table) {
+            $table->id();
+            $table->string('name');
+            $table->string('email')->unique();
+            $table->timestamp('email_verified_at')->nullable();
+            $table->string('password');
+            $table->rememberToken();
+            $table->timestamps();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('{{moduleNameLower}}_users');
+    }
+};

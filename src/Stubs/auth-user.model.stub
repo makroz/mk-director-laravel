@@ -1,0 +1,103 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Models;
+
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
+{{factoryHasFactoryUse}}{{mustVerifyEmailUse}}use Mk\Director\Auth\Models\AuthUser;
+
+/**
+ * {{ModuleName}} — modelo concreto de un scope de autenticación MK.
+ *
+ * Extiende {@see AuthUser} (abstract) y se ata al scope '{{moduleNameLower}}'.
+ * La capa 1 del modelo de seguridad es la columna `auth_scope` (Capa 1,
+ * ver docs/guides/AUTH.md § "The 4 defense layers against cross-scope mix-up").
+ *
+ * Cada scope concreto vive en su propio bounded context
+ * (App\Modules\{{ModuleName}}) — la MME rule (R-MK-001) prohíbe
+ * importar este modelo desde otros módulos. Si necesitás datos
+ * del {{ModuleName}} desde otro módulo, exponé una interface en
+ * `App\Modules\{{ModuleName}}\Api\` y consumila.
+ *
+ * Login field: `{{loginField}}` (configurable via `--login-field=<campo>` al
+ * ejecutar `php artisan mk:make:auth-user`). Ver docs/API_REFERENCE_LARAVEL.md
+ * § mk:make:auth-user --login-field para casos soportados.
+ *
+ * Profile fields: declarados via `--profile-fields=<csv>` (R-PKG-011). Cada
+ * field se agrega como columna string nullable en la tabla del scope y como
+ * entry en $fillable. Exposición: /me (GET read), PATCH /me (update),
+ * /register (create). Ver docs/API_REFERENCE_LARAVEL.md § mk:make:auth-user
+ * --profile-fields.
+ *
+ * Email verification: opt-in via `--verify-email` (R-PKG-011). Si está activo,
+ * `email_verified_at` está en $casts y `MustVerifyEmail` interface está importada.
+ * Si no está activo (default), NO hay columna `email_verified_at` y NO hay
+ * verificación (BC con v1.5.0-rc4).
+ *
+ * Factory DDD: si el scope se generó con `--with-crud` (R-PKG-014), este modelo
+ * usa `HasFactory` trait + override `newFactory()` que apunta a la factory DDD
+ * en `App\Modules\{{ModuleName}}\Database\Factories\{{ModuleName}}Factory`.
+ */
+class {{ModuleName}} extends AuthUser
+{
+    {{factoryHasFactoryTrait}}use HasUuids;
+
+    /**
+     * Tabla propia del scope. NO compartir con `auth_users` —
+     * cada scope es un bounded context con su propia tabla.
+     */
+    protected $table = '{{moduleNamePluralLower}}';
+
+    {{apiResourceEntry}}
+    /**
+     * Columna usada para login. Configurable via `--login-field=<campo>`.
+     * Default BC: `email`. Otros casos comunes: `ci`, `phone`, `username`.
+     *
+     * Si vas a usar este modelo con login no-email, override también
+     * el cast de `email_verified_at` (eliminado cuando loginField != email)
+     * y NO implementar MustVerifyEmail (override via remove en este stub).
+     */
+    protected string $loginField = '{{loginField}}';
+
+    {{profileFieldsDocblock}}
+
+    /**
+     * Columnas asignables en masa. El `auth_scope` por defecto es
+     * `{{moduleNameLower}}`; las subclases (Admin, Member, etc.) lo setean
+     * al crear. `{{loginField}}` es el campo de login (default `email`).
+     * Profile fields (R-PKG-011) se agregan vía `--profile-fields=<csv>`.
+     *
+     * @var array<int, string>
+     */
+    protected $fillable = [
+        'name',
+        '{{loginField}}',
+{{profileFieldsFillableEntries}}        'password',
+        'auth_scope',
+        'client_id',
+    ];
+
+    /**
+     * Casts de atributos. Solo `email_verified_at` se incluye cuando
+     * `--verify-email` está activo (R-PKG-011 ADR-009). Para default mode
+     * (sin flag), queda solo `password`.
+     *
+     * @var array<string, string>
+     */
+    protected $casts = [
+{{emailVerifiedAtCastEntry}}{{profileFieldsCastEntries}}        'password' => 'hashed',
+    ];
+
+    /**
+     * El scope se ata al instanciar el modelo. Esto garantiza que
+     * `getAuthScope()` nunca devuelva null (Capa 1: auth_scope indexado).
+     */
+    public function __construct(array $attributes = [])
+    {
+        parent::__construct($attributes);
+        $this->setAuthScope('{{moduleNameLower}}');
+    }
+{{factoryNewFactoryMethod}}
+{{rolesRelationOverride}}{{directAbilitiesRelationOverride}}
+}

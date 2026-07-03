@@ -1,0 +1,57 @@
+<?php
+
+declare(strict_types=1);
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+/**
+ * Migración generada por `php artisan mk:make:auth-user {{ModuleName}}`.
+ *
+ * Crea la tabla del scope `{{moduleNameLower}}` (plural: `{{moduleNamePluralLower}}`)
+ * con la columna `auth_scope` indexada (Capa 1 del modelo de seguridad MK).
+ *
+ * Columna de login: `{{loginField}}` (configurable via --login-field=<campo>).
+ * Profile fields: declarados via --profile-fields=<csv> (R-PKG-011), cada uno como
+ * columna string nullable. Solo se generan si el flag está activo.
+ *
+ * `email_verified_at` SIEMPRE se crea (nullable) — R-PKG-027 PKG-NEW-01 fix.
+ * El modelo base `AuthUser` declara el cast `email_verified_at => datetime`
+ * y la interface `MustVerifyEmail`. Si la columna NO existiera (drift pre-fix),
+ * cualquier path que setee el atributo (factory, register, verificación futura)
+ * revienta con SQLSTATE. Crear la columna siempre es barato (nullable, no molesta)
+ * y mantiene consistencia scaffolder-modelo. El flujo de verificación sigue siendo
+ * opt-in via `--verify-email` (esa flag controla el endpoint + la notification).
+ *
+ * Spec: MK-LAR-1.0.2 / MK-LAR-1.0.6 / MK-LAR-1.5.0-rc5.PF (R-PKG-011).
+ * Bug fix: R-PKG-027 PKG-NEW-01 (post-merge 4R audit 2026-06-28).
+ */
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('{{moduleNamePluralLower}}', function (Blueprint $table): void {
+            $table->uuid('id')->primary();
+            $table->string('name');
+            $table->string('{{loginField}}')->unique();
+            {{profileFieldsColumns}}$table->timestamp('email_verified_at')->nullable();
+            $table->string('password');
+            $table->string('auth_scope')->default('{{moduleNameLower}}')->index();
+            $table->rememberToken();
+            $table->timestamps();
+        });
+
+        Schema::create('{{moduleNameLower}}_password_reset_tokens', function (Blueprint $table): void {
+            $table->string('{{loginField}}')->primary();
+            $table->string('token');
+            $table->timestamp('created_at')->nullable();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('{{moduleNameLower}}_password_reset_tokens');
+        Schema::dropIfExists('{{moduleNamePluralLower}}');
+    }
+};

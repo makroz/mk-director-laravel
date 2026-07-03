@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Mk\Director\Models;
 
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Facades\Cache;
+use Mk\Director\Managers\CacheManager;
 
 class BaseModelBuilder extends Builder
 {
@@ -18,7 +18,7 @@ class BaseModelBuilder extends Builder
         $table = $this->getModel()->getTable();
 
         if (config('mk_director.features.auto_cache', false)) {
-            return Cache::tags([$table . '_all'])->remember($cacheKey, $time, function () {
+            return CacheManager::remember($cacheKey, [$table], $time, function () {
                 return $this->get();
             });
         }
@@ -35,7 +35,7 @@ class BaseModelBuilder extends Builder
         $table = $this->getModel()->getTable();
 
         if (config('mk_director.features.auto_cache', false)) {
-            return Cache::tags([$table . '_all'])->remember($cacheKey, $time, function () {
+            return CacheManager::remember($cacheKey, [$table], $time, function () {
                 return $this->first();
             });
         }

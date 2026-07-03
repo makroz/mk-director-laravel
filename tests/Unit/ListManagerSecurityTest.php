@@ -70,6 +70,5 @@ test('applyJoins only applies whitelisted joins', function () {
 
     $ref = new \ReflectionClass(ListManager::class);
     $method = $ref->getMethod('applyJoins');
-    $method->setAccessible(true);
     $method->invoke(null, $request, $query, ['profiles', 'roles']);
 });

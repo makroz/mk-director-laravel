@@ -1,0 +1,37 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Mk\Director\Auth\Models\Ability;
+
+/**
+ * Validación para asignar abilities directas (bypass role hierarchy) a un {{ModuleName}}.
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ *
+ * Abilities se validan contra las existentes en `mk_director`. Si la ability
+ * no existe, se rechaza (evita typos).
+ */
+class AssignDirectAbilitiesRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function rules(): array
+    {
+        $existingAbilityNames = Ability::query()->pluck('name')->all();
+
+        return [
+            'abilities' => ['required', 'array'],
+            'abilities.*' => ['string', 'in:'.implode(',', $existingAbilityNames)],
+        ];
+    }
+}

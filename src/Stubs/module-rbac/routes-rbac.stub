@@ -1,0 +1,53 @@
+<?php
+
+declare(strict_types=1);
+
+use App\Modules\{{ModuleName}}\Controllers\AbilityController;
+use App\Modules\{{ModuleName}}\Controllers\RoleController;
+use App\Modules\{{ModuleName}}\Controllers\{{ModuleName}}Controller;
+use Illuminate\Support\Facades\Route;
+
+/**
+ * Rutas del módulo `{{ModuleName}}` con RBAC triad (User + Role + Ability).
+ * Generado por `php artisan mk:module {{ModuleName}} --with-rbac`.
+ *
+ * Las policies se auto-bindean en `{Name}ModuleServiceProvider::boot()`
+ * via `Gate::policy()` (ver `provider-rbac.stub`). El Gate ya tiene
+ * definidas las abilities por `Gate::define()`.
+ *
+ * Spec: RBAC-001 (R-PKG-008).
+ */
+
+// ─── CRUD de {{ModuleName}} (User) ────────────────────────────────────
+Route::prefix('api/{{moduleNamePluralLower}}')->group(function () {
+    Route::get('/',         [{{ModuleName}}Controller::class, 'index']);
+    Route::get('/{id}',     [{{ModuleName}}Controller::class, 'show']);
+    Route::post('/',        [{{ModuleName}}Controller::class, 'store']);
+    Route::put('/{id}',     [{{ModuleName}}Controller::class, 'update']);
+    Route::delete('/{id}',  [{{ModuleName}}Controller::class, 'destroy']);
+
+    // Asignación / revocación de roles (autorizado por {{ModuleName}}Policy).
+    Route::post('/{id}/roles/{roleId}',         [{{ModuleName}}Controller::class, 'assignRole']);
+    Route::delete('/{id}/roles/{roleId}',      [{{ModuleName}}Controller::class, 'revokeRole']);
+});
+
+// ─── CRUD de Roles ────────────────────────────────────────────────────
+Route::prefix('api/{{moduleNameLower}}-roles')->group(function () {
+    Route::get('/',         [RoleController::class, 'index']);
+    Route::get('/{id}',     [RoleController::class, 'show']);
+    Route::post('/',        [RoleController::class, 'store']);
+    Route::put('/{id}',     [RoleController::class, 'update']);
+    Route::delete('/{id}',  [RoleController::class, 'destroy']);
+
+    // Sincronización de abilities (autorizado por RolePolicy).
+    Route::put('/{id}/abilities', [RoleController::class, 'syncAbilities']);
+});
+
+// ─── CRUD de Abilities (read-only por default) ────────────────────────
+Route::prefix('api/{{moduleNameLower}}-abilities')->group(function () {
+    Route::get('/',         [AbilityController::class, 'index']);
+    Route::get('/{id}',     [AbilityController::class, 'show']);
+    Route::post('/',        [AbilityController::class, 'store']);
+    Route::put('/{id}',     [AbilityController::class, 'update']);
+    Route::delete('/{id}',  [AbilityController::class, 'destroy']);
+});

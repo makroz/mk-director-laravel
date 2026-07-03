@@ -25,13 +25,32 @@ final class LintBoundariesCommand extends Command
 
     /**
      * Allowed external paths under another module.
-     * Matches App\Modules\X\Api\, App\Modules\X\Api\Dto\,
-     * App\Modules\X\Enums\, App\Modules\X\Exceptions\.
+     *
+     * R-PKG-023 (rc12): `App\Modules\X\DTOs\` is the canonical DTO
+     * location per R-MK-001 + mk:module + mk:make:auth-user --with-crud
+     * (sibling of `Api/`, not nested under it). It is allowed silently.
+     *
+     * Legacy `App\Modules\X\Api\Dto\` is STILL allowed (BC for 1 release
+     * window) but emits a deprecation warning via {@see DEPRECATED_PATTERNS}.
+     * The Api\Dto path is removed in 1.7.0.
      */
     private const ALLOWED_PATTERNS = [
-        '#App\\\\Modules\\\\[A-Za-z0-9_]+\\\\Api(\\\\Dto)?\\\\#',
+        '#App\\\\Modules\\\\[A-Za-z0-9_]+\\\\Api\\\\#',
+        '#App\\\\Modules\\\\[A-Za-z0-9_]+\\\\DTOs\\\\#',
         '#App\\\\Modules\\\\[A-Za-z0-9_]+\\\\Enums\\\\#',
         '#App\\\\Modules\\\\[A-Za-z0-9_]+\\\\Exceptions\\\\#',
+    ];
+
+    /**
+     * Patterns that are still allowed but emit a deprecation warning.
+     * Consumers see the warning in CI output and can migrate at their
+     * own pace before the 1.7.0 removal.
+     *
+     * @var array<string, string> pattern => deprecation message
+     */
+    private const DEPRECATED_PATTERNS = [
+        '#App\\\\Modules\\\\[A-Za-z0-9_]+\\\\Api\\\\Dto\\\\#'
+            => 'Api\\Dto is deprecated since 1.6.0-rc12. Use DTOs\\ (canonical) instead. See DEVELOPER_GUIDE § MME.',
     ];
 
     public function handle(): int
@@ -50,6 +69,7 @@ final class LintBoundariesCommand extends Command
         }
 
         $violations = [];
+        $deprecations = [];
         foreach ($modules as $sourceModule) {
             $modulePath = $modulesPath . '/' . $sourceModule;
             foreach ($this->phpFiles($modulePath) as $file) {
@@ -63,6 +83,18 @@ final class LintBoundariesCommand extends Command
                         continue;
                     }
                     if ($this->isAllowedExternal($import)) {
+                        // R-PKG-023 (rc12): even though the import is allowed,
+                        // it may match a DEPRECATED pattern — track those
+                        // separately so we can emit a warning at the end.
+                        $deprecatedMessage = $this->isDeprecatedExternal($import);
+                        if ($deprecatedMessage !== null) {
+                            $deprecations[] = [
+                                'file' => $relative,
+                                'import' => $import,
+                                'source' => $sourceModule,
+                                'message' => $deprecatedMessage,
+                            ];
+                        }
                         continue;
                     }
                     $violations[] = [
@@ -73,6 +105,13 @@ final class LintBoundariesCommand extends Command
                     ];
                 }
             }
+        }
+
+        // R-PKG-023 (rc12): emit deprecation warnings (BC window for Api\Dto).
+        // These do NOT count as violations — the imports still pass the linter
+        // for 1 release. They are surfaced to encourage migration to DTOs\.
+        if (! empty($deprecations)) {
+            $this->reportDeprecations($deprecations);
         }
 
         if (empty($violations)) {
@@ -139,6 +178,39 @@ final class LintBoundariesCommand extends Command
             }
         }
         return false;
+    }
+
+    /**
+     * R-PKG-023 (rc12): check if an FQCN matches a DEPRECATED pattern.
+     * Returns the deprecation message if matched, null otherwise.
+     */
+    private function isDeprecatedExternal(string $fqcn): ?string
+    {
+        foreach (self::DEPRECATED_PATTERNS as $pattern => $message) {
+            if (preg_match($pattern, $fqcn . '\\')) {
+                return $message;
+            }
+        }
+        return null;
+    }
+
+    /** @param list<array{file:string,import:string,source:string,message:string}> $deprecations */
+    private function reportDeprecations(array $deprecations): void
+    {
+        $rows = [];
+        foreach ($deprecations as $d) {
+            $rows[] = [
+                $d['file'],
+                $d['import'],
+                $d['source'],
+                "<fg=yellow>{$d['message']}</>",
+            ];
+        }
+        $this->table(['File', 'Import', 'Source', 'Deprecation'], $rows);
+        $this->warn(sprintf(
+            "\n⚠️  %d deprecated import(s) found (still allowed for BC, will be removed in 1.7.0).\n",
+            count($deprecations)
+        ));
     }
 
     /** @param list<array{file:string,import:string,source:string,target:string}> $violations */

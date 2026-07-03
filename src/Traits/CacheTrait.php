@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Mk\Director\Traits;
 
-use Illuminate\Support\Facades\Cache;
+use Mk\Director\Managers\CacheManager;
 use Mk\Director\Utils\Logger;
 
 trait CacheTrait
@@ -15,7 +15,7 @@ trait CacheTrait
     public function cacheFlush()
     {
         $table = $this->getTable();
-        Cache::tags([$table . '_all'])->flush();
+        CacheManager::flush([$table]);
         Logger::log("MK-Director: Cache flushed manually for table [{$table}].");
     }
 
@@ -28,7 +28,7 @@ trait CacheTrait
         $table = $model->getTable();
 
         if (config('mk_director.features.auto_cache', false)) {
-            return Cache::tags([$table . '_all'])->remember($table . '_' . $id, $time, function () use ($id) {
+            return CacheManager::remember($table . '_' . $id, [$table], $time, function () use ($id) {
                 return static::find($id);
             });
         }

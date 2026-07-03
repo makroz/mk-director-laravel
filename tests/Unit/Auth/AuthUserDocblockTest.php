@@ -60,8 +60,28 @@ test('AuthUser docblock still has the rest of the @property tags (regression gua
     $doc = authUserClassDocblock();
     expect($doc)->not->toBeEmpty();
 
-    // Ensure we did not accidentally drop other properties when fixing $id.
+    // R-PKG-009: AuthUser es agnóstico al campo de login (default `email`,
+    // pero subclases pueden override con `ci`, `phone`, etc.). El docblock
+    // NO debe hardcodear un campo específico — solo las props universales.
     expect($doc)->toContain('@property string $name');
-    expect($doc)->toContain('@property string $email');
     expect($doc)->toContain('@property string $auth_scope');
+
+    // Regression guard: si alguien re-introduce $email hardcoded en el base,
+    // este test falla. La subclase concreta (Admin, Member, etc.) es la que
+    // declara su propio @property string $loginField vía stub.
+    expect($doc)->not->toContain('@property string $email');
+    expect($doc)->not->toContain('@property \Illuminate\Support\Carbon|null $email_verified_at');
+});
+
+test('AuthUser has $loginField property + scopeWhereLoginField method (R-PKG-009 D6)', function () {
+    $source = (string) file_get_contents(authUserSourcePath());
+
+    // Property declaration
+    expect($source)->toContain('protected string $loginField = \'email\'');
+
+    // Method getLoginField()
+    expect($source)->toMatch('/public function getLoginField\(\)\s*:\s*string/');
+
+    // Local scope scopeWhereLoginField(Builder $query, string $value)
+    expect($source)->toMatch('/public function scopeWhereLoginField\(Builder \$query, string \$value\)\s*:\s*Builder/');
 });

@@ -7,8 +7,12 @@ namespace Mk\Director\Auth\Concerns;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Mk\Director\Auth\Models\Ability;
+use Mk\Director\Auth\Pivots\MkAbilityUserPivot;
 use Mk\Director\Auth\Services\AbilityResolver;
+use Mk\Director\Database\Eloquent\Relations\MkBelongsToMany;
 
 /**
  * HasAbilities — relación many-to-many entre AuthUser y Ability.
@@ -46,14 +50,28 @@ trait HasAbilities
      * NOTA: la firma es `BelongsToMany` para que encadene con el
      * resto del Query Builder, pero la `pivot` referencia una
      * tabla virtual — usa `get() / pluck()` para materializar.
+     *
+     * R-PKG-016 BUG-NEW-17 fix: el código previo hacía JOIN directo contra
+     * `ability_user` y luego filtraba con `whereExists` apuntando a
+     * `ability_role`. Esto retornaba CERO rows para usuarios que NO tienen
+     * direct abilities (caso típico cuando las abilities vienen únicamente
+     * por roles) — el JOIN a `ability_user` no matchea nada y el `whereExists`
+     * queda sin rows donde aplicar. Resultado: `$user->abilities->pluck('name')`
+     * retornaba `[]` aunque el user tuviera abilities vía roles.
+     *
+     * La fix correcta: NO hacer JOIN directo a `ability_user`. En vez de eso,
+     * restringir `abilities.id` a la UNION de los dos paths via subqueries
+     * (UNION ALL + dedup en memoria). Esto es portable cross-engine y
+     * mantiene la firma `BelongsToMany` para que encadene con el resto del
+     * Query Builder.
      */
     public function abilities(): BelongsToMany
     {
-        $instance = new Ability();
+        $instance = new Ability;
 
-        // Construimos una relación contra `ability_user` (pivot directo)
-        // y luego restringimos a los abilities que también estén en
-        // ability_role para alguno de los roles del user.
+        // Construimos una relation contra `ability_user` (sigue siendo el pivot
+        // declarado en el modelo Ability), pero filtramos los ability IDs
+        // a la UNION de los dos paths via subquery.
         $relation = $instance->belongsToMany(
             static::class,
             'ability_user',
@@ -61,15 +79,23 @@ trait HasAbilities
             'user_id',
         );
 
-        // Filtramos a las abilities conectadas a través de roles del user.
         $userKey = $this->getKey();
 
-        $relation->whereExists(function ($query) use ($userKey) {
-            $query->select(\DB::raw(1))
-                ->from('ability_role')
-                ->join('role_user', 'role_user.role_id', '=', 'ability_role.role_id')
-                ->whereColumn('ability_role.ability_id', 'abilities.id')
-                ->where('role_user.user_id', '=', $userKey);
+        // R-PKG-016 BUG-NEW-17: filtrar `abilities.id` por la UNION de:
+        //   Path 1 (direct):   `ability_user.user_id = ?`
+        //   Path 2 (vía rol):  `ability_role` JOIN `role_user.user_id = ?`
+        // Usamos `unionAll` + dedup en runtime (las dos subqueries pueden tener
+        // solapamiento cuando un user tiene la misma ability por ambos paths).
+        $relation->whereIn('abilities.id', function ($query) use ($userKey) {
+            $query->select('ability_id')
+                ->from('ability_user')
+                ->where('user_id', $userKey)
+                ->unionAll(
+                    DB::table('ability_role')
+                        ->join('role_user', 'role_user.role_id', '=', 'ability_role.role_id')
+                        ->where('role_user.user_id', $userKey)
+                        ->select('ability_role.ability_id'),
+                );
         });
 
         return $relation;
@@ -78,13 +104,32 @@ trait HasAbilities
     /**
      * Grants directos (pivot `ability_user`). El consumer debe
      * publicar la migración correspondiente si quiere usar este path.
+     *
+     * R-PKG-021 BUG-NEW-31 (RC9 regression of HALLAZGO-NEW-01):
+     * La relation retorna `MkBelongsToMany` (via reflection-based state copy).
+     * Override de `newPivot()` inyecta `user_type = $this->getMorphClass()`
+     * automáticamente cuando la pivot tiene la columna. Cubre todas las
+     * mutations nativas de Eloquent.
+     *
+     * R-PKG-020 HALLAZGO-NEW-01 (defense-in-depth): `using(MkAbilityUserPivot::class)`
+     * también aplica el listener `creating` en `MkPivot::boot()`. Como segunda
+     * capa (cubre edge cases donde pivotParent SÍ está seteado).
+     *
+     * Si el consumer override esta relation con su propio `->using(...)`,
+     * su pivot gana (BC preservada).
      */
     public function directAbilities(): BelongsToMany
     {
-        return $this->belongsToMany(
+        // Crea la BelongsToMany stock via Laravel, luego promueve a
+        // MkBelongsToMany via reflection-based state copy (R-PKG-021).
+        $relation = $this->belongsToMany(
             Ability::class,
             'ability_user',
-        )->withTimestamps();
+        )
+            ->using(MkAbilityUserPivot::class)
+            ->withTimestamps();
+
+        return MkBelongsToMany::from($relation);
     }
 
     /**
@@ -113,6 +158,11 @@ trait HasAbilities
      * Asigna una ability directamente al usuario.
      *
      * Crea la Ability si no existe (idempotente).
+     *
+     * R-PKG-016 BUG-NEW-16 fix: cuando la pivot `ability_user` tiene la
+     * columna `user_type` (caso MME-polimórfico), setea `user_type = static::class`
+     * para que el INSERT no rompa con `NOT NULL violation`. Si la pivot NO
+     * tiene `user_type`, el comportamiento es idéntico al previo.
      */
     public function giveAbilityTo(string $ability): void
     {
@@ -121,7 +171,10 @@ trait HasAbilities
             ['description' => null],
         );
 
-        $this->directAbilities()->syncWithoutDetaching([$abilityModel->id]);
+        $payload = $this->abilityPivotExtras();
+        $this->directAbilities()->syncWithoutDetaching(
+            $payload === [] ? [$abilityModel->id] : [$abilityModel->id => $payload]
+        );
 
         $this->invalidateAbilityCache();
     }
@@ -154,23 +207,56 @@ trait HasAbilities
     /**
      * Sincroniza los grants directos (reemplaza los existentes).
      *
+     * R-PKG-016 BUG-NEW-16 fix: idem giveAbilityTo() — incluye `user_type`
+     * cuando la pivot lo requiere.
+     *
      * @param  array<int, string>  $abilities
      */
     public function syncDirectAbilities(array $abilities): void
     {
         $ids = [];
+        $payload = $this->abilityPivotExtras();
 
         foreach ($abilities as $name) {
             $ability = Ability::query()->firstOrCreate(
                 ['name' => $name],
                 ['description' => null],
             );
-            $ids[] = $ability->id;
+            $ids[$ability->id] = $payload;
         }
 
         $this->directAbilities()->sync($ids);
 
         $this->invalidateAbilityCache();
+    }
+
+    /**
+     * Devuelve los extras a adjuntar a las mutaciones de `ability_user` (R-PKG-016 BUG-NEW-16).
+     *
+     * Si la pivot `ability_user` tiene columna `user_type`, retorna
+     * `['user_type' => static::class]`. Si NO, retorna `[]` (BC).
+     *
+     * Schema detection está cacheada en memoria del proceso.
+     *
+     * R-PKG-017 BUG-NEW-22: idem `HasRoles::pivotExtras()` — visibilidad
+     * cambiada de `protected` a `public` para que el Repository scaffoldeado
+     * pueda invocar `$admin->abilityPivotExtras()` directamente en
+     * `syncDirectAbilities()` y emitir el payload correcto sin hardcodear
+     * el FQCN. BC-safe.
+     */
+    public function abilityPivotExtras(): array
+    {
+        static $hasUserType = null;
+
+        if ($hasUserType === null) {
+            try {
+                $hasUserType = Schema::hasColumn('ability_user', 'user_type');
+            } catch (\Throwable) {
+                $hasUserType = false;
+            }
+        }
+
+        return $hasUserType ? ['user_type' => static::class] : [];
     }
 
     /**
@@ -192,7 +278,7 @@ trait HasAbilities
         $segments = explode('.', $ability, 2);
         $resource = $segments[0] ?? null;
 
-        if ($resource !== null && $resource !== '' && $names->contains($resource . '.*')) {
+        if ($resource !== null && $resource !== '' && $names->contains($resource.'.*')) {
             return true;
         }
 
@@ -237,6 +323,39 @@ trait HasAbilities
         }
 
         return $fromRoles->merge($fromDirect)->unique()->values();
+    }
+
+    /**
+     * Devuelve los nombres de abilities efectivos (directos + vía rol) sin
+     * duplicar, como array plano `string[]`. Helper público para que
+     * Resources scaffoldeados (e.g. `AdminResource::toArray()`) puedan
+     * emitir `abilities: string[]` flat al top-level, cumpliendo el
+     * contrato cross-stack con `@makroz/web AuthUserDto.abilities: string[]`
+     * que consume `useMkAuth().hasAbility(ability)` y la sidebar
+     * permission-gated.
+     *
+     * R-PKG-035 HALLAZGO-NEW-FASE15-06 fix (v1.8.3-rc0): sin este helper,
+     * cada consumer tenía que aplanar manualmente en su Resource:
+     *
+     *     $eff = collect();
+     *     foreach ($this->roles as $r) {
+     *         if ($r->relationLoaded('abilities')) $eff = $eff->merge($r->abilities->pluck('name'));
+     *     }
+     *     if ($this->relationLoaded('directAbilities')) $eff = $eff->merge($this->directAbilities->pluck('name'));
+     *     return ['abilities' => $eff->unique()->values()->all(), ...];
+     *
+     * Ahora el Resource scaffoldeado puede usar:
+     *
+     *     'abilities' => $this->whenLoaded('roles', fn () => $this->getEffectiveAbilities()),
+     *
+     * BC-safe: additive public method. No reemplaza `collectAllAbilityNames()`
+     * (mantenido private como fallback para `canMkLegacy()`).
+     *
+     * @return array<int, string>
+     */
+    public function getEffectiveAbilities(): array
+    {
+        return $this->collectAllAbilityNames()->values()->all();
     }
 
     /**

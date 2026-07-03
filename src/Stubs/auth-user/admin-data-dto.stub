@@ -1,0 +1,74 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\DTOs;
+
+use Illuminate\Http\Request;
+
+/**
+ * DTO inmutable para los datos de un {{ModuleName}}.
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ *
+ * Se construye desde:
+ *   - `fromRequest()` para input HTTP (create/update)
+ *   - `fromArray()` para hidratación desde DB o fixtures de tests
+ *
+ * `final readonly` — no mutar. Si necesitás cambiar un valor, creá una nueva instancia.
+ *
+ * R-PKG-027 PKG-NEW-06 fix: `fromRequest`, `fromArray` y `toArray` ahora
+ * mapean TODOS los profile fields declarados via `--profile-fields=<csv>`,
+ * no solo `name`/`email`/`password`. Antes el DTO perdía profile fields
+ * (full_name, ci, phone, address, photo_path, is_active, etc.) — si alguien
+ * adoptaba el DTO tal cual, rompía la feature. El placeholder
+ * `{{profileFieldsFillable}}` ya existía en el constructor; ahora se aplica
+ * consistentemente en los 3 métodos de mapeo.
+ */
+final readonly class {{ModuleName}}Data
+{
+    public function __construct(
+        public string $name,
+        public string ${{loginField}},
+        public ?string $password = null,
+{{profileFieldsFillable}}    ) {}
+
+    /**
+     * Construye desde un Request HTTP. `photo` puede venir como `UploadedFile`
+     * (multipart) o string path (JSON). El Service procesa el upload.
+     */
+    public static function fromRequest(Request $request): self
+    {
+        return new self(
+            name: (string) $request->input('name'),
+            {{loginField}}: (string) $request->input('{{loginField}}'),
+            password: $request->input('password'),
+{{profileFieldsFromRequest}}        );
+    }
+
+    /**
+     * Construye desde un array (hidratación desde DB o fixtures).
+     */
+    public static function fromArray(array $data): self
+    {
+        return new self(
+            name: (string) ($data['name'] ?? ''),
+            {{loginField}}: (string) ($data['{{loginField}}'] ?? ''),
+            password: $data['password'] ?? null,
+{{profileFieldsFromArray}}        );
+    }
+
+    /**
+     * Convierte a array para persistencia. Excluye `photo` (lo maneja el Service).
+     *
+     * @return array<string, mixed>
+     */
+    public function toArray(): array
+    {
+        return array_filter([
+            'name' => $this->name,
+            '{{loginField}}' => $this->{{loginField}},
+            'password' => $this->password,
+{{profileFieldsToArray}}        ], fn ($v) => $v !== null);
+    }
+}

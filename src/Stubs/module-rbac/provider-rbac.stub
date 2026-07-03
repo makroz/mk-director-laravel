@@ -1,0 +1,119 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}};
+
+use App\Modules\{{ModuleName}}\Models\Ability;
+use App\Modules\{{ModuleName}}\Models\Role;
+use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
+use App\Modules\{{ModuleName}}\Policies\AbilityPolicy;
+use App\Modules\{{ModuleName}}\Policies\RolePolicy;
+use App\Modules\{{ModuleName}}\Policies\{{ModuleName}}Policy;
+use App\Modules\{{ModuleName}}\Services\RbacService;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\ServiceProvider;
+
+/**
+ * ServiceProvider del módulo `{{ModuleName}}` con RBAC triad.
+ * Generado por `php artisan mk:module {{ModuleName}} --with-rbac`.
+ *
+ * Responsabilidades:
+ *   1. Bind `RbacService` como singleton en el container.
+ *   2. Auto-bind de Policies via `Gate::policy()` para los 3 modelos.
+ *   3. Auto-define de Gates por ability (`{scope}.{resource}.{action}`)
+ *      vía `discoverAbilities()` — explícito (no reflection) para que
+ *      `mk:discover-abilities` (R-PKG-007) pueda enumerarlos.
+ *   4. Carga de rutas (`Routes/api.php`).
+ *   5. Carga de migraciones (`Database/Migrations/`).
+ *
+ * Spec: RBAC-001..005 (R-PKG-008).
+ */
+class {{ModuleName}}ModuleServiceProvider extends ServiceProvider
+{
+    /**
+     * Auto-discovery de policies (mapeo Model → Policy).
+     * Cada Policy implementa `before()` con super-admin bypass.
+     *
+     * @var array<class-string, class-string>
+     */
+    protected array $policies = [
+        {{ModuleName}}::class => {{ModuleName}}Policy::class,
+        Role::class           => RolePolicy::class,
+        Ability::class        => AbilityPolicy::class,
+    ];
+
+    public function register(): void
+    {
+        // Singleton: una sola instancia del RbacService por request lifecycle.
+        $this->app->singleton(RbacService::class);
+    }
+
+    public function boot(): void
+    {
+        // 1. Rutas del módulo.
+        if (file_exists(__DIR__ . '/Routes/api.php')) {
+            $this->loadRoutesFrom(__DIR__ . '/Routes/api.php');
+        }
+
+        // 2. Migraciones del módulo.
+        if (is_dir(__DIR__ . '/Database/Migrations')) {
+            $this->loadMigrationsFrom(__DIR__ . '/Database/Migrations');
+        }
+
+        // 3. Auto-bind Policies (RBAC-004).
+        foreach ($this->policies as $model => $policy) {
+            Gate::policy($model, $policy);
+        }
+
+        // 4. Auto-define Gates por ability (RBAC-001, RBAC-004).
+        // Cada ability resuelve via `user->hasAbility()` (default-deny).
+        foreach ($this->discoverAbilities() as $ability) {
+            Gate::define($ability, static function ($user) use ($ability): bool {
+                /** @var {{ModuleName}} $user */
+                return $user->hasAbility($ability);
+            });
+        }
+    }
+
+    /**
+     * Lista explícita de abilities del scope RBAC.
+     *
+     * Convención: `{scope}.{resource}.{action}`.
+     *
+     * Esta lista es la "fuente de verdad" para:
+     *   - `mk:discover-abilities` (R-PKG-007) — auto-crear las filas en `{scope}_abilities`.
+     *   - Tests del scaffolder — verificar que cada Policy use exactamente estos nombres.
+     *
+     * Si agregás una ability nueva, agregala acá Y en la Policy correspondiente.
+     *
+     * @return array<int, string>
+     */
+    protected function discoverAbilities(): array
+    {
+        $scope  = '{{moduleNameLower}}';
+        $users  = '{{moduleNamePluralLower}}';
+        return [
+            // {{ModuleName}} (User) CRUD + role assignment
+            "{$scope}.{$users}.viewAny",
+            "{$scope}.{$users}.view",
+            "{$scope}.{$users}.create",
+            "{$scope}.{$users}.update",
+            "{$scope}.{$users}.delete",
+            "{$scope}.{$users}.assignRole",
+            "{$scope}.{$users}.revokeRole",
+
+            // Role CRUD + ability sync
+            "{$scope}.roles.viewAny",
+            "{$scope}.roles.view",
+            "{$scope}.roles.create",
+            "{$scope}.roles.update",
+            "{$scope}.roles.delete",
+            "{$scope}.roles.syncAbilities",
+
+            // Ability CRUD (read-only)
+            "{$scope}.abilities.viewAny",
+            "{$scope}.abilities.view",
+        ];
+    }
+}

@@ -98,6 +98,43 @@ trait HasTenantScope
     }
 
     /**
+     * Whether this concrete model has opted in to tenant scoping.
+     *
+     * R-PKG-022 BUG-NEW-32 + HALLAZGO-NEW-05: previously, external
+     * callers (e.g. {@see \Mk\Director\Plugins\Enterprise\MkMultiTenantPlugin})
+     * accessed `$usesTenant` via ReflectionProperty + setAccessible(),
+     * which is deprecated since PHP 8.1 and emits warnings since PHP 8.5.
+     *
+     * Solución de raíz: exponer el flag como accessor público. Es:
+     *  - API limpia (no reflection tricks)
+     *  - BC-safe (agregar método público es no-op para consumers)
+     *  - Performance: O(1) sin overhead de reflection
+     *
+     * Implementación: delega a `static::$usesTenant` (late static binding)
+     * para que concrete models overrideen el flag por scope.
+     */
+    public static function isTenantEnabled(): bool
+    {
+        return static::$usesTenant;
+    }
+
+    /**
+     * Set the per-model opt-in flag at runtime.
+     *
+     * R-PKG-022: complemento de {@see isTenantEnabled()}. Permite toggle
+     * del flag sin reflection, útil para:
+     *  - Testing: setup de fixtures con flag on/off por test.
+     *  - Runtime: consumers que necesitan deshabilitar tenancy en
+     *    contextos específicos (CLI commands, queue workers, reports).
+     *
+     * BC-safe (agregar método público es no-op).
+     */
+    public static function setTenantEnabled(bool $enabled): void
+    {
+        static::$usesTenant = $enabled;
+    }
+
+    /**
      * Whether the tenant feature is enabled in config. Tied to
      * the boot guard so the trait is a no-op when opted out.
      */

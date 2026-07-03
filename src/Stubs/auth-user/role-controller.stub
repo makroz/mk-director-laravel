@@ -1,0 +1,72 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Http\Controllers;
+
+use App\Modules\{{ModuleName}}\Http\Requests\SyncRoleAbilitiesRequest;
+use App\Modules\{{ModuleName}}\Services\{{ModuleName}}Service;
+use Illuminate\Http\JsonResponse;
+use Mk\Director\Auth\Models\Role;
+use Mk\Director\Controllers\SmartController;
+
+/**
+ * RoleController — CRUD de roles del scope `{{moduleNameLower}}`.
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ *
+ * Los roles son GLOBALES del paquete (`Mk\Director\Auth\Models\Role`).
+ * El sync de abilities a un role se hace via `syncAbilities()`.
+ *
+ * **MME (R-MK-001)**: NO importar modelos de otros módulos.
+ *
+ * R-PKG-027 PKG-NEW-07 fix: `syncAbilities` ahora usa `SyncRoleAbilitiesRequest`
+ * (FormRequest dedicado) en vez de validación inline (R-AD-012).
+ * Unifica el patrón con `AssignRolesRequest` / `AssignDirectAbilitiesRequest`.
+ */
+class RoleController extends SmartController
+{
+    /**
+     * @var array<string, mixed>
+     */
+    protected array $mkConfig = [
+        'model'           => Role::class,
+        // HALLAZGO-NEW-FASE17-03 fix: pinear `resource` explícito como BC
+        // fallback path. R-PKG-044 v2.0.0 canónico es per-model
+        // `public $apiResource` en Role::class (aplicado por BaseController::autoTransform,
+        // see HALLAZGO-NEW-FASE15-07). Este `resource` per-controller se mantiene
+        // como BC para `CRUDSmart::autoTransform` (thin wrapper @deprecated).
+        'resource'        => \App\Modules\{{ModuleName}}\Http\Resources\RoleResource::class,
+        'service'         => {{ModuleName}}Service::class,
+        'searchable'      => ['name'],
+        'with'            => ['abilities'],
+        'allowedIncludes' => ['abilities'],
+        'features'        => [
+            'auto_cache' => true,
+            'remember_state' => true,
+        ],
+    ];
+
+    public function __construct()
+    {
+        $this->middleware('mk.auth:{{moduleNameLower}}');
+    }
+
+    /**
+     * PUT /api/roles/{id}/abilities
+     *
+     * Sincroniza (reemplaza) las abilities del role. Body: `{"abilities": ["admin.dashboard.view"]}`.
+     */
+    public function syncAbilities(string $id, SyncRoleAbilitiesRequest $request): JsonResponse
+    {
+        /** @var Role $role */
+        $role = Role::findOrFail($id);
+
+        app({{ModuleName}}Service::class)->syncRoleAbilities($role, $request->validated('abilities'));
+
+        return $this->sendResponse(
+            $role->fresh()->load('abilities'),
+            'Abilities del role sincronizadas.',
+        );
+    }
+}

@@ -500,14 +500,46 @@ class ListManager
     /**
      * Get total from paginator for extraData
      */
-    public static function getExtraData(LengthAwarePaginator $paginator): array
+    /**
+     * Pagination metadata for the `__extraData.pagination` grouped field (R-PKG-032).
+     *
+     * R-PKG-024 (v1.7.0 GA): snake_case keys match the @makroz/web
+     * `useMkList` / `useMkInfiniteList` consumption shape and the
+     * @makroz/core `MkResponse<T>.__extraData` contract. Camel-case keys
+     * (`page`, `perPage`, `lastPage`) are REMOVED — they were inconsistent
+     * with the frontend and never read by any consumer.
+     *
+     * R-PKG-032 (v1.8.0 MAJOR) — PAGINATION ENVELOPE grouping.
+     * The 5 snake_case pagination keys (current_page, last_page, per_page,
+     * total, has_more_pages) are now grouped under a `pagination` sub-object
+     * instead of being flat at top-level. Caller-supplied custom keys
+     * (audit_checked, request_id, etc.) can be merged via the 2nd arg.
+     *
+     * Note: this method is RETAINED for BC (consumers may call it directly),
+     * but `BaseController::sendResponse()` already auto-emits these fields
+     * for paginator responses via `extractPaginationMetadata()` + the
+     * `pagination` group wrapper. Most callers no longer need to invoke
+     * this manually.
+     *
+     * @param LengthAwarePaginator $paginator
+     * @param array<string, mixed> $extras Optional custom keys merged into
+     *                                     `__extraData` (flat). Caller keys
+     *                                     win on conflict (e.g., caller can
+     *                                     override `pagination` sub-object
+     *                                     entirely by passing `'pagination' => [...]`).
+     * @return array{pagination: array{current_page: int, last_page: int, per_page: int, total: int, has_more_pages: bool}}
+     */
+    public static function getExtraData(LengthAwarePaginator $paginator, array $extras = []): array
     {
-        return [
-            'total' => $paginator->total(),
-            'page' => $paginator->currentPage(),
-            'perPage' => $paginator->perPage(),
-            'lastPage' => $paginator->lastPage(),
-            'hasMorePages' => $paginator->hasMorePages(),
-        ];
+        return array_merge(
+            ['pagination' => [
+                'current_page'   => $paginator->currentPage(),
+                'last_page'      => $paginator->lastPage(),
+                'per_page'       => $paginator->perPage(),
+                'total'          => $paginator->total(),
+                'has_more_pages' => $paginator->hasMorePages(),
+            ]],
+            $extras,
+        );
     }
 }

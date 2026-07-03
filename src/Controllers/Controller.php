@@ -35,17 +35,18 @@ abstract class Controller extends BaseController
         
         // Apply afterSearch hook
         $data = $this->afterSearch($request, $paginator);
-        
-        // Get extra data for response
-        $extra = array_merge(
-            $this->afterList($request, $data, $paginator->total()),
-            ListManager::getExtraData($paginator)
-        );
-        
-        return $this->sendResponse([
-            'data' => $data,
-            '__extraData' => $extra
-        ]);
+
+        // R-PKG-024 (v1.7.0 GA) — single-level envelope. We pass the
+        // paginator directly to sendResponse(); the BaseController
+        // auto-extracts items to `data` and pagination metadata to
+        // `__extraData` top-level. No flag, no opt-in, no `data.data`.
+        //
+        // Custom extras (from afterList hook) are merged by BaseController
+        // AFTER its auto-extracted pagination metadata, so hook keys
+        // win on conflict.
+        $extra = $this->afterList($request, $paginator->items(), $paginator->total());
+
+        return $this->sendResponse($paginator, '', 200, $extra);
     }
 
     /**

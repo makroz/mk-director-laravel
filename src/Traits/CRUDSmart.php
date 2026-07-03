@@ -113,8 +113,12 @@ trait CRUDSmart
      */
     protected function isCacheEnabled(): bool
     {
+        // Global toggle acts as a master switch. If disabled globally, cache is off.
+        if (!config('mk_director.features.auto_cache', false)) {
+            return false;
+        }
         $features = $this->getListFeatures();
-        return $features['auto_cache'] ?? config('mk_director.features.auto_cache', false);
+        return $features['auto_cache'] ?? true;
     }
 
     /**
@@ -126,16 +130,31 @@ trait CRUDSmart
     }
 
     /**
-     * Obtener etiquetas (tags) para el caché, por defecto es el nombre de la tabla
+     * Obtener etiquetas (tags) para el caché, por defecto es el nombre de la tabla.
+     *
+     * R-PKG-024 P0-FIX-1: when a tenant is active (via TenantContext),
+     * the tag array includes `tenant:{id}` so that cache invalidation
+     * on write operations is scoped per-tenant instead of global
+     * per-table. Without this, Tenant A's write flushes Tenant B's
+     * cache — a performance bug in multi-tenant deployments.
      */
     protected function getCacheTags(): array
     {
         if (isset($this->mkConfig['cache_tags'])) {
-            return (array) $this->mkConfig['cache_tags'];
+            $tags = (array) $this->mkConfig['cache_tags'];
+        } else {
+            $modelClass = $this->getModel();
+            $tags = [(new $modelClass)->getTable()];
         }
-        
-        $modelClass = $this->getModel();
-        return [(new $modelClass)->getTable()];
+
+        // Scope tags to the active tenant when available
+        $tenantContext = app(\Mk\Director\Tenancy\TenantContext::class);
+        $tenantId = $tenantContext->current();
+        if ($tenantId !== null) {
+            $tags[] = 'tenant:' . $tenantId;
+        }
+
+        return $tags;
     }
 
     /**
@@ -165,10 +184,19 @@ trait CRUDSmart
     }
 
     /**
+     * Cached PluginManager instance — avoids redundant setup per hook call.
+     */
+    private ?PluginManager $pluginManagerInstance = null;
+
+    /**
      * Obtener el PluginManager
      */
     protected function getPluginManager(): PluginManager
     {
+        if ($this->pluginManagerInstance !== null) {
+            return $this->pluginManagerInstance;
+        }
+
         $manager = app(PluginManager::class);
 
         // Set the controller context
@@ -182,6 +210,7 @@ trait CRUDSmart
         // Validate Requirements (Only in debug mode)
         $manager->validateRequirements($this->getFillable());
 
+        $this->pluginManagerInstance = $manager;
         return $manager;
     }
 
@@ -235,39 +264,56 @@ trait CRUDSmart
             ? \Mk\Director\Managers\CacheManager::remember($cacheKey, $this->getCacheTags(), $this->getCacheTTL(), $resolver)
             : $resolver();
 
-        // Apply service hook afterList
-        $total = method_exists($paginator, 'total') ? $paginator->total() : null;
-        $extra = ['total' => $total];
-        if ($service && method_exists($service, 'afterList')) {
-            $extra = array_merge($extra, $service->afterList($request, $paginator->items(), $total));
-        }
-
-        // Add pagination info if ListManager has getExtraData
-        if (method_exists('\Mk\Director\Managers\ListManager', 'getExtraData')) {
-            $extra = array_merge($extra, ListManager::getExtraData($paginator));
-        } else {
-            // Include basic cursors if cursor pagination is in use
-            if (method_exists($paginator, 'nextCursor')) {
-                $extra['next_cursor'] = $paginator->nextCursor() ? $paginator->nextCursor()->encode() : null;
-                $extra['prev_cursor'] = $paginator->previousCursor() ? $paginator->previousCursor()->encode() : null;
+        // R-PKG-036 HALLAZGO-NEW-FASE15-06 fix (extension): si el modelo
+        // extiende `AuthUser` (R-PKG-015 BUG-NEW-06 + R-PKG-022),
+        // pinear `loadMissing(['roles', 'directAbilities'])` después del
+        // paginator para que `getEffectiveAbilities()` (HALLAZGO-06 fix
+        // pineado en v1.8.3-rc0) funcione en el index, NO solo en
+        // single resource (show/me). Defense-in-depth: ZERO costo runtime
+        // para non-AuthUser models (instanceof check).
+        if (
+            is_subclass_of($modelClass, \Mk\Director\Auth\Models\AuthUser::class)
+            || $modelClass === \Mk\Director\Auth\Models\AuthUser::class
+        ) {
+            foreach ($paginator->items() as $item) {
+                $item->loadMissing(['roles', 'directAbilities']);
             }
         }
 
-        $response = [
-            'data' => $paginator->items(),
-            '__extraData' => $extra
-        ];
+        // R-PKG-024 (v1.7.0 GA) — single-level envelope. We pass the
+        // paginator directly to sendResponse(); the BaseController
+        // auto-extracts items to `data` and pagination metadata to
+        // `__extraData` top-level. No flag, no opt-in, no `data.data`.
+        //
+        // Custom extras (from service.afterList) are merged by BaseController
+        // AFTER its auto-extracted pagination metadata, so service keys
+        // win on conflict. Cursor pagination cursors are auto-extracted by
+        // BaseController::extractPaginationMetadata() for CursorPaginator
+        // instances.
+        $extra = [];
+        if ($service && method_exists($service, 'afterList')) {
+            $total = method_exists($paginator, 'total') ? $paginator->total() : null;
+            $extra = $service->afterList($request, $paginator->items(), $total);
+        }
 
-        // Plugin Hook: afterResponse
-        $this->getPluginManager()->fireAfterResponse($response);
+        // Plugin Hook: afterResponse (receives the raw paginator so plugins
+        // can read total / currentPage / etc. without unwrapping).
+        $this->getPluginManager()->fireAfterResponse($paginator);
 
-        return $this->sendResponse($response);
+        return $this->sendResponse($paginator, '', 200, $extra);
     }
 
     /**
      * GET /resource/{id} - Ver detalle
+     *
+     * R-PKG-016 BUG-NEW-20 fix: el parámetro `$id` ahora acepta `string|int`
+     * porque consumers que usan `HasUuids` (RETO, otros) generan IDs string
+     * tipo `01HXYZ...`. La firma previa `int $id` lanzaba TypeError al primer
+     * GET /api/{scope}/{uuid} después de migrar a UUIDs.
+     *
+     * El casteo se hace internamente vía `findOrFail` que acepta ambos tipos.
      */
-    public function show(Request $request, int $id)
+    public function show(Request $request, string|int $id)
     {
         $modelClass = $this->getModel();
         $service = $this->getService();
@@ -364,8 +410,10 @@ trait CRUDSmart
 
     /**
      * PUT/PATCH /resource/{id} - Actualizar
+     *
+     * R-PKG-016 BUG-NEW-20 fix: ver show() — acepta string|int para UUIDs.
      */
-    public function update(Request $request, int $id)
+    public function update(Request $request, string|int $id)
     {
         $modelClass = $this->getModel();
         $service = $this->getService();
@@ -418,8 +466,10 @@ trait CRUDSmart
 
     /**
      * DELETE /resource/{id} - Eliminar
+     *
+     * R-PKG-016 BUG-NEW-20 fix: ver show() — acepta string|int para UUIDs.
      */
-    public function destroy(Request $request, int $id)
+    public function destroy(Request $request, string|int $id)
     {
         $modelClass = $this->getModel();
         $service = $this->getService();
@@ -474,28 +524,54 @@ trait CRUDSmart
     }
 
     /**
-     * Auto transformar con resource si está configurado
+     * Auto transformar con resource si está configurado.
+     *
+     * @deprecated since R-PKG-044 v2.0.0 — use `parent::autoTransform()`
+     * (BaseController::autoTransform) which is the canonical SSoT.
+     *
+     * The canonical pattern (v2.0.0+) is per-model `public $apiResource`
+     * declaration (see HALLAZGO-NEW-FASE15-07 + R-PKG-035/036):
+     * - BaseController::autoTransform() uses `property_exists($data, 'apiResource')`
+     *   + recursive array handling for nested Model values.
+     * - Each model owns its own Resource (DRY, scaffolder-driven).
+     *
+     * This wrapper keeps BC for legacy consumers that still use the
+     * `mkConfig['resource']` per-controller pattern. When `$this->getResource()`
+     * is set, this legacy path is used. Otherwise we delegate to the
+     * parent (BaseController::autoTransform) which checks per-model
+     * `$apiResource`.
+     *
+     ** MIGRATION (RETO 2.0.0+):
+     *   - Replace `protected array $mkConfig = ['resource' => FooResource::class]`
+     *     on SmartController subclasses with `public $apiResource = FooResource::class`
+     *     on the Eloquent model itself (the scaffolder already does this since R-PKG-035).
+     *   - Drop any custom `autoTransform()` override in your controllers —
+     *     BaseController::autoTransform handles Model / Collection / Paginator
+     *     / array-with-nested-Model uniformly.
      */
     protected function autoTransform($data)
     {
         $resourceClass = $this->getResource();
 
-        if (!$resourceClass || !class_exists($resourceClass)) {
-            return $data;
+        if ($resourceClass && class_exists($resourceClass)) {
+            // Legacy BC path: per-controller `mkConfig['resource']`.
+            // Single model
+            if ($data instanceof Model) {
+                return new $resourceClass($data);
+            }
+
+            // Collection or Paginator wrappers
+            if ($data instanceof \Illuminate\Support\Collection ||
+                $data instanceof \Illuminate\Contracts\Pagination\Paginator ||
+                $data instanceof \Illuminate\Contracts\Pagination\CursorPaginator) {
+                return $resourceClass::collection($data);
+            }
         }
 
-        // Single model
-        if ($data instanceof Model) {
-            return new $resourceClass($data);
-        }
-
-        // Collection or Paginator wrappers
-        if ($data instanceof \Illuminate\Support\Collection || 
-            $data instanceof \Illuminate\Contracts\Pagination\Paginator || 
-            $data instanceof \Illuminate\Contracts\Pagination\CursorPaginator) {
-            return $resourceClass::collection($data);
-        }
-
-        return $data;
+        // Canonical path (R-PKG-044 v2.0.0): delegate to BaseController::autoTransform
+        // which uses per-model `public $apiResource` + recursive array handling
+        // (HALLAZGO-NEW-FASE15-07). This is the path RETO and all v2.0.0+ consumers
+        // should rely on.
+        return parent::autoTransform($data);
     }
 }

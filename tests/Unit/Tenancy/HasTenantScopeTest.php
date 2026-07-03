@@ -40,14 +40,11 @@ function newDemoModel(?bool $usesTenant = null): Model
 
         public function __construct(?bool $usesTenant = null)
         {
+            // R-PKG-022 BUG-NEW-32 + HALLAZGO-NEW-05: use the public
+            // setter instead of `ReflectionProperty::setAccessible(true)`
+            // (deprecated PHP 8.5). See {@see HasTenantScope::setTenantEnabled()}.
             if ($usesTenant !== null) {
-                // PHP forbids redeclaring the trait's static property,
-                // so we set it via reflection. This keeps the fixture
-                // independent of the property's static binding at the
-                // trait level.
-                $ref = new \ReflectionProperty(self::class, 'usesTenant');
-                $ref->setAccessible(true);
-                $ref->setValue(null, $usesTenant);
+                self::setTenantEnabled($usesTenant);
             }
         }
     };
@@ -93,10 +90,19 @@ test('HasTenantScope does not register the global scope when tenant.enabled is f
 
     // Eloquent stores global scopes in a static $globalScopes array
     // keyed by class name. Reset it to mimic a fresh boot.
+    //
+    // R-PKG-022 BUG-NEW-32 NOTE: `$globalScopes` is a protected static
+    // property of Laravel's `Model` class — not part of this package.
+    // Laravel doesn't expose a public setter for it, so the only way to
+    // clear scopes between tests is via reflection. `setAccessible(true)`
+    // here emits a PHP 8.5 deprecation warning, but it's a TEST-only path
+    // (not runtime for consumers) and the warning is filterable via
+    // `php -d error_reporting=E_ALL~E_DEPRECATED vendor/bin/pest`.
+    // Acceptable trade-off; full Closure::bind() refactor deferred to
+    // future sprint hardening.
     $cls::clearBootedModels();
     $ref = new \ReflectionClass(Model::class);
     $prop = $ref->getProperty('globalScopes');
-    $prop->setAccessible(true);
     $prop->setValue(null, []);
 
     // Trigger the static boot hook.
@@ -130,7 +136,6 @@ test('HasTenantScope registers the global scope when tenant.enabled is true and 
     $cls::clearBootedModels();
     $ref = new \ReflectionClass(Model::class);
     $prop = $ref->getProperty('globalScopes');
-    $prop->setAccessible(true);
     $prop->setValue(null, []);
 
     // Trigger the boot hook.
@@ -155,7 +160,6 @@ test('HasTenantScope is a no-op when no container is bound (CLI without app)', f
     $cls::clearBootedModels();
     $ref = new \ReflectionClass(Model::class);
     $prop = $ref->getProperty('globalScopes');
-    $prop->setAccessible(true);
     $prop->setValue(null, []);
 
     $cls::bootHasTenantScope();

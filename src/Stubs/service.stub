@@ -6,7 +6,7 @@ use App\Modules\{{ModuleName}}\Contracts\{{ModuleName}}RepositoryInterface;
 use App\Modules\{{ModuleName}}\DTOs\{{ModuleName}}Data;
 use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
 use Illuminate\Pagination\LengthAwarePaginator;
-use Illuminate\Support\Facades\Cache;
+use Mk\Director\Managers\CacheManager;
 use Mk\Director\Contracts\MkModuleServiceInterface;
 use Illuminate\Http\Request;
 use Illuminate\Database\Eloquent\Model;
@@ -79,10 +79,9 @@ class {{ModuleName}}Service implements MkModuleServiceInterface
         $page     = request('page', 1);
         $cacheKey = self::CACHE_TAG . ".list.page.{$page}.per.{$perPage}";
 
-        return Cache::tags([self::CACHE_TAG])
-            ->remember($cacheKey, self::CACHE_TTL, function () use ($perPage) {
-                return $this->repository->paginate($perPage);
-            });
+        return CacheManager::remember($cacheKey, [self::CACHE_TAG], self::CACHE_TTL, function () use ($perPage) {
+            return $this->repository->paginate($perPage);
+        });
     }
 
     /**
@@ -122,6 +121,6 @@ class {{ModuleName}}Service implements MkModuleServiceInterface
      */
     private function invalidateCache(): void
     {
-        Cache::tags([self::CACHE_TAG])->flush();
+        CacheManager::flush([self::CACHE_TAG]);
     }
 }

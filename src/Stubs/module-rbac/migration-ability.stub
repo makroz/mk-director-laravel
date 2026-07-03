@@ -1,0 +1,33 @@
+<?php
+
+declare(strict_types=1);
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+/**
+ * Crea `{moduleNameLower}_abilities` — permisos atómicos
+ * `{scope}.{resource}.{action}` del scope RBAC de `{{ModuleName}}`.
+ *
+ * Las abilities se crean/vinculan vía `mk:discover-abilities` (R-PKG-007).
+ *
+ * Spec: RBAC-002 (R-PKG-008).
+ */
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('{{moduleNameLower}}_abilities', function (Blueprint $table) {
+            $table->id();
+            $table->string('name')->unique();
+            $table->string('description')->nullable();
+            $table->timestamps();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('{{moduleNameLower}}_abilities');
+    }
+};

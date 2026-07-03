@@ -105,3 +105,74 @@ test('TokenIssuer TTLs are configurable via constructor for testability', functi
     // Verificamos que el constructor no rompe y la clase es usable.
     expect($issuer)->toBeInstanceOf(TokenIssuer::class);
 });
+
+// ─── R-PKG-018 BUG-NEW-26 regression tests ──────────────────────────────
+//
+// BUG: el código previo usaba `Hash::check()` (bcrypt) para comparar el
+// token plaintext contra el hash guardado en `personal_access_tokens.token`,
+// pero Sanctum v4.3.2 hashea con SHA256 (no bcrypt). Resultado: refresh
+// SIEMPRE devolvía 401.
+//
+// R-PKG-017 BUG-NEW-23 fix mitigaba el 500 → 401 vía try/catch, pero el
+// refresh seguía sin funcionar (el catch convertía el RuntimeException
+// siempre en InvalidRefreshTokenException::hashMismatch()).
+//
+// R-PKG-018 BUG-NEW-26 fix: usar `hash_equals(hash('sha256', $plaintext),
+// $tokenModel->token)` que es timing-safe Y consistente con la
+// implementación interna de Sanctum v4.
+
+test('R-PKG-018 BUG-NEW-26: TokenIssuer uses hash_equals with sha256, not Hash::check', function () {
+    $src = (string) file_get_contents(dirname(__DIR__, 2).'/src/Auth/Services/TokenIssuer.php');
+
+    // FIX: usa hash_equals + hash('sha256', ...) — consistente con Sanctum v4.
+    expect($src)->toContain("hash_equals(\n                \$tokenModel->token,\n                hash('sha256', \$plaintext),");
+    expect($src)->toContain("hash('sha256', \$plaintext)");
+
+    // NO debe usar Hash::check() para comparar tokens de Sanctum
+    // (Hash::check asume bcrypt — incompatible con SHA256 de Sanctum v4).
+    expect($src)->not->toMatch('/Hash::check\s*\(\s*\\\$plaintext\s*,\s*\\\$tokenModel->token/');
+
+    // Defense-in-depth: el try/catch de R-PKG-017 BUG-NEW-23 se conserva
+    // como safety net por si Sanctum rota a otro algoritmo en el futuro.
+    expect($src)->toContain('catch (\RuntimeException $e)');
+});
+
+test('R-PKG-018 BUG-NEW-26: TokenIssuer docblock reflects SHA256 reality (no bcrypt)', function () {
+    $src = (string) file_get_contents(dirname(__DIR__, 2).'/src/Auth/Services/TokenIssuer.php');
+
+    // El docblock debe mencionar explícitamente SHA256 y NO bcrypt como
+    // el algoritmo de hash de Sanctum v4.
+    expect($src)->toContain('SHA256');
+    expect($src)->toContain('Sanctum v4');
+
+    // No debe decir "Sanctum v4 hashea con Hash::make() (bcrypt)" —
+    // era la información incorrecta que llevó al bug.
+    expect($src)->not->toMatch('/Sanctum v4.*Hash::make.*bcrypt/s');
+    expect($src)->not->toMatch('/Hash::make\(\)\s*\(bcrypt\)/s');
+});
+
+test('R-PKG-018 BUG-NEW-26: TokenIssuer imports hash() global function for Sanctum v4 SHA256', function () {
+    // No requiere import (hash() es built-in de PHP), pero verificamos
+    // que NO importa Hash facade para la comparación de tokens.
+    $src = (string) file_get_contents(dirname(__DIR__, 2).'/src/Auth/Services/TokenIssuer.php');
+
+    // El namespace `use Illuminate\Support\Facades\Hash;` puede o no estar —
+    // lo importante es que NO se use para `Hash::check($plaintext, $tokenModel->token)`.
+    if (str_contains($src, 'use Illuminate\\Support\\Facades\\Hash')) {
+        // Si importa Hash facade, debe ser solo para usos NO relacionados
+        // con la comparación de tokens Sanctum (e.g. user password hash).
+        $lines = explode("\n", $src);
+        $hashCheckForToken = false;
+        foreach ($lines as $line) {
+            if (preg_match('/Hash::check\s*\(\s*\\\$plaintext\s*,\s*\\\$tokenModel->token/', $line)) {
+                $hashCheckForToken = true;
+                break;
+            }
+        }
+        expect($hashCheckForToken)->toBeFalse(
+            'Hash::check NO debe usarse para comparar $plaintext contra $tokenModel->token (Sanctum v4 usa SHA256, no bcrypt).'
+        );
+    }
+
+    expect(true)->toBeTrue(); // sentinel — assertion principal arriba.
+});
