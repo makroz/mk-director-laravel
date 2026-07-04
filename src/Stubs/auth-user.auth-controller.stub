@@ -326,11 +326,6 @@ class AuthController extends BaseController
                 'Si el {{loginField}} existe, recibirás un enlace para reset.',
             );
         }
-            return $this->sendResponse(
-                null,
-                'Si el {{loginField}} existe, recibirás un enlace para reset.',
-            );
-        }
 
         // Genera token (Sanctum v4 formato: random 64-char string).
         $token = bin2hex(random_bytes(32));

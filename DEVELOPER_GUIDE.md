@@ -1808,6 +1808,124 @@ diff <(grep -oE "^[A-Z_]+" .env | sort) \
 
 ---
 
+### 3.15 S8 Fase 7 scaffolder hardening (HALLAZGO-NEW-FASE18-A/B/C — RETO fase 6 clean rebuild feedback)
+
+> **Sprint**: `makromania/260704-1935--fase18-scaffolder-fixes`.
+> **Source**: RETO fase 6 clean rebuild feedback (sprint `makromania/2026-07-04-1855--s8-fase6-admin-clean-rebuild`, commit `c2dd3f5`).
+> **Acumula al lote RELEASE_AT_END**: Mario retiene tag GA + Packagist publish.
+> **R-G-033**: BC break documentado (HALLAZGO-NEW-FASE18-C), autorizado por dogfooding-first (único consumer = RETO, migración en mismo sprint).
+
+#### 3.15.1 HALLAZGO-NEW-FASE18-A — `forgot()` llaves extras en `AuthController.stub` (HIGH, parse error)
+
+Pre-fix, el stub `src/Stubs/auth-user.auth-controller.stub` tenía 5 líneas huérfanas + 1 llave extra entre el early-return del anti-enumeration check (`if (! $user || ...)`) y la generación del token (`$token = bin2hex(random_bytes(32))`). El bloque huérfano era una copia near-duplicada del early-return.
+
+**Síntoma runtime**: `php artisan route:list` (y `php -l` sobre el `AuthController.php` scaffoldeado) fallaba con `ParseError: syntax error, unexpected variable "$token", expecting "function"` en línea ~370. Bloqueante — el consumer no podía bootear el scaffolder out-of-the-box.
+
+**Post-fix**: stub ahora tiene llaves balanceadas en `forgot()`. El early-return aparece una sola vez antes de la generación del token.
+
+**Tests pineados** (regression guards en `tests/Unit/Scaffolders/HallazgoFase18AForgotBracesTest.php`):
+
+- Source-parsing: `forgot()` body contiene exactamente 2 `$this->sendResponse(...)` calls (early-return + success-return). Pre-fix: 3 calls (extra huérfano).
+- Source-parsing: balanced braces check (count `{` vs `}` después de strip strings + comments).
+- Source-parsing: early-return position antes de `$token = bin2hex(...)`.
+
+**Workaround consumer pre-bumpear** (RETO pino en fase 6, commit `c2dd3f5`):
+
+```php
+// app/Modules/Admin/Http/Controllers/AuthController.php — eliminar manualmente líneas ~363-367
+        if (! $user || $user->getAuthScope() !== 'admin' || $isActiveCheck) {
+            return $this->sendResponse(
+                null,
+                'Si el email existe, recibirás un enlace para reset.',
+            );
+        }
+//        return $this->sendResponse(         ← ELIMINAR
+//            null,                             ← ELIMINAR
+//            'Si el email existe, ...',        ← ELIMINAR
+//        );                                    ← ELIMINAR
+//    }                                         ← ELIMINAR
+```
+
+#### 3.15.2 HALLAZGO-NEW-FASE18-B — `me/permissions` regression test guard (HIGH, HTTP 500)
+
+Pre-R-PKG-043 (commit `99084ad`), `MakeAuthUserCommand::generatePermissionsEndpoint()` pineaba el route `Route::get('me/permissions', [MePermissionsController::class, 'show'])` al FINAL del archivo `Http/Routes/api.php` sin bloque `Route::prefix()->group(...)` ni middleware `mk.auth:{scope}`. R-PKG-043 HALLAZGO-NEW-FASE19-02 fix pineá el route DENTRO del bloque middleware existente (vía `preg_replace` sobre `Route::get('me', ...)`).
+
+**Riesgo residual**: el fix depende del regex match sobre la línea canónica `Route::get('me', [AuthController::class, 'me'])`. Si el consumer customiza el routes y elimina/renombra esa línea, el scaffolder cae al fallback (líneas 2485-2492 del scaffolder) que pineá un SEGUNDO grupo con prefix+middleware explícito + warning al scaffolder output.
+
+**Pre-R-PKG-043 fix**, el consumer (RETO) pineaba manualmente la route dentro del grupo (commit `c2dd3f5`).
+
+**Tests pineados** (regression guards en `tests/Unit/Scaffolders/HallazgoFase18BPermissionsRouteTest.php`, 7 tests):
+
+- Source-parsing: presencia de `Route::get('me/permissions', [MePermissionsController::class, 'show'])`.
+- Source-parsing: anchor regex `Route::get\(\s*'me'\s*,` en `$meRoutePattern`.
+- Source-parsing: `preg_replace` con `$1\n{routeLine}` placement.
+- Source-parsing: primary `use` strategy (MePermissionsController + str_replace + AuthController anchor).
+- Source-parsing: fallback path (Route::prefix + middleware group explícito).
+- Source-parsing: fallback warning al consumer.
+- Source-parsing: idempotency check (`str_contains` pre-injection).
+
+#### 3.15.3 HALLAZGO-NEW-FASE18-C — `mk.ability` per-route en CRUD (HIGH, privilege escalation) — **BC BREAK**
+
+Pre-fix, las 21 rutas CRUD scaffoldeadas por `--with-crud` pinean SOLO `mk.auth:{scope}` middleware a nivel de `Route::prefix(...)->middleware(...)->group(...)`. Las abilities per-action (`{scope}.{resource}.{action}`) NO se chequean — solo el RBAC del `AuthController` (`--with-auth-rbac`) cubre `/me`, `/logout`, `/login`, etc. CRUD endpoints son gateados por auth check ONLY.
+
+**Síntoma runtime verificado en RETO** (sprint `makromania/2026-07-04-1855--s8-fase6-admin-clean-rebuild`): editor con abilities reducidas `[admin.admins.viewAny, admin.admins.view, admin.admins.update]` (sin `create`, sin `delete`) pudo ejecutar `POST /api/admins/{id}/roles` y escalar privilegios a `super-admin`. Cualquier user autenticado puede escalar privilegios en CRUD endpoints.
+
+**Post-fix**: cada `Route::xxx` carga `->middleware(['mk.auth:{scope}', 'mk.ability:{scope}.{resource}.{action}'])` PER-ROUTE. Action mapping canónico (Laravel conventions):
+
+| HTTP verb | Action del controller | Ability pineada |
+|---|---|---|
+| `GET /` | `index` | `{scope}.{resource}.viewAny` |
+| `GET /{id}` | `show` | `{scope}.{resource}.view` |
+| `POST /` | `store` | `{scope}.{resource}.create` |
+| `PUT /{id}` | `update` | `{scope}.{resource}.update` |
+| `PATCH /{id}` | `update` | `{scope}.{resource}.update` |
+| `DELETE /{id}` | `destroy` | `{scope}.{resource}.delete` |
+| `POST /{id}/roles` | `assignRoles` | `{scope}.{resource}.update` |
+| `POST /{id}/abilities` | `assignDirectAbilities` | `{scope}.{resource}.update` |
+| `PUT /{role}/abilities` (Roles) | `syncAbilities` | `{scope}.roles.update` |
+
+Rutas de **Roles** (prefix `api/roles`): usan `{scope}.roles.{action}`.
+Rutas de **Abilities** (prefix `api/abilities`): usan `{scope}.abilities.{action}`.
+
+**BREAKING CHANGE** (R-G-033 autoriza):
+
+- **Consumers con abilities pre-pineadas por-resource** (canónico si usaste `mk:discover-abilities` o pineaste manualmente abilities `{scope}.{resource}.{action}`): NO se rompen. Las rutas ahora chequean abilities que ya existen en DB.
+- **Consumers SIN abilities pre-pineadas** (raro — el patrón canónico es `mk:discover-abilities` post-scaffolder): **TODAS las rutas CRUD devuelven HTTP 403** post-bumpear. Fix: `php artisan mk:discover-abilities --force` ANTES de bumpear.
+
+**Workaround consumer pre-bumpear** (RETO pino en fase 6):
+
+```php
+// Opción 1: discover abilities ANTES de bumpear
+php artisan mk:discover-abilities --force
+
+// Opción 2: si no podés bumpear el paquete todavía, override los routes
+// app/Modules/Admin/Http/Routes/api.php — agregar mk.ability per-route manualmente
+Route::prefix('api/admins')->group(function () {
+    Route::middleware(['mk.auth:admin', 'mk.ability:admin.admins.viewAny'])
+        ->get('/',         [AdminController::class, 'index']);
+    // ... etc para cada Route::xxx
+});
+```
+
+**Tests pineados** (regression guards en `tests/Unit/Scaffolders/HallazgoFase18CCrudAbilityPerRouteTest.php`, 8 tests):
+
+- Source-parsing: NO group-level `->middleware('mk.auth:{scope}')->group(...)` (defense-in-depth: ability check per-route, not group).
+- Source-parsing: presencia de las 5 actions CRUD canónicas (`viewAny`, `view`, `create`, `update`, `delete`) en el resource group.
+- Source-parsing: `assignRoles` + `assignDirectAbilities` requieren `update` ability (escalation guard).
+- Source-parsing: roles routes usan `{scope}.roles.{action}` ability.
+- Source-parsing: abilities routes usan `{scope}.abilities.{action}` ability.
+- Source-parsing: count consistency — N middleware blocks === N verb routes (no routes sin middleware).
+- Source-parsing: BC break documentado inline (HALLAZGO-NEW-FASE18-C + BC BREAK + `mk:discover-abilities --force`).
+
+#### Spec
+
+- Sprint: `makromania/260704-1935--fase18-scaffolder-fixes`.
+- Tests: 18 nuevos Pest tests (3 + 7 + 8 across HALLAZGO-A/B/C). Total paquete: **536 passing, 0 failing**.
+- Stubs modificados: `src/Stubs/auth-user.auth-controller.stub` (A), `src/Stubs/auth-user/auth-user.routes.with-crud.stub` (C).
+- Source: `.makromania/projects/mk-director/operations/s8-f6-admin-clean-rebuild-result.md` § "Consumer-side fixes pineados" + § "Hallazgo adicional".
+
+---
+
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)
 
 Tanto para **Next.js** como para **React Native**, el consumo de listas es estandarizado mediante parámetros URL:

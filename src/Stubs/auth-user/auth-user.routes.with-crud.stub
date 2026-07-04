@@ -1,6 +1,6 @@
 <?php
 
-// ── CRUD endpoints del scope `{{moduleNameLower}}` (R-PKG-014 BUG-08/MEJORA-02 + R-PKG-015 BUG-NEW-05) ──
+// ── CRUD endpoints del scope `{{moduleNameLower}}` (R-PKG-014 BUG-08/MEJORA-02 + R-PKG-015 BUG-NEW-05 + R-PKG-NEW FASE18-C) ──
 // Generados por `php artisan mk:make:auth-user {{ModuleName}} --with-crud`.
 // Las rutas usan SmartController que delega a {{ModuleName}}Service via container.
 //
@@ -19,43 +19,89 @@
 // con `admin` sin espacio (`GET /api/admins/abc-123` retornaba
 // "route could not be found"). El fix aplica a las 6 rutas con param
 // dinámico de este stub.
+//
 // R-PKG-015 BUG-NEW-05: los 3 controllers deben estar importados. Sin esto,
 // ReflectionException: Class "{{ModuleName}}Controller" does not exist al hacer
 // route:list, porque las rutas referencian FQCNs no resueltos en este namespace.
+//
+// HALLAZGO-NEW-FASE18-C fix (R-PKG-NEW proposed, 2026-07-04): las rutas CRUD
+// ahora pinean middleware `mk.auth:{scope}` + `mk.ability:{scope}.{resource}.{action}`
+// PER-ROUTE (no group-level). Defense-in-depth contra privilege escalation:
+// un user con abilities reducidas (ej. `[viewAny, view, update]`, sin `delete`)
+// ya no puede ejecutar acciones para las que no tiene ability.
+//
+// BC BREAK: pre-fix, las rutas pinean SOLO `mk.auth:{scope}` a nivel de group.
+// Post-fix, cada ruta pinea `mk.ability:{scope}.{resource}.{action}` específico.
+// Consumers pre-existentes con abilities ya pineadas por-resource NO se rompen.
+// Consumers SIN abilities pre-pineadas deben correr
+// `php artisan mk:discover-abilities --force` antes para pineá todas las abilities
+// necesarias (canónico post-fix). R-G-033 autoriza BC break (único consumer =
+// RETO, que migra en mismo sprint). Ver CHANGELOG para migration guide.
+//
+// Action mapping (canónico Laravel conventions):
+//   - index       → viewAny
+//   - show        → view
+//   - store       → create
+//   - update      → update   (también cubre assignRoles, assignDirectAbilities, syncAbilities)
+//   - destroy     → delete
 use App\Modules\{{ModuleName}}\Http\Controllers\AbilityController;
 use App\Modules\{{ModuleName}}\Http\Controllers\RoleController;
 use App\Modules\{{ModuleName}}\Http\Controllers\{{ModuleName}}Controller;
 
-Route::prefix('api/{{moduleNamePluralLower}}')->middleware('mk.auth:{{moduleNameLower}}')->group(function () {
-    Route::get('/',         [{{ModuleName}}Controller::class, 'index']);
-    Route::get('/{{{moduleNameLower}}}',     [{{ModuleName}}Controller::class, 'show']);
-    Route::post('/',        [{{ModuleName}}Controller::class, 'store']);
-    Route::put('/{{{moduleNameLower}}}',     [{{ModuleName}}Controller::class, 'update']);
-    Route::patch('/{{{moduleNameLower}}}',   [{{ModuleName}}Controller::class, 'update']);
-    Route::delete('/{{{moduleNameLower}}}',  [{{ModuleName}}Controller::class, 'destroy']);
+// CRUD principal del scope {{moduleNameLower}}.
+Route::prefix('api/{{moduleNamePluralLower}}')->group(function () {
+    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.{{moduleNamePluralLower}}.viewAny'])
+        ->get('/',         [{{ModuleName}}Controller::class, 'index']);
+    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.{{moduleNamePluralLower}}.view'])
+        ->get('/{{{moduleNameLower}}}',     [{{ModuleName}}Controller::class, 'show']);
+    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.{{moduleNamePluralLower}}.create'])
+        ->post('/',        [{{ModuleName}}Controller::class, 'store']);
+    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.{{moduleNamePluralLower}}.update'])
+        ->put('/{{{moduleNameLower}}}',     [{{ModuleName}}Controller::class, 'update']);
+    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.{{moduleNamePluralLower}}.update'])
+        ->patch('/{{{moduleNameLower}}}',   [{{ModuleName}}Controller::class, 'update']);
+    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.{{moduleNamePluralLower}}.delete'])
+        ->delete('/{{{moduleNameLower}}}',  [{{ModuleName}}Controller::class, 'destroy']);
 
     // Asignar roles / abilities directas a un {{moduleNameLower}} específico.
-    Route::post('/{{{moduleNameLower}}}/roles',         [{{ModuleName}}Controller::class, 'assignRoles']);
-    Route::post('/{{{moduleNameLower}}}/abilities',     [{{ModuleName}}Controller::class, 'assignDirectAbilities']);
+    // Ambas son mutations que requieren `update` ability (pueden escalar
+    // privilegios si no se gatean explícitamente).
+    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.{{moduleNamePluralLower}}.update'])
+        ->post('/{{{moduleNameLower}}}/roles',         [{{ModuleName}}Controller::class, 'assignRoles']);
+    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.{{moduleNamePluralLower}}.update'])
+        ->post('/{{{moduleNameLower}}}/abilities',     [{{ModuleName}}Controller::class, 'assignDirectAbilities']);
 });
 
 // CRUD de Roles del paquete (global).
-Route::prefix('api/roles')->middleware('mk.auth:{{moduleNameLower}}')->group(function () {
-    Route::get('/',         [RoleController::class, 'index']);
-    Route::get('/{role}',     [RoleController::class, 'show']);
-    Route::post('/',        [RoleController::class, 'store']);
-    Route::put('/{role}',     [RoleController::class, 'update']);
-    Route::patch('/{role}',   [RoleController::class, 'update']);
-    Route::delete('/{role}',  [RoleController::class, 'destroy']);
-    Route::put('/{role}/abilities', [RoleController::class, 'syncAbilities']);
+Route::prefix('api/roles')->group(function () {
+    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.roles.viewAny'])
+        ->get('/',         [RoleController::class, 'index']);
+    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.roles.view'])
+        ->get('/{role}',     [RoleController::class, 'show']);
+    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.roles.create'])
+        ->post('/',        [RoleController::class, 'store']);
+    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.roles.update'])
+        ->put('/{role}',     [RoleController::class, 'update']);
+    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.roles.update'])
+        ->patch('/{role}',   [RoleController::class, 'update']);
+    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.roles.delete'])
+        ->delete('/{role}',  [RoleController::class, 'destroy']);
+    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.roles.update'])
+        ->put('/{role}/abilities', [RoleController::class, 'syncAbilities']);
 });
 
 // CRUD de Abilities del paquete (global, read-only by default).
-Route::prefix('api/abilities')->middleware('mk.auth:{{moduleNameLower}}')->group(function () {
-    Route::get('/',         [AbilityController::class, 'index']);
-    Route::get('/{ability}',     [AbilityController::class, 'show']);
-    Route::post('/',        [AbilityController::class, 'store']);
-    Route::put('/{ability}',     [AbilityController::class, 'update']);
-    Route::patch('/{ability}',   [AbilityController::class, 'update']);
-    Route::delete('/{ability}',  [AbilityController::class, 'destroy']);
+Route::prefix('api/abilities')->group(function () {
+    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.abilities.viewAny'])
+        ->get('/',         [AbilityController::class, 'index']);
+    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.abilities.view'])
+        ->get('/{ability}',     [AbilityController::class, 'show']);
+    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.abilities.create'])
+        ->post('/',        [AbilityController::class, 'store']);
+    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.abilities.update'])
+        ->put('/{ability}',     [AbilityController::class, 'update']);
+    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.abilities.update'])
+        ->patch('/{ability}',   [AbilityController::class, 'update']);
+    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.abilities.delete'])
+        ->delete('/{ability}',  [AbilityController::class, 'destroy']);
 });

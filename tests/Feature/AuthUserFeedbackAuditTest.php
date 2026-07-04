@@ -509,9 +509,15 @@ test('BUG-NEW-19: routes with-crud stub emite rutas SIN espacios dentro de {para
 
     // Filtrar las líneas que son RUTAS PHP (no comentarios) — el bug estaba en
     // las líneas Route::xxx, no en los comentarios explicativos.
+    //
+    // R-PKG-NEW FASE18-C: desde v2.0.1-rc0, cada Route::xxx carga
+    // `->middleware([...])` chained. Las verb calls (`->get('/{admin}', ...)`)
+    // ahora viven en líneas separadas del `Route::middleware(...)` que las
+    // precede. Filtramos por ambos patrones: lineas con `Route::` (group +
+    // middleware blocks) Y lineas con verb calls (`->get`, `->post`, etc.).
     $routeLines = array_values(array_filter(
         explode("\n", $stubResolved),
-        static fn (string $line): bool => str_contains($line, 'Route::') && ! str_starts_with(trim($line), '//'),
+        static fn (string $line): bool => (str_contains($line, 'Route::') || preg_match('/->(?:get|post|put|patch|delete)\(/', $line)) && ! str_starts_with(trim($line), '//'),
     ));
 
     // 6 rutas con param dinámico del scope Admin.
@@ -527,6 +533,9 @@ test('BUG-NEW-19: routes with-crud stub emite rutas SIN espacios dentro de {para
 
     // Conteo de rutas con param scope: 6 (show, update×2, destroy, assignRoles, assignDirectAbilities).
     // Filtramos las líneas de rutas que tienen `{admin}` o `{admin}/` (sin espacios).
+    //
+    // R-PKG-NEW FASE18-C: el pattern ahora matchea ambas formas — lineas con
+    // `Route::` (group + middleware) Y lineas con verb calls (`->get`, etc.).
     $scopeRouteLines = array_filter($routeLines, static fn (string $line): bool => (bool) preg_match("/'\\/\\{admin\\}(['\\/])/", $line));
     expect(count($scopeRouteLines))->toBe(6);
 });

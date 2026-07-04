@@ -5,6 +5,28 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v2.0.1-rc0] - 2026-07-04 — PATCH — S8 Fase 7 scaffolder hardening (HALLAZGO-NEW-FASE18-A/B/C)
+
+> **Strategy**: BC break documentado (R-G-033 autoriza, único consumer = RETO).
+> **Accumula al lote RELEASE_AT_END**: Mario retiene tag GA + npm/Packagist publish.
+> **Cross-stack companion**: `@makroz/web` SKILL sync pineado por separado (humandistor).
+
+### Fixed
+
+- **HALLAZGO-NEW-FASE18-A (HIGH, parse error)**: stub `src/Stubs/auth-user.auth-controller.stub` línea ~329 tenía 5 líneas huérfanas + 1 llave extra en el bloque `forgot()`, lo que provocaba `ParseError: syntax error, unexpected variable "$token"` al ejecutar `php artisan route:list`. **Fix**: eliminar el bloque muerto. Stub ahora compila limpio. Regression test en `tests/Unit/Scaffolders/HallazgoFase18AForgotBracesTest.php` (3 tests source-parsing: count `sendResponse` calls, balanced braces check, early-return antes de token generation).
+
+- **HALLAZGO-NEW-FASE18-B (HIGH, HTTP 500 regression guard)**: scaffolder `MakeAuthUserCommand::generatePermissionsEndpoint()` ya pineá `Route::get('me/permissions', ...)` DENTRO del bloque `mk.auth:{scope}` (R-PKG-043 HALLAZGO-NEW-FASE19-02, commit `99084ad`). Sin test de regresión pineado hasta este sprint. **Fix**: 7 tests source-parsing nuevos en `tests/Unit/Scaffolders/HallazgoFase18BPermissionsRouteTest.php` que pinean: (a) presencia del route line canónico, (b) anchor regex sobre `Route::get('me', ...)`, (c) `preg_replace` con `$1\n{routeLine}`, (d) primary use-strategy (MePermissionsController + str_replace), (e) fallback path (prefix + middleware group explícito), (f) consumer warning en fallback, (g) idempotency (skip si ya pineado).
+
+- **HALLAZGO-NEW-FASE18-C (HIGH, privilege escalation)**: stub `src/Stubs/auth-user/auth-user.routes.with-crud.stub` solo pinea `mk.auth:{scope}` a nivel de group (NO `mk.ability:{scope}.{resource}.{action}` per-route). En RETO, editor con abilities reducidas `[admin.admins.viewAny, view, update]` pudo ejecutar `POST /api/admins/{id}/roles` y escalar privilegios a `super-admin`. **Fix**: cada `Route::xxx` ahora carga `->middleware(['mk.auth:{scope}', 'mk.ability:{scope}.{resource}.{action}'])` per-route. Action mapping canónico (Laravel conventions): `index → viewAny`, `show → view`, `store → create`, `update → update` (cubre `assignRoles`, `assignDirectAbilities`, `syncAbilities`), `destroy → delete`. 8 tests source-parsing nuevos en `tests/Unit/Scaffolders/HallazgoFase18CCrudAbilityPerRouteTest.php`.
+
+### BREAKING CHANGES
+
+- **HALLAZGO-NEW-FASE18-C** (`--with-crud` ahora pineá `mk.ability` per-route, no group-level). Consumers pre-existentes con abilities ya pineadas por-resource NO se rompen. Consumers SIN abilities pre-pineadas deben correr `php artisan mk:discover-abilities --force` ANTES de bump a v2.0.1+ (de lo contrario, todas las rutas CRUD devuelven HTTP 403 por ability check fail). Ver `docs/UPGRADE_2.0.md` § "HALLAZGO-NEW-FASE18-C — mk.ability per-route migration path".
+
+### Internal changes (no consumer migration needed)
+
+- 3 nuevos test files en `tests/Unit/Scaffolders/` (HALLAZGO-A/B/C regression guards). Total: 18 tests nuevos.
+
 ## [v2.0.0] - 2026-07-01 — MAJOR — Cleanup deprecados + refactor arquitectural (R-PKG-044)
 
 > **Strategy**: SIN BC BRIDGE. RETO regenera desde 0 (dogfooding-first, único consumer real).
