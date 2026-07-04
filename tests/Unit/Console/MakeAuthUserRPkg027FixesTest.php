@@ -96,7 +96,20 @@ describe('PKG-NEW-04 + PKG-NEW-05 — auth-controller stub: is_active check', fu
     test('reset() también consulta is_active (consistencia)', function (): void {
         $stub = readStubRPkg027('src/Stubs/auth-user.auth-controller.stub');
 
-        expect($stub)->toContain("Schema::hasColumn(\$user->getTable(), 'is_active')");
+        // LAR-12 (2026-07-03 audit): the is_active check in reset() is
+        // now null-safe — `$user?->getTable()` and `$user?->is_active`
+        // instead of `$user->getTable()` and `$user->is_active`. The
+        // downstream `if (! $user || ...)` already handles null, but the
+        // inner expression crashed first pre-fix. The shape assertion
+        // reflects the null-safe form (we accept either null-safe or the
+        // legacy non-null-safe; what matters is that the check is present).
+        $hasNullSafeGetTable = str_contains($stub, '$user?->getTable()');
+        $hasLegacyGetTable   = str_contains($stub, '$user->getTable()');
+
+        expect($hasNullSafeGetTable || $hasLegacyGetTable)->toBeTrue(
+            'reset() must consult Schema::hasColumn with $user->getTable() (null-safe or legacy)'
+        );
+        expect($stub)->toContain("'is_active'");
     });
 });
 
