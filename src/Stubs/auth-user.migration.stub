@@ -24,6 +24,18 @@ use Illuminate\Support\Facades\Schema;
  * y mantiene consistencia scaffolder-modelo. El flujo de verificación sigue siendo
  * opt-in via `--verify-email` (esa flag controla el endpoint + la notification).
  *
+ * email vs loginField semantics (LAR-14, 2026-07-03 audit):
+ *   - Cuando --login-field=email: la columna {{loginField}} ES email,
+ *     creada como `string NOT NULL UNIQUE` (es el credential de auth).
+ *     No agregar `email` también como profile-field — colisión detectada
+ *     en MakeAuthUserCommand::resolveProfileFields() (reserved list).
+ *   - Cuando --login-field != email (ci, phone, username, etc.): la
+ *     columna {{loginField}} es el credential NOT NULL UNIQUE. Si el
+ *     consumer quiere email como dato de contacto (no credential), debe
+ *     pinear `--profile-fields=email` — la columna se crea como
+ *     `string NULLABLE` (per R-PKG-011, profile fields son opcional).
+ *     En este caso email NO es requerido por el flow de auth.
+ *
  * Spec: MK-LAR-1.0.2 / MK-LAR-1.0.6 / MK-LAR-1.5.0-rc5.PF (R-PKG-011).
  * Bug fix: R-PKG-027 PKG-NEW-01 (post-merge 4R audit 2026-06-28).
  */

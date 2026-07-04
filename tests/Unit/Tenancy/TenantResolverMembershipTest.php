@@ -68,15 +68,17 @@ test('TenantResolver membership check sits between strict-mode MISSING and the c
 test('TenantResolver returns 403 status code on mismatch', function () {
     $src = tenantResolverSource();
 
-    // The new branch returns JsonResponse with 403.
+    // The new branch routes the response through `canonicalErrorResponse(403, 'ERR_TENANT_MISMATCH', ...)`
+    // (LAR-09 R-PKG-024 canonical envelope). The literal must appear in the
+    // source; the status code is inside the helper call, not adjacent to the
+    // code literal. We assert both pieces independently.
     expect($src)->toContain('ERR_TENANT_MISMATCH');
-    // Confirm the HTTP status: the surrounding JsonResponse call must use 403.
-    expect($src)->toMatch('/ERR_TENANT_MISMATCH.{0,300},\s*403/s');
+    expect($src)->toMatch('/canonicalErrorResponse\(\s*403\s*,\s*[\'"]ERR_TENANT_MISMATCH[\'"]/s');
 });
 
 test('TenantResolver still returns 400 on missing tenant context (regression)', function () {
     $src = tenantResolverSource();
 
     expect($src)->toContain('ERR_TENANT_MISSING');
-    expect($src)->toMatch('/ERR_TENANT_MISSING.{0,300},\s*400/s');
+    expect($src)->toMatch('/canonicalErrorResponse\(\s*400\s*,\s*[\'"]ERR_TENANT_MISSING[\'"]/s');
 });

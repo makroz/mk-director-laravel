@@ -289,11 +289,30 @@ class MkServiceProvider extends ServiceProvider
      * `cache` table and matched reads too, so the listener never fired
      * reliably.
      *
-     * Limitation: the regex below matches `update|delete|insert into`. It
-     * does NOT match `REPLACE`, `TRUNCATE`, raw stored-procedure calls, or
-     * Eloquent `upsert()` (which uses `INSERT ... ON DUPLICATE KEY UPDATE`).
-     * Those mutations will not invalidate the cache. Documented so callers
-     * can `CacheManager::flush([$table])` manually if needed.
+     * LAR-06 (2026-07-03 audit): the write-verb regex was broadened to
+     * require SQL-specific tokens AFTER each verb:
+     *   - `delete` MUST be followed by `from` (no more matching `delete()`
+     *     PHP function calls in the trace).
+     *   - `insert` / `replace` MUST be followed by `into`.
+     *   - `update`, `truncate` stay as verbs-on-their-own (UPDATE table /
+     *     TRUNCATE table are unambiguous).
+     *   - `upsert` is no longer a top-level verb: the SQL emitted by
+     *     `Eloquent::upsert()` is `INSERT ... ON DUPLICATE KEY UPDATE`,
+     *     which is covered by the `insert\s+into` branch.
+     *   - REPLACE / TRUNCATE are supported (REPLACE INTO ... / TRUNCATE TABLE ...).
+     *
+     * LAR-07 (2026-07-03 audit): the system-tables check was hardened from
+     * `str_contains($query->sql, $table)` to a token-aware match. The
+     * previous substring match would silently skip a query like
+     * `INSERT INTO users (cache_token) VALUES ('x')` (because the SQL
+     * contained the substring `cache`), and would also skip consumer tables
+     * like `cache_stats` or `password_reset_tokens` (substring overlap).
+     * The new check requires the table name to appear as an SQL identifier
+     * AFTER the FROM/INTO/UPDATE keyword (or wrapped in backticks).
+     *
+     * Limitation: the regex below matches SQL DML verbs; raw stored-procedure
+     * calls or migrations loaded as SQL are not detected. Documented so
+     * callers can `CacheManager::flush([$table])` manually if needed.
      */
     protected function registerGlobalCacheListener()
     {
@@ -317,25 +336,35 @@ class MkServiceProvider extends ServiceProvider
 
         DB::listen(function ($query) use ($systemTables) {
             // 1. Skip system tables (cron writes, self-references).
+            //
+            // LAR-07 fix: replace str_contains with a SQL-aware match. The
+            // table name MUST appear as an SQL identifier after the
+            // FROM/INTO/UPDATE keyword (or wrapped in backticks). This
+            // prevents:
+            //  - false-positive skips (queries mentioning a system-table
+            //    name in a column or value, like `INSERT INTO users (cache_token)`)
+            //  - false-positive flushes on consumer tables named like system
+            //    tables (e.g. `cache_stats`, `password_reset_tokens_attempts`)
             foreach ($systemTables as $table) {
-                if (str_contains($query->sql, $table)) {
+                $pattern = '/(?:FROM|INTO|UPDATE)\s+`?' . preg_quote($table, '/') . '`?\b/i';
+                if (preg_match($pattern, $query->sql) === 1) {
                     return;
                 }
             }
 
-            // 2. Only act on writes (INSERT / UPDATE / DELETE / REPLACE / TRUNCATE / upsert).
+            // 2. Only act on writes (INSERT INTO / UPDATE / DELETE FROM /
+            //    REPLACE INTO / TRUNCATE). The previous regex missed
+            //    `delete()` PHP function calls (false positive: any source
+            //    mentioning `delete(` triggered the listener). The new
+            //    regex requires the SQL-specific token AFTER each verb.
             //
-            // R-PKG-024 (rc13): regex broadened to cover `REPLACE`, `TRUNCATE`,
-            // and `upsert()` (Eloquent upsert generates `INSERT ... ON DUPLICATE
-            // KEY UPDATE` on MySQL/MariaDB — covered by `insert\s+into`).
-            // The previous regex missed these mutations, leaving stale cache
-            // after `TRUNCATE TABLE` or `Eloquent::upsert()`.
-            //
-            // Group 1: write verb (update|delete|insert[ into]|replace[ into]|upsert|truncate)
-            // Group 5: table name
-            if (preg_match('/(update|delete|insert(\s+into)?|replace(\s+into)?|upsert|truncate)\s+`?(\w+)`?/i', $query->sql, $matches)) {
-                $table = $matches[5] ?? null;
-                if ($table === null) {
+            // Group 1: write verb + qualifier
+            // Group 6: table name (the capture group is computed below)
+            $writePattern = '/(?:update|delete\s+from|insert\s+into|replace\s+into|truncate)\s+`?(\w+)`?/i';
+
+            if (preg_match($writePattern, $query->sql, $matches)) {
+                $table = $matches[1] ?? null;
+                if ($table === null || $table === '') {
                     return;  // TRUNCATE without a table name — skip.
                 }
                 CacheManager::flush([$table.'_all']);

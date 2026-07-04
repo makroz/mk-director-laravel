@@ -51,7 +51,11 @@ class ListManager
         if ($useSorting) {
             $query = self::applySorting($request, $query, $model);
         } else {
-            $query->orderBy('id', 'desc');
+            // LAR-13 (2026-07-03 audit): use $model->getKeyName() instead
+            // of literal 'id' so consumers with custom primary-key column
+            // names (UUID tables, `uuid`/`code`/`slug` keys) get the
+            // correct default ordering.
+            $query->orderBy($model->getKeyName(), 'desc');
         }
 
         // 6. Search
@@ -90,7 +94,11 @@ class ListManager
         // Validar que las columnas existan en el modelo
         $fillable = $model->getFillable();
         $validColumns = array_filter($columns, function($col) use ($model, $fillable) {
-            return in_array($col, $fillable) || $col === 'id';
+            // LAR-13 (2026-07-03 audit): accept the model's actual primary
+            // key column name (default 'id', but consumer models may
+            // override to e.g. 'uuid'/'code'/'slug'). The literal 'id'
+            // check was a footgun for non-id PK models.
+            return in_array($col, $fillable) || $col === $model->getKeyName();
         });
 
         if (!empty($validColumns)) {
@@ -265,7 +273,7 @@ class ListManager
     protected static function sanitizeSortState(string $sort, Model $model): string
     {
         $fields = is_array($sort) ? $sort : explode(',', $sort);
-        $allowed = array_merge($model->getFillable(), ['id', 'created_at', 'updated_at']);
+        $allowed = array_merge($model->getFillable(), [$model->getKeyName(), 'created_at', 'updated_at']);
 
         $clean = [];
         foreach ($fields as $field) {
@@ -383,11 +391,15 @@ class ListManager
         $dir = $request->query('dir', $request->query('orderBy', 'desc'));
         
         if (!$sort) {
-            return $query->orderBy('id', 'desc');
+            // LAR-13: use $model->getKeyName() for the same reason as in apply() above.
+            return $query->orderBy($model->getKeyName(), 'desc');
         }
 
         $sortFields = is_array($sort) ? $sort : explode(',', $sort);
-        $fillable = array_merge($model->getFillable(), ['id', 'created_at', 'updated_at']);
+        // LAR-13: include the model's primary key column name (default 'id')
+        // in the allowed-sort set so consumers with custom PK names can
+        // sort by their PK.
+        $fillable = array_merge($model->getFillable(), [$model->getKeyName(), 'created_at', 'updated_at']);
         
         foreach ($sortFields as $field) {
             $field = trim($field);
@@ -407,7 +419,8 @@ class ListManager
 
         // Fallback si no hay órdenes válidos
         if (empty($query->getQuery()->orders)) {
-             $query->orderBy('id', 'desc');
+             // LAR-13: same getKeyName() rationale as above.
+             $query->orderBy($model->getKeyName(), 'desc');
         }
 
         return $query;
