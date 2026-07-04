@@ -352,14 +352,42 @@ return [
     |
     | `strict` (default true): reject the request with 400 if the
     | tenant cannot be resolved. Set to false for public endpoints
-    | that should run without a tenant.
+    | that should run without a tenant. Read via filter_var so the
+    | value 'false' in config/env correctly evaluates to false
+    | (LAR-05 fix — PHP (bool) footgun).
+    |
+    | `allowlist_routes` (LAR-05): array of path patterns exempt from
+    | the strict tenant-membership gate. Used when an authenticated
+    | user has no `getTenantId()` method (no HasTenantMembership trait)
+    | — without allowlisting, strict mode rejects the request with 403
+    | `ERR_TENANT_MEMBERSHIP_REQUIRED`. The package's own auth endpoints
+    | (login, refresh, forgot, reset) are pre-allowlisted because a user
+    | authenticating has not yet proven tenant membership. Add additional
+    | patterns here for other public routes (webhooks, health checks,
+    | password reset confirmations, etc.).
+    |
+    | `fail_closed` (LAR-11): when true AND the tenant context is null
+    | AND the model has `HasTenantScope` enabled, the scope injects
+    | an impossible predicate (`where tenant_id = -1`) so the query
+    | returns 0 rows. Default false (BC-safe) — single-tenant apps see
+    | no behavior change. Enable this in multi-tenant deployments to
+    | close the IDOR loophole when TenantResolver misconfiguration
+    | (strict=false, malformed header, etc.) would otherwise leak rows
+    | across tenants. Read via filter_var (same pattern as `strict`).
     */
     'tenant' => [
-        'enabled' => env('MK_TENANT_ENABLED', false),
+        'enabled' => filter_var(env('MK_TENANT_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
         'resolver' => env('MK_TENANT_RESOLVER', 'header'),
         'header_name' => env('MK_TENANT_HEADER', 'X-Tenant-ID'),
         'model' => env('MK_TENANT_MODEL', null), // e.g. App\Models\Tenant
-        'strict' => env('MK_TENANT_STRICT', true),
+        'strict' => filter_var(env('MK_TENANT_STRICT', true), FILTER_VALIDATE_BOOLEAN),
+        'allowlist_routes' => [
+            'api/*/auth/login',
+            'api/*/auth/refresh',
+            'api/*/auth/forgot',
+            'api/*/auth/reset',
+        ],
+        'fail_closed' => filter_var(env('MK_TENANT_FAIL_CLOSED', false), FILTER_VALIDATE_BOOLEAN),
     ],
 
     /*

@@ -57,7 +57,19 @@ class TenantResolver
         }
 
         $resolver = (string) $this->config->get('mk_director.tenant.resolver', 'header');
-        $strict = (bool) $this->config->get('mk_director.tenant.strict', true);
+
+        // LAR-05 (2026-07-03 audit): read `strict` via filter_var. The
+        // previous `(bool) $config->get(...)` was a footgun — `(bool) 'false'`
+        // is true in PHP, so a consumer that pinned `MK_TENANT_STRICT=false`
+        // in `.env` got the OPPOSITE of what they asked for (still strict,
+        // because the default is true and `'false'` is truthy as a string).
+        // filter_var with FILTER_VALIDATE_BOOLEAN handles 'false'/'0'/'no'
+        // correctly. Same pattern as auth.refresh.rotate_on_refresh (F1.2)
+        // and openapi.enabled (F1.4).
+        $strict = filter_var(
+            $this->config->get('mk_director.tenant.strict', true),
+            FILTER_VALIDATE_BOOLEAN
+        );
 
         $tenantId = match ($resolver) {
             'path' => $this->resolveFromPath($request),
@@ -67,10 +79,11 @@ class TenantResolver
 
         if ($tenantId === null) {
             if ($strict) {
-                return new JsonResponse([
-                    'error' => 'ERR_TENANT_MISSING',
-                    'message' => 'Missing tenant context. Provide X-Tenant-ID header.',
-                ], 400);
+                return $this->canonicalErrorResponse(
+                    400,
+                    'ERR_TENANT_MISSING',
+                    'Missing tenant context. Provide X-Tenant-ID header.',
+                );
             }
             // Non-strict: leave context null, scope is a no-op.
             return $next($request);
@@ -81,24 +94,88 @@ class TenantResolver
         // tenant A could access tenant B's data just by sending
         // X-Tenant-ID: <B> on the next request.
         //
-        // We use the HasTenantMembership trait (when the user model uses
-        // it) to read the tenant id via a single source of truth. Models
-        // without the trait are treated as tenant-agnostic — we log a
-        // debug message when the trait is missing so consumers notice.
+        // LAR-05: in strict mode, a user without the HasTenantMembership
+        // trait (no `getTenantId()` method) used to silently pass the
+        // membership gate. Now, in strict mode, that case is rejected
+        // unless the request path is in `tenant.allowlist_routes` (auth
+        // endpoints, public routes the consumer declared). This closes
+        // the loophole where a consumer forgot to add the trait to their
+        // User model and accidentally bypassed tenant isolation.
         $user = $request->user();
-        if ($user !== null && method_exists($user, 'getTenantId')) {
-            $userTenantId = $user->getTenantId();
-            if ($userTenantId !== null && (string) $userTenantId !== (string) $tenantId) {
-                return new JsonResponse([
-                    'error' => 'ERR_TENANT_MISMATCH',
-                    'message' => 'Tenant context does not match the authenticated user.',
-                ], 403);
+        if ($user !== null) {
+            if (method_exists($user, 'getTenantId')) {
+                $userTenantId = $user->getTenantId();
+                if ($userTenantId !== null && (string) $userTenantId !== (string) $tenantId) {
+                    return $this->canonicalErrorResponse(
+                        403,
+                        'ERR_TENANT_MISMATCH',
+                        'Tenant context does not match the authenticated user.',
+                    );
+                }
+            } elseif ($strict && ! $this->isAllowlisted($request)) {
+                return $this->canonicalErrorResponse(
+                    403,
+                    'ERR_TENANT_MEMBERSHIP_REQUIRED',
+                    'Authenticated user has no tenant membership. Add HasTenantMembership to your User model or add this route to tenant.allowlist_routes.',
+                );
             }
         }
 
         $this->context->set($tenantId);
 
         return $next($request);
+    }
+
+    /**
+     * Build a canonical single-level-envelope error response (R-PKG-024 +
+     * LAR-09 R-PKG-044) consistent with `BaseController::sendError()`,
+     * `MkAbility::errorResponse()` and `MkAuthenticate`. The `__extraData.code`
+     * is the machine-readable identifier the frontend branches on.
+     */
+    protected function canonicalErrorResponse(int $status, string $code, string $message): JsonResponse
+    {
+        return new JsonResponse([
+            'success' => false,
+            'message' => $message,
+            'data' => null,
+            '__extraData' => [
+                'code' => $code,
+            ],
+            'debugMsg' => [],
+        ], $status);
+    }
+
+    /**
+     * LAR-05: is the current request path exempt from the strict
+     * tenant-membership gate? Returns true when the request matches
+     * any of the patterns in `tenant.allowlist_routes`.
+     *
+     * Default patterns are the package's auth endpoints (login/refresh/
+     * forgot/reset) because a user authenticating has not yet proven
+     * tenant membership — that's the whole point of the flow. Consumers
+     * can add additional public routes (e.g. /api/webhooks/*) in
+     * `config/mk_director.php` after publishing.
+     */
+    protected function isAllowlisted(Request $request): bool
+    {
+        $patterns = (array) $this->config->get('mk_director.tenant.allowlist_routes', [
+            'api/*/auth/login',
+            'api/*/auth/refresh',
+            'api/*/auth/forgot',
+            'api/*/auth/reset',
+        ]);
+
+        $path = trim($request->path(), '/');
+
+        foreach ($patterns as $pattern) {
+            $regex = '#^' . str_replace('\*', '[^/]+', preg_quote((string) $pattern, '#')) . '$#';
+
+            if (preg_match($regex, $path) === 1) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

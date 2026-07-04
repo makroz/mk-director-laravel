@@ -95,9 +95,13 @@ test('TenantResolver returns 400 when strict and the header is missing', functio
     expect($response->getStatusCode())->toBe(400)
         ->and($context->current())->toBeNull();
 
+    // LAR-09 R-PKG-024: the error envelope is now canonical
+    // (`__extraData.code` instead of top-level `error`). Update the
+    // assertion accordingly — see tests/Unit/Controllers/BaseControllerSendErrorEnvelopeTest.php
+    // for the full contract pin.
     $payload = json_decode((string) $response->getContent(), true);
     expect($payload)->toBeArray()
-        ->and($payload['error'])->toBe('ERR_TENANT_MISSING');
+        ->and($payload['__extraData']['code'])->toBe('ERR_TENANT_MISSING');
 });
 
 test('TenantResolver passes through (no scope) when non-strict and header missing', function () {
