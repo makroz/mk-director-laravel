@@ -82,14 +82,25 @@ test('cache listener defines a system-tables allowlist that excludes cache, migr
     }
 });
 
-test('cache listener skips writes that target a system table via str_contains loop', function () {
+test('cache listener skips writes that target a system table via SQL-aware match (LAR-07 hardening)', function () {
     $body = cacheListenerMethodSource();
     expect($body)->not->toBeEmpty();
 
-    // The new filter iterates $systemTables and returns early if any of
-    // them is in the query SQL. This is the core R2-007 fix.
+    // LAR-07 (2026-07-03 audit): the system-tables filter still iterates
+    // $systemTables and returns early, but the match is now SQL-aware
+    // (FROM|INTO|UPDATE prefix + word boundary) instead of a naive
+    // `str_contains`. The previous shape was a footgun: any query
+    // mentioning a system-table name as a column/value (e.g. `INSERT INTO
+    // users (cache_token)`) was silently skipped, and consumer tables
+    // named `cache_stats` were skipped because of substring overlap.
     expect($body)->toContain('foreach ($systemTables as $table)');
-    expect($body)->toContain('str_contains($query->sql, $table)');
+
+    // The legacy `str_contains($query->sql, $table)` shape is GONE —
+    // a refactor that re-introduces it is a regression.
+    expect($body)->not->toContain('str_contains($query->sql, $table)');
+
+    // The new SQL-aware match (FROM/INTO/UPDATE + table identifier) is present.
+    expect($body)->toMatch('/FROM\|INTO\|UPDATE/s');
 });
 
 test('cache listener only acts on write operations (insert / update / delete)', function () {
