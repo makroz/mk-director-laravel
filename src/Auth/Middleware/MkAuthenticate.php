@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace Mk\Director\Auth\Middleware;
 
 use Closure;
+use Illuminate\Auth\AuthenticationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Auth\AuthenticationException;
+use Illuminate\Support\Facades\Auth;
+use Mk\Director\Auth\Exceptions\ScopeMismatchException;
 use Mk\Director\Auth\Services\AuthScopeResolver;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -43,23 +45,37 @@ class MkAuthenticate
 {
     public function __construct(
         private readonly AuthScopeResolver $resolver,
-    ) {
-    }
+    ) {}
 
     public function handle(Request $request, Closure $next, string $scope = 'admin'): Response
     {
         // Resolve the current user via Sanctum.
         // If no token, abort 401.
-        $user = \Illuminate\Support\Facades\Auth::guard($scope)->user();
+        $user = Auth::guard($scope)->user();
         if ($user === null) {
             return $this->unauthorizedResponse($request, $scope);
         }
 
-        \Illuminate\Support\Facades\Auth::shouldUse($scope);
+        Auth::shouldUse($scope);
 
         // The resolver validates the scope; throws on mismatch.
+        //
+        // F1.2 (LAR-03 HIGH): ScopeMismatchException (token de otro scope /
+        // no_token / no_scope_ability) DEBE traducirse a 401 envelope canónico
+        // acá. Pre-fix, solo se catcheaba AuthenticationException, pero
+        // ScopeMismatchException extiende RuntimeException (no AuthenticationException),
+        // así que la exception burbujeaba como 500 genérico de Laravel y
+        // rompía el contrato del package ("Mismatches → 401 ScopeMismatchException").
         try {
             $this->resolver->resolve($scope);
+        } catch (ScopeMismatchException $e) {
+            return $this->unauthorizedResponse(
+                $request,
+                $scope,
+                $e->getMessage(),
+                'ERR_SCOPE_MISMATCH',
+                ['actual_scope' => $e->actualScope],
+            );
         } catch (AuthenticationException $e) {
             return $this->unauthorizedResponse($request, $scope, $e->getMessage());
         }
@@ -95,18 +111,31 @@ class MkAuthenticate
      * El cambio SOLO aplica a API routes, que es donde el envelope
      * canónico se consume.
      */
-    private function unauthorizedResponse(Request $request, string $scope, ?string $message = null): JsonResponse
-    {
+    /**
+     * @param  array<string,mixed>  $extraData  extras opcionales que se mergean dentro
+     *                                          de `__extraData` (ej: actual_scope para
+     *                                          distinguir scope mismatch de no-auth).
+     */
+    private function unauthorizedResponse(
+        Request $request,
+        string $scope,
+        ?string $message = null,
+        string $code = 'ERR_UNAUTHENTICATED',
+        array $extraData = [],
+    ): JsonResponse {
         // API request: retornar JsonResponse con envelope canónico.
         if ($request->expectsJson() || $request->is('api/*')) {
             return new JsonResponse([
                 'success' => false,
                 'message' => $message ?? 'Unauthenticated.',
                 'data' => null,
-                '__extraData' => [
-                    'auth_scope' => $scope,
-                    'code' => 'ERR_UNAUTHENTICATED',
-                ],
+                '__extraData' => array_merge(
+                    [
+                        'auth_scope' => $scope,
+                        'code' => $code,
+                    ],
+                    $extraData,
+                ),
                 'debugMsg' => [],
             ], 401);
         }
