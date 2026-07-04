@@ -178,18 +178,82 @@ abstract class BaseController extends LaravelController
     }
 
     /**
-     * Standard JSON Error Response
+     * Standard JSON Error Response (R-PKG-024 single-level + R-PKG-044 unified)
+     *
+     * LAR-09 fix (2026-07-03 audit): the canonical envelope for errors is
+     * now consistent with `MkAbility::errorResponse()` and the rest of the
+     * auth middleware. The emitted shape is:
+     *
+     *   {
+     *     "success": false,
+     *     "message": "...",
+     *     "data": null,
+     *     "__extraData": {
+     *       "code": "ERR_XXX",         // machine-readable (frontend branches on this)
+     *       "errors": { ... }          // validation errors (optional)
+     *     },
+     *     "debugMsg": []
+     *   }
+     *
+     * Migration:
+     *   - The `errors` key MOVED from top-level (legacy) to `__extraData.errors`
+     *     (canonical). Cross-stack consumers (`@makroz/web`, `@makroz/mobile`)
+     *     already read `body.__extraData.code` — the previous shape silently
+     *     dropped the code field and broke error UX.
+     *   - A 4th optional parameter `$errorCode` lets callers pass an explicit
+     *     machine-readable code; when omitted, a sensible default is derived
+     *     from the HTTP status (401 → ERR_UNAUTHENTICATED, 403 → ERR_FORBIDDEN,
+     *     404 → ERR_NOT_FOUND, 422 → ERR_VALIDATION, 500 → ERR_INTERNAL, default
+     *     → ERR_ERROR).
+     *   - No BC bridge — the legacy top-level `errors` key is REMOVED. RETO
+     *     regenera Admin desde 0 con v2.0.0 (R-PKG-044), no hay consumers que
+     *     lean `errors` top-level.
+     *
+     * @param  string  $message  Human-readable error message.
+     * @param  array<string, array<int, string>|string>  $errors  Validation errors (per-field).
+     * @param  int  $code  HTTP status code.
+     * @param  string|null  $errorCode  Optional explicit machine-readable code.
+     *                                  When null, a default is derived from $code.
      */
-    protected function sendError($message, $errors = [], $code = 404)
+    protected function sendError($message, $errors = [], $code = 404, ?string $errorCode = null)
     {
+        $extra = ['code' => $errorCode ?? $this->defaultErrorCode($code)];
+
+        if ($errors !== []) {
+            $extra['errors'] = $errors;
+        }
+
         $response = [
-            'success' => false,
-            'message' => $message,
-            'errors'  => $errors,
-            'debugMsg'=> $this->debugMsgs
+            'success'    => false,
+            'message'    => $message,
+            'data'       => null,
+            '__extraData'=> $extra,
+            'debugMsg'   => $this->debugMsgs,
         ];
 
         return response()->json($response, $code);
+    }
+
+    /**
+     * Default machine-readable error code for the given HTTP status.
+     * Centralized so the mapping is testable + the docs/changelog can
+     * pin it as part of the LAR-09 contract.
+     *
+     * @internal
+     */
+    protected function defaultErrorCode(int $status): string
+    {
+        return match ($status) {
+            400     => 'ERR_BAD_REQUEST',
+            401     => 'ERR_UNAUTHENTICATED',
+            403     => 'ERR_FORBIDDEN',
+            404     => 'ERR_NOT_FOUND',
+            409     => 'ERR_CONFLICT',
+            422     => 'ERR_VALIDATION',
+            429     => 'ERR_RATE_LIMITED',
+            500     => 'ERR_INTERNAL',
+            default => 'ERR_ERROR',
+        };
     }
 
     /**
