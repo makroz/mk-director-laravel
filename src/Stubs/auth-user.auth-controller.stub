@@ -19,8 +19,11 @@ use Mk\Director\Controllers\BaseController;
 /**
  * AuthController del scope `{{moduleNameLower}}`.
  *
- * Skeleton con la forma del flow MK-Director. Los métodos login / refresh
- * / forgot / reset son TODO — la implementación real vive en el consumer.
+ * Implementa el flow completo MK-Director: login / refresh / logout / me y
+ * forgot / reset (password reset funcional sobre la tabla
+ * `{{moduleNameLower}}_password_reset_tokens` que genera la migration). Override
+ * cualquier método en el consumer si necesitás lógica extra (e.g. notificación
+ * de reset por un canal propio).
  *
  * Login field: `{{loginField}}` (configurable via `--login-field=<campo>`).
  * El validation y el lookup usan este campo en lugar de hardcodear `email`.

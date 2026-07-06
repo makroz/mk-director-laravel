@@ -141,7 +141,13 @@ class MakeAuthUserCommand extends Command
         {--force-cors : Re-pinear `config/cors.php` aunque ya exista. Default: skip si ya existe (BC). (R-PKG-042 FASE18-07).}
         {--profile-fields= : Campos adicionales para el perfil del scope (CSV con sintaxis key[:type], default: ninguno = BC). Cada field se agrega como columna del tipo correspondiente en la tabla del scope, en $fillable del modelo, y se expone en /me + PATCH /me + /register. Sin tipo = string (BC con R-PKG-011). Tipos soportados: string, text, int, decimal, bool, date, datetime, json (R-PKG-012). Ortogonal con --login-field, --with-auth-rbac y --verify-email. Ej: --profile-fields=name,birthdate:date,age:int (R-PKG-011 + R-PKG-012).}
         {--profile-fields-required= : Override del validation default a `required` para profile fields específicos (CSV). Default: ninguno (todos nullable). Ej: --profile-fields-required=full_name,email. Solo aplica si el field está en --profile-fields. (R-PKG-014 BUG-03 fix)}
-        {--verify-email : Habilita verificación por email: columna email_verified_at, endpoints /email/verify/<id>/<hash> y /email/resend, dispatch de Illuminate\Auth\Notifications\VerifyEmail en /register. Default BC: false. Aplican cuando --login-field=email (R-PKG-011).}';
+        {--verify-email : Habilita verificación por email: columna email_verified_at, endpoints /email/verify/<id>/<hash> y /email/resend, dispatch de Illuminate\Auth\Notifications\VerifyEmail en /register. Default BC: false. Aplican cuando --login-field=email (R-PKG-011).}
+        {--setup-sanctum : (A9) Publica las migraciones de Sanctum (personal_access_tokens) y las parchea a uuidMorphs (mk:fix:sanctum-uuids) — el scope usa HasUuids. Requiere laravel/sanctum instalado. Idempotente.}
+        {--migrate : (A9) Corre `php artisan migrate` al terminar el scaffold.}
+        {--seed : (A9) Corre el {Scope}RolesSeeder al terminar (requiere --with-crud). Siembra super-admin/admin/editor/viewer.}
+        {--discover : (A9) Corre `mk:discover-abilities --module={Scope} --force` al terminar.}
+        {--skip-auth-wire : (A4) NO editar config/auth.php automáticamente (solo imprime los snippets, comportamiento pre-A4). Por default el scaffolder cablea el guard+provider de forma idempotente con backup .bak.}
+        {--skip-policies : (A1/A3) NO generar las Policies default-deny en el pack --with-crud. Por default, --with-crud genera {Scope}Policy/RolePolicy/AbilityPolicy (default-deny + super-admin bypass) y las registra vía Gate::policy — así mk:make:auth-user --with-crud --with-auth-rbac produce login + RBAC aislado + Policies + CRUD en un solo comando.}';
 
     /**
      * The console command description.
@@ -165,6 +171,12 @@ class MakeAuthUserCommand extends Command
         $profileFieldsRaw = $this->resolveProfileFields((string) $this->option('profile-fields'), $loginField);
         $verifyEmailRequested = (bool) $this->option('verify-email');
         $requiredFields = $this->resolveRequiredProfileFields((string) $this->option('profile-fields-required'), $profileFieldsRaw);
+        // A4 + A9 — auto-wire config/auth.php + post-scaffold orchestration.
+        $skipAuthWire = (bool) $this->option('skip-auth-wire');
+        $setupSanctum = (bool) $this->option('setup-sanctum');
+        $migrate = (bool) $this->option('migrate');
+        $seed = (bool) $this->option('seed');
+        $discover = (bool) $this->option('discover');
 
         if ($scope === '') {
             $this->error('El nombre del scope no puede estar vacío.');
@@ -618,7 +630,9 @@ PHP
 
         // ── MEJORA-02 / BUG-08 (R-PKG-014): generar CRUD completo si --with-crud ──
         if ($withCrud) {
-            $this->generateCrudPack($scope, $scopeLower, $scopePlural, $loginField, $profileFieldsRaw, $requiredFields);
+            // A1/A3: policies default-deny por default con --with-crud (skippable).
+            $withPolicies = ! (bool) $this->option('skip-policies');
+            $this->generateCrudPack($scope, $scopeLower, $scopePlural, $loginField, $profileFieldsRaw, $requiredFields, $withPolicies);
         }
 
         $this->newLine();
@@ -629,7 +643,7 @@ PHP
         $this->line("   • Routes:       /api/{$scopeLower}/auth/{login,refresh,logout,me,forgot,reset}".($withAuthRbac ? ' (rate limited)' : ''));
         $this->line("   • ServiceProv:  app/Modules/{$scope}/Providers/{$scope}ServiceProvider.php");
         if ($withCrud) {
-            $this->line('   • CRUD:         17 archivos (AdminController + RoleController + AbilityController + DTOs + Repository + Service + Factory + Seeder + Requests + Resources)');
+            $this->line('   • CRUD:         Controllers + DTOs + Repository + Service + Factory + Seeder + Requests + Resources + Enums/CrudAction'.((bool) $this->option('skip-policies') ? '' : ' + Policies (default-deny)'));
         }
 
         if ($withAuthRbac) {
@@ -651,11 +665,199 @@ PHP
             $this->line('   4. (Opcional) Override de AdminService::beforeCreate() para photo upload logic');
         }
 
-        // Imprimir snippets a mano (no modificar config/auth.php automáticamente)
+        // ── A4: cablear config/auth.php (idempotente + backup) ─────────────
+        // Antes solo se IMPRIMÍAN los snippets (decisión de least-surprise).
+        // FEEDBACK A4: el dev igual tenía que pegarlos a mano en cada scope.
+        // Ahora el guard+provider se insertan automáticamente (con backup .bak).
+        // Si config/auth.php no existe o tiene un formato inesperado, caemos al
+        // print de siempre. `--skip-auth-wire` fuerza el comportamiento viejo.
         $this->newLine();
-        $this->printAuthConfigSnippets($scope, $scopeLower, $scopePlural, $loginField);
+        $wired = ! $skipAuthWire && $this->wireAuthConfig($scope, $scopeLower, $scopePlural);
+        if (! $wired) {
+            $this->printAuthConfigSnippets($scope, $scopeLower, $scopePlural, $loginField);
+        }
+
+        // ── A9: orquestación post-scaffold (setup-sanctum / migrate / discover / seed) ──
+        $this->runPostScaffoldSteps($scope, $scopeLower, $withCrud, $setupSanctum, $migrate, $seed, $discover);
 
         return self::SUCCESS;
+    }
+
+    /**
+     * A4 — cablea el guard + provider del scope en `config/auth.php` de forma
+     * idempotente, con backup `.bak`. Devuelve `true` si quedó cableado (o ya
+     * lo estaba), `false` si no pudo (archivo ausente / formato inesperado) —
+     * en cuyo caso el caller imprime los snippets a mano.
+     *
+     * Diseño: inserción string-based (NO preg_replace con replacement dinámico)
+     * para no pelear con el escaping de `$`/`\` del modelo FQCN. Es idempotente:
+     * si el guard '{scopeLower}' y el provider '{scopePlural}' ya existen, no
+     * toca nada.
+     */
+    protected function wireAuthConfig(string $scope, string $scopeLower, string $scopePlural): bool
+    {
+        $path = function_exists('config_path') ? config_path('auth.php') : 'config/auth.php';
+
+        if (! file_exists($path)) {
+            return false; // sin config/auth.php → el caller imprime snippets.
+        }
+
+        $content = (string) file_get_contents($path);
+
+        $alreadyGuard = (bool) preg_match("/'".preg_quote($scopeLower, '/')."'\\s*=>\\s*\\[/", $content);
+        $alreadyProvider = (bool) preg_match("/'".preg_quote($scopePlural, '/')."'\\s*=>\\s*\\[/", $content);
+
+        if ($alreadyGuard && $alreadyProvider) {
+            $this->line("   ✅ config/auth.php ya tiene el guard '{$scopeLower}' + provider '{$scopePlural}' (sin cambios).");
+
+            return true;
+        }
+
+        // FQCN construido con concatenación single-quote → backslashes literales.
+        $modelClass = 'App\\Modules\\'.$scope.'\\Models\\'.$scope.'::class';
+
+        $guardBlock =
+            "        '{$scopeLower}' => [\n"
+            ."            'driver' => 'sanctum',\n"
+            ."            'provider' => '{$scopePlural}',\n"
+            ."        ],\n";
+
+        $providerBlock =
+            "        '{$scopePlural}' => [\n"
+            ."            'driver' => 'eloquent',\n"
+            ."            'model' => {$modelClass},\n"
+            ."        ],\n";
+
+        $new = $content;
+        $wroteAny = false;
+
+        if (! $alreadyGuard) {
+            $candidate = $this->insertAfterArrayOpen($new, 'guards', $guardBlock);
+            if ($candidate !== null) {
+                $new = $candidate;
+                $wroteAny = true;
+            }
+        }
+
+        if (! $alreadyProvider) {
+            $candidate = $this->insertAfterArrayOpen($new, 'providers', $providerBlock);
+            if ($candidate !== null) {
+                $new = $candidate;
+                $wroteAny = true;
+            }
+        }
+
+        if (! $wroteAny) {
+            return false; // formato inesperado → fallback a print.
+        }
+
+        @copy($path, $path.'.bak');
+        file_put_contents($path, $new);
+        $this->info('🔗 A4: config/auth.php cableado automáticamente:');
+        $this->line("   ✅ guard '{$scopeLower}' + provider '{$scopePlural}' agregados (backup: config/auth.php.bak).");
+
+        return true;
+    }
+
+    /**
+     * Helper de A4: inserta `$block` justo después del `[` de apertura del
+     * array top-level `$arrayKey` (guards / providers). String-based para
+     * evitar el escaping de preg_replace. Devuelve `null` si no encuentra el
+     * array (formato inesperado).
+     */
+    protected function insertAfterArrayOpen(string $content, string $arrayKey, string $block): ?string
+    {
+        if (! preg_match("/'".preg_quote($arrayKey, '/')."'\\s*=>\\s*\\[/", $content, $m, PREG_OFFSET_CAPTURE)) {
+            return null;
+        }
+
+        $openPos = $m[0][1] + strlen($m[0][0]); // justo después del '['
+        $nlPos = strpos($content, "\n", $openPos);
+        if ($nlPos === false) {
+            return null;
+        }
+        $insertAt = $nlPos + 1;
+
+        return substr($content, 0, $insertAt).$block.substr($content, $insertAt);
+    }
+
+    /**
+     * A9 — orquestación post-scaffold. Corre, en orden seguro:
+     *   setup-sanctum → migrate → discover → seed
+     * Cada paso es opt-in por flag. `migrate` va antes de seed/discover (las
+     * tablas deben existir); `discover` antes de `seed` (el seeder referencia
+     * abilities, aunque las crea con updateOrCreate). `seed` requiere --with-crud.
+     */
+    protected function runPostScaffoldSteps(
+        string $scope,
+        string $scopeLower,
+        bool $withCrud,
+        bool $setupSanctum,
+        bool $migrate,
+        bool $seed,
+        bool $discover,
+    ): void {
+        if ($setupSanctum) {
+            $this->newLine();
+            $this->setupSanctum();
+        }
+
+        if ($migrate) {
+            $this->newLine();
+            $this->info('🗄️  A9: corriendo migraciones (--migrate)...');
+            $this->call('migrate', ['--force' => true]);
+        }
+
+        if ($discover) {
+            $this->newLine();
+            $this->info('🔍 A9: descubriendo abilities (--discover)...');
+            $this->call('mk:discover-abilities', ['--module' => $scope, '--force' => true]);
+        }
+
+        if ($seed) {
+            if (! $withCrud) {
+                $this->warn('⚠️  --seed ignorado: el RolesSeeder solo se genera con --with-crud.');
+
+                return;
+            }
+            $this->newLine();
+            $this->info('🌱 A9: sembrando RBAC (--seed)...');
+            $this->call('db:seed', [
+                '--class' => "App\\Modules\\{$scope}\\Database\\Seeders\\{$scope}RolesSeeder",
+                '--force' => true,
+            ]);
+        }
+    }
+
+    /**
+     * A9/Sanctum — publica las migraciones de Sanctum si faltan y las parchea
+     * a UUID (el scope usa HasUuids). Idempotente: si ya están publicadas, solo
+     * parchea. Antes esto era un WARN manual (`vendor:publish` +
+     * `mk:fix:sanctum-uuids` a mano); ahora `--setup-sanctum` lo automatiza.
+     */
+    protected function setupSanctum(): void
+    {
+        if (! $this->isSanctumInstalled()) {
+            $this->warn('⚠️  --setup-sanctum: `laravel/sanctum` no está instalado. Corré `composer require laravel/sanctum` primero.');
+
+            return;
+        }
+
+        $migrationsPath = function_exists('database_path') ? database_path('migrations') : null;
+        $published = $migrationsPath !== null
+            && is_dir($migrationsPath)
+            && count(glob($migrationsPath.'/*_create_personal_access_tokens_table.php') ?: []) > 0;
+
+        if (! $published) {
+            $this->info('📦 Sanctum: publicando migración personal_access_tokens...');
+            $this->call('vendor:publish', ['--tag' => 'sanctum-migrations']);
+        } else {
+            $this->line('   ✅ Sanctum: migración personal_access_tokens ya publicada.');
+        }
+
+        // El modelo del scope usa HasUuids → tokenable_id debe ser uuidMorphs.
+        $this->info('🔧 Sanctum: parcheando personal_access_tokens a UUID (mk:fix:sanctum-uuids)...');
+        $this->call('mk:fix:sanctum-uuids');
     }
 
     /**
@@ -931,9 +1133,12 @@ PHP
         string $loginField,
         array $profileFields,
         array $requiredFields,
+        bool $withPolicies = true,
     ): void {
+        // A1/A3/A8: 17 base + 1 enum (A8) + 3 policies (A1/A3, si $withPolicies).
+        $fileCount = 18 + ($withPolicies ? 3 : 0);
         $this->newLine();
-        $this->info('📄 Generando CRUD pack (17 archivos):');
+        $this->info("📄 Generando CRUD pack ({$fileCount} archivos):");
 
         $basePath = app_path("Modules/{$scope}");
 
@@ -947,7 +1152,11 @@ PHP
             'Http/Resources',
             'Database/Factories',
             'Database/Seeders',
+            'Enums', // A8
         ];
+        if ($withPolicies) {
+            $crudDirs[] = 'Policies'; // A1/A3
+        }
         foreach ($crudDirs as $dir) {
             if (! File::exists("{$basePath}/{$dir}")) {
                 File::makeDirectory("{$basePath}/{$dir}", 0755, true);
@@ -1008,14 +1217,90 @@ PHP
         // ── Factory (1) ──
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/admin-factory.stub', 'Database/Factories', "{$scope}Factory.php", $crudReplacements);
 
+        // ── Enum CrudAction (1) — A8 ──
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/enum-crud-action.stub', 'Enums', 'CrudAction.php', $crudReplacements);
+
         // ── Seeder (1) ──
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/admin-roles-seeder.stub', 'Database/Seeders', "{$scope}RolesSeeder.php", $crudReplacements);
+
+        // ── Policies (3) — A1/A3: default-deny + super-admin bypass ──
+        // Reusa los stubs de module-rbac (mismos placeholders + mismo modelo).
+        // Con esto `mk:make:auth-user --with-crud --with-auth-rbac` produce
+        // login + RBAC aislado + Policies + CRUD en un solo comando (A1).
+        if ($withPolicies) {
+            // {Scope}Policy: el stub de module-rbac ya referencia el modelo del
+            // scope (App\Modules\{Scope}\Models\{Scope}) — reusable tal cual.
+            $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'module-rbac/policy-user.stub', 'Policies', "{$scope}Policy.php", $crudReplacements);
+            // Role/Ability: variantes auth-user que apuntan a los modelos CENTRALES
+            // del paquete (Mk\Director\Auth\Models\*), no a modelos módulo-locales.
+            $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/policy-role.stub', 'Policies', 'RolePolicy.php', $crudReplacements);
+            $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/policy-ability.stub', 'Policies', 'AbilityPolicy.php', $crudReplacements);
+        }
 
         // ── Extender routes/api.php con CRUD ──
         $this->extendRoutesWithCrud($basePath, $scope, $scopeLower, $scopePlural);
 
         // ── Extender ServiceProvider con Repository binding ──
         $this->extendServiceProviderWithBinding($basePath, $scope);
+
+        // ── Registrar Policies via Gate::policy en el ServiceProvider (A1/A3) ──
+        if ($withPolicies) {
+            $this->extendServiceProviderWithPolicies($basePath, $scope);
+        }
+    }
+
+    /**
+     * A1/A3 — registra las 3 Policies del pack en el ServiceProvider del scope
+     * vía `Gate::policy()` en `boot()`. Idempotente: si ya están registradas,
+     * no re-inyecta. Agrega el import de `Gate` si falta.
+     */
+    protected function extendServiceProviderWithPolicies(string $basePath, string $scope): void
+    {
+        $providerPath = "{$basePath}/Providers/{$scope}ServiceProvider.php";
+        if (! File::exists($providerPath)) {
+            $this->warn('   ⚠️  ServiceProvider no existe, no se pudo registrar Policies.');
+
+            return;
+        }
+
+        $content = File::get($providerPath);
+
+        if (str_contains($content, "{$scope}Policy::class")) {
+            return; // ya registradas (idempotente).
+        }
+
+        // Import de Gate si falta.
+        if (! str_contains($content, 'use Illuminate\\Support\\Facades\\Gate;')) {
+            $content = preg_replace(
+                '/(use Illuminate\\\\Support\\\\ServiceProvider;\n)/',
+                "$1use Illuminate\\Support\\Facades\\Gate;\n",
+                $content,
+                1,
+            );
+        }
+
+        $registrations =
+            "        // A1/A3: Policies default-deny (super-admin bypass en before()).\n"
+            ."        Gate::policy(\\App\\Modules\\{$scope}\\Models\\{$scope}::class, \\App\\Modules\\{$scope}\\Policies\\{$scope}Policy::class);\n"
+            ."        Gate::policy(\\Mk\\Director\\Auth\\Models\\Role::class, \\App\\Modules\\{$scope}\\Policies\\RolePolicy::class);\n"
+            ."        Gate::policy(\\Mk\\Director\\Auth\\Models\\Ability::class, \\App\\Modules\\{$scope}\\Policies\\AbilityPolicy::class);\n\n";
+
+        $content = preg_replace(
+            '/(public function boot\(\): void\s*\{\n)/',
+            "$1{$registrations}",
+            $content,
+            1,
+            $count,
+        );
+
+        if ($count === 0) {
+            $this->warn('   ⚠️  No se pudo inyectar Gate::policy en boot() (formato inesperado). Registralas a mano.');
+
+            return;
+        }
+
+        File::put($providerPath, $content);
+        $this->line('   ✅ Providers/'.$scope.'ServiceProvider.php (Policies registradas via Gate::policy)');
     }
 
     /**
@@ -2353,7 +2638,7 @@ PHP,
         $stubContent = file_get_contents($stubPath);
         $extraCorsPaths = $this->option('with-auth-rbac')
             ? "['sanctum/csrf-cookie']"
-            : "[]";
+            : '[]';
         $rendered = str_replace('{{extraCorsPaths}}', $extraCorsPaths, $stubContent);
 
         // Crear el directorio config/ si no existe (puede no existir en fresh
@@ -2424,7 +2709,7 @@ PHP,
         if (file_exists($routesPath)) {
             $routesContent = file_get_contents($routesPath);
 
-            if (str_contains($routesContent, "me/permissions")) {
+            if (str_contains($routesContent, 'me/permissions')) {
                 $this->line('   📄 Route ya existe, skipping me/permissions.');
             } else {
                 // 1. Insertar `use ...\MePermissionsController;` después del bloque `use`

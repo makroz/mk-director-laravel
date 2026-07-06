@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\{{ModuleName}}\Database\Seeders;
 
+use App\Modules\{{ModuleName}}\Enums\CrudAction;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 use Mk\Director\Auth\Models\Ability;
@@ -16,9 +17,10 @@ use Mk\Director\Auth\Models\Role;
  *
  * Crea 4 roles con jerarquía:
  *   - super-admin: ability `*` (bypass total)
- *   - admin: CRUD completo sobre {{moduleNamePluralLower}}
- *   - editor: view + update (no delete ni create)
- *   - viewer: solo view
+ *   - admin: CRUD completo sobre TODOS los recursos ruteados
+ *            ({{moduleNamePluralLower}} + roles + abilities)
+ *   - editor: view + update sobre {{moduleNamePluralLower}} (no gestiona RBAC)
+ *   - viewer: solo view (read-only) sobre todos los recursos
  *
  * Override este seeder para customizar la jerarquía de roles.
  */
@@ -27,7 +29,14 @@ class {{ModuleName}}RolesSeeder extends Seeder
     public function run(): void
     {
         $scope = '{{moduleNameLower}}';
-        $resource = '{{moduleNamePluralLower}}';
+
+        // FEEDBACK A7: el scaffolder --with-crud rutea TRES recursos —
+        // el propio módulo + `roles` + `abilities` (RoleController /
+        // AbilityController), cada uno gateado con `mk.ability:{scope}.{resource}.*`.
+        // Si el seeder solo concede `{{moduleNamePluralLower}}`, el rol `admin`
+        // recibe 403 en /roles y /abilities (solo el wildcard de super-admin
+        // funcionaba). Concedemos los tres al `admin`, y read-only al `viewer`.
+        $resources = ['{{moduleNamePluralLower}}', 'roles', 'abilities'];
 
         // ── super-admin ─────────────────────────────────────────────────
         $superAdmin = Role::query()->updateOrCreate(
@@ -39,31 +48,36 @@ class {{ModuleName}}RolesSeeder extends Seeder
         );
         $this->attachAbility($superAdmin, '*', 'Wildcard: todas las abilities.');
 
-        // ── admin ───────────────────────────────────────────────────────
+        // ── admin: CRUD completo sobre los tres recursos ────────────────
         $admin = Role::query()->updateOrCreate(
             ['name' => 'admin'],
             ['guard' => $scope],
         );
-        foreach (['viewAny', 'view', 'create', 'update', 'delete'] as $action) {
-            $this->attachAbility($admin, "{$scope}.{$resource}.{$action}", ucfirst($action).' '.$resource.'.');
+        foreach ($resources as $resource) {
+            // A8: acciones desde el enum canónico CrudAction (SSoT).
+            foreach (CrudAction::all() as $action) {
+                $this->attachAbility($admin, "{$scope}.{$resource}.{$action}", ucfirst($action).' '.$resource.'.');
+            }
         }
 
-        // ── editor ──────────────────────────────────────────────────────
+        // ── editor: view + update sobre el módulo (no gestiona RBAC) ─────
         $editor = Role::query()->updateOrCreate(
             ['name' => 'editor'],
             ['guard' => $scope],
         );
         foreach (['viewAny', 'view', 'update'] as $action) {
-            $this->attachAbility($editor, "{$scope}.{$resource}.{$action}", ucfirst($action).' '.$resource.'.');
+            $this->attachAbility($editor, "{$scope}.{{moduleNamePluralLower}}.{$action}", ucfirst($action).' {{moduleNamePluralLower}}.');
         }
 
-        // ── viewer ──────────────────────────────────────────────────────
+        // ── viewer: read-only sobre los tres recursos ───────────────────
         $viewer = Role::query()->updateOrCreate(
             ['name' => 'viewer'],
             ['guard' => $scope],
         );
-        foreach (['viewAny', 'view'] as $action) {
-            $this->attachAbility($viewer, "{$scope}.{$resource}.{$action}", ucfirst($action).' '.$resource.'.');
+        foreach ($resources as $resource) {
+            foreach (['viewAny', 'view'] as $action) {
+                $this->attachAbility($viewer, "{$scope}.{$resource}.{$action}", ucfirst($action).' '.$resource.'.');
+            }
         }
     }
 

@@ -9,6 +9,7 @@ use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Contracts\MkModuleServiceInterface;
@@ -379,6 +380,15 @@ trait CRUDSmart
         // Apply service hook beforeCreate
         $input = $request->all();
 
+        // FEEDBACK (bulk) — if the payload is a list of objects, do a
+        // transactional bulk insert instead of a single create. This pairs
+        // with the frontend `useMkCrud().createMany(items[])`, which sends
+        // ONE POST with an array so the consumer doesn't fire N concurrent
+        // requests. All-or-nothing: any failing item rolls back the batch.
+        if ($this->isBulkPayload($input)) {
+            return $this->storeMany($request, $input);
+        }
+
         // Plugin Hook: beforeSave
         $this->getPluginManager()->fireBeforeSave($request, $input, 'create');
 
@@ -416,6 +426,86 @@ trait CRUDSmart
         $this->getPluginManager()->fireAfterResponse($data);
 
         return $this->sendResponse($data, 'Creado con éxito', 201);
+    }
+
+    /**
+     * FEEDBACK (bulk) — ¿el payload es una lista de objetos (bulk create)?
+     *
+     * `true` solo si es un array list-style (claves 0..n) y TODOS los elementos
+     * son arrays. Un objeto single (`{name: ...}`) es un array asociativo →
+     * `array_is_list()` es false → NO se trata como bulk (BC intacto).
+     */
+    protected function isBulkPayload(array $input): bool
+    {
+        if ($input === [] || ! array_is_list($input)) {
+            return false;
+        }
+
+        foreach ($input as $item) {
+            if (! is_array($item)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * FEEDBACK (bulk) — inserta N registros en UNA transacción. Cada item pasa
+     * por el MISMO pipeline que el store single (plugins beforeSave/afterSave,
+     * service beforeCreate/afterCreate, DTO validation, filtro fillable), así
+     * que las invariantes por-registro (tenant, enums, hooks) se respetan.
+     * Si cualquier item falla, la transacción entera hace rollback (todo-o-nada)
+     * y la ValidationException/QueryException se propaga al handler estándar.
+     *
+     * Devuelve la colección creada con el envelope single-level (data = T[]).
+     */
+    protected function storeMany(Request $request, array $items)
+    {
+        $modelClass = $this->getModel();
+        $service = $this->getService();
+        $fillable = $this->getFillable();
+
+        $created = DB::transaction(function () use ($request, $items, $modelClass, $service, $fillable) {
+            $models = [];
+
+            foreach ($items as $raw) {
+                $data = $raw;
+
+                $this->getPluginManager()->fireBeforeSave($request, $data, 'create');
+
+                if ($service && method_exists($service, 'beforeCreate')) {
+                    $data = $service->beforeCreate($request, $data) ?? $data;
+                }
+
+                $data = $this->applyDTOValidation($data);
+                $data = array_intersect_key($data, array_flip($fillable));
+
+                $model = $modelClass::create($data);
+
+                if ($service && method_exists($service, 'afterCreate')) {
+                    $service->afterCreate($request, $model, $data);
+                }
+
+                $this->getPluginManager()->fireAfterSave($model, $request, 'create');
+
+                $models[] = $model;
+            }
+
+            return $models;
+        });
+
+        // Cache invalidation once for the whole batch.
+        if ($this->isCacheEnabled()) {
+            CacheManager::flush($this->getCacheTags());
+        }
+
+        // Single-level envelope: data = list of transformed items.
+        $data = $this->autoTransform(new Collection($created));
+
+        $this->getPluginManager()->fireAfterResponse($data);
+
+        return $this->sendResponse($data, count($created).' creados con éxito', 201);
     }
 
     /**

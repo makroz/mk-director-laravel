@@ -1,0 +1,53 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Policies;
+
+use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
+use Mk\Director\Auth\Models\Ability;
+
+/**
+ * AbilityPolicy — READ-ONLY por default.
+ *
+ * A1/A3: variante del pack `--with-crud`, opera sobre el modelo CENTRAL del
+ * paquete `Mk\Director\Auth\Models\Ability`. `create`/`update`/`delete`
+ * retornan `false` siempre (default-deny); solo `super-admin` escribe (vía
+ * `before()` bypass). Las abilities se gestionan con `mk:discover-abilities` +
+ * `RoleController::syncAbilities`.
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud`.
+ */
+class AbilityPolicy
+{
+    public function before({{ModuleName}} $user, string $ability): ?bool
+    {
+        return $user->hasRole('super-admin') ? true : null;
+    }
+
+    public function viewAny({{ModuleName}} $user): bool
+    {
+        return $user->hasAbility('{{moduleNameLower}}.abilities.viewAny');
+    }
+
+    public function view({{ModuleName}} $user, Ability $ability): bool
+    {
+        return $user->hasAbility('{{moduleNameLower}}.abilities.view');
+    }
+
+    public function create({{ModuleName}} $user): bool
+    {
+        // Default-deny: solo super-admin (via before bypass).
+        return false;
+    }
+
+    public function update({{ModuleName}} $user, Ability $ability): bool
+    {
+        return false;
+    }
+
+    public function delete({{ModuleName}} $user, Ability $ability): bool
+    {
+        return false;
+    }
+}

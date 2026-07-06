@@ -581,6 +581,107 @@ test('BUG-NEW-10 drift: checkSanctumInstalled tiene fallback file_exists para dr
     expect($src)->toMatch('/file_exists\(/');
 });
 
+// ─── FEEDBACK-A6 — photo_path column + accessor shipped with the pipeline ────
+
+test('FEEDBACK-A6: migration stub crea la columna photo_path nullable', function () {
+    $migration = stubContents('auth-user.migration.stub');
+
+    // La columna se emite SIEMPRE (el Resource/Service la referencian siempre).
+    expect($migration)->toContain("\$table->string('photo_path')->nullable();");
+});
+
+test('FEEDBACK-A6: model stub tiene photo_path en fillable + accessor getPhotoUrlAttribute', function () {
+    $model = stubContents('auth-user.model.stub');
+
+    // photo_path fillable.
+    expect($model)->toContain("'photo_path',");
+    // accessor que resuelve photo_url desde photo_path.
+    expect($model)->toMatch('/function\s+getPhotoUrlAttribute\s*\(\s*\)\s*:\s*\?string/');
+    expect($model)->toContain('Storage::url($this->photo_path)');
+});
+
+// ─── FEEDBACK-A7 — RBAC seeder cubre TODOS los recursos ruteados ─────────────
+
+test('FEEDBACK-A7: seeder concede al admin roles + abilities, no solo el modulo', function () {
+    $seeder = stubContents('auth-user/admin-roles-seeder.stub');
+
+    // La lista de recursos incluye los tres que el scaffolder rutea.
+    expect($seeder)->toContain("\$resources = ['{{moduleNamePluralLower}}', 'roles', 'abilities'];");
+    // El admin itera sobre $resources usando el enum canónico CrudAction (A8).
+    expect($seeder)->toMatch('/foreach\s*\(\s*\$resources\s+as\s+\$resource\s*\)/');
+    expect($seeder)->toContain('CrudAction::all()');
+});
+
+// ─── FEEDBACK-A8 — enum canónico CrudAction ─────────────────────────────────
+
+test('FEEDBACK-A8: existe el stub enum-crud-action con all() + ability()', function () {
+    $enum = stubContents('auth-user/enum-crud-action.stub');
+
+    expect($enum)->toContain('enum CrudAction: string');
+    expect($enum)->toContain("case ViewAny = 'viewAny';");
+    expect($enum)->toContain('public static function all(): array');
+    expect($enum)->toContain('public function ability(string $scope, string $resource): string');
+});
+
+test('FEEDBACK-A8: generateCrudPack genera el enum CrudAction', function () {
+    $src = pkgFileContents('src/Console/Commands/MakeAuthUserCommand.php');
+
+    expect($src)->toContain("'auth-user/enum-crud-action.stub'");
+    expect($src)->toContain("'Enums'");
+});
+
+// ─── FEEDBACK-A1/A3 — Policies default-deny en el pack --with-crud ───────────
+
+test('FEEDBACK-A1/A3: --with-crud genera las 3 Policies + registra Gate::policy', function () {
+    $src = pkgFileContents('src/Console/Commands/MakeAuthUserCommand.php');
+
+    // Genera {Scope}Policy (module-rbac) + Role/Ability (variantes auth-user).
+    expect($src)->toContain("'module-rbac/policy-user.stub'");
+    expect($src)->toContain("'auth-user/policy-role.stub'");
+    expect($src)->toContain("'auth-user/policy-ability.stub'");
+    // Registro vía Gate::policy en el ServiceProvider.
+    expect($src)->toContain('function extendServiceProviderWithPolicies');
+    expect($src)->toContain('Gate::policy(');
+    // Escape hatch.
+    expect($src)->toContain('skip-policies');
+});
+
+test('FEEDBACK-A1/A3: las policies role/ability apuntan al modelo CENTRAL del paquete', function () {
+    // Regresión: NO deben referenciar App\Modules\{Scope}\Models\Role|Ability
+    // (que no existen en el camino --with-crud), sino Mk\Director\Auth\Models\*.
+    $role = stubContents('auth-user/policy-role.stub');
+    $ability = stubContents('auth-user/policy-ability.stub');
+
+    expect($role)->toContain('use Mk\\Director\\Auth\\Models\\Role;');
+    expect($role)->not->toContain('use App\\Modules\\{{ModuleName}}\\Models\\Role;');
+    expect($ability)->toContain('use Mk\\Director\\Auth\\Models\\Ability;');
+    expect($ability)->not->toContain('use App\\Modules\\{{ModuleName}}\\Models\\Ability;');
+});
+
+// ─── FEEDBACK-A9 — flags de orquestación post-scaffold ──────────────────────
+
+test('FEEDBACK-A9: command expone --migrate/--seed/--discover/--setup-sanctum', function () {
+    $src = pkgFileContents('src/Console/Commands/MakeAuthUserCommand.php');
+
+    foreach (['--migrate', '--seed', '--discover', '--setup-sanctum', '--skip-auth-wire'] as $opt) {
+        expect($src)->toContain($opt);
+    }
+
+    // Orquestador que corre los pasos en orden seguro.
+    expect($src)->toContain('function runPostScaffoldSteps');
+    expect($src)->toMatch("/\\\$this->call\\(\\s*'migrate'/");
+    expect($src)->toMatch("/\\\$this->call\\(\\s*'db:seed'/");
+    expect($src)->toMatch("/\\\$this->call\\(\\s*'mk:discover-abilities'/");
+});
+
+test('FEEDBACK-A9/Sanctum: setupSanctum publica + parchea a UUID', function () {
+    $src = pkgFileContents('src/Console/Commands/MakeAuthUserCommand.php');
+
+    expect($src)->toContain('function setupSanctum');
+    expect($src)->toContain('sanctum-migrations');
+    expect($src)->toContain('mk:fix:sanctum-uuids');
+});
+
 /**
  * Helper: extrae el cuerpo de un método del código fuente via reflection-style parsing.
  * Usado por BUG-NEW-17 para aislar el método `abilities()` del resto del trait.

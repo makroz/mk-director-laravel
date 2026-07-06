@@ -132,10 +132,12 @@ test('HALLAZGO-NEW-FASE18-B — scaffolder fallback warns the consumer', functio
 test('HALLAZGO-NEW-FASE18-B — scaffolder idempotency: skip if me/permissions already injected', function () {
     $body = extractMethodBodyFromScaffolder('generatePermissionsEndpoint');
 
-    // The scaffolder checks `if (str_contains($routesContent, "me/permissions"))`
-    // before injecting. Look for the literal check + skip message.
+    // The scaffolder checks `if (str_contains($routesContent, 'me/permissions'))`
+    // before injecting. Look for the literal check + skip message. NOTE: the
+    // string is single-quoted to match the project's Pint `single_quote`
+    // standard (the source is kept pint-clean).
     expect($body)
-        ->toContain('str_contains($routesContent, "me/permissions")')
+        ->toContain("str_contains(\$routesContent, 'me/permissions')")
         ->toContain('Route ya existe, skipping me/permissions');
 });
 

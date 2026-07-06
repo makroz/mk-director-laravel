@@ -73,6 +73,10 @@ class {{ModuleName}} extends AuthUser
     protected $fillable = [
         'name',
         '{{loginField}}',
+        // FEEDBACK A6: photo pipeline is always emitted (Resource/Service),
+        // so the column + fillable + accessor ship together — no more
+        // "column photo_path not found" on upload.
+        'photo_path',
 {{profileFieldsFillableEntries}}        'password',
         'auth_scope',
         'client_id',
@@ -97,6 +101,19 @@ class {{ModuleName}} extends AuthUser
     {
         parent::__construct($attributes);
         $this->setAuthScope('{{moduleNameLower}}');
+    }
+
+    /**
+     * FEEDBACK A6: accessor `photo_url` que el {{ModuleName}}Resource expone.
+     * Resuelve la URL pública de `photo_path` vía el disk configurado
+     * (`Storage::url`). Devuelve `null` si no hay foto. Requiere `storage:link`
+     * si usás el disk `public` (el scaffolder lo recuerda en el post-scaffold).
+     */
+    public function getPhotoUrlAttribute(): ?string
+    {
+        return $this->photo_path
+            ? \Illuminate\Support\Facades\Storage::url($this->photo_path)
+            : null;
     }
 {{factoryNewFactoryMethod}}
 {{rolesRelationOverride}}{{directAbilitiesRelationOverride}}
