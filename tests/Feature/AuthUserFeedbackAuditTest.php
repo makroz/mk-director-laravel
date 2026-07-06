@@ -581,6 +581,37 @@ test('BUG-NEW-10 drift: checkSanctumInstalled tiene fallback file_exists para dr
     expect($src)->toMatch('/file_exists\(/');
 });
 
+// ─── FEEDBACK-A6 — photo_path column + accessor shipped with the pipeline ────
+
+test('FEEDBACK-A6: migration stub crea la columna photo_path nullable', function () {
+    $migration = stubContents('auth-user.migration.stub');
+
+    // La columna se emite SIEMPRE (el Resource/Service la referencian siempre).
+    expect($migration)->toContain("\$table->string('photo_path')->nullable();");
+});
+
+test('FEEDBACK-A6: model stub tiene photo_path en fillable + accessor getPhotoUrlAttribute', function () {
+    $model = stubContents('auth-user.model.stub');
+
+    // photo_path fillable.
+    expect($model)->toContain("'photo_path',");
+    // accessor que resuelve photo_url desde photo_path.
+    expect($model)->toMatch('/function\s+getPhotoUrlAttribute\s*\(\s*\)\s*:\s*\?string/');
+    expect($model)->toContain('Storage::url($this->photo_path)');
+});
+
+// ─── FEEDBACK-A7 — RBAC seeder cubre TODOS los recursos ruteados ─────────────
+
+test('FEEDBACK-A7: seeder concede al admin roles + abilities, no solo el modulo', function () {
+    $seeder = stubContents('auth-user/admin-roles-seeder.stub');
+
+    // La lista de recursos incluye los tres que el scaffolder rutea.
+    expect($seeder)->toContain("\$resources = ['{{moduleNamePluralLower}}', 'roles', 'abilities'];");
+    // El admin itera sobre $resources con las 5 acciones CRUD.
+    expect($seeder)->toMatch('/foreach\s*\(\s*\$resources\s+as\s+\$resource\s*\)/');
+    expect($seeder)->toContain("['viewAny', 'view', 'create', 'update', 'delete']");
+});
+
 /**
  * Helper: extrae el cuerpo de un método del código fuente via reflection-style parsing.
  * Usado por BUG-NEW-17 para aislar el método `abilities()` del resto del trait.
