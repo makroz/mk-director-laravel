@@ -612,6 +612,30 @@ test('FEEDBACK-A7: seeder concede al admin roles + abilities, no solo el modulo'
     expect($seeder)->toContain("['viewAny', 'view', 'create', 'update', 'delete']");
 });
 
+// ─── FEEDBACK-A9 — flags de orquestación post-scaffold ──────────────────────
+
+test('FEEDBACK-A9: command expone --migrate/--seed/--discover/--setup-sanctum', function () {
+    $src = pkgFileContents('src/Console/Commands/MakeAuthUserCommand.php');
+
+    foreach (['--migrate', '--seed', '--discover', '--setup-sanctum', '--skip-auth-wire'] as $opt) {
+        expect($src)->toContain($opt);
+    }
+
+    // Orquestador que corre los pasos en orden seguro.
+    expect($src)->toContain('function runPostScaffoldSteps');
+    expect($src)->toMatch("/\\\$this->call\\(\\s*'migrate'/");
+    expect($src)->toMatch("/\\\$this->call\\(\\s*'db:seed'/");
+    expect($src)->toMatch("/\\\$this->call\\(\\s*'mk:discover-abilities'/");
+});
+
+test('FEEDBACK-A9/Sanctum: setupSanctum publica + parchea a UUID', function () {
+    $src = pkgFileContents('src/Console/Commands/MakeAuthUserCommand.php');
+
+    expect($src)->toContain('function setupSanctum');
+    expect($src)->toContain('sanctum-migrations');
+    expect($src)->toContain('mk:fix:sanctum-uuids');
+});
+
 /**
  * Helper: extrae el cuerpo de un método del código fuente via reflection-style parsing.
  * Usado por BUG-NEW-17 para aislar el método `abilities()` del resto del trait.

@@ -81,16 +81,24 @@ test('mk:make:auth-user command generates exactly five stubs', function () {
     }
 });
 
-test('mk:make:auth-user command does NOT modify config/auth.php directly', function () {
-    // Decisión de diseño: el command imprime los snippets a mano, no
-    // escribe en config/auth.php del consumer. Si alguien rompe esto,
-    // el principio de least surprise cae.
+test('FEEDBACK-A4: mk:make:auth-user auto-wires config/auth.php (idempotent + backup), with --skip-auth-wire escape', function () {
+    // FEEDBACK A4 revierte la decisión previa de "solo imprimir snippets":
+    // el dev igual tenía que pegar el guard+provider a mano en cada scope.
+    // Ahora el command cablea config/auth.php automáticamente (idempotente,
+    // con backup .bak) y deja `--skip-auth-wire` para el comportamiento viejo.
     $source = commandSource();
 
+    // El helper de wiring existe y edita config/auth.php.
+    expect($source)->toContain('function wireAuthConfig');
+    expect($source)->toContain("config_path('auth.php')");
+    // Backup antes de escribir.
+    expect($source)->toContain('.bak');
+    // Idempotencia: si el guard/provider ya existen, no re-escribe.
+    expect($source)->toContain('sin cambios');
+    // Escape hatch al comportamiento pre-A4.
+    expect($source)->toContain('skip-auth-wire');
+    // El fallback a print sigue existiendo (config/auth.php ausente / formato raro).
     expect($source)->toContain('printAuthConfigSnippets');
-    expect($source)->toContain('NO se modifican automáticamente');
-    expect($source)->not->toContain("config_path('auth.php')");
-    expect($source)->not->toContain("'config/auth.php'"); // any File::put call would reference a literal path
 });
 
 test('mk:make:auth-user command auto-registers the ServiceProvider in Laravel 11+ bootstrap/providers.php', function () {
@@ -131,8 +139,8 @@ test('mk:make:auth-user package does NOT ship a hardcoded create_admins_table mi
     $migrationsDir = packageRoot().'/src/Auth/Database/Migrations';
     $hardcoded = $migrationsDir.'/2026_06_10_000006_create_admins_table.php';
     expect(file_exists($hardcoded))->toBeFalse(
-        "Hardcoded admins migration must be removed from the package. ".
-        "The scaffolder (auth-user.migration.stub) is the canonical source."
+        'Hardcoded admins migration must be removed from the package. '.
+        'The scaffolder (auth-user.migration.stub) is the canonical source.'
     );
 });
 
@@ -229,7 +237,7 @@ test('auth-user auth-controller stub uses TokenIssuer::issueAccessToken in login
     expect($source)->toContain('new TokenIssuer()');
     expect($source)->toContain('->issueAccessToken(');
     // And the previous raw Sanctum call must be gone.
-    expect($source)->not->toContain("\$user->createToken(");
+    expect($source)->not->toContain('$user->createToken(');
 });
 
 // ── Routes stub ─────────────────────────────────────────────────────────

@@ -141,7 +141,12 @@ class MakeAuthUserCommand extends Command
         {--force-cors : Re-pinear `config/cors.php` aunque ya exista. Default: skip si ya existe (BC). (R-PKG-042 FASE18-07).}
         {--profile-fields= : Campos adicionales para el perfil del scope (CSV con sintaxis key[:type], default: ninguno = BC). Cada field se agrega como columna del tipo correspondiente en la tabla del scope, en $fillable del modelo, y se expone en /me + PATCH /me + /register. Sin tipo = string (BC con R-PKG-011). Tipos soportados: string, text, int, decimal, bool, date, datetime, json (R-PKG-012). Ortogonal con --login-field, --with-auth-rbac y --verify-email. Ej: --profile-fields=name,birthdate:date,age:int (R-PKG-011 + R-PKG-012).}
         {--profile-fields-required= : Override del validation default a `required` para profile fields específicos (CSV). Default: ninguno (todos nullable). Ej: --profile-fields-required=full_name,email. Solo aplica si el field está en --profile-fields. (R-PKG-014 BUG-03 fix)}
-        {--verify-email : Habilita verificación por email: columna email_verified_at, endpoints /email/verify/<id>/<hash> y /email/resend, dispatch de Illuminate\Auth\Notifications\VerifyEmail en /register. Default BC: false. Aplican cuando --login-field=email (R-PKG-011).}';
+        {--verify-email : Habilita verificación por email: columna email_verified_at, endpoints /email/verify/<id>/<hash> y /email/resend, dispatch de Illuminate\Auth\Notifications\VerifyEmail en /register. Default BC: false. Aplican cuando --login-field=email (R-PKG-011).}
+        {--setup-sanctum : (A9) Publica las migraciones de Sanctum (personal_access_tokens) y las parchea a uuidMorphs (mk:fix:sanctum-uuids) — el scope usa HasUuids. Requiere laravel/sanctum instalado. Idempotente.}
+        {--migrate : (A9) Corre `php artisan migrate` al terminar el scaffold.}
+        {--seed : (A9) Corre el {Scope}RolesSeeder al terminar (requiere --with-crud). Siembra super-admin/admin/editor/viewer.}
+        {--discover : (A9) Corre `mk:discover-abilities --module={Scope} --force` al terminar.}
+        {--skip-auth-wire : (A4) NO editar config/auth.php automáticamente (solo imprime los snippets, comportamiento pre-A4). Por default el scaffolder cablea el guard+provider de forma idempotente con backup .bak.}';
 
     /**
      * The console command description.
@@ -165,6 +170,12 @@ class MakeAuthUserCommand extends Command
         $profileFieldsRaw = $this->resolveProfileFields((string) $this->option('profile-fields'), $loginField);
         $verifyEmailRequested = (bool) $this->option('verify-email');
         $requiredFields = $this->resolveRequiredProfileFields((string) $this->option('profile-fields-required'), $profileFieldsRaw);
+        // A4 + A9 — auto-wire config/auth.php + post-scaffold orchestration.
+        $skipAuthWire = (bool) $this->option('skip-auth-wire');
+        $setupSanctum = (bool) $this->option('setup-sanctum');
+        $migrate = (bool) $this->option('migrate');
+        $seed = (bool) $this->option('seed');
+        $discover = (bool) $this->option('discover');
 
         if ($scope === '') {
             $this->error('El nombre del scope no puede estar vacío.');
@@ -651,11 +662,199 @@ PHP
             $this->line('   4. (Opcional) Override de AdminService::beforeCreate() para photo upload logic');
         }
 
-        // Imprimir snippets a mano (no modificar config/auth.php automáticamente)
+        // ── A4: cablear config/auth.php (idempotente + backup) ─────────────
+        // Antes solo se IMPRIMÍAN los snippets (decisión de least-surprise).
+        // FEEDBACK A4: el dev igual tenía que pegarlos a mano en cada scope.
+        // Ahora el guard+provider se insertan automáticamente (con backup .bak).
+        // Si config/auth.php no existe o tiene un formato inesperado, caemos al
+        // print de siempre. `--skip-auth-wire` fuerza el comportamiento viejo.
         $this->newLine();
-        $this->printAuthConfigSnippets($scope, $scopeLower, $scopePlural, $loginField);
+        $wired = ! $skipAuthWire && $this->wireAuthConfig($scope, $scopeLower, $scopePlural);
+        if (! $wired) {
+            $this->printAuthConfigSnippets($scope, $scopeLower, $scopePlural, $loginField);
+        }
+
+        // ── A9: orquestación post-scaffold (setup-sanctum / migrate / discover / seed) ──
+        $this->runPostScaffoldSteps($scope, $scopeLower, $withCrud, $setupSanctum, $migrate, $seed, $discover);
 
         return self::SUCCESS;
+    }
+
+    /**
+     * A4 — cablea el guard + provider del scope en `config/auth.php` de forma
+     * idempotente, con backup `.bak`. Devuelve `true` si quedó cableado (o ya
+     * lo estaba), `false` si no pudo (archivo ausente / formato inesperado) —
+     * en cuyo caso el caller imprime los snippets a mano.
+     *
+     * Diseño: inserción string-based (NO preg_replace con replacement dinámico)
+     * para no pelear con el escaping de `$`/`\` del modelo FQCN. Es idempotente:
+     * si el guard '{scopeLower}' y el provider '{scopePlural}' ya existen, no
+     * toca nada.
+     */
+    protected function wireAuthConfig(string $scope, string $scopeLower, string $scopePlural): bool
+    {
+        $path = function_exists('config_path') ? config_path('auth.php') : 'config/auth.php';
+
+        if (! file_exists($path)) {
+            return false; // sin config/auth.php → el caller imprime snippets.
+        }
+
+        $content = (string) file_get_contents($path);
+
+        $alreadyGuard = (bool) preg_match("/'".preg_quote($scopeLower, '/')."'\\s*=>\\s*\\[/", $content);
+        $alreadyProvider = (bool) preg_match("/'".preg_quote($scopePlural, '/')."'\\s*=>\\s*\\[/", $content);
+
+        if ($alreadyGuard && $alreadyProvider) {
+            $this->line("   ✅ config/auth.php ya tiene el guard '{$scopeLower}' + provider '{$scopePlural}' (sin cambios).");
+
+            return true;
+        }
+
+        // FQCN construido con concatenación single-quote → backslashes literales.
+        $modelClass = 'App\\Modules\\'.$scope.'\\Models\\'.$scope.'::class';
+
+        $guardBlock =
+            "        '{$scopeLower}' => [\n"
+            ."            'driver' => 'sanctum',\n"
+            ."            'provider' => '{$scopePlural}',\n"
+            ."        ],\n";
+
+        $providerBlock =
+            "        '{$scopePlural}' => [\n"
+            ."            'driver' => 'eloquent',\n"
+            ."            'model' => {$modelClass},\n"
+            ."        ],\n";
+
+        $new = $content;
+        $wroteAny = false;
+
+        if (! $alreadyGuard) {
+            $candidate = $this->insertAfterArrayOpen($new, 'guards', $guardBlock);
+            if ($candidate !== null) {
+                $new = $candidate;
+                $wroteAny = true;
+            }
+        }
+
+        if (! $alreadyProvider) {
+            $candidate = $this->insertAfterArrayOpen($new, 'providers', $providerBlock);
+            if ($candidate !== null) {
+                $new = $candidate;
+                $wroteAny = true;
+            }
+        }
+
+        if (! $wroteAny) {
+            return false; // formato inesperado → fallback a print.
+        }
+
+        @copy($path, $path.'.bak');
+        file_put_contents($path, $new);
+        $this->info('🔗 A4: config/auth.php cableado automáticamente:');
+        $this->line("   ✅ guard '{$scopeLower}' + provider '{$scopePlural}' agregados (backup: config/auth.php.bak).");
+
+        return true;
+    }
+
+    /**
+     * Helper de A4: inserta `$block` justo después del `[` de apertura del
+     * array top-level `$arrayKey` (guards / providers). String-based para
+     * evitar el escaping de preg_replace. Devuelve `null` si no encuentra el
+     * array (formato inesperado).
+     */
+    protected function insertAfterArrayOpen(string $content, string $arrayKey, string $block): ?string
+    {
+        if (! preg_match("/'".preg_quote($arrayKey, '/')."'\\s*=>\\s*\\[/", $content, $m, PREG_OFFSET_CAPTURE)) {
+            return null;
+        }
+
+        $openPos = $m[0][1] + strlen($m[0][0]); // justo después del '['
+        $nlPos = strpos($content, "\n", $openPos);
+        if ($nlPos === false) {
+            return null;
+        }
+        $insertAt = $nlPos + 1;
+
+        return substr($content, 0, $insertAt).$block.substr($content, $insertAt);
+    }
+
+    /**
+     * A9 — orquestación post-scaffold. Corre, en orden seguro:
+     *   setup-sanctum → migrate → discover → seed
+     * Cada paso es opt-in por flag. `migrate` va antes de seed/discover (las
+     * tablas deben existir); `discover` antes de `seed` (el seeder referencia
+     * abilities, aunque las crea con updateOrCreate). `seed` requiere --with-crud.
+     */
+    protected function runPostScaffoldSteps(
+        string $scope,
+        string $scopeLower,
+        bool $withCrud,
+        bool $setupSanctum,
+        bool $migrate,
+        bool $seed,
+        bool $discover,
+    ): void {
+        if ($setupSanctum) {
+            $this->newLine();
+            $this->setupSanctum();
+        }
+
+        if ($migrate) {
+            $this->newLine();
+            $this->info('🗄️  A9: corriendo migraciones (--migrate)...');
+            $this->call('migrate', ['--force' => true]);
+        }
+
+        if ($discover) {
+            $this->newLine();
+            $this->info('🔍 A9: descubriendo abilities (--discover)...');
+            $this->call('mk:discover-abilities', ['--module' => $scope, '--force' => true]);
+        }
+
+        if ($seed) {
+            if (! $withCrud) {
+                $this->warn('⚠️  --seed ignorado: el RolesSeeder solo se genera con --with-crud.');
+
+                return;
+            }
+            $this->newLine();
+            $this->info('🌱 A9: sembrando RBAC (--seed)...');
+            $this->call('db:seed', [
+                '--class' => "App\\Modules\\{$scope}\\Database\\Seeders\\{$scope}RolesSeeder",
+                '--force' => true,
+            ]);
+        }
+    }
+
+    /**
+     * A9/Sanctum — publica las migraciones de Sanctum si faltan y las parchea
+     * a UUID (el scope usa HasUuids). Idempotente: si ya están publicadas, solo
+     * parchea. Antes esto era un WARN manual (`vendor:publish` +
+     * `mk:fix:sanctum-uuids` a mano); ahora `--setup-sanctum` lo automatiza.
+     */
+    protected function setupSanctum(): void
+    {
+        if (! $this->isSanctumInstalled()) {
+            $this->warn('⚠️  --setup-sanctum: `laravel/sanctum` no está instalado. Corré `composer require laravel/sanctum` primero.');
+
+            return;
+        }
+
+        $migrationsPath = function_exists('database_path') ? database_path('migrations') : null;
+        $published = $migrationsPath !== null
+            && is_dir($migrationsPath)
+            && count(glob($migrationsPath.'/*_create_personal_access_tokens_table.php') ?: []) > 0;
+
+        if (! $published) {
+            $this->info('📦 Sanctum: publicando migración personal_access_tokens...');
+            $this->call('vendor:publish', ['--tag' => 'sanctum-migrations']);
+        } else {
+            $this->line('   ✅ Sanctum: migración personal_access_tokens ya publicada.');
+        }
+
+        // El modelo del scope usa HasUuids → tokenable_id debe ser uuidMorphs.
+        $this->info('🔧 Sanctum: parcheando personal_access_tokens a UUID (mk:fix:sanctum-uuids)...');
+        $this->call('mk:fix:sanctum-uuids');
     }
 
     /**
@@ -2353,7 +2552,7 @@ PHP,
         $stubContent = file_get_contents($stubPath);
         $extraCorsPaths = $this->option('with-auth-rbac')
             ? "['sanctum/csrf-cookie']"
-            : "[]";
+            : '[]';
         $rendered = str_replace('{{extraCorsPaths}}', $extraCorsPaths, $stubContent);
 
         // Crear el directorio config/ si no existe (puede no existir en fresh
@@ -2424,7 +2623,7 @@ PHP,
         if (file_exists($routesPath)) {
             $routesContent = file_get_contents($routesPath);
 
-            if (str_contains($routesContent, "me/permissions")) {
+            if (str_contains($routesContent, 'me/permissions')) {
                 $this->line('   📄 Route ya existe, skipping me/permissions.');
             } else {
                 // 1. Insertar `use ...\MePermissionsController;` después del bloque `use`
