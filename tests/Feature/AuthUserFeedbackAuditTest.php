@@ -607,9 +607,55 @@ test('FEEDBACK-A7: seeder concede al admin roles + abilities, no solo el modulo'
 
     // La lista de recursos incluye los tres que el scaffolder rutea.
     expect($seeder)->toContain("\$resources = ['{{moduleNamePluralLower}}', 'roles', 'abilities'];");
-    // El admin itera sobre $resources con las 5 acciones CRUD.
+    // El admin itera sobre $resources usando el enum canónico CrudAction (A8).
     expect($seeder)->toMatch('/foreach\s*\(\s*\$resources\s+as\s+\$resource\s*\)/');
-    expect($seeder)->toContain("['viewAny', 'view', 'create', 'update', 'delete']");
+    expect($seeder)->toContain('CrudAction::all()');
+});
+
+// ─── FEEDBACK-A8 — enum canónico CrudAction ─────────────────────────────────
+
+test('FEEDBACK-A8: existe el stub enum-crud-action con all() + ability()', function () {
+    $enum = stubContents('auth-user/enum-crud-action.stub');
+
+    expect($enum)->toContain('enum CrudAction: string');
+    expect($enum)->toContain("case ViewAny = 'viewAny';");
+    expect($enum)->toContain('public static function all(): array');
+    expect($enum)->toContain('public function ability(string $scope, string $resource): string');
+});
+
+test('FEEDBACK-A8: generateCrudPack genera el enum CrudAction', function () {
+    $src = pkgFileContents('src/Console/Commands/MakeAuthUserCommand.php');
+
+    expect($src)->toContain("'auth-user/enum-crud-action.stub'");
+    expect($src)->toContain("'Enums'");
+});
+
+// ─── FEEDBACK-A1/A3 — Policies default-deny en el pack --with-crud ───────────
+
+test('FEEDBACK-A1/A3: --with-crud genera las 3 Policies + registra Gate::policy', function () {
+    $src = pkgFileContents('src/Console/Commands/MakeAuthUserCommand.php');
+
+    // Genera {Scope}Policy (module-rbac) + Role/Ability (variantes auth-user).
+    expect($src)->toContain("'module-rbac/policy-user.stub'");
+    expect($src)->toContain("'auth-user/policy-role.stub'");
+    expect($src)->toContain("'auth-user/policy-ability.stub'");
+    // Registro vía Gate::policy en el ServiceProvider.
+    expect($src)->toContain('function extendServiceProviderWithPolicies');
+    expect($src)->toContain('Gate::policy(');
+    // Escape hatch.
+    expect($src)->toContain('skip-policies');
+});
+
+test('FEEDBACK-A1/A3: las policies role/ability apuntan al modelo CENTRAL del paquete', function () {
+    // Regresión: NO deben referenciar App\Modules\{Scope}\Models\Role|Ability
+    // (que no existen en el camino --with-crud), sino Mk\Director\Auth\Models\*.
+    $role = stubContents('auth-user/policy-role.stub');
+    $ability = stubContents('auth-user/policy-ability.stub');
+
+    expect($role)->toContain('use Mk\\Director\\Auth\\Models\\Role;');
+    expect($role)->not->toContain('use App\\Modules\\{{ModuleName}}\\Models\\Role;');
+    expect($ability)->toContain('use Mk\\Director\\Auth\\Models\\Ability;');
+    expect($ability)->not->toContain('use App\\Modules\\{{ModuleName}}\\Models\\Ability;');
 });
 
 // ─── FEEDBACK-A9 — flags de orquestación post-scaffold ──────────────────────

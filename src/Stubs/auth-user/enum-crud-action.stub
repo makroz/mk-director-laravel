@@ -1,0 +1,41 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Enums;
+
+/**
+ * CrudAction — enum canónico de las acciones CRUD del scope `{{moduleNameLower}}`.
+ *
+ * FEEDBACK A8: fuente única de verdad de las acciones, reusable por el
+ * {{ModuleName}}RolesSeeder, las rutas y mk:discover-abilities. Evita
+ * hardcodear `['viewAny','view','create','update','delete']` en varios lugares.
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud`.
+ */
+enum CrudAction: string
+{
+    case ViewAny = 'viewAny';
+    case View = 'view';
+    case Create = 'create';
+    case Update = 'update';
+    case Delete = 'delete';
+
+    /**
+     * Todas las acciones CRUD como strings (orden canónico).
+     *
+     * @return array<int, string>
+     */
+    public static function all(): array
+    {
+        return array_map(static fn (self $action): string => $action->value, self::cases());
+    }
+
+    /**
+     * Nombre de la ability para un recurso: `{scope}.{resource}.{action}`.
+     */
+    public function ability(string $scope, string $resource): string
+    {
+        return "{$scope}.{$resource}.{$this->value}";
+    }
+}

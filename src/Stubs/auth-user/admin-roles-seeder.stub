@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\{{ModuleName}}\Database\Seeders;
 
+use App\Modules\{{ModuleName}}\Enums\CrudAction;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 use Mk\Director\Auth\Models\Ability;
@@ -53,7 +54,8 @@ class {{ModuleName}}RolesSeeder extends Seeder
             ['guard' => $scope],
         );
         foreach ($resources as $resource) {
-            foreach (['viewAny', 'view', 'create', 'update', 'delete'] as $action) {
+            // A8: acciones desde el enum canónico CrudAction (SSoT).
+            foreach (CrudAction::all() as $action) {
                 $this->attachAbility($admin, "{$scope}.{$resource}.{$action}", ucfirst($action).' '.$resource.'.');
             }
         }

@@ -146,7 +146,8 @@ class MakeAuthUserCommand extends Command
         {--migrate : (A9) Corre `php artisan migrate` al terminar el scaffold.}
         {--seed : (A9) Corre el {Scope}RolesSeeder al terminar (requiere --with-crud). Siembra super-admin/admin/editor/viewer.}
         {--discover : (A9) Corre `mk:discover-abilities --module={Scope} --force` al terminar.}
-        {--skip-auth-wire : (A4) NO editar config/auth.php automáticamente (solo imprime los snippets, comportamiento pre-A4). Por default el scaffolder cablea el guard+provider de forma idempotente con backup .bak.}';
+        {--skip-auth-wire : (A4) NO editar config/auth.php automáticamente (solo imprime los snippets, comportamiento pre-A4). Por default el scaffolder cablea el guard+provider de forma idempotente con backup .bak.}
+        {--skip-policies : (A1/A3) NO generar las Policies default-deny en el pack --with-crud. Por default, --with-crud genera {Scope}Policy/RolePolicy/AbilityPolicy (default-deny + super-admin bypass) y las registra vía Gate::policy — así mk:make:auth-user --with-crud --with-auth-rbac produce login + RBAC aislado + Policies + CRUD en un solo comando.}';
 
     /**
      * The console command description.
@@ -629,7 +630,9 @@ PHP
 
         // ── MEJORA-02 / BUG-08 (R-PKG-014): generar CRUD completo si --with-crud ──
         if ($withCrud) {
-            $this->generateCrudPack($scope, $scopeLower, $scopePlural, $loginField, $profileFieldsRaw, $requiredFields);
+            // A1/A3: policies default-deny por default con --with-crud (skippable).
+            $withPolicies = ! (bool) $this->option('skip-policies');
+            $this->generateCrudPack($scope, $scopeLower, $scopePlural, $loginField, $profileFieldsRaw, $requiredFields, $withPolicies);
         }
 
         $this->newLine();
@@ -640,7 +643,7 @@ PHP
         $this->line("   • Routes:       /api/{$scopeLower}/auth/{login,refresh,logout,me,forgot,reset}".($withAuthRbac ? ' (rate limited)' : ''));
         $this->line("   • ServiceProv:  app/Modules/{$scope}/Providers/{$scope}ServiceProvider.php");
         if ($withCrud) {
-            $this->line('   • CRUD:         17 archivos (AdminController + RoleController + AbilityController + DTOs + Repository + Service + Factory + Seeder + Requests + Resources)');
+            $this->line('   • CRUD:         Controllers + DTOs + Repository + Service + Factory + Seeder + Requests + Resources + Enums/CrudAction'.((bool) $this->option('skip-policies') ? '' : ' + Policies (default-deny)'));
         }
 
         if ($withAuthRbac) {
@@ -1130,9 +1133,12 @@ PHP
         string $loginField,
         array $profileFields,
         array $requiredFields,
+        bool $withPolicies = true,
     ): void {
+        // A1/A3/A8: 17 base + 1 enum (A8) + 3 policies (A1/A3, si $withPolicies).
+        $fileCount = 18 + ($withPolicies ? 3 : 0);
         $this->newLine();
-        $this->info('📄 Generando CRUD pack (17 archivos):');
+        $this->info("📄 Generando CRUD pack ({$fileCount} archivos):");
 
         $basePath = app_path("Modules/{$scope}");
 
@@ -1146,7 +1152,11 @@ PHP
             'Http/Resources',
             'Database/Factories',
             'Database/Seeders',
+            'Enums', // A8
         ];
+        if ($withPolicies) {
+            $crudDirs[] = 'Policies'; // A1/A3
+        }
         foreach ($crudDirs as $dir) {
             if (! File::exists("{$basePath}/{$dir}")) {
                 File::makeDirectory("{$basePath}/{$dir}", 0755, true);
@@ -1207,14 +1217,90 @@ PHP
         // ── Factory (1) ──
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/admin-factory.stub', 'Database/Factories', "{$scope}Factory.php", $crudReplacements);
 
+        // ── Enum CrudAction (1) — A8 ──
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/enum-crud-action.stub', 'Enums', 'CrudAction.php', $crudReplacements);
+
         // ── Seeder (1) ──
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/admin-roles-seeder.stub', 'Database/Seeders', "{$scope}RolesSeeder.php", $crudReplacements);
+
+        // ── Policies (3) — A1/A3: default-deny + super-admin bypass ──
+        // Reusa los stubs de module-rbac (mismos placeholders + mismo modelo).
+        // Con esto `mk:make:auth-user --with-crud --with-auth-rbac` produce
+        // login + RBAC aislado + Policies + CRUD en un solo comando (A1).
+        if ($withPolicies) {
+            // {Scope}Policy: el stub de module-rbac ya referencia el modelo del
+            // scope (App\Modules\{Scope}\Models\{Scope}) — reusable tal cual.
+            $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'module-rbac/policy-user.stub', 'Policies', "{$scope}Policy.php", $crudReplacements);
+            // Role/Ability: variantes auth-user que apuntan a los modelos CENTRALES
+            // del paquete (Mk\Director\Auth\Models\*), no a modelos módulo-locales.
+            $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/policy-role.stub', 'Policies', 'RolePolicy.php', $crudReplacements);
+            $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/policy-ability.stub', 'Policies', 'AbilityPolicy.php', $crudReplacements);
+        }
 
         // ── Extender routes/api.php con CRUD ──
         $this->extendRoutesWithCrud($basePath, $scope, $scopeLower, $scopePlural);
 
         // ── Extender ServiceProvider con Repository binding ──
         $this->extendServiceProviderWithBinding($basePath, $scope);
+
+        // ── Registrar Policies via Gate::policy en el ServiceProvider (A1/A3) ──
+        if ($withPolicies) {
+            $this->extendServiceProviderWithPolicies($basePath, $scope);
+        }
+    }
+
+    /**
+     * A1/A3 — registra las 3 Policies del pack en el ServiceProvider del scope
+     * vía `Gate::policy()` en `boot()`. Idempotente: si ya están registradas,
+     * no re-inyecta. Agrega el import de `Gate` si falta.
+     */
+    protected function extendServiceProviderWithPolicies(string $basePath, string $scope): void
+    {
+        $providerPath = "{$basePath}/Providers/{$scope}ServiceProvider.php";
+        if (! File::exists($providerPath)) {
+            $this->warn('   ⚠️  ServiceProvider no existe, no se pudo registrar Policies.');
+
+            return;
+        }
+
+        $content = File::get($providerPath);
+
+        if (str_contains($content, "{$scope}Policy::class")) {
+            return; // ya registradas (idempotente).
+        }
+
+        // Import de Gate si falta.
+        if (! str_contains($content, 'use Illuminate\\Support\\Facades\\Gate;')) {
+            $content = preg_replace(
+                '/(use Illuminate\\\\Support\\\\ServiceProvider;\n)/',
+                "$1use Illuminate\\Support\\Facades\\Gate;\n",
+                $content,
+                1,
+            );
+        }
+
+        $registrations =
+            "        // A1/A3: Policies default-deny (super-admin bypass en before()).\n"
+            ."        Gate::policy(\\App\\Modules\\{$scope}\\Models\\{$scope}::class, \\App\\Modules\\{$scope}\\Policies\\{$scope}Policy::class);\n"
+            ."        Gate::policy(\\Mk\\Director\\Auth\\Models\\Role::class, \\App\\Modules\\{$scope}\\Policies\\RolePolicy::class);\n"
+            ."        Gate::policy(\\Mk\\Director\\Auth\\Models\\Ability::class, \\App\\Modules\\{$scope}\\Policies\\AbilityPolicy::class);\n\n";
+
+        $content = preg_replace(
+            '/(public function boot\(\): void\s*\{\n)/',
+            "$1{$registrations}",
+            $content,
+            1,
+            $count,
+        );
+
+        if ($count === 0) {
+            $this->warn('   ⚠️  No se pudo inyectar Gate::policy en boot() (formato inesperado). Registralas a mano.');
+
+            return;
+        }
+
+        File::put($providerPath, $content);
+        $this->line('   ✅ Providers/'.$scope.'ServiceProvider.php (Policies registradas via Gate::policy)');
     }
 
     /**

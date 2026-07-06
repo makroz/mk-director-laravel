@@ -43,7 +43,7 @@ test('command signature incluye --with-crud option', function () {
 
 // ── 17 stubs existen ─────────────────────────────────────────────────────
 
-test('crud pack: 17 stubs existen', function () {
+test('crud pack: stubs existen (incluye enum + policies A1/A3/A8)', function () {
     $required = [
         'admin-controller.stub',
         'role-controller.stub',
@@ -63,6 +63,10 @@ test('crud pack: 17 stubs existen', function () {
         'admin-factory.stub',
         'admin-roles-seeder.stub',
         'auth-user.routes.with-crud.stub',
+        // A8 enum + A1/A3 policies (role/ability apuntan al modelo central).
+        'enum-crud-action.stub',
+        'policy-role.stub',
+        'policy-ability.stub',
     ];
 
     foreach ($required as $stub) {
@@ -168,5 +172,7 @@ test('command handle() orquesta generateCrudPack() cuando --with-crud', function
     $source = (string) file_get_contents($path);
 
     expect($source)->toContain('protected function generateCrudPack');
-    expect($source)->toMatch('/if \(\$withCrud\)\s*\{\s*\$this->generateCrudPack/');
+    // handle() entra al bloque --with-crud y llama a generateCrudPack (con
+    // $withPolicies computado en el medio — A1/A3).
+    expect($source)->toMatch('/if \(\$withCrud\)\s*\{[\s\S]{0,200}?\$this->generateCrudPack/');
 });
