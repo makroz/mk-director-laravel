@@ -14,9 +14,9 @@ declare(strict_types=1);
  * **Qué hace este archivo**:
  *   - `paths`: `['api/*']` cubre todos los endpoints del paquete.
  *     Si usás Sanctum SPA flow (cookie-based), sumá `'sanctum/csrf-cookie'`.
- *   - `allowed_origins`: lee desde `config('mk_director.frontend.frontend_origins')`
- *     (que a su vez lee de `FRONTEND_ORIGINS` env var). Default dev-friendly
- *     para `localhost:3000` y `127.0.0.1:3000` (Next.js dev server).
+ *   - `allowed_origins`: lee `FRONTEND_ORIGINS` (comma-separated) DIRECTO del
+ *     env — NO vía `config()`, por el load-order alfabético (ver nota N3 abajo).
+ *     Default dev-friendly para `localhost:3000` y `127.0.0.1:3000` (Next.js).
  *   - `supports_credentials`: `true` para Sanctum SPA. Si NO usás cookies,
  *     setear `false` y `allowed_headers` no necesita `Authorization`.
  *   - `allowed_methods` / `allowed_headers`: explícitos (no `*`) para
@@ -38,6 +38,30 @@ declare(strict_types=1);
  * con `--force-cors` (próximo sprint, backlog).
  */
 
+/*
+ | FEEDBACK-2 N3 FIX (load-order): NO leer los origins vía `config()` del
+ | namespace `mk_director.frontend`. Laravel carga los config files en orden
+ | ALFABÉTICO, así que `cors.php` se evalúa ANTES que
+ | `mk_director.php` → el lookup devuelve `null` y cae SIEMPRE al default
+ | `localhost:3000`, rompiendo el login del browser para CUALQUIER origin
+ | ≠ 3000 (el preflight OPTIONS responde 204 sin `Access-Control-Allow-Origin`).
+ |
+ | `env('FRONTEND_ORIGINS')` SÍ está disponible a load-time (no depende de
+ | otro config file), así que lo parseamos directo. Fallback a los defaults
+ | dev-friendly de Next.js cuando la env var está vacía.
+ */
+$mkFrontendOrigins = array_values(array_filter(
+    array_map('trim', explode(',', (string) env('FRONTEND_ORIGINS', ''))),
+    static fn (string $origin): bool => $origin !== ''
+));
+
+if ($mkFrontendOrigins === []) {
+    $mkFrontendOrigins = [
+        'http://localhost:3000',
+        'http://127.0.0.1:3000',
+    ];
+}
+
 return [
     /*
     | Paths allow-list. `api/*` cubre todos los endpoints del paquete.
@@ -55,14 +79,12 @@ return [
     'allowed_methods' => ['*'],
 
     /*
-    | Allowed origins. Lee del env var `FRONTEND_ORIGINS` (comma-separated)
-    | o del default en `config/mk_director.php`. Si necesitás wildcards
-    | (e.g. `https://*.example.com`), usá `allowed_origins_patterns` abajo.
+    | Allowed origins. Se resuelven ARRIBA leyendo `FRONTEND_ORIGINS`
+    | DIRECTO del env (comma-separated), NO vía `config()` — ver nota N3.
+    | Si necesitás wildcards (e.g. `https://*.example.com`), usá
+    | `allowed_origins_patterns` abajo.
     */
-    'allowed_origins' => config('mk_director.frontend.frontend_origins', [
-        'http://localhost:3000',
-        'http://127.0.0.1:3000',
-    ]),
+    'allowed_origins' => $mkFrontendOrigins,
 
     /*
     | Wildcard origins (e.g. `https://*.example.com` para subdominios

@@ -111,8 +111,16 @@ class RPackage042RegressionGuardsTest extends TestCase
             "cors.php.stub debe pinear 'api/*' en `paths` (endpoints del paquete).");
         $this->assertStringContainsString("'supports_credentials'", $content,
             "cors.php.stub debe pinear 'supports_credentials' (Sanctum SPA flow).");
-        $this->assertStringContainsString("mk_director.frontend.frontend_origins", $content,
-            "cors.php.stub debe leer 'allowed_origins' desde config(mk_director.frontend.frontend_origins).");
+
+        // FEEDBACK-2 N3: `allowed_origins` DEBE leer `FRONTEND_ORIGINS` DIRECTO
+        // del env, NO vía `config('mk_director...')`. Laravel carga config en
+        // orden alfabético → `cors.php` corre antes que `mk_director.php`, el
+        // lookup devuelve null y cae al default 3000, rompiendo el login del
+        // browser para cualquier origin ≠ 3000. Este guard evita la regresión.
+        $this->assertStringContainsString("env('FRONTEND_ORIGINS'", $content,
+            "cors.php.stub debe leer 'allowed_origins' desde env('FRONTEND_ORIGINS') DIRECTO (N3: load-order).");
+        $this->assertStringNotContainsString("config('mk_director.frontend.frontend_origins'", $content,
+            "cors.php.stub NO debe leer origins vía config() (N3: se evalúa antes que mk_director.php → null → default 3000).");
     }
 
     public function test_cors_stub_has_force_cors_path_for_extra_paths(): void
