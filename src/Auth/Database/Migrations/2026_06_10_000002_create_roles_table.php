@@ -21,6 +21,7 @@ return new class extends Migration
             $table->id();
             $table->string('name')->unique();
             $table->string('guard')->default('web');
+            $table->unsignedTinyInteger('is_fixed')->default(0);
             $table->timestamps();
         });
     }

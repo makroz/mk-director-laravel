@@ -6,6 +6,7 @@ namespace Mk\Director\Auth\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Mk\Director\Auth\Enums\FixedStatus;
 
 /**
  * Role model — groups abilities and is assigned to users.
@@ -18,6 +19,11 @@ class Role extends Model
         'name',
         'guard',
         'description',
+        'is_fixed',
+    ];
+
+    protected $casts = [
+        'is_fixed' => FixedStatus::class,
     ];
 
     /**

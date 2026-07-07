@@ -14,6 +14,7 @@ return new class extends Migration
             $table->id();
             $table->string('name')->unique();
             $table->string('description')->nullable();
+            $table->unsignedTinyInteger('is_fixed')->default(0);
             $table->timestamps();
         });
     }

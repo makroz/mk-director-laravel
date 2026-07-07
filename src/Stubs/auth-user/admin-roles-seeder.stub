@@ -7,6 +7,7 @@ namespace App\Modules\{{ModuleName}}\Database\Seeders;
 use App\Modules\{{ModuleName}}\Enums\CrudAction;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
+use Mk\Director\Auth\Enums\FixedStatus;
 use Mk\Director\Auth\Models\Ability;
 use Mk\Director\Auth\Models\Role;
 
@@ -44,9 +45,9 @@ class {{ModuleName}}RolesSeeder extends Seeder
             // R-PKG-015 BUG-NEW-04: la tabla `roles` del paquete solo tiene `id, name,
             // guard, timestamps`. NO tiene `description`. Quitamos del stub. Si el
             // consumer quiere `description`, agrega una migration custom al paquete.
-            ['guard' => $scope],
+            ['guard' => $scope, 'is_fixed' => FixedStatus::Fixed->value],
         );
-        $this->attachAbility($superAdmin, '*', 'Wildcard: todas las abilities.');
+        $this->attachAbility($superAdmin, '*', 'Wildcard: todas las abilities.', true);
 
         // ── admin: CRUD completo sobre los tres recursos ────────────────
         $admin = Role::query()->updateOrCreate(
@@ -84,14 +85,14 @@ class {{ModuleName}}RolesSeeder extends Seeder
     /**
      * Helper: crea la ability si no existe y la vincula al role via `ability_role` pivot.
      */
-    protected function attachAbility(Role $role, string $name, ?string $description = null): void
+    protected function attachAbility(Role $role, string $name, ?string $description = null, bool $isFixed = false): void
     {
         $ability = Ability::query()->updateOrCreate(
             ['name' => $name],
             // R-PKG-015 BUG-NEW-03: la tabla `abilities` del paquete solo tiene
             // `id, name, description, timestamps`. NO tiene `module`. Quitamos del
             // stub. Si el consumer quiere `module`, agrega una migration custom.
-            ['description' => $description],
+            ['description' => $description, 'is_fixed' => $isFixed ? FixedStatus::Fixed->value : FixedStatus::Editable->value],
         );
 
         DB::table('ability_role')->updateOrInsert(

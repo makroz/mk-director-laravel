@@ -10,7 +10,10 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
 use Mk\Director\Auth\Concerns\HasAbilities;
 use Mk\Director\Auth\Concerns\HasRoles;
+use Mk\Director\Auth\Enums\FixedStatus;
+use Mk\Director\Auth\Models\Ability;
 use Mk\Director\Auth\Models\AuthUser;
+use Mk\Director\Auth\Models\Role;
 
 /**
  * `php artisan mk:auth:create-super-admin` — crea el primer usuario
@@ -243,6 +246,15 @@ class AuthCreateSuperAdminCommand extends Command
         //    existe, warning explícito (no error fatal) para que el consumer
         //    sepa que necesita scaffoldear el seeder.
         $this->seedAdminRolesIfAvailable();
+
+        // Pin el flag `is_fixed` en las filas de sistema que NUNCA deben
+        // editarse/eliminarse desde el CRUD: el role `super-admin` y la
+        // ability wildcard `*`. Idempotente (mass update por nombre). Se
+        // corre solo si super-admin fue parte de la siembra.
+        if (in_array('super-admin', $rolesToSeed, true)) {
+            Role::query()->where('name', 'super-admin')->update(['is_fixed' => FixedStatus::Fixed->value]);
+            Ability::query()->where('name', '*')->update(['is_fixed' => FixedStatus::Fixed->value]);
+        }
 
         $this->newLine();
         $infoVerb = count($rolesToSeed) > 1 ? 'Roles sembrados.' : 'Super-admin creado.';

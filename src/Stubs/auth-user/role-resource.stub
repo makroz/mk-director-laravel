@@ -6,6 +6,7 @@ namespace App\Modules\{{ModuleName}}\Http\Resources;
 
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
+use Mk\Director\Auth\Enums\FixedStatus;
 
 /**
  * Resource para Role.
@@ -26,6 +27,7 @@ class RoleResource extends JsonResource
             'name' => $this->name,
             'guard' => $this->guard,
             'description' => $this->description,
+            'is_fixed' => $this->is_fixed instanceof FixedStatus ? $this->is_fixed->value : (int) ($this->is_fixed ?? 0),
             'abilities' => $this->whenLoaded('abilities', fn () => $this->abilities->pluck('name')),
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
