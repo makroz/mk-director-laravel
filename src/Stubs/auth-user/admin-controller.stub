@@ -11,6 +11,8 @@ use App\Modules\{{ModuleName}}\Http\Requests\UpdateAdminRequest;
 use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
 use App\Modules\{{ModuleName}}\Services\{{ModuleName}}Service;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Mk\Director\Auth\Models\Role;
 use Mk\Director\Controllers\SmartController;
 
 /**
@@ -65,6 +67,27 @@ class {{ModuleName}}Controller extends SmartController
     public function __construct()
     {
         $this->middleware('mk.auth:{{moduleNameLower}}');
+    }
+
+    /**
+     * Metadata de dominio para los formularios de creación/edición: la lista
+     * de roles disponibles en el scope `{{moduleNameLower}}`.
+     *
+     * Se emite bajo `__extraData.roles`. El front (`useMkList`) la pide con
+     * `__extraData=1` SOLO en la primera carga de la lista y la cachea, así el
+     * formulario NO repide los roles cada vez que se abre. Poné
+     * `$mkConfig['extraDataForce'] => true` si necesitás que venga en cada request.
+     */
+    public function setExtraData(Request $request, $data): array
+    {
+        $scope = '{{moduleNameLower}}';
+
+        return [
+            'roles' => Role::query()
+                ->where('guard', $scope)
+                ->orderBy('name')
+                ->get(['id', 'name', 'description']),
+        ];
     }
 
     /**

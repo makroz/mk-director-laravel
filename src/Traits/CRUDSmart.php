@@ -303,9 +303,16 @@ trait CRUDSmart
         // so service keys win on conflict. Cursor pagination cursors are
         // auto-extracted by BaseController::extractPaginationMetadata() for
         // CursorPaginator instances.
+        // Hooks resolve to the CONTROLLER ($this) when it overrides them, else
+        // the service. This lets a SmartController subclass provide afterList /
+        // setExtraData directly (e.g. per-resource metadata) even when several
+        // controllers share one service.
         $total = method_exists($paginator, 'total') ? $paginator->total() : null;
-        if ($service && method_exists($service, 'afterList')) {
-            $rows = $service->afterList($request, $paginator->items(), $total);
+        $afterListHook = method_exists($this, 'afterList')
+            ? $this
+            : (($service && method_exists($service, 'afterList')) ? $service : null);
+        if ($afterListHook) {
+            $rows = $afterListHook->afterList($request, $paginator->items(), $total);
             if ($rows !== null && method_exists($paginator, 'setCollection')) {
                 $paginator->setCollection(collect($rows));
             }
@@ -320,9 +327,13 @@ trait CRUDSmart
         // metadata is ALWAYS auto-emitted by BaseController.
         $extra = [];
         $extraDataForce = $this->mkConfig['extraDataForce'] ?? false;
-        if (($request->boolean('__extraData') || $extraDataForce)
-            && $service && method_exists($service, 'setExtraData')) {
-            $extra = $service->setExtraData($request, $paginator->items()) ?? [];
+        if ($request->boolean('__extraData') || $extraDataForce) {
+            $extraDataHook = method_exists($this, 'setExtraData')
+                ? $this
+                : (($service && method_exists($service, 'setExtraData')) ? $service : null);
+            if ($extraDataHook) {
+                $extra = $extraDataHook->setExtraData($request, $paginator->items()) ?? [];
+            }
         }
 
         // Plugin Hook: afterResponse (receives the raw paginator so plugins
