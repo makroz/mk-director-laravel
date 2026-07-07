@@ -88,10 +88,12 @@ test('Controller::index() does NOT wrap response in legacy nested array shape (R
     expect($body)->not->toContain('sendResponse([');
 });
 
-test('Controller::index() still builds $extra via afterList hook (regression guard)', function () {
+test('Controller::index() calls afterList (data transform) then setExtraData (metadata) hooks (regression guard)', function () {
     $body = indexMethodSource();
     expect($body)->not->toBeEmpty();
 
-    // The pre-GA logic to call afterList hook (consumer custom metadata) is preserved.
+    // afterList() transforms/replaces the data rows (default passthrough);
+    // setExtraData() runs after and builds the `__extraData` metadata ($extra).
     expect($body)->toContain('afterList(');
+    expect($body)->toContain('setExtraData(');
 });

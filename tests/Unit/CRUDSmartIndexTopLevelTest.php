@@ -103,17 +103,16 @@ test('CRUDSmart::index() does NOT wrap response in legacy nested array shape (R-
     expect($body)->not->toContain('sendResponse($response)');
 });
 
-test('CRUDSmart::index() still assembles $extra via afterList service hook (regression guard)', function () {
+test('CRUDSmart::index() calls afterList (data transform) then setExtraData (metadata) hooks (regression guard)', function () {
     $body = crudsMartIndexMethodSource();
     expect($body)->not->toBeEmpty();
 
-    // The pre-GA logic to call service.afterList (consumer custom hooks) is
-    // preserved. R-PKG-024 only changes how $extra is passed to sendResponse,
-    // not how it is built (R-PKG-024 refactor: $extra = $service->afterList(...)
-    // — the array_merge pattern was only needed when combining with the
-    // auto-extracted pagination defaults in CRUDSmart itself; now BaseController
-    // handles the merge, so CRUDSmart just assigns the service extras).
+    // afterList() TRANSFORMS/REPLACES the data rows (default passthrough);
+    // its return is written back into the paginator. setExtraData() runs AFTER
+    // afterList and builds the `__extraData` metadata block ($extra). Both hooks
+    // are dispatched via method_exists guards so services stay optional.
     expect($body)->toContain('afterList(');
+    expect($body)->toContain('setExtraData(');
 });
 
 test('CRUDSmart::index() still fires afterResponse plugin hook (regression guard)', function () {

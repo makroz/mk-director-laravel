@@ -67,9 +67,24 @@ interface MkModuleServiceInterface
     public function beforeList(Request $request, $query);
 
     /**
-     * Hook after list - agregar datos extra
+     * Hook after list — transformar/reemplazar las filas de `data`.
+     *
+     * Recibe los items paginados y retorna las filas (posiblemente
+     * transformadas) que REEMPLAZAN a `data` en el response. Corre ANTES
+     * de setExtraData(). Si no se sobreescribe, retorna el mismo $data
+     * sin tocar (passthrough).
      */
-    public function afterList(Request $request, $data, int $total): array;
+    public function afterList(Request $request, $data, int $total);
+
+    /**
+     * Hook after list — construir el bloque de metadata `__extraData`.
+     *
+     * Se llama DESPUÉS de afterList(), recibe las filas (posiblemente
+     * transformadas). Retorna un array que se mergea en `__extraData`
+     * (hermano de `data`). Si no se sobreescribe, retorna [] — la metadata
+     * de paginación la sigue emitiendo BaseController automáticamente.
+     */
+    public function setExtraData(Request $request, $data): array;
 
     /**
      * Hook before search - agregar condiciones de búsqueda

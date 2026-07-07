@@ -296,15 +296,24 @@ trait CRUDSmart
         // auto-extracts items to `data` and pagination metadata to
         // `__extraData` top-level. No flag, no opt-in, no `data.data`.
         //
-        // Custom extras (from service.afterList) are merged by BaseController
-        // AFTER its auto-extracted pagination metadata, so service keys
-        // win on conflict. Cursor pagination cursors are auto-extracted by
-        // BaseController::extractPaginationMetadata() for CursorPaginator
-        // instances.
-        $extra = [];
+        // afterList() TRANSFORMS/REPLACES the data rows (default: passthrough);
+        // its return REPLACES `data`. setExtraData() runs AFTER afterList and
+        // builds the `__extraData` metadata block (default: []). Its keys are
+        // merged by BaseController AFTER the auto-extracted pagination metadata,
+        // so service keys win on conflict. Cursor pagination cursors are
+        // auto-extracted by BaseController::extractPaginationMetadata() for
+        // CursorPaginator instances.
+        $total = method_exists($paginator, 'total') ? $paginator->total() : null;
         if ($service && method_exists($service, 'afterList')) {
-            $total = method_exists($paginator, 'total') ? $paginator->total() : null;
-            $extra = $service->afterList($request, $paginator->items(), $total);
+            $rows = $service->afterList($request, $paginator->items(), $total);
+            if ($rows !== null && method_exists($paginator, 'setCollection')) {
+                $paginator->setCollection(collect($rows));
+            }
+        }
+
+        $extra = [];
+        if ($service && method_exists($service, 'setExtraData')) {
+            $extra = $service->setExtraData($request, $paginator->items()) ?? [];
         }
 
         // Plugin Hook: afterResponse (receives the raw paginator so plugins

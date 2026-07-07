@@ -41,10 +41,17 @@ abstract class Controller extends BaseController
         // auto-extracts items to `data` and pagination metadata to
         // `__extraData` top-level. No flag, no opt-in, no `data.data`.
         //
-        // Custom extras (from afterList hook) are merged by BaseController
-        // AFTER its auto-extracted pagination metadata, so hook keys
-        // win on conflict.
-        $extra = $this->afterList($request, $paginator->items(), $paginator->total());
+        // afterList() TRANSFORMS/REPLACES the data rows (default: passthrough).
+        // Its return REPLACES `data`. setExtraData() runs AFTER afterList and
+        // builds the `__extraData` metadata block (default: []); its keys are
+        // merged by BaseController AFTER the auto-extracted pagination metadata,
+        // so hook keys win on conflict.
+        $rows = $this->afterList($request, $paginator->items(), $paginator->total());
+        if ($rows !== null && method_exists($paginator, 'setCollection')) {
+            $paginator->setCollection(collect($rows));
+        }
+
+        $extra = $this->setExtraData($request, $paginator->items()) ?? [];
 
         return $this->sendResponse($paginator, '', 200, $extra);
     }
@@ -114,11 +121,29 @@ abstract class Controller extends BaseController
     }
 
     /**
-     * Modify response data after list is complete.
+     * Hook after list — transform/replace the data rows.
+     *
+     * Receives the paginated items and returns the (possibly transformed)
+     * rows that will REPLACE `data` in the response. Runs BEFORE
+     * setExtraData(). If not overridden, returns the same $data untouched
+     * (passthrough).
      */
-    public function afterList(Request $request, $data, $total) 
-    { 
-        return ['total' => $total]; 
+    public function afterList(Request $request, $data, $total)
+    {
+        return $data;
+    }
+
+    /**
+     * Hook after list — build the `__extraData` metadata block.
+     *
+     * Called AFTER afterList(), receives the (possibly transformed) rows.
+     * Returns an array merged into `__extraData` (sibling of `data`). If not
+     * overridden, returns [] so nothing extra is added — pagination metadata
+     * is still auto-emitted by BaseController.
+     */
+    public function setExtraData(Request $request, $data): array
+    {
+        return [];
     }
 
     // --- CRUD Hooks (Overridable) ---
