@@ -1,0 +1,54 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Enums;
+
+/**
+ * {{ModuleName}}Status — enum canónico del estado de un `{{moduleNameLower}}`.
+ *
+ * FEEDBACK A8: antes había que crear a mano un enum de `status` + la columna
+ * cada vez. Con `--with-status` el scaffolder pinea este enum + la columna
+ * `status` (unsignedTinyInteger, default Active) + el cast en el modelo.
+ *
+ * Backing NUMÉRICO (int), no string: es la convención de la org (mismo patrón
+ * que ReservationStatus/DebtStatus/ApprovedStatus). Guardar `1`/`0` en un
+ * TINYINT es más barato que un varchar y evita drift de literales string
+ * sueltos sobre una columna de estado.
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-status`.
+ */
+enum {{ModuleName}}Status: int
+{
+    case Active = 1;
+    case Inactive = 0;
+
+    /**
+     * Estado por defecto al crear un `{{moduleNameLower}}`.
+     */
+    public static function default(): self
+    {
+        return self::Active;
+    }
+
+    /**
+     * Todos los valores del enum (orden de declaración).
+     *
+     * @return array<int, int>
+     */
+    public static function values(): array
+    {
+        return array_map(static fn (self $status): int => $status->value, self::cases());
+    }
+
+    /**
+     * Label human-readable para UI / responses.
+     */
+    public function label(): string
+    {
+        return match ($this) {
+            self::Active => 'Activo',
+            self::Inactive => 'Inactivo',
+        };
+    }
+}

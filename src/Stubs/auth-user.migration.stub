@@ -55,7 +55,7 @@ return new class extends Migration
             // con "column photo_path not found". El accessor `getPhotoUrlAttribute()`
             // vive en el modelo. Si no usás fotos, la columna nullable no molesta.
             $table->string('photo_path')->nullable();
-            {{profileFieldsColumns}}$table->timestamp('email_verified_at')->nullable();
+            {{profileFieldsColumns}}{{statusColumn}}$table->timestamp('email_verified_at')->nullable();
             $table->string('password');
             $table->string('auth_scope')->default('{{moduleNameLower}}')->index();
             $table->rememberToken();
