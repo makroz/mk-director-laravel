@@ -137,6 +137,7 @@ class MakeAuthUserCommand extends Command
         {--login-field=email : Campo usado para login (default: email). BC: si no se pasa, idéntico a v1.4.0. Valores comunes: email, ci, phone, username, documento.}
         {--with-auth-rbac : Habilita RBAC integration (ability checks en /me y /logout), rate limiting en /login, /forgot, /reset, y audit log via AuthEvent (R-PKG-010). Default BC: false. Configurar abilities + rate_limits en config/mk_director.php.}
         {--with-crud : Genera CRUD completo del scope + RBAC triada (AdminController + RoleController + AbilityController + DTOs + Repository + Service + Factory + Seeder + Requests + Resources + ServiceProvider binding). Default BC: false. Ortogonal con --with-auth-rbac, --login-field, --profile-fields. Spec: R-PKG-014.}
+        {--with-status : (A8) Genera un enum {Scope}Status (int-backed: Active=1, Inactive=0), la columna `status` (unsignedTinyInteger, default Active, index) en la migración, y el cast en el modelo. Default BC: false. Ortogonal con --with-crud (funciona con o sin él). Evita tener que crear el enum + columna de estado a mano.}
         {--with-permissions-endpoint : Genera endpoint opt-in `GET /api/{scope}/auth/me/permissions` (MePermissionsController) que retorna el desglose de abilities (direct + via roles). Opt-in porque pinea un controller extra; pinearlo solo si tu UI tiene pantalla de "Manage permissions". Default BC: false. (R-PKG-042 FASE18-05).}
         {--force-cors : Re-pinear `config/cors.php` aunque ya exista. Default: skip si ya existe (BC). (R-PKG-042 FASE18-07).}
         {--profile-fields= : Campos adicionales para el perfil del scope (CSV con sintaxis key[:type], default: ninguno = BC). Cada field se agrega como columna del tipo correspondiente en la tabla del scope, en $fillable del modelo, y se expone en /me + PATCH /me + /register. Sin tipo = string (BC con R-PKG-011). Tipos soportados: string, text, int, decimal, bool, date, datetime, json (R-PKG-012). Ortogonal con --login-field, --with-auth-rbac y --verify-email. Ej: --profile-fields=name,birthdate:date,age:int (R-PKG-011 + R-PKG-012).}
@@ -164,6 +165,8 @@ class MakeAuthUserCommand extends Command
         $loginField = $this->resolveLoginField((string) $this->option('login-field'));
         $withAuthRbac = (bool) $this->option('with-auth-rbac');
         $withCrud = (bool) $this->option('with-crud');
+        // A8: enum {Scope}Status + columna `status` + cast en el modelo.
+        $withStatus = (bool) $this->option('with-status');
         // R-PKG-042 FASE18-05: opt-in endpoint para desglose de abilities.
         $withPermissionsEndpoint = (bool) $this->option('with-permissions-endpoint');
         // R-PKG-042 FASE18-07: force re-pinear config/cors.php aunque exista.
@@ -540,12 +543,34 @@ PHP
             $profileFieldsReplacements['{{updateProfileRoute}}'] = '';
         }
 
+        // A8 — placeholders condicionales para `--with-status`. Default mode
+        // (sin flag): las 3 keys son string vacío → BC preservada, el modelo y
+        // la migración salen idénticos a la versión sin status. Con el flag:
+        //   - migración: columna `status` unsignedTinyInteger, default Active, index.
+        //   - modelo: `'status'` en $fillable + cast al enum {Scope}Status.
+        // El default de la columna se resuelve del propio enum ({Scope}Status::
+        // default()->value) para que el enum sea la ÚNICA fuente de verdad del
+        // valor por defecto. El enum se genera aparte (ver abajo, tras los stubs base).
+        $statusEnumFqcn = "\\App\\Modules\\{$scope}\\Enums\\{$scope}Status";
+        $statusReplacements = [
+            '{{statusColumn}}' => $withStatus
+                ? "\$table->unsignedTinyInteger('status')->default({$statusEnumFqcn}::default()->value)->index();\n            "
+                : '',
+            '{{statusFillableEntry}}' => $withStatus
+                ? "        'status',\n"
+                : '',
+            '{{statusCastEntry}}' => $withStatus
+                ? "        'status' => {$statusEnumFqcn}::class,\n"
+                : '',
+        ];
+
         $extraReplacements = array_merge(
             $loginFieldReplacements,
             $rbacReplacements,
             $profileFieldsReplacements,
             $verifyEmailReplacements,
             $factoryReplacements,
+            $statusReplacements,
         );
 
         $this->info("🔐 Generando scope de autenticación MK: {$scope}".($withAuthRbac ? ' (with RBAC)' : ''));
@@ -581,6 +606,18 @@ PHP
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.auth-controller.stub', 'Http/Controllers', 'AuthController.php', $extraReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.routes.stub', 'Http/Routes', 'api.php', $extraReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.service-provider.stub', 'Providers', "{$scope}ServiceProvider.php");
+
+        // A8 — enum {Scope}Status (int-backed). Ortogonal a --with-crud: si
+        // --with-crud está activo el dir `Enums/` lo crea el pack CRUD, pero el
+        // enum de status debe generarse igual con o sin CRUD. Por eso creamos el
+        // dir acá de forma idempotente y lo generamos en el flujo base.
+        if ($withStatus) {
+            $enumsDir = "{$basePath}/Enums";
+            if (! File::exists($enumsDir)) {
+                File::makeDirectory($enumsDir, 0755, true);
+            }
+            $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/enum-status.stub', 'Enums', "{$scope}Status.php", $extraReplacements);
+        }
 
         $this->newLine();
         $this->info('🔌 Auto-registrando ServiceProvider:');

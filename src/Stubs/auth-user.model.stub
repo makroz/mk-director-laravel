@@ -77,7 +77,7 @@ class {{ModuleName}} extends AuthUser
         // so the column + fillable + accessor ship together — no more
         // "column photo_path not found" on upload.
         'photo_path',
-{{profileFieldsFillableEntries}}        'password',
+{{profileFieldsFillableEntries}}{{statusFillableEntry}}        'password',
         'auth_scope',
         'client_id',
     ];
@@ -90,7 +90,7 @@ class {{ModuleName}} extends AuthUser
      * @var array<string, string>
      */
     protected $casts = [
-{{emailVerifiedAtCastEntry}}{{profileFieldsCastEntries}}        'password' => 'hashed',
+{{emailVerifiedAtCastEntry}}{{profileFieldsCastEntries}}{{statusCastEntry}}        'password' => 'hashed',
     ];
 
     /**
