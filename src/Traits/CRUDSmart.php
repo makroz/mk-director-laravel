@@ -311,8 +311,17 @@ trait CRUDSmart
             }
         }
 
+        // setExtraData() only runs when the client asks for it (query param
+        // `__extraData`) OR the controller config forces it
+        // (`$mkConfig['extraDataForce'] => true`). The front
+        // (useMkList/useMkInfiniteList) sends `__extraData=1` only on the first
+        // list load and caches the result, so this domain metadata — which
+        // rarely changes — is not recomputed on every page/refetch. Pagination
+        // metadata is ALWAYS auto-emitted by BaseController.
         $extra = [];
-        if ($service && method_exists($service, 'setExtraData')) {
+        $extraDataForce = $this->mkConfig['extraDataForce'] ?? false;
+        if (($request->boolean('__extraData') || $extraDataForce)
+            && $service && method_exists($service, 'setExtraData')) {
             $extra = $service->setExtraData($request, $paginator->items()) ?? [];
         }
 

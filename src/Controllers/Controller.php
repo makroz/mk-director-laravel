@@ -17,6 +17,14 @@ abstract class Controller extends BaseController
     protected $modelClass = null;
 
     /**
+     * Force setExtraData() to run on every list request, even when the
+     * client does NOT send the `__extraData` query param. Default false —
+     * the domain metadata is computed only on demand (first load). Set to
+     * true when the extra data changes often and must stay fresh per page.
+     */
+    protected bool $extraDataForce = false;
+
+    /**
      * List all resources with pagination, filters, sorting, and search.
      */
     public function index(Request $request)
@@ -51,7 +59,15 @@ abstract class Controller extends BaseController
             $paginator->setCollection(collect($rows));
         }
 
-        $extra = $this->setExtraData($request, $paginator->items()) ?? [];
+        // setExtraData() only runs when the client asks for it (query param
+        // `__extraData`) OR the controller forces it ($extraDataForce = true).
+        // The front (useMkList/useMkInfiniteList) sends `__extraData=1` only on
+        // the first list load and caches the result, so this domain metadata —
+        // which rarely changes — is not recomputed on every page/refetch.
+        // Pagination metadata is ALWAYS auto-emitted by BaseController.
+        $extra = ($request->boolean('__extraData') || $this->extraDataForce)
+            ? ($this->setExtraData($request, $paginator->items()) ?? [])
+            : [];
 
         return $this->sendResponse($paginator, '', 200, $extra);
     }
