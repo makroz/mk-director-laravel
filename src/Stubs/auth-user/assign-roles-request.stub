@@ -30,7 +30,11 @@ class AssignRolesRequest extends FormRequest
         $existingRoleNames = Role::query()->pluck('name')->all();
 
         return [
-            'roles' => ['required', 'array'],
+            // BACK-03 (FEEDBACK5): `present` (no `required`) para que `{ "roles": [] }`
+            // sea válido y se puedan QUITAR todos los roles vía este endpoint.
+            // `present` exige la clave en el body pero admite el array vacío;
+            // `required` la rechazaba con 422, imposibilitando limpiar.
+            'roles' => ['present', 'array'],
             'roles.*' => ['string', 'in:'.implode(',', $existingRoleNames)],
         ];
     }
