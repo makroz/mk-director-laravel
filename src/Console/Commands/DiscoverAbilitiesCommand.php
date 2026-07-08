@@ -729,5 +729,16 @@ class DiscoverAbilitiesCommand extends Command
         }
 
         $this->table(['Scope', 'Source', 'Action', 'Ability', 'Description'], $rows);
+
+        // BACK-02 (FEEDBACK5): la columna `Source` confundía ("¿lee las rutas reales
+        // o deriva por nombre?"). Leyenda explícita de los dos valores posibles:
+        $this->newLine();
+        $this->line('  <comment>Source</comment>:');
+        $this->line('    • <info>provider</info> — el {Scope}ModuleServiceProvider::discoverAbilities() declaró');
+        $this->line('      las abilities explícitamente (fuente autoritativa).');
+        $this->line('    • <info>fallback</info> — el provider NO implementa discoverAbilities(); las abilities');
+        $this->line('      se derivaron de atributos #[MkAbility] + docblocks @mk-ability en los');
+        $this->line('      controllers (convención). NO es introspección de rutas: `route:list` es');
+        $this->line('      sólo informativo, el descubrimiento NO lee la routing table.');
     }
 }
