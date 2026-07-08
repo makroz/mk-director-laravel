@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Mk\Director\Tests\Feature;
 
-use Illuminate\Filesystem\Filesystem;
 use Mk\Director\Tests\MkLaravelTestCase;
 
 /**
@@ -70,10 +69,10 @@ test('R-PKG-019 BUG-NEW-28: admin-factory.stub no longer hardcodes email_verifie
 test('R-PKG-019 BUG-NEW-28: stub renders valid PHP (php -l passes)', function () {
     $stub = (string) file_get_contents(dirname(__DIR__, 2).'/src/Stubs/auth-user/admin-factory.stub');
 
-    // Reemplazos básicos (lo que hace el scaffolder real).
+    // Reemplazos básicos (lo que hace el scaffolder real, caso sin --with-status).
     $rendered = str_replace(
-        ['{{ModuleName}}', '{{moduleNameLower}}'],
-        ['Admin', 'admin'],
+        ['{{ModuleName}}', '{{moduleNameLower}}', '{{statusFactoryDefault}}', '{{factoryStateMethods}}'],
+        ['Admin', 'admin', '', "    public function inactive(): static\n    {\n        return \$this->state(fn () => ['is_active' => false]);\n    }\n"],
         $stub
     );
 
@@ -90,8 +89,8 @@ test('R-PKG-019 BUG-NEW-28: rendered stub has correct Schema::hasColumn wrapping
     $stub = (string) file_get_contents(dirname(__DIR__, 2).'/src/Stubs/auth-user/admin-factory.stub');
 
     $rendered = str_replace(
-        ['{{ModuleName}}', '{{moduleNameLower}}'],
-        ['Member', 'member'],
+        ['{{ModuleName}}', '{{moduleNameLower}}', '{{statusFactoryDefault}}', '{{factoryStateMethods}}'],
+        ['Member', 'member', '', "    public function inactive(): static\n    {\n        return \$this->state(fn () => ['is_active' => false]);\n    }\n"],
         $stub
     );
 
@@ -102,5 +101,5 @@ test('R-PKG-019 BUG-NEW-28: rendered stub has correct Schema::hasColumn wrapping
     expect($rendered)->toMatch('/if\s*\(\s*Schema::hasColumn\([^)]+\)[^{]*\{[^}]*\}/s');
 
     // Y debe tener `Schema::hasColumn((new Member())->getTable()` (rendered con el module name).
-    expect($rendered)->toContain("Schema::hasColumn((new Member())->getTable()");
+    expect($rendered)->toContain('Schema::hasColumn((new Member())->getTable()');
 });

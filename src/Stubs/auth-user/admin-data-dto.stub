@@ -31,7 +31,7 @@ final readonly class {{ModuleName}}Data
         public string $name,
         public string ${{loginField}},
         public ?string $password = null,
-{{profileFieldsFillable}}    ) {}
+{{profileFieldsFillable}}{{statusDtoParam}}    ) {}
 
     /**
      * Construye desde un Request HTTP. `photo` puede venir como `UploadedFile`
@@ -43,7 +43,7 @@ final readonly class {{ModuleName}}Data
             name: (string) $request->input('name'),
             {{loginField}}: (string) $request->input('{{loginField}}'),
             password: $request->input('password'),
-{{profileFieldsFromRequest}}        );
+{{profileFieldsFromRequest}}{{statusDtoFromRequest}}        );
     }
 
     /**
@@ -55,7 +55,7 @@ final readonly class {{ModuleName}}Data
             name: (string) ($data['name'] ?? ''),
             {{loginField}}: (string) ($data['{{loginField}}'] ?? ''),
             password: $data['password'] ?? null,
-{{profileFieldsFromArray}}        );
+{{profileFieldsFromArray}}{{statusDtoFromArray}}        );
     }
 
     /**
@@ -69,6 +69,6 @@ final readonly class {{ModuleName}}Data
             'name' => $this->name,
             '{{loginField}}' => $this->{{loginField}},
             'password' => $this->password,
-{{profileFieldsToArray}}        ], fn ($v) => $v !== null);
+{{profileFieldsToArray}}{{statusDtoToArray}}        ], fn ($v) => $v !== null);
     }
 }

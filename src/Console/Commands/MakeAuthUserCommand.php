@@ -137,7 +137,8 @@ class MakeAuthUserCommand extends Command
         {--login-field=email : Campo usado para login (default: email). BC: si no se pasa, idéntico a v1.4.0. Valores comunes: email, ci, phone, username, documento.}
         {--with-auth-rbac : Habilita RBAC integration (ability checks en /me y /logout), rate limiting en /login, /forgot, /reset, y audit log via AuthEvent (R-PKG-010). Default BC: false. Configurar abilities + rate_limits en config/mk_director.php.}
         {--with-crud : Genera CRUD completo del scope + RBAC triada (AdminController + RoleController + AbilityController + DTOs + Repository + Service + Factory + Seeder + Requests + Resources + ServiceProvider binding). Default BC: false. Ortogonal con --with-auth-rbac, --login-field, --profile-fields. Spec: R-PKG-014.}
-        {--with-status : (A8) Genera un enum {Scope}Status (int-backed: Active=1, Inactive=0), la columna `status` (unsignedTinyInteger, default Active, index) en la migración, y el cast en el modelo. Default BC: false. Ortogonal con --with-crud (funciona con o sin él). Evita tener que crear el enum + columna de estado a mano.}
+        {--with-status : (A8/N8) Genera un enum {Scope}Status (int-backed, valores arrancan en 1 — NUNCA 0, para no colisionar con el falsy-check de <MkSelect>), la columna `status` (unsignedTinyInteger, default = primer estado, index) en la migración, el cast en el modelo, y (con --with-crud) lo threadea en Resource/DTO/Factory/Requests. Default BC: false. Ortogonal con --with-crud. Personalizá los estados con --status-values.}
+        {--status-values= : (N8) CSV de estados para --with-status (StudlyCase, ej: Active,Inactive,Suspended). Default: Active,Inactive. Los valores se asignan 1,2,3... en orden; el primero es el default de la columna. Solo aplica con --with-status.}
         {--with-permissions-endpoint : Genera endpoint opt-in `GET /api/{scope}/auth/me/permissions` (MePermissionsController) que retorna el desglose de abilities (direct + via roles). Opt-in porque pinea un controller extra; pinearlo solo si tu UI tiene pantalla de "Manage permissions". Default BC: false. (R-PKG-042 FASE18-05).}
         {--force-cors : Re-pinear `config/cors.php` aunque ya exista. Default: skip si ya existe (BC). (R-PKG-042 FASE18-07).}
         {--profile-fields= : Campos adicionales para el perfil del scope (CSV con sintaxis key[:type], default: ninguno = BC). Cada field se agrega como columna del tipo correspondiente en la tabla del scope, en $fillable del modelo, y se expone en /me + PATCH /me + /register. Sin tipo = string (BC con R-PKG-011). Tipos soportados: string, text, int, decimal, bool, date, datetime, json (R-PKG-012). Ortogonal con --login-field, --with-auth-rbac y --verify-email. Ej: --profile-fields=name,birthdate:date,age:int (R-PKG-011 + R-PKG-012).}
@@ -167,11 +168,15 @@ class MakeAuthUserCommand extends Command
         $withCrud = (bool) $this->option('with-crud');
         // A8: enum {Scope}Status + columna `status` + cast en el modelo.
         $withStatus = (bool) $this->option('with-status');
+        // N8: estados del enum (ordenados, valores 1..N). [] si no --with-status.
+        $statusStates = $withStatus
+            ? $this->resolveStatusStates((string) $this->option('status-values'))
+            : [];
         // R-PKG-042 FASE18-05: opt-in endpoint para desglose de abilities.
         $withPermissionsEndpoint = (bool) $this->option('with-permissions-endpoint');
         // R-PKG-042 FASE18-07: force re-pinear config/cors.php aunque exista.
         $forceCors = (bool) $this->option('force-cors');
-        $profileFieldsRaw = $this->resolveProfileFields((string) $this->option('profile-fields'), $loginField);
+        $profileFieldsRaw = $this->resolveProfileFields((string) $this->option('profile-fields'), $loginField, $withStatus);
         $verifyEmailRequested = (bool) $this->option('verify-email');
         $requiredFields = $this->resolveRequiredProfileFields((string) $this->option('profile-fields-required'), $profileFieldsRaw);
         // A4 + A9 — auto-wire config/auth.php + post-scaffold orchestration.
@@ -200,6 +205,11 @@ class MakeAuthUserCommand extends Command
 
         if ($requiredFields === null) {
             // resolveRequiredProfileFields() ya imprimió el error específico.
+            return self::FAILURE;
+        }
+
+        if ($statusStates === null) {
+            // resolveStatusStates() ya imprimió el error específico.
             return self::FAILURE;
         }
 
@@ -562,6 +572,10 @@ PHP
             '{{statusCastEntry}}' => $withStatus
                 ? "        'status' => {$statusEnumFqcn}::class,\n"
                 : '',
+            // N8 — cuerpo del enum templatizado desde $statusStates (1..N).
+            '{{statusCases}}' => $withStatus ? $this->buildStatusCases($statusStates) : '',
+            '{{statusDefaultCase}}' => $withStatus ? array_key_first($statusStates) : 'Active',
+            '{{statusLabelArms}}' => $withStatus ? $this->buildStatusLabelArms($statusStates) : '',
         ];
 
         $extraReplacements = array_merge(
@@ -658,18 +672,25 @@ PHP
         // Verificamos + avisamos + sugerimos la fix correcta por ambiente.
         $this->checkCacheDriver();
 
-        // ── MEJORA-03 (R-PKG-014): auto-corrrer mk:discover-abilities con --with-auth-rbac ──
-        if ($withAuthRbac) {
+        // ── MEJORA-03 (R-PKG-014) — N16 fix: NO auto-correr discover acá ──
+        // En este punto la migración aún no corrió y las rutas del módulo recién
+        // creado NO están cargadas en ESTE proceso → `mk:discover-abilities`
+        // encontraría 0 abilities y daba la falsa impresión de que ya quedó.
+        // El discovery correcto corre en runPostScaffoldSteps() DESPUÉS de
+        // migrate (con --discover), o el usuario lo corre a mano post-migrate.
+        // Solo mostramos el hint si NO se pidió --discover (para no duplicar).
+        if ($withAuthRbac && ! $discover) {
             $this->newLine();
-            $this->info('🔍 Auto-corriendo mk:discover-abilities (MEJORA-03):');
-            $this->call('mk:discover-abilities');
+            $this->info('🔍 mk:discover-abilities (MEJORA-03):');
+            $this->line("   Corré DESPUÉS de migrar: php artisan mk:discover-abilities --module={$scope} --force");
+            $this->line('   (o re-scaffoldeá con --migrate --discover para automatizar el orden correcto).');
         }
 
         // ── MEJORA-02 / BUG-08 (R-PKG-014): generar CRUD completo si --with-crud ──
         if ($withCrud) {
             // A1/A3: policies default-deny por default con --with-crud (skippable).
             $withPolicies = ! (bool) $this->option('skip-policies');
-            $this->generateCrudPack($scope, $scopeLower, $scopePlural, $loginField, $profileFieldsRaw, $requiredFields, $withPolicies);
+            $this->generateCrudPack($scope, $scopeLower, $scopePlural, $loginField, $profileFieldsRaw, $requiredFields, $withPolicies, $withStatus, $statusStates);
         }
 
         $this->newLine();
@@ -789,11 +810,47 @@ PHP
         }
 
         @copy($path, $path.'.bak');
+        $this->ensureBakGitignored();
         file_put_contents($path, $new);
         $this->info('🔗 A4: config/auth.php cableado automáticamente:');
         $this->line("   ✅ guard '{$scopeLower}' + provider '{$scopePlural}' agregados (backup: config/auth.php.bak).");
 
         return true;
+    }
+
+    /**
+     * N14 fix: los backups `.bak` que deja el scaffolder al cablear config/*.php
+     * (auth.php.bak, cors.php.bak.<ts>) NO deben terminar versionados. Si el
+     * consumer hace `git add -A` (flujo normal) commitearía el backup. Este
+     * helper agrega los patrones al `.gitignore` del proyecto de forma
+     * idempotente. El backup se conserva local (rollback seguro), fuera de git.
+     */
+    protected function ensureBakGitignored(): void
+    {
+        $gitignorePath = function_exists('base_path') ? base_path('.gitignore') : '.gitignore';
+
+        if (! file_exists($gitignorePath)) {
+            return; // proyecto sin .gitignore — nada que ignorar.
+        }
+
+        $content = (string) file_get_contents($gitignorePath);
+        $patterns = ['config/*.bak', 'config/*.bak.*'];
+
+        $toAppend = [];
+        foreach ($patterns as $pattern) {
+            if (! preg_match('/^\s*'.preg_quote($pattern, '/').'\s*$/m', $content)) {
+                $toAppend[] = $pattern;
+            }
+        }
+
+        if ($toAppend === []) {
+            return; // ya ignorados (idempotente).
+        }
+
+        $block = "\n# mk:make:auth-user (N14): backups de config/*.php — no versionar\n"
+            .implode("\n", $toAppend)."\n";
+        file_put_contents($gitignorePath, rtrim($content, "\n")."\n".$block);
+        $this->line('   ✅ .gitignore: '.implode(' + ', $toAppend).' (backups fuera de git).');
     }
 
     /**
@@ -1133,16 +1190,21 @@ PHP
     /**
      * Determina si un cache store de Laravel soporta tags.
      *
-     * Referencia: https://laravel.com/docs/13.x/cache#cache-tags
-     *   "The file, dynamodb, and database cache drivers do not support tags."
+     * N15 fix: la verdad canónica es la jerarquía de clases, no el texto de
+     * los docs (que cambió entre versiones). Soportan tags los stores cuyo
+     * driver extiende `Illuminate\Cache\TaggableStore`:
+     *   - ArrayStore, RedisStore, MemcachedStore, ApcStore, DynamoDbStore.
+     * NO soportan tags (extienden `Store` pelado): FileStore, DatabaseStore, NullStore.
      *
-     * Soportados: redis, memcached, dynamodb (Laravel 9+ agrega dynamodb a la lista).
-     * NO soportados: file, database, array, null, apc.
+     * Antes `array` estaba mal clasificado como NO-soporta → el warning
+     * PKG-NEW-14 se disparaba con `CACHE_STORE=array` (default de dev) y encima
+     * sugería "Fix: CACHE_STORE=array" (auto-contradictorio). Verificado en el
+     * piloto RETO: el CRUD completo corre con `array` sin error de tags.
      */
     protected function cacheStoreSupportsTags(string $store): bool
     {
-        // Drivers que SÍ soportan tags (lista conservadora de Laravel 11+ docs).
-        $supportsTags = ['redis', 'memcached', 'dynamodb'];
+        // Drivers cuyo Store extiende TaggableStore (soportan Cache::tags()).
+        $supportsTags = ['array', 'apc', 'redis', 'memcached', 'dynamodb'];
 
         return in_array(strtolower($store), $supportsTags, true);
     }
@@ -1171,6 +1233,8 @@ PHP
         array $profileFields,
         array $requiredFields,
         bool $withPolicies = true,
+        bool $withStatus = false,
+        array $statusStates = [],
     ): void {
         // A1/A3/A8: 17 base + 1 enum (A8) + 3 policies (A1/A3, si $withPolicies).
         $fileCount = 18 + ($withPolicies ? 3 : 0);
@@ -1204,19 +1268,22 @@ PHP
         // ── Extra replacements para los stubs CRUD ──
         // Necesitan saber qué profile fields existen (para AdminResource, AdminData, etc.)
         // y cuáles son unique (para StoreAdminRequest / UpdateAdminRequest).
-        $uniqueRules = $this->buildUniqueRules($profileFields, $requiredFields, $scopePlural);
-        $crudReplacements = [
+        // N12: buildProfileFieldRules emite reglas para TODOS los profile fields
+        // (no solo los unique), si no `validated()` los descartaba y el CRUD
+        // nunca persistía full_name/phone/address.
+        $fieldRules = $this->buildProfileFieldRules($profileFields, $requiredFields, $scopePlural);
+        $crudReplacements = array_merge([
             '{{profileFieldsList}}' => $this->buildProfileFieldsList($profileFields),
             '{{profileFieldsFillable}}' => $this->buildProfileFieldsFillable($profileFields),
             '{{profileFieldsFromRequest}}' => $this->buildProfileFieldsFromRequest($profileFields),
             '{{profileFieldsFromArray}}' => $this->buildProfileFieldsFromArray($profileFields),
             '{{profileFieldsToArray}}' => $this->buildProfileFieldsToArray($profileFields),
-            '{{profileFieldsUniqueRules}}' => $uniqueRules['store'],
-            '{{profileFieldsUniqueRulesUpdate}}' => $uniqueRules['update'],
+            '{{profileFieldsUniqueRules}}' => $fieldRules['store'],
+            '{{profileFieldsUniqueRulesUpdate}}' => $fieldRules['update'],
             '{{loginFieldValidationRule}}' => $loginField === 'email'
                 ? "['required', 'email', 'max:255', 'unique:{$scopePlural},{$loginField}']"
                 : "['required', 'string', 'max:255', 'unique:{$scopePlural},{$loginField}']",
-        ];
+        ], $this->buildStatusCrudReplacements($withStatus, $statusStates, $scope, $scopeLower));
 
         // ── Controllers (3) ──
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/admin-controller.stub', 'Http/Controllers', "{$scope}Controller.php", $crudReplacements);
@@ -1405,7 +1472,15 @@ PHP
     {
         $out = '';
         foreach ($profileFields as $key => $meta) {
-            $out .= "            {$key}: \$request->input('{$key}'),\n";
+            // N11 fix: el named arg DEBE matchear el nombre del parámetro del
+            // constructor, que es camelCase (buildProfileFieldsFillable emite
+            // `$fullName`, no `$full_name`). En PHP 8 un named arg snake_case
+            // (`full_name:`) sobre un param camelCase revienta con
+            // `Error: Unknown named parameter $full_name`. La KEY del input
+            // HTTP sigue siendo snake_case (columna real); solo el nombre del
+            // argumento se camelCasea.
+            $paramName = lcfirst(str_replace('_', '', ucwords($key, '_')));
+            $out .= "            {$paramName}: \$request->input('{$key}'),\n";
         }
 
         return $out;
@@ -1425,7 +1500,9 @@ PHP
     {
         $out = '';
         foreach ($profileFields as $key => $meta) {
-            $out .= "            {$key}: \$data['{$key}'] ?? null,\n";
+            // N11 fix: named arg camelCase (ver buildProfileFieldsFromRequest).
+            $paramName = lcfirst(str_replace('_', '', ucwords($key, '_')));
+            $out .= "            {$paramName}: \$data['{$key}'] ?? null,\n";
         }
 
         return $out;
@@ -1453,41 +1530,49 @@ PHP
     }
 
     /**
-     * Helper: genera rules unique para StoreAdminRequest / UpdateAdminRequest.
+     * N12 — genera rules para TODOS los profile fields (Store/Update requests).
      *
-     * StoreAdminRequest: `'key' => ['nullable', 'string', 'unique:table,key']`.
-     * UpdateAdminRequest: `'key' => ['sometimes', 'nullable', 'string', Rule::unique(...)->ignore($id)]`.
-     *
-     * Solo emite reglas para fields que tengan `unique` en su metadata
-     * (prefijo `!` en --profile-fields).
+     * Antes (buildUniqueRules) solo emitía reglas para los fields `unique`, así
+     * que los demás (full_name, phone, address...) NO estaban en `rules()` →
+     * `validated()` los descartaba y el CRUD NUNCA persistía esos campos, aunque
+     * la migración sí creaba la columna. Ahora emite una regla por cada field:
+     *   - required si está en --profile-fields-required, nullable si no.
+     *   - tipo de validación acorde al tipo del field (string/integer/date/...).
+     *   - `unique` (con ignore en update) solo si el field lo declaró (prefijo `!`).
      *
      * @param  array<string, array{type: string, unique: bool}>  $profileFields
      * @param  array<string, bool>  $requiredFields
      * @param  string  $scopePlural  Nombre de la tabla del scope (e.g. `admins`).
      * @return array{store: string, update: string}
      */
-    protected function buildUniqueRules(array $profileFields, array $requiredFields, string $scopePlural): array
+    protected function buildProfileFieldRules(array $profileFields, array $requiredFields, string $scopePlural): array
     {
         $store = '';
         $update = '';
         foreach ($profileFields as $key => $meta) {
-            $unique = $meta['unique'];
             $isRequired = isset($requiredFields[$key]);
+            $requiredRule = $isRequired ? 'required' : 'nullable';
 
-            // Si NO es unique, no emitir.
-            if (! $unique) {
-                continue;
+            // Regla de tipo acorde al tipo declarado del profile field.
+            $typeRule = match ($meta['type']) {
+                'int' => 'integer',
+                'decimal' => 'numeric',
+                'bool' => 'boolean',
+                'date', 'datetime' => 'date',
+                'json' => 'array',
+                default => 'string', // string, text, y fallback.
+            };
+
+            $storeRules = ["'{$requiredRule}'", "'{$typeRule}'"];
+            $updateRules = ["'sometimes'", "'{$requiredRule}'", "'{$typeRule}'"];
+
+            if ($meta['unique']) {
+                $storeRules[] = "'unique:{$scopePlural},{$key}'";
+                $updateRules[] = "\\Illuminate\\Validation\\Rule::unique('{$scopePlural}', '{$key}')->ignore(\$id)";
             }
 
-            $requiredRule = $isRequired ? 'required' : 'nullable';
-            $stringRule = 'string';
-
-            // Store: simple unique sin ignore.
-            $store .= "            '{$key}' => ['{$requiredRule}', '{$stringRule}', 'unique:{$scopePlural},{$key}'],\n";
-
-            // Update: con Rule::unique()->ignore() del row actual.
-            // El caller resuelve el id desde el route param.
-            $update .= "            '{$key}' => ['sometimes', '{$requiredRule}', '{$stringRule}', \\Illuminate\\Validation\\Rule::unique('{$scopePlural}', '{$key}')->ignore(\$id)],\n";
+            $store .= "            '{$key}' => [".implode(', ', $storeRules)."],\n";
+            $update .= "            '{$key}' => [".implode(', ', $updateRules)."],\n";
         }
 
         return [
@@ -2024,7 +2109,7 @@ PHP,
      * @param  string  $loginField  Login field del scope (para detectar colisión).
      * @return array<string, array{type: string, unique: bool}>|null Mapa key => metadata, o null si inválido.
      */
-    protected function resolveProfileFields(string $raw, string $loginField): ?array
+    protected function resolveProfileFields(string $raw, string $loginField, bool $withStatus = false): ?array
     {
         $raw = trim($raw);
 
@@ -2039,6 +2124,19 @@ PHP,
             'remember_token', 'created_at', 'updated_at',
             'email_verified_at', $loginField,
         ];
+
+        // N7 fix: columnas que el scaffolder emite SIEMPRE por su cuenta.
+        //   - `photo_path`: se pinea siempre en la migración + $fillable (A6).
+        //   - `status`: la pinea --with-status (columna + cast + enum).
+        // Si el usuario las pasa en --profile-fields (¡el ejemplo canónico de la
+        // doc incluía `photo_path`!), el scaffolder emitía la columna DOS veces
+        // → en Postgres la migración aborta con "column ... specified twice".
+        // En vez de errorear, las OMITIMOS silenciosamente (dedup) con un aviso:
+        // el resultado es el mismo (columna presente) sin romper el ejemplo.
+        $alwaysEmitted = ['photo_path'];
+        if ($withStatus) {
+            $alwaysEmitted[] = 'status';
+        }
 
         $fields = [];
         foreach ($items as $item) {
@@ -2071,6 +2169,13 @@ PHP,
                 $this->error("El campo \"{$key}\" no es un identificador PHP válido (solo letras, números y guión bajo).");
 
                 return null;
+            }
+
+            // N7: dedup de columnas siempre-emitidas — omitir en vez de duplicar.
+            if (in_array($key, $alwaysEmitted, true)) {
+                $this->line("   ℹ️  '{$key}' ya se emite siempre; se omite de --profile-fields (N7).");
+
+                continue;
             }
 
             if (in_array($key, $reserved, true)) {
@@ -2106,6 +2211,204 @@ PHP,
      * @param  array<string, array{type: string, unique: bool}>  $profileFields  Resultado de `resolveProfileFields`.
      * @return array<string, bool>|null Mapa key => true (todos true por diseño), o null si inválido.
      */
+    /**
+     * N8 — resuelve los estados del enum {Scope}Status desde --status-values.
+     *
+     * Reglas:
+     *   - Vacío/ausente → default ['Active' => 1, 'Inactive' => 2].
+     *   - CSV de identificadores StudlyCase válidos (ej: Active,Inactive,Suspended).
+     *   - Valores asignados 1..N en orden de declaración (NUNCA 0 — falsy).
+     *   - El primer estado es el default de la columna.
+     *
+     * @return array<string, int>|null Mapa Case => valor (1..N), o null si inválido.
+     */
+    protected function resolveStatusStates(string $raw): ?array
+    {
+        $raw = trim($raw);
+
+        $names = $raw === ''
+            ? ['Active', 'Inactive']
+            : array_values(array_filter(array_map('trim', explode(',', $raw)), static fn ($n) => $n !== ''));
+
+        if ($names === []) {
+            $names = ['Active', 'Inactive'];
+        }
+
+        $states = [];
+        $value = 1; // N8: arranca en 1, nunca 0.
+        foreach ($names as $name) {
+            if (! preg_match('/^[A-Za-z][A-Za-z0-9]*$/', $name)) {
+                $this->error("El estado \"{$name}\" en --status-values no es un case de enum válido (solo letras/números, sin espacios).");
+
+                return null;
+            }
+
+            if (isset($states[$name])) {
+                $this->error("El estado \"{$name}\" está duplicado en --status-values.");
+
+                return null;
+            }
+
+            $states[$name] = $value++;
+        }
+
+        return $states;
+    }
+
+    /**
+     * N8 — genera las líneas `case Name = N;` del enum de status.
+     *
+     * @param  array<string, int>  $statusStates
+     */
+    protected function buildStatusCases(array $statusStates): string
+    {
+        $out = '';
+        foreach ($statusStates as $name => $value) {
+            $out .= "    case {$name} = {$value};\n";
+        }
+
+        return $out;
+    }
+
+    /**
+     * N8 — genera los brazos del `match` de label() del enum de status.
+     *
+     * @param  array<string, int>  $statusStates
+     */
+    protected function buildStatusLabelArms(array $statusStates): string
+    {
+        $out = '';
+        foreach ($statusStates as $name => $value) {
+            $label = $this->statusLabelFor($name);
+            $out .= "            self::{$name} => '{$label}',\n";
+        }
+
+        return $out;
+    }
+
+    /**
+     * N8 — label human-readable en español para un case de status. Mapa de
+     * estados comunes + fallback al propio nombre del case si no se conoce.
+     */
+    protected function statusLabelFor(string $name): string
+    {
+        $map = [
+            'Active' => 'Activo',
+            'Inactive' => 'Inactivo',
+            'Suspended' => 'Suspendido',
+            'Pending' => 'Pendiente',
+            'Blocked' => 'Bloqueado',
+            'Banned' => 'Bloqueado',
+            'Deleted' => 'Eliminado',
+            'Archived' => 'Archivado',
+            'Approved' => 'Aprobado',
+            'Rejected' => 'Rechazado',
+            'Draft' => 'Borrador',
+        ];
+
+        return $map[$name] ?? $name;
+    }
+
+    /**
+     * N9 — placeholders de status para los stubs del CRUD pack (Resource, DTO,
+     * Requests, Factory). Cuando --with-status NO está activo TODOS son string
+     * vacío salvo `{{factoryStateMethods}}`, que cae al método `inactive()`
+     * legacy (BC). Cuando está activo, threadea el status end-to-end para que la
+     * feature funcione out-of-the-box (antes había que cablear 4 archivos a mano).
+     *
+     * @param  array<string, int>  $statusStates
+     * @return array<string, string>
+     */
+    protected function buildStatusCrudReplacements(bool $withStatus, array $statusStates, string $scope, string $scopeLower): array
+    {
+        $enumFqcn = "\\App\\Modules\\{$scope}\\Enums\\{$scope}Status";
+
+        if (! $withStatus) {
+            return [
+                '{{statusResourceEntry}}' => '',
+                '{{statusDtoParam}}' => '',
+                '{{statusDtoFromRequest}}' => '',
+                '{{statusDtoFromArray}}' => '',
+                '{{statusDtoToArray}}' => '',
+                '{{statusRequestRuleStore}}' => '',
+                '{{statusRequestRuleUpdate}}' => '',
+                '{{statusFactoryDefault}}' => '',
+                '{{factoryStateMethods}}' => $this->legacyFactoryInactiveMethod($scopeLower),
+            ];
+        }
+
+        // Resource: expone status (int) + status_label (string) — contrato con el front.
+        $resourceEntry = "            'status' => \$this->status?->value,\n"
+            ."            'status_label' => \$this->status?->label(),\n";
+
+        // DTO: param + mapeos (el DTO es opt-in, pero debe ser consistente).
+        $dtoParam = "        public ?int \$status = null,\n";
+        $dtoFromRequest = "            status: \$request->input('status') !== null ? (int) \$request->input('status') : null,\n";
+        $dtoFromArray = "            status: isset(\$data['status']) ? (int) \$data['status'] : null,\n";
+        $dtoToArray = "            'status' => \$this->status,\n";
+
+        // Requests: valida contra el enum (Rule::enum). `sometimes`+`nullable`
+        // porque la columna tiene default (no es obligatorio en create).
+        $ruleStore = "            'status' => ['sometimes', 'nullable', 'integer', \\Illuminate\\Validation\\Rule::enum({$enumFqcn}::class)],\n";
+        $ruleUpdate = $ruleStore;
+
+        // Factory: default al primer estado; states por cada estado no-default.
+        $factoryDefault = "            'status' => {$enumFqcn}::default()->value,\n";
+
+        return [
+            '{{statusResourceEntry}}' => $resourceEntry,
+            '{{statusDtoParam}}' => $dtoParam,
+            '{{statusDtoFromRequest}}' => $dtoFromRequest,
+            '{{statusDtoFromArray}}' => $dtoFromArray,
+            '{{statusDtoToArray}}' => $dtoToArray,
+            '{{statusRequestRuleStore}}' => $ruleStore,
+            '{{statusRequestRuleUpdate}}' => $ruleUpdate,
+            '{{statusFactoryDefault}}' => $factoryDefault,
+            '{{factoryStateMethods}}' => $this->buildStatusFactoryStateMethods($statusStates, $scope, $scopeLower),
+        ];
+    }
+
+    /**
+     * N10 — genera un factory state method por cada estado NO-default (el
+     * primero es el default de definition()). Ej: `suspended()` → status Suspended.
+     *
+     * @param  array<string, int>  $statusStates
+     */
+    protected function buildStatusFactoryStateMethods(array $statusStates, string $scope, string $scopeLower): string
+    {
+        $enumFqcn = "\\App\\Modules\\{$scope}\\Enums\\{$scope}Status";
+        $out = '';
+        $first = true;
+        foreach ($statusStates as $name => $value) {
+            if ($first) {
+                $first = false; // el primer estado es el default de definition().
+
+                continue;
+            }
+            $method = lcfirst($name);
+            $out .= "    /**\n     * State: {$scopeLower} en estado {$name}.\n     */\n";
+            $out .= "    public function {$method}(): static\n    {\n";
+            $out .= "        return \$this->state(fn () => ['status' => {$enumFqcn}::{$name}->value]);\n";
+            $out .= "    }\n\n";
+        }
+
+        return $out === '' ? '' : rtrim($out, "\n")."\n";
+    }
+
+    /**
+     * N10 — método `inactive()` legacy (sin --with-status). Se conserva por BC:
+     * escribe `is_active => false` (solo válido si el consumer declaró
+     * `is_active:bool` en --profile-fields). Con --with-status se reemplaza por
+     * states basados en el enum (ver buildStatusFactoryStateMethods).
+     */
+    protected function legacyFactoryInactiveMethod(string $scopeLower): string
+    {
+        return "    /**\n     * State: {$scopeLower} inactivo.\n     */\n"
+            ."    public function inactive(): static\n    {\n"
+            ."        return \$this->state(fn () => ['is_active' => false]);\n"
+            ."    }\n";
+    }
+
     protected function resolveRequiredProfileFields(string $raw, array $profileFields): ?array
     {
         $raw = trim($raw);
@@ -2662,6 +2965,7 @@ PHP,
                 $this->warn("⚠️  No se pudo crear backup de cors.php en {$backupPath}. Continuando de todos modos.");
             } else {
                 $this->line("   📁 Backup: {$backupPath}");
+                $this->ensureBakGitignored(); // N14: mantener el backup fuera de git.
             }
         }
 

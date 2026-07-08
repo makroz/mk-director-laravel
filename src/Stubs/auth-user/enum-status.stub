@@ -12,23 +12,26 @@ namespace App\Modules\{{ModuleName}}\Enums;
  * `status` (unsignedTinyInteger, default Active) + el cast en el modelo.
  *
  * Backing NUMÉRICO (int), no string: es la convención de la org (mismo patrón
- * que ReservationStatus/DebtStatus/ApprovedStatus). Guardar `1`/`0` en un
- * TINYINT es más barato que un varchar y evita drift de literales string
- * sueltos sobre una columna de estado.
+ * que ReservationStatus/DebtStatus/ApprovedStatus). Guardar un TINYINT es más
+ * barato que un varchar y evita drift de literales string sueltos sobre una
+ * columna de estado.
+ *
+ * N8: los valores arrancan en 1 (NUNCA 0). Un `0` es falsy y colisiona con el
+ * falsy-check de `<MkSelect>` en el frontend (`value || placeholder`), que
+ * trataría el estado `0` como "sin seleccionar". Los estados se declaran con
+ * `--status-values` (default: Active,Inactive).
  *
  * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-status`.
  */
 enum {{ModuleName}}Status: int
 {
-    case Active = 1;
-    case Inactive = 0;
-
+{{statusCases}}
     /**
-     * Estado por defecto al crear un `{{moduleNameLower}}`.
+     * Estado por defecto al crear un `{{moduleNameLower}}` (primer estado declarado).
      */
     public static function default(): self
     {
-        return self::Active;
+        return self::{{statusDefaultCase}};
     }
 
     /**
@@ -47,8 +50,6 @@ enum {{ModuleName}}Status: int
     public function label(): string
     {
         return match ($this) {
-            self::Active => 'Activo',
-            self::Inactive => 'Inactivo',
-        };
+{{statusLabelArms}}        };
     }
 }

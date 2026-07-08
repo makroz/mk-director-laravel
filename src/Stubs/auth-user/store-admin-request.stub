@@ -35,7 +35,6 @@ class StoreAdminRequest extends FormRequest
             'email' => ['required', 'email', 'max:255', 'unique:{{moduleNamePluralLower}},email'],
             'password' => ['required', 'string', 'min:8', 'max:255'],
             'photo' => ['nullable', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
-{{profileFieldsUniqueRules}}
-        ];
+{{profileFieldsUniqueRules}}{{statusRequestRuleStore}}        ];
     }
 }

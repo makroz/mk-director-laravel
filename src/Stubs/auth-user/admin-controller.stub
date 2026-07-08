@@ -83,10 +83,15 @@ class {{ModuleName}}Controller extends SmartController
         $scope = '{{moduleNameLower}}';
 
         return [
+            // N13 fix: la tabla `roles` del paquete NO tiene `description`
+            // (solo id/name/guard/timestamps). Seleccionar `description` acá
+            // reventaba con SQLSTATE 42703 en el primer `GET /?__extraData=1`
+            // que manda `useMkList` en la carga inicial → la pantalla moría
+            // out-of-the-box. Seleccionamos solo las columnas que existen.
             'roles' => Role::query()
                 ->where('guard', $scope)
                 ->orderBy('name')
-                ->get(['id', 'name', 'description']),
+                ->get(['id', 'name']),
         ];
     }
 

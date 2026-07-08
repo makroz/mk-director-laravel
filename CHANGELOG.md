@@ -5,6 +5,35 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [UNRELEASED] — feedback RETO corrida 4 (FEEDBACK4 — `mk:make:auth-user`)
+
+> Fixes al scaffolder `mk:make:auth-user --with-crud`/`--with-status` reportados por
+> el piloto RETO corrida 4. BC-safe salvo el enum de status (N8: valores arrancan en 1).
+> Único consumer = RETO (R-G-033). Sin push.
+
+### Fixed
+
+- **N7 (🔴) — `photo_path`/`status` duplicados en `--profile-fields`.** `photo_path` se emite SIEMPRE (A6) y `status` con `--with-status`; si el usuario los pasaba en `--profile-fields` (¡el ejemplo canónico de la doc incluía `photo_path`!) la columna se emitía dos veces → la migración Postgres abortaba con "column specified twice". `resolveProfileFields()` ahora los deduplica (los omite con aviso) en vez de duplicarlos.
+- **N8 (🟠) — enum de status arrancaba en `Inactive = 0` (falsy).** El `0` colisiona con el falsy-check de `<MkSelect>`. El enum se templatizó (`{{statusCases}}`) y los valores arrancan en **1** (Active=1, Inactive=2). Nuevo flag `--status-values="Active,Inactive,Suspended"` para estados custom.
+- **N9 (🟠) — `--with-status` quedaba a medias.** Cableaba enum+columna+cast pero NO tocaba los consumidores. Ahora, con `--with-crud`, threadea `status`+`status_label` en `Resource`, `status` en DTO/Factory/Requests (`Rule::enum`).
+- **N10 (🟠) — `Factory::inactive()` usaba `is_active`** (columna inexistente con `--with-status`). Ahora genera un state por cada estado no-default (`inactive()`, `suspended()`…) basado en el enum.
+- **N11 (🔴) — DTO `{Scope}Data` roto: named args snake_case ≠ params camelCase.** `full_name:` contra `$fullName` → `Error: Unknown named parameter`. `buildProfileFieldsFromRequest/FromArray` ahora emiten el named arg en camelCase (la key del input HTTP sigue snake_case).
+- **N12 (🟠) — los FormRequests ignoraban `--profile-fields`.** Sólo se emitían reglas para fields `unique`, así que `validated()` descartaba full_name/phone/address. `buildProfileFieldRules()` ahora emite regla (required/nullable + tipo) para TODOS los profile fields.
+- **N13 (🔴) — `setExtraData` seleccionaba `roles.description` inexistente** → 500 (SQLSTATE 42703) en el primer `GET /?__extraData=1` que manda `useMkList`. Selecciona sólo `['id','name']`.
+- **N14 (🔵) — backups `.bak` versionables.** El scaffolder agrega `config/*.bak` al `.gitignore` (idempotente) al cablear `config/auth.php`/`config/cors.php`.
+- **N15 (🔵) — warning de cache tags falso/auto-contradictorio.** `array` (y `apc`) SÍ soportan tags (`ArrayStore extends TaggableStore`); el warning ya no se dispara para ellos (sólo `file`/`database`/`null`).
+- **N16 (🔵) — `discover-abilities` eager pre-migrate no descubría nada** (rutas del módulo nuevo no cargadas). Se removió el auto-run prematuro; ahora imprime el hint para correrlo post-migrate (o vía `--discover`).
+- **N17 (🟡) — doc drift** en `references/15-auth-user-with-crud.md` (17→21 archivos, ejemplo sin `photo_path`/`is_active`, tabla `roles` sin `description`) + `GETTING_STARTED.md` + `API_REFERENCE_LARAVEL.md` + `SKILL.md`.
+
+### Added
+
+- Flag `--status-values="<csv>"` para declarar los estados del enum `{Scope}Status` (N8).
+
+### Tests
+
+- `tests/Feature/AuthUserFeedback4AuditTest.php` — 11 tests que fijan N7/N9/N11/N12/N13/N15.
+- Actualizados `MakeAuthUserWithStatusFlagTest` + `AdminUserFactoryStubTest` al nuevo contrato (enum templatizado, valores desde 1). Suite: **878 verdes**, `pint` limpio.
+
 ## [v2.0.1-rc0] - 2026-07-04 — PATCH — S8 Fase 7 scaffolder hardening (HALLAZGO-NEW-FASE18-A/B/C)
 
 > **Strategy**: BC break documentado (R-G-033 autoriza, único consumer = RETO).

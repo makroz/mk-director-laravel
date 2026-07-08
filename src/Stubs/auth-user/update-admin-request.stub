@@ -34,7 +34,6 @@ class UpdateAdminRequest extends FormRequest
             'email' => ['sometimes', 'required', 'email', 'max:255', Rule::unique('{{moduleNamePluralLower}}', 'email')->ignore($id)],
             'password' => ['sometimes', 'nullable', 'string', 'min:8', 'max:255'],
             'photo' => ['sometimes', 'nullable', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
-{{profileFieldsUniqueRulesUpdate}}
-        ];
+{{profileFieldsUniqueRulesUpdate}}{{statusRequestRuleUpdate}}        ];
     }
 }
