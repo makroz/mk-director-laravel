@@ -375,9 +375,13 @@ PHP
             // applies out of the box (HALLAZGO-NEW-04: scaffolder should auto-apply
             // well-defined patterns, not just document them).
             //
-            // Default: vacío (sin override). --with-crud: override con FK explícita.
-            '{{rolesRelationOverride}}' => $withCrud
-                ? <<<PHP
+            // BACK-01 (FEEDBACK5): el override se emite SIEMPRE, no solo con
+            // --with-crud. El AuthController hace `loadMissing(['roles', 'directAbilities'])`
+            // incondicionalmente en login() y me() (BUG-05/06), así que CUALQUIER
+            // scope de auth que loguee necesita la FK explícita (`user_id`, no
+            // `{scope}_id`). Sin este override el primer /login o /me revienta con
+            // `column role_user.{scope}_id does not exist`.
+            '{{rolesRelationOverride}}' => <<<PHP
 
     /**
      * Override de `roles()` del trait HasRoles (R-PKG-015 BUG-NEW-06 + R-PKG-022 BUG-NEW-33).
@@ -413,13 +417,12 @@ PHP
 
         return \Mk\Director\Database\Eloquent\Relations\MkBelongsToMany::from(\$relation);
     }
-PHP
-                : '',
+PHP,
             // R-PKG-015 BUG-NEW-06: FK override para `directAbilities()`.
             // R-PKG-022 BUG-NEW-33: idem BUG-NEW-33 rationale.
-            // Default: vacío. --with-crud: override con FK explícita.
-            '{{directAbilitiesRelationOverride}}' => $withCrud
-                ? <<<PHP
+            // BACK-01 (FEEDBACK5): idem `roles()` — se emite SIEMPRE. me()/login()
+            // hacen `loadMissing([..., 'directAbilities'])` incondicionalmente.
+            '{{directAbilitiesRelationOverride}}' => <<<PHP
 
     /**
      * Override de `directAbilities()` del trait HasAbilities (R-PKG-015 BUG-NEW-06 + R-PKG-022 BUG-NEW-33).
@@ -445,8 +448,7 @@ PHP
 
         return \Mk\Director\Database\Eloquent\Relations\MkBelongsToMany::from(\$relation);
     }
-PHP
-                : '',
+PHP,
         ];
 
         // R-PKG-011: register() y updateProfile() se generan condicionalmente.

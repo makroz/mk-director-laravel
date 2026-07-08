@@ -133,3 +133,24 @@ test('BUG-NEW-33 scaffolder: NO emite el patrón viejo BelongsToMany stock sin f
         expect($hasLegacyReturn)->toBe(0, 'No debe haber patrón viejo `return \$this->belongsToMany(...)->wherePivot(...)` en ningún heredoc');
     }
 });
+
+// ── BACK-01 (FEEDBACK5): el override roles()/directAbilities() se emite SIEMPRE ─
+
+test('BACK-01 scaffolder: rolesRelationOverride NO está gateado por --with-crud', function () {
+    $src = scaffolderSource();
+
+    // El AuthController hace loadMissing(['roles', 'directAbilities']) en login()
+    // y me() incondicionalmente (BUG-05/06). Si el override sólo se emite con
+    // --with-crud, cualquier scope generado sin ese flag revienta en el primer
+    // /login o /me con `column role_user.{scope}_id does not exist`.
+    // El override debe emitirse SIEMPRE → el placeholder NO puede estar atado a $withCrud.
+    expect($src)->toContain("'{{rolesRelationOverride}}' => <<<PHP");
+    expect($src)->not->toContain("'{{rolesRelationOverride}}' => \$withCrud");
+});
+
+test('BACK-01 scaffolder: directAbilitiesRelationOverride NO está gateado por --with-crud', function () {
+    $src = scaffolderSource();
+
+    expect($src)->toContain("'{{directAbilitiesRelationOverride}}' => <<<PHP");
+    expect($src)->not->toContain("'{{directAbilitiesRelationOverride}}' => \$withCrud");
+});
