@@ -1,0 +1,72 @@
+<?php
+
+declare(strict_types=1);
+
+use App\Modules\{{ModuleName}}\Http\Controllers\{{ModuleName}}Controller;
+use Illuminate\Support\Facades\Route;
+
+/**
+ * Rutas MANAGED del scope `{{moduleNameLower}}` — GESTIONADAS POR el scope
+ * `{{managerNameLower}}`.
+ *
+ * Generadas por `php artisan mk:make:auth-user {{ModuleName}} --with-crud --managed-by={{managerName}}`
+ * (ARCH-01 / FEEDBACK6).
+ *
+ * ## Por qué existe este archivo (el "quién hace el CRUD")
+ *
+ * El CRUD normal de `{{moduleNameLower}}` (`/api/{{moduleNamePluralLower}}`) está
+ * hard-guardeado con `mk.auth:{{moduleNameLower}}` (defensa de 4 capas anti
+ * cross-scope, ver docs/guides/AUTH.md). Eso significa que **sólo un token
+ * `{{moduleNameLower}}` puede administrarse a sí mismo** — un token
+ * `{{managerNameLower}}` (ej. un admin) recibe 401 ahí.
+ *
+ * Para que el scope `{{managerNameLower}}` PUEDA administrar users del scope
+ * `{{moduleNameLower}}` con SU PROPIO token, este archivo expone el MISMO CRUD
+ * bajo un prefijo propio del manager y gateado por el guard + abilities del
+ * MANAGER:
+ *
+ *   - Prefijo:    `/api/{{managerNameLower}}/{{moduleNamePluralLower}}`
+ *   - Guard:      `mk.auth:{{managerNameLower}}`
+ *   - Abilities:  `mk.ability:{{managerNameLower}}.{{moduleNamePluralLower}}.{action}`
+ *
+ * ## Qué scope afecta cada permiso (el "quién verifica el permiso")
+ *
+ * Cada permiso de ESTE archivo pertenece al scope **{{managerNameLower}}** (es
+ * el manager quien decide quién de los suyos puede tocar {{moduleNamePluralLower}}).
+ * NO se comparten con las abilities `{{moduleNameLower}}.{{moduleNamePluralLower}}.*`
+ * del CRUD self-service — son namespaces de permisos distintos:
+ *
+ *   - `{{managerNameLower}}.{{moduleNamePluralLower}}.viewAny|view|create|update|delete`
+ *     → afectan a roles del scope `{{managerNameLower}}` (guard = {{managerNameLower}}).
+ *
+ * El seeder `{{ModuleName}}ManagedBy{{managerName}}Seeder` concede estas abilities
+ * al rol `admin` (y read-only al `viewer`) del scope `{{managerNameLower}}`.
+ * `mk:discover-abilities --module={{ModuleName}}` las descubre automáticamente
+ * desde el middleware `mk.ability:` de abajo.
+ *
+ * MME (R-MK-001): este archivo vive DENTRO del módulo `{{ModuleName}}` y reusa
+ * sus propios controllers, así que NO importa modelos de otro módulo — la
+ * excepción cross-scope se resuelve por CONFIG de rutas (guard del manager),
+ * no por acoplamiento de código entre módulos.
+ */
+Route::prefix('api/{{managerNameLower}}/{{moduleNamePluralLower}}')->group(function () {
+    Route::middleware(['mk.auth:{{managerNameLower}}', 'mk.ability:{{managerNameLower}}.{{moduleNamePluralLower}}.viewAny'])
+        ->get('/',         [{{ModuleName}}Controller::class, 'index']);
+    Route::middleware(['mk.auth:{{managerNameLower}}', 'mk.ability:{{managerNameLower}}.{{moduleNamePluralLower}}.view'])
+        ->get('/{{{moduleNameLower}}}',     [{{ModuleName}}Controller::class, 'show']);
+    Route::middleware(['mk.auth:{{managerNameLower}}', 'mk.ability:{{managerNameLower}}.{{moduleNamePluralLower}}.create'])
+        ->post('/',        [{{ModuleName}}Controller::class, 'store']);
+    Route::middleware(['mk.auth:{{managerNameLower}}', 'mk.ability:{{managerNameLower}}.{{moduleNamePluralLower}}.update'])
+        ->put('/{{{moduleNameLower}}}',     [{{ModuleName}}Controller::class, 'update']);
+    Route::middleware(['mk.auth:{{managerNameLower}}', 'mk.ability:{{managerNameLower}}.{{moduleNamePluralLower}}.update'])
+        ->patch('/{{{moduleNameLower}}}',   [{{ModuleName}}Controller::class, 'update']);
+    Route::middleware(['mk.auth:{{managerNameLower}}', 'mk.ability:{{managerNameLower}}.{{moduleNamePluralLower}}.delete'])
+        ->delete('/{{{moduleNameLower}}}',  [{{ModuleName}}Controller::class, 'destroy']);
+
+    // El manager también puede asignar roles / abilities directas a un
+    // {{moduleNameLower}} específico. Mutaciones → requieren `update`.
+    Route::middleware(['mk.auth:{{managerNameLower}}', 'mk.ability:{{managerNameLower}}.{{moduleNamePluralLower}}.update'])
+        ->post('/{{{moduleNameLower}}}/roles',     [{{ModuleName}}Controller::class, 'assignRoles']);
+    Route::middleware(['mk.auth:{{managerNameLower}}', 'mk.ability:{{managerNameLower}}.{{moduleNamePluralLower}}.update'])
+        ->post('/{{{moduleNameLower}}}/abilities', [{{ModuleName}}Controller::class, 'assignDirectAbilities']);
+});

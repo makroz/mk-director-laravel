@@ -149,7 +149,8 @@ class MakeAuthUserCommand extends Command
         {--seed : (A9) Corre el {Scope}RolesSeeder al terminar (requiere --with-crud). Siembra super-admin/admin/editor/viewer.}
         {--discover : (A9) Corre `mk:discover-abilities --module={Scope} --force` al terminar.}
         {--skip-auth-wire : (A4) NO editar config/auth.php automáticamente (solo imprime los snippets, comportamiento pre-A4). Por default el scaffolder cablea el guard+provider de forma idempotente con backup .bak.}
-        {--skip-policies : (A1/A3) NO generar las Policies default-deny en el pack --with-crud. Por default, --with-crud genera {Scope}Policy/RolePolicy/AbilityPolicy (default-deny + super-admin bypass) y las registra vía Gate::policy — así mk:make:auth-user --with-crud --with-auth-rbac produce login + RBAC aislado + Policies + CRUD en un solo comando.}';
+        {--skip-policies : (A1/A3) NO generar las Policies default-deny en el pack --with-crud. Por default, --with-crud genera {Scope}Policy/RolePolicy/AbilityPolicy (default-deny + super-admin bypass) y las registra vía Gate::policy — así mk:make:auth-user --with-crud --with-auth-rbac produce login + RBAC aislado + Policies + CRUD en un solo comando.}
+        {--managed-by= : (ARCH-01/FEEDBACK6) Genera un recurso admin-scoped para que OTRO scope administre users de ESTE scope. Ej: `mk:make:auth-user Member --with-crud --managed-by=Admin` expone `/api/admin/members` gateado con mk.auth:admin + mk.ability:admin.members.* (reusa los controllers del scope, registra las rutas managed en el ServiceProvider y genera el seeder de abilities cross-scope para los roles del manager). Requiere --with-crud. El manager (StudlyCase) debe ser un scope existente. Default BC: sin managed resource.}';
 
     /**
      * The console command description.
@@ -185,6 +186,9 @@ class MakeAuthUserCommand extends Command
         $migrate = (bool) $this->option('migrate');
         $seed = (bool) $this->option('seed');
         $discover = (bool) $this->option('discover');
+        // ARCH-01/FEEDBACK6: scope MANAGER que administra ESTE scope (cross-scope CRUD).
+        $managedByRaw = trim((string) $this->option('managed-by'));
+        $managedBy = $managedByRaw === '' ? null : Str::studly($managedByRaw);
 
         if ($scope === '') {
             $this->error('El nombre del scope no puede estar vacío.');
@@ -211,6 +215,29 @@ class MakeAuthUserCommand extends Command
         if ($statusStates === null) {
             // resolveStatusStates() ya imprimió el error específico.
             return self::FAILURE;
+        }
+
+        // ARCH-01/FEEDBACK6: validación del recurso managed (cross-scope CRUD).
+        if ($managedBy !== null) {
+            if (! $withCrud) {
+                $this->error('--managed-by requiere --with-crud (el recurso managed reusa los controllers del pack CRUD).');
+
+                return self::FAILURE;
+            }
+            if (! preg_match('/^[A-Za-z][A-Za-z0-9]*$/', $managedBy)) {
+                $this->error('--managed-by debe ser el nombre de un scope en StudlyCase (ej: Admin).');
+
+                return self::FAILURE;
+            }
+            if ($managedBy === $scope) {
+                $this->error("--managed-by no puede ser el mismo scope ({$scope}). El manager debe ser OTRO scope (ej: Admin gestiona Member).");
+
+                return self::FAILURE;
+            }
+            if (! File::exists(app_path("Modules/{$managedBy}"))) {
+                // No es fatal: el manager podría scaffoldearse después. Avisamos.
+                $this->warn("⚠️  --managed-by={$managedBy}: el módulo App\\Modules\\{$managedBy} todavía no existe. Genera el scope manager (ej: `mk:make:auth-user {$managedBy} --with-crud`) para que su guard `".Str::snake($managedBy)."` y sus roles existan antes de correr el seeder managed.");
+            }
         }
 
         // Normalize: extract keys (sin prefijo !) para el resto del pipeline.
@@ -693,6 +720,11 @@ PHP,
             // A1/A3: policies default-deny por default con --with-crud (skippable).
             $withPolicies = ! (bool) $this->option('skip-policies');
             $this->generateCrudPack($scope, $scopeLower, $scopePlural, $loginField, $profileFieldsRaw, $requiredFields, $withPolicies, $withStatus, $statusStates);
+        }
+
+        // ── ARCH-01/FEEDBACK6: recurso managed (otro scope administra ESTE) ──
+        if ($managedBy !== null) {
+            $this->generateManagedResource($basePath, $scope, $scopeLower, $scopePlural, $managedBy);
         }
 
         $this->newLine();
@@ -1735,6 +1767,88 @@ PHP,
 
         File::put($routesPath, $content);
         $this->line('   ✅ Http/Routes/api.php (extended with CRUD, single PHP block, declare preserved)');
+    }
+
+    /**
+     * ARCH-01/FEEDBACK6 — genera el recurso MANAGED: expone el CRUD de ESTE scope
+     * bajo el guard + abilities de OTRO scope (el manager), para que un panel del
+     * manager pueda administrar users de este scope con su propio token.
+     *
+     * Reusa los controllers del pack --with-crud (guard-agnósticos: el guard vive
+     * en el middleware de la ruta), así que NO duplica lógica ni viola MME
+     * (R-MK-001): las rutas managed viven DENTRO de este módulo e importan sólo
+     * sus propios controllers. Lo que las distingue del CRUD self-service es el
+     * prefijo (`api/{manager}/{plural}`) y el middleware (`mk.auth:{manager}` +
+     * `mk.ability:{manager}.{plural}.{action}`).
+     *
+     * Genera:
+     *   - Http/Routes/managed.php  (rutas manager-scoped, registradas en el Provider)
+     *   - Database/Seeders/{Scope}ManagedBy{Manager}Seeder.php (abilities del manager)
+     */
+    protected function generateManagedResource(string $basePath, string $scope, string $scopeLower, string $scopePlural, string $managedBy): void
+    {
+        $managerLower = Str::snake($managedBy);
+
+        $this->newLine();
+        $this->info("🔗 ARCH-01: recurso managed — {$managedBy} administra {$scope}:");
+
+        $managedReplacements = [
+            '{{managerName}}' => $managedBy,
+            '{{managerNameLower}}' => $managerLower,
+        ];
+
+        // Rutas managed (manager-scoped) + seeder de abilities del manager.
+        $this->generateStub($scope, $scopeLower, $scopePlural, 'email', 'auth-user/managed-routes.stub', 'Http/Routes', 'managed.php', $managedReplacements);
+        $this->generateStub($scope, $scopeLower, $scopePlural, 'email', 'auth-user/managed-seeder.stub', 'Database/Seeders', "{$scope}ManagedBy{$managedBy}Seeder.php", $managedReplacements);
+
+        // Registrar managed.php en el ServiceProvider (loadRoutesFrom idempotente).
+        $this->extendServiceProviderWithManagedRoutes($basePath, $scope);
+
+        $this->newLine();
+        $this->warn("📋 Recurso managed habilitado ({$managedBy} → {$scope}). Siguientes pasos:");
+        $this->line("   • Endpoint:   /api/{$managerLower}/{$scopePlural} (guard mk.auth:{$managerLower})");
+        $this->line("   • Abilities:  {$managerLower}.{$scopePlural}.{viewAny,view,create,update,delete} (afectan al scope {$managerLower})");
+        $this->line("   1. php artisan migrate  (si aún no corriste)");
+        $this->line("   2. php artisan mk:discover-abilities --module={$scope} --force  (descubre {$managerLower}.{$scopePlural}.*)");
+        $this->line("   3. php artisan db:seed --class=\"App\\Modules\\{$scope}\\Database\\Seeders\\{$scope}ManagedBy{$managedBy}Seeder\"");
+        $this->line("      (concede esas abilities a los roles admin/viewer del scope {$managerLower}; correr DESPUÉS del {$managedBy}RolesSeeder).");
+    }
+
+    /**
+     * ARCH-01/FEEDBACK6 — registra `Http/Routes/managed.php` en el `boot()` del
+     * ServiceProvider del scope, justo después del `loadRoutesFrom` de `api.php`.
+     * Idempotente: si ya está registrado, no re-inyecta.
+     */
+    protected function extendServiceProviderWithManagedRoutes(string $basePath, string $scope): void
+    {
+        $providerPath = "{$basePath}/Providers/{$scope}ServiceProvider.php";
+        if (! File::exists($providerPath)) {
+            $this->warn('   ⚠️  ServiceProvider no existe, no se pudieron registrar las rutas managed.');
+
+            return;
+        }
+
+        $content = File::get($providerPath);
+
+        if (str_contains($content, "Http/Routes/managed.php")) {
+            $this->line('   ✅ ServiceProvider ya carga Http/Routes/managed.php (sin cambios).');
+
+            return;
+        }
+
+        $anchor = "\$this->loadRoutesFrom(__DIR__ . '/../Http/Routes/api.php');";
+        $managedLoad = $anchor."\n        \$this->loadRoutesFrom(__DIR__ . '/../Http/Routes/managed.php');";
+
+        if (! str_contains($content, $anchor)) {
+            $this->warn('   ⚠️  No se encontró el loadRoutesFrom de api.php; agregá manualmente:');
+            $this->line("        \$this->loadRoutesFrom(__DIR__ . '/../Http/Routes/managed.php');");
+
+            return;
+        }
+
+        $content = str_replace($anchor, $managedLoad, $content);
+        File::put($providerPath, $content);
+        $this->line('   ✅ ServiceProvider: Http/Routes/managed.php registrado en boot().');
     }
 
     /**
