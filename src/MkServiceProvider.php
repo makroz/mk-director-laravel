@@ -29,6 +29,7 @@ use Mk\Director\Console\Commands\SecurityLintCommand;
 use Mk\Director\Controllers\OpenApiController;
 use Mk\Director\Managers\CacheManager;
 use Mk\Director\Managers\PluginManager;
+use Mk\Director\Plugins\FileStoragePlugin;
 use Mk\Director\Tenancy\TenantContext;
 use Mk\Director\Tenancy\TenantResolver;
 
@@ -37,6 +38,12 @@ class MkServiceProvider extends ServiceProvider
     public function register()
     {
         $this->mergeConfigFrom(__DIR__.'/../config/mk_director.php', 'mk_director');
+
+        // R-PKG-045 D2: auto-register FileStoragePlugin by default unless the
+        // consumer explicitly opts out via `features.file_storage_plugin = false`.
+        // MUST run BEFORE the PluginManager singleton binding (which reads
+        // `config('mk_director.plugins')` in its constructor).
+        $this->registerPlugins();
 
         // MK-Director Plugin Manager
         $this->app->singleton(PluginManager::class, function ($app) {
@@ -50,6 +57,47 @@ class MkServiceProvider extends ServiceProvider
         // singleton so the same instance is shared by the
         // middleware (writer) and the trait (reader).
         $this->app->singleton(TenantContext::class);
+    }
+
+    /**
+     * R-PKG-045 D2 — Auto-register FileStoragePlugin by default.
+     *
+     * Behavior:
+     *   - Default (feature flag true OR unset): FileStoragePlugin is appended
+     *     to `config('mk_director.plugins')` so PluginManager loads it.
+     *   - Opt-out: `'features.file_storage_plugin' => false` → FileStoragePlugin
+     *     is NOT registered. Escape hatch para consumers que quieren controlar
+     *     manualmente qué plugins se cargan (e.g. RETO pre-R-PKG-045 que tenía
+     *     `plugins => []` pineado esperando "no plugins").
+     *   - Dedup: si FileStoragePlugin ya está en `plugins` → skip (no duplicar).
+     *
+     * BC analysis (FEEDBACK8):
+     *   - `'plugins' => []` + feature flag true → FileStoragePlugin se carga
+     *     (NEW behavior). Riesgo documentado en CHANGELOG; consumer puede
+     *     opt-out via flag.
+     *   - `'plugins' => [CustomPlugin::class]` → FileStoragePlugin se suma
+     *     (BC-safe).
+     *   - `'features.file_storage_plugin' => false` → FileStoragePlugin NO
+     *     se carga (escape hatch).
+     *
+     * MUST run BEFORE the PluginManager singleton binding — el ctor de
+     * PluginManager::loadPluginsFromConfig() lee `config('mk_director.plugins')`
+     * en su primera instanciación.
+     *
+     * @see https://github.com/makroz/mk-director-laravel/blob/main/CHANGELOG.md (R-PKG-045)
+     */
+    protected function registerPlugins(): void
+    {
+        $pluginClasses = config('mk_director.plugins', []);
+
+        // D2: auto-register unless feature flag is explicitly disabled.
+        if (config('mk_director.features.file_storage_plugin', true)
+            && !in_array(FileStoragePlugin::class, $pluginClasses, true)
+        ) {
+            $pluginClasses[] = FileStoragePlugin::class;
+        }
+
+        config(['mk_director.plugins' => $pluginClasses]);
     }
 
     public function boot()
