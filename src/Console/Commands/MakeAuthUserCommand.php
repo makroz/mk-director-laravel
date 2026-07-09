@@ -386,10 +386,10 @@ PHP
     /**
      * Override de `roles()` del trait HasRoles (R-PKG-015 BUG-NEW-06 + R-PKG-022 BUG-NEW-33).
      *
-     * Eloquent infiere la foreign key pivot del nombre del modelo (`admin_id`
-     * para `App\Modules\Admin\Models\Admin`), pero la pivot `role_user` del
+     * Eloquent infiere la foreign key pivot del nombre del modelo (`{$scopeLower}_id`
+     * para `App\\Modules\\{$scope}\\Models\\{$scope}`), pero la pivot `role_user` del
      * paquete usa `user_id`. Sin este override, `syncRoles()` y `assignRoles()`
-     * explotan con `no such column: role_user.admin_id`.
+     * explotan con `no such column: role_user.{$scopeLower}_id`.
      *
      * El `wherePivot('user_type', static::class)` mantiene el polimorfismo: la
      * pivot es global pero cada modelo concreto filtra por su FQCN, respetando
@@ -428,7 +428,7 @@ PHP,
      * Override de `directAbilities()` del trait HasAbilities (R-PKG-015 BUG-NEW-06 + R-PKG-022 BUG-NEW-33).
      *
      * Idem rationale que `roles()`: la pivot `ability_user` usa `user_id` pero
-     * Eloquent inferiría `admin_id` del nombre del modelo. Sin este override,
+     * Eloquent inferiría `{$scopeLower}_id` del nombre del modelo. Sin este override,
      * `syncDirectAbilities()` y `assignDirectAbilities()` explotan.
      *
      * R-PKG-022: ver `roles()` para explicación de `->using(MkAbilityUserPivot::class)`
@@ -721,8 +721,8 @@ PHP,
             $this->warn('📋 CRUD habilitado. Siguientes pasos:');
             $this->line('   1. php artisan migrate');
             $this->line('   2. Configurar abilities en config/mk_director.php (ver discover-abilities output arriba)');
-            $this->line('   3. (Opcional) Override de StoreAdminRequest/UpdateAdminRequest para validation custom');
-            $this->line('   4. (Opcional) Override de AdminService::beforeCreate() para photo upload logic');
+            $this->line("   3. (Opcional) Override de Store{$scope}Request/Update{$scope}Request para validation custom");
+            $this->line("   4. (Opcional) Override de {$scope}Service::beforeCreate() para photo upload logic");
         }
 
         // ── A4: cablear config/auth.php (idempotente + backup) ─────────────
@@ -1298,14 +1298,25 @@ PHP,
         // que validaba inline. Ahora todos los endpoints mutantes tienen
         // FormRequest dedicado (consistente con AssignRolesRequest /
         // AssignDirectAbilitiesRequest).
-        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/store-admin-request.stub', 'Http/Requests', 'StoreAdminRequest.php', $crudReplacements);
-        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/update-admin-request.stub', 'Http/Requests', 'UpdateAdminRequest.php', $crudReplacements);
+        // F6-02 (FEEDBACK6): filename + clase se derivan del scope (`Store{Scope}Request`),
+        // NO de un literal "Admin". Antes el 2º scope con --with-crud generaba
+        // `StoreAdminRequest` dentro de `App\Modules\Member\...` — autoloadeaba (namespace
+        // + filename coinciden) pero la clase quedaba mal nombrada e inconsistente con el
+        // Resource (que sí interpolaba). Ahora todos los stubs --with-crud interpolan igual.
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/store-admin-request.stub', 'Http/Requests', "Store{$scope}Request.php", $crudReplacements);
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/update-admin-request.stub', 'Http/Requests', "Update{$scope}Request.php", $crudReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/assign-roles-request.stub', 'Http/Requests', 'AssignRolesRequest.php', $crudReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/assign-abilities-request.stub', 'Http/Requests', 'AssignDirectAbilitiesRequest.php', $crudReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/sync-role-abilities-request.stub', 'Http/Requests', 'SyncRoleAbilitiesRequest.php', $crudReplacements);
 
         // ── Resources (3) ──
-        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/admin-resource.stub', 'Http/Resources', 'AdminResource.php', $crudReplacements);
+        // F6-01 (FEEDBACK6, 🔴): el filename del Resource se deriva del scope
+        // (`{Scope}Resource.php`), NO del literal "AdminResource.php". El contenido ya
+        // interpolaba `class {{ModuleName}}Resource`, así que con el 2º scope PSR-4 no
+        // encontraba `MemberResource` (archivo llamado `AdminResource.php`) → login 500
+        // (`AuthController` serializa vía $apiResource). El 1er scope ("Admin") no lo
+        // sufría porque base == nombre del scope.
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/admin-resource.stub', 'Http/Resources', "{$scope}Resource.php", $crudReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/role-resource.stub', 'Http/Resources', 'RoleResource.php', $crudReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/ability-resource.stub', 'Http/Resources', 'AbilityResource.php', $crudReplacements);
 

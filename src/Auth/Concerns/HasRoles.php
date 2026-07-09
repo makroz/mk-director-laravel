@@ -82,11 +82,17 @@ trait HasRoles
      */
     public function assignRole(string|Role $role): void
     {
+        // F6-03 (FEEDBACK6, multi-scope isolation): el match de firstOrCreate incluye
+        // `guard` (= scope del propio usuario), NO sólo `name`. Con dos scopes que
+        // comparten nombres de rol (admin/editor/...), matchear por `name` a secas
+        // podía devolver la fila de OTRO scope y engancharle a este usuario un rol
+        // ajeno. Con la clave (name, guard) cada scope resuelve/crea SU propia fila,
+        // coherente con el unique compuesto (name, guard) de la tabla `roles`.
+        $guard = $this->getAuthScope() ?? 'web';
         $roleModel = $role instanceof Role
             ? $role
             : Role::query()->firstOrCreate(
-                ['name' => $role],
-                ['guard' => $this->getAuthScope() ?? 'web'],
+                ['name' => $role, 'guard' => $guard],
             );
 
         $payload = $this->pivotExtras();
@@ -163,13 +169,15 @@ trait HasRoles
     {
         $ids = [];
         $payload = $this->pivotExtras();
+        // F6-03 (FEEDBACK6, multi-scope isolation): idem assignRole() — resolver
+        // por (name, guard) para no adjuntar roles de otro scope.
+        $guard = $this->getAuthScope() ?? 'web';
 
         foreach ($roles as $role) {
             $roleModel = $role instanceof Role
                 ? $role
                 : Role::query()->firstOrCreate(
-                    ['name' => $role],
-                    ['guard' => $this->getAuthScope() ?? 'web'],
+                    ['name' => $role, 'guard' => $guard],
                 );
             // sync() espera `[id => extras]` cuando hay extras — la firma con
             // array_indexado también funciona pero perderíamos los extras si la

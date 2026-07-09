@@ -15,7 +15,7 @@ use Illuminate\Validation\Rule;
  * Todos los campos son `sometimes` — solo se actualiza lo que viene.
  * `email` y profile fields con `unique` validan IGNORANDO el row actual.
  */
-class UpdateAdminRequest extends FormRequest
+class Update{{ModuleName}}Request extends FormRequest
 {
     public function authorize(): bool
     {

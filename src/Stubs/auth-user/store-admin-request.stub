@@ -18,7 +18,7 @@ use Illuminate\Foundation\Http\FormRequest;
  *
  * Override este método `rules()` para custom validation (regex CI, etc.).
  */
-class StoreAdminRequest extends FormRequest
+class Store{{ModuleName}}Request extends FormRequest
 {
     public function authorize(): bool
     {

@@ -149,17 +149,46 @@ final class LintBoundariesCommand extends Command
     /**
      * Extract fully-qualified class names starting with App\Modules from code body and use statements.
      *
+     * F6-05 (FEEDBACK6): los FQCN dentro de comentarios/docblocks NO cuentan como
+     * imports cross-module. Un ejemplo tipo `@see App\Modules\Admin\Models\Admin` en
+     * un docblock del stub disparaba un falso positivo y rompía el gate en CI sin un
+     * import real. Antes de matchear, removemos comentarios y docblocks con
+     * `token_get_all()` (robusto: no confunde un `//` dentro de un string, etc.).
+     *
      * @return list<string>
      */
     private function extractUseStatements(string $src): array
     {
+        $code = $this->stripComments($src);
+
         $out = [];
-        if (preg_match_all('/(?<![a-zA-Z0-9_\\\\])\\\\?(App\\\\Modules\\\\[A-Za-z0-9_]+(?:\\\\[A-Za-z0-9_]+)*)/', $src, $matches)) {
+        if (preg_match_all('/(?<![a-zA-Z0-9_\\\\])\\\\?(App\\\\Modules\\\\[A-Za-z0-9_]+(?:\\\\[A-Za-z0-9_]+)*)/', $code, $matches)) {
             foreach ($matches[1] as $m) {
                 $out[] = $m;
             }
         }
         return array_unique($out);
+    }
+
+    /**
+     * Remueve comentarios de línea (`//`, `#`) y docblocks (`/* … *\/`, `/** … *\/`)
+     * del source PHP, dejando el resto intacto. Usa el tokenizer nativo para no
+     * romper strings que contengan secuencias tipo `//` o `/*`.
+     */
+    private function stripComments(string $src): string
+    {
+        $out = '';
+        foreach (token_get_all($src) as $token) {
+            if (is_array($token)) {
+                if ($token[0] === T_COMMENT || $token[0] === T_DOC_COMMENT) {
+                    continue; // descartar comentarios/docblocks
+                }
+                $out .= $token[1];
+            } else {
+                $out .= $token;
+            }
+        }
+        return $out;
     }
 
     private function extractTargetModule(string $fqcn): ?string
