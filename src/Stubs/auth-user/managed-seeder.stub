@@ -1,0 +1,75 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Database\Seeders;
+
+use App\Modules\{{ModuleName}}\Enums\CrudAction;
+use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\DB;
+use Mk\Director\Auth\Enums\FixedStatus;
+use Mk\Director\Auth\Models\Ability;
+use Mk\Director\Auth\Models\Role;
+
+/**
+ * Seeder de las abilities CROSS-SCOPE que permiten al scope `{{managerNameLower}}`
+ * administrar users del scope `{{moduleNameLower}}`.
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud --managed-by={{managerName}}`
+ * (ARCH-01 / FEEDBACK6).
+ *
+ * ## Qué siembra (el "quién hace el CRUD" + "qué scope afecta el permiso")
+ *
+ * Las abilities `{{managerNameLower}}.{{moduleNamePluralLower}}.{action}` pertenecen
+ * al scope **{{managerNameLower}}** (guard = {{managerNameLower}}). Se conceden a los
+ * roles del MANAGER, NO a los del scope gestionado:
+ *
+ *   - rol `admin`  (guard {{managerNameLower}}) → CRUD completo sobre {{moduleNamePluralLower}}.
+ *   - rol `viewer` (guard {{managerNameLower}}) → read-only sobre {{moduleNamePluralLower}}.
+ *   - rol `super-admin` (guard {{managerNameLower}}) → ya cubierto por su wildcard `*`.
+ *
+ * Correr DESPUÉS del `{{managerName}}RolesSeeder` (los roles del manager deben
+ * existir). Idempotente. Match de roles por (name, guard) para no tocar roles
+ * de otros scopes (ver F6-03).
+ */
+class {{ModuleName}}ManagedBy{{managerName}}Seeder extends Seeder
+{
+    public function run(): void
+    {
+        $managerGuard = '{{managerNameLower}}';
+        $resource = '{{moduleNamePluralLower}}';
+
+        // rol `admin` del manager → CRUD completo sobre el scope gestionado.
+        $admin = Role::query()->firstOrCreate(
+            ['name' => 'admin', 'guard' => $managerGuard],
+            [],
+        );
+        foreach (CrudAction::all() as $action) {
+            $this->attachAbility($admin, "{$managerGuard}.{$resource}.{$action}", ucfirst($action).' '.$resource.' (managed by '.$managerGuard.').');
+        }
+
+        // rol `viewer` del manager → read-only sobre el scope gestionado.
+        $viewer = Role::query()->firstOrCreate(
+            ['name' => 'viewer', 'guard' => $managerGuard],
+            [],
+        );
+        foreach (['viewAny', 'view'] as $action) {
+            $this->attachAbility($viewer, "{$managerGuard}.{$resource}.{$action}", ucfirst($action).' '.$resource.' (managed by '.$managerGuard.').');
+        }
+    }
+
+    /**
+     * Crea la ability si no existe y la vincula al role via `ability_role` pivot.
+     */
+    protected function attachAbility(Role $role, string $name, ?string $description = null): void
+    {
+        $ability = Ability::query()->updateOrCreate(
+            ['name' => $name],
+            ['description' => $description, 'is_fixed' => FixedStatus::Editable->value],
+        );
+
+        DB::table('ability_role')->updateOrInsert(
+            ['role_id' => $role->id, 'ability_id' => $ability->id],
+        );
+    }
+}

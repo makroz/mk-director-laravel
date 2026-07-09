@@ -149,7 +149,8 @@ class MakeAuthUserCommand extends Command
         {--seed : (A9) Corre el {Scope}RolesSeeder al terminar (requiere --with-crud). Siembra super-admin/admin/editor/viewer.}
         {--discover : (A9) Corre `mk:discover-abilities --module={Scope} --force` al terminar.}
         {--skip-auth-wire : (A4) NO editar config/auth.php automáticamente (solo imprime los snippets, comportamiento pre-A4). Por default el scaffolder cablea el guard+provider de forma idempotente con backup .bak.}
-        {--skip-policies : (A1/A3) NO generar las Policies default-deny en el pack --with-crud. Por default, --with-crud genera {Scope}Policy/RolePolicy/AbilityPolicy (default-deny + super-admin bypass) y las registra vía Gate::policy — así mk:make:auth-user --with-crud --with-auth-rbac produce login + RBAC aislado + Policies + CRUD en un solo comando.}';
+        {--skip-policies : (A1/A3) NO generar las Policies default-deny en el pack --with-crud. Por default, --with-crud genera {Scope}Policy/RolePolicy/AbilityPolicy (default-deny + super-admin bypass) y las registra vía Gate::policy — así mk:make:auth-user --with-crud --with-auth-rbac produce login + RBAC aislado + Policies + CRUD en un solo comando.}
+        {--managed-by= : (ARCH-01/FEEDBACK6) Genera un recurso admin-scoped para que OTRO scope administre users de ESTE scope. Ej: `mk:make:auth-user Member --with-crud --managed-by=Admin` expone `/api/admin/members` gateado con mk.auth:admin + mk.ability:admin.members.* (reusa los controllers del scope, registra las rutas managed en el ServiceProvider y genera el seeder de abilities cross-scope para los roles del manager). Requiere --with-crud. El manager (StudlyCase) debe ser un scope existente. Default BC: sin managed resource.}';
 
     /**
      * The console command description.
@@ -185,6 +186,9 @@ class MakeAuthUserCommand extends Command
         $migrate = (bool) $this->option('migrate');
         $seed = (bool) $this->option('seed');
         $discover = (bool) $this->option('discover');
+        // ARCH-01/FEEDBACK6: scope MANAGER que administra ESTE scope (cross-scope CRUD).
+        $managedByRaw = trim((string) $this->option('managed-by'));
+        $managedBy = $managedByRaw === '' ? null : Str::studly($managedByRaw);
 
         if ($scope === '') {
             $this->error('El nombre del scope no puede estar vacío.');
@@ -211,6 +215,29 @@ class MakeAuthUserCommand extends Command
         if ($statusStates === null) {
             // resolveStatusStates() ya imprimió el error específico.
             return self::FAILURE;
+        }
+
+        // ARCH-01/FEEDBACK6: validación del recurso managed (cross-scope CRUD).
+        if ($managedBy !== null) {
+            if (! $withCrud) {
+                $this->error('--managed-by requiere --with-crud (el recurso managed reusa los controllers del pack CRUD).');
+
+                return self::FAILURE;
+            }
+            if (! preg_match('/^[A-Za-z][A-Za-z0-9]*$/', $managedBy)) {
+                $this->error('--managed-by debe ser el nombre de un scope en StudlyCase (ej: Admin).');
+
+                return self::FAILURE;
+            }
+            if ($managedBy === $scope) {
+                $this->error("--managed-by no puede ser el mismo scope ({$scope}). El manager debe ser OTRO scope (ej: Admin gestiona Member).");
+
+                return self::FAILURE;
+            }
+            if (! File::exists(app_path("Modules/{$managedBy}"))) {
+                // No es fatal: el manager podría scaffoldearse después. Avisamos.
+                $this->warn("⚠️  --managed-by={$managedBy}: el módulo App\\Modules\\{$managedBy} todavía no existe. Genera el scope manager (ej: `mk:make:auth-user {$managedBy} --with-crud`) para que su guard `".Str::snake($managedBy)."` y sus roles existan antes de correr el seeder managed.");
+            }
         }
 
         // Normalize: extract keys (sin prefijo !) para el resto del pipeline.
@@ -386,10 +413,10 @@ PHP
     /**
      * Override de `roles()` del trait HasRoles (R-PKG-015 BUG-NEW-06 + R-PKG-022 BUG-NEW-33).
      *
-     * Eloquent infiere la foreign key pivot del nombre del modelo (`admin_id`
-     * para `App\Modules\Admin\Models\Admin`), pero la pivot `role_user` del
+     * Eloquent infiere la foreign key pivot del nombre del modelo (`{$scopeLower}_id`
+     * para `App\\Modules\\{$scope}\\Models\\{$scope}`), pero la pivot `role_user` del
      * paquete usa `user_id`. Sin este override, `syncRoles()` y `assignRoles()`
-     * explotan con `no such column: role_user.admin_id`.
+     * explotan con `no such column: role_user.{$scopeLower}_id`.
      *
      * El `wherePivot('user_type', static::class)` mantiene el polimorfismo: la
      * pivot es global pero cada modelo concreto filtra por su FQCN, respetando
@@ -428,7 +455,7 @@ PHP,
      * Override de `directAbilities()` del trait HasAbilities (R-PKG-015 BUG-NEW-06 + R-PKG-022 BUG-NEW-33).
      *
      * Idem rationale que `roles()`: la pivot `ability_user` usa `user_id` pero
-     * Eloquent inferiría `admin_id` del nombre del modelo. Sin este override,
+     * Eloquent inferiría `{$scopeLower}_id` del nombre del modelo. Sin este override,
      * `syncDirectAbilities()` y `assignDirectAbilities()` explotan.
      *
      * R-PKG-022: ver `roles()` para explicación de `->using(MkAbilityUserPivot::class)`
@@ -695,6 +722,11 @@ PHP,
             $this->generateCrudPack($scope, $scopeLower, $scopePlural, $loginField, $profileFieldsRaw, $requiredFields, $withPolicies, $withStatus, $statusStates);
         }
 
+        // ── ARCH-01/FEEDBACK6: recurso managed (otro scope administra ESTE) ──
+        if ($managedBy !== null) {
+            $this->generateManagedResource($basePath, $scope, $scopeLower, $scopePlural, $managedBy);
+        }
+
         $this->newLine();
         $this->info("✅ Scope {$scope} generado con el estándar MK-Director:");
         $this->line("   • Model:        app/Modules/{$scope}/Models/{$scope}.php (extends AuthUser, loginField={$loginField})");
@@ -721,8 +753,8 @@ PHP,
             $this->warn('📋 CRUD habilitado. Siguientes pasos:');
             $this->line('   1. php artisan migrate');
             $this->line('   2. Configurar abilities en config/mk_director.php (ver discover-abilities output arriba)');
-            $this->line('   3. (Opcional) Override de StoreAdminRequest/UpdateAdminRequest para validation custom');
-            $this->line('   4. (Opcional) Override de AdminService::beforeCreate() para photo upload logic');
+            $this->line("   3. (Opcional) Override de Store{$scope}Request/Update{$scope}Request para validation custom");
+            $this->line("   4. (Opcional) Override de {$scope}Service::beforeCreate() para photo upload logic");
         }
 
         // ── A4: cablear config/auth.php (idempotente + backup) ─────────────
@@ -1298,14 +1330,25 @@ PHP,
         // que validaba inline. Ahora todos los endpoints mutantes tienen
         // FormRequest dedicado (consistente con AssignRolesRequest /
         // AssignDirectAbilitiesRequest).
-        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/store-admin-request.stub', 'Http/Requests', 'StoreAdminRequest.php', $crudReplacements);
-        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/update-admin-request.stub', 'Http/Requests', 'UpdateAdminRequest.php', $crudReplacements);
+        // F6-02 (FEEDBACK6): filename + clase se derivan del scope (`Store{Scope}Request`),
+        // NO de un literal "Admin". Antes el 2º scope con --with-crud generaba
+        // `StoreAdminRequest` dentro de `App\Modules\Member\...` — autoloadeaba (namespace
+        // + filename coinciden) pero la clase quedaba mal nombrada e inconsistente con el
+        // Resource (que sí interpolaba). Ahora todos los stubs --with-crud interpolan igual.
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/store-admin-request.stub', 'Http/Requests', "Store{$scope}Request.php", $crudReplacements);
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/update-admin-request.stub', 'Http/Requests', "Update{$scope}Request.php", $crudReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/assign-roles-request.stub', 'Http/Requests', 'AssignRolesRequest.php', $crudReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/assign-abilities-request.stub', 'Http/Requests', 'AssignDirectAbilitiesRequest.php', $crudReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/sync-role-abilities-request.stub', 'Http/Requests', 'SyncRoleAbilitiesRequest.php', $crudReplacements);
 
         // ── Resources (3) ──
-        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/admin-resource.stub', 'Http/Resources', 'AdminResource.php', $crudReplacements);
+        // F6-01 (FEEDBACK6, 🔴): el filename del Resource se deriva del scope
+        // (`{Scope}Resource.php`), NO del literal "AdminResource.php". El contenido ya
+        // interpolaba `class {{ModuleName}}Resource`, así que con el 2º scope PSR-4 no
+        // encontraba `MemberResource` (archivo llamado `AdminResource.php`) → login 500
+        // (`AuthController` serializa vía $apiResource). El 1er scope ("Admin") no lo
+        // sufría porque base == nombre del scope.
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/admin-resource.stub', 'Http/Resources', "{$scope}Resource.php", $crudReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/role-resource.stub', 'Http/Resources', 'RoleResource.php', $crudReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/ability-resource.stub', 'Http/Resources', 'AbilityResource.php', $crudReplacements);
 
@@ -1724,6 +1767,88 @@ PHP,
 
         File::put($routesPath, $content);
         $this->line('   ✅ Http/Routes/api.php (extended with CRUD, single PHP block, declare preserved)');
+    }
+
+    /**
+     * ARCH-01/FEEDBACK6 — genera el recurso MANAGED: expone el CRUD de ESTE scope
+     * bajo el guard + abilities de OTRO scope (el manager), para que un panel del
+     * manager pueda administrar users de este scope con su propio token.
+     *
+     * Reusa los controllers del pack --with-crud (guard-agnósticos: el guard vive
+     * en el middleware de la ruta), así que NO duplica lógica ni viola MME
+     * (R-MK-001): las rutas managed viven DENTRO de este módulo e importan sólo
+     * sus propios controllers. Lo que las distingue del CRUD self-service es el
+     * prefijo (`api/{manager}/{plural}`) y el middleware (`mk.auth:{manager}` +
+     * `mk.ability:{manager}.{plural}.{action}`).
+     *
+     * Genera:
+     *   - Http/Routes/managed.php  (rutas manager-scoped, registradas en el Provider)
+     *   - Database/Seeders/{Scope}ManagedBy{Manager}Seeder.php (abilities del manager)
+     */
+    protected function generateManagedResource(string $basePath, string $scope, string $scopeLower, string $scopePlural, string $managedBy): void
+    {
+        $managerLower = Str::snake($managedBy);
+
+        $this->newLine();
+        $this->info("🔗 ARCH-01: recurso managed — {$managedBy} administra {$scope}:");
+
+        $managedReplacements = [
+            '{{managerName}}' => $managedBy,
+            '{{managerNameLower}}' => $managerLower,
+        ];
+
+        // Rutas managed (manager-scoped) + seeder de abilities del manager.
+        $this->generateStub($scope, $scopeLower, $scopePlural, 'email', 'auth-user/managed-routes.stub', 'Http/Routes', 'managed.php', $managedReplacements);
+        $this->generateStub($scope, $scopeLower, $scopePlural, 'email', 'auth-user/managed-seeder.stub', 'Database/Seeders', "{$scope}ManagedBy{$managedBy}Seeder.php", $managedReplacements);
+
+        // Registrar managed.php en el ServiceProvider (loadRoutesFrom idempotente).
+        $this->extendServiceProviderWithManagedRoutes($basePath, $scope);
+
+        $this->newLine();
+        $this->warn("📋 Recurso managed habilitado ({$managedBy} → {$scope}). Siguientes pasos:");
+        $this->line("   • Endpoint:   /api/{$managerLower}/{$scopePlural} (guard mk.auth:{$managerLower})");
+        $this->line("   • Abilities:  {$managerLower}.{$scopePlural}.{viewAny,view,create,update,delete} (afectan al scope {$managerLower})");
+        $this->line("   1. php artisan migrate  (si aún no corriste)");
+        $this->line("   2. php artisan mk:discover-abilities --module={$scope} --force  (descubre {$managerLower}.{$scopePlural}.*)");
+        $this->line("   3. php artisan db:seed --class=\"App\\Modules\\{$scope}\\Database\\Seeders\\{$scope}ManagedBy{$managedBy}Seeder\"");
+        $this->line("      (concede esas abilities a los roles admin/viewer del scope {$managerLower}; correr DESPUÉS del {$managedBy}RolesSeeder).");
+    }
+
+    /**
+     * ARCH-01/FEEDBACK6 — registra `Http/Routes/managed.php` en el `boot()` del
+     * ServiceProvider del scope, justo después del `loadRoutesFrom` de `api.php`.
+     * Idempotente: si ya está registrado, no re-inyecta.
+     */
+    protected function extendServiceProviderWithManagedRoutes(string $basePath, string $scope): void
+    {
+        $providerPath = "{$basePath}/Providers/{$scope}ServiceProvider.php";
+        if (! File::exists($providerPath)) {
+            $this->warn('   ⚠️  ServiceProvider no existe, no se pudieron registrar las rutas managed.');
+
+            return;
+        }
+
+        $content = File::get($providerPath);
+
+        if (str_contains($content, "Http/Routes/managed.php")) {
+            $this->line('   ✅ ServiceProvider ya carga Http/Routes/managed.php (sin cambios).');
+
+            return;
+        }
+
+        $anchor = "\$this->loadRoutesFrom(__DIR__ . '/../Http/Routes/api.php');";
+        $managedLoad = $anchor."\n        \$this->loadRoutesFrom(__DIR__ . '/../Http/Routes/managed.php');";
+
+        if (! str_contains($content, $anchor)) {
+            $this->warn('   ⚠️  No se encontró el loadRoutesFrom de api.php; agregá manualmente:');
+            $this->line("        \$this->loadRoutesFrom(__DIR__ . '/../Http/Routes/managed.php');");
+
+            return;
+        }
+
+        $content = str_replace($anchor, $managedLoad, $content);
+        File::put($providerPath, $content);
+        $this->line('   ✅ ServiceProvider: Http/Routes/managed.php registrado en boot().');
     }
 
     /**

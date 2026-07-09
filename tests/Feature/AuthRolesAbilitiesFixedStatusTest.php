@@ -94,8 +94,10 @@ test('admin-roles-seeder stub marca super-admin role y wildcard * como Fixed', f
     // Import del enum.
     expect($stub)->toContain('use Mk\Director\Auth\Enums\FixedStatus;');
 
-    // super-admin role sembrado Fixed.
-    expect($stub)->toContain("['guard' => \$scope, 'is_fixed' => FixedStatus::Fixed->value],");
+    // super-admin role sembrado Fixed. F6-04 (FEEDBACK6): `guard` se movió al match
+    // de updateOrCreate (name, guard); los attributes sólo llevan is_fixed.
+    expect($stub)->toContain("['name' => 'super-admin', 'guard' => \$scope],");
+    expect($stub)->toContain("['is_fixed' => FixedStatus::Fixed->value],");
 
     // Wildcard `*` con el flag isFixed=true (4to arg).
     expect($stub)->toContain("\$this->attachAbility(\$superAdmin, '*', 'Wildcard: todas las abilities.', true);");

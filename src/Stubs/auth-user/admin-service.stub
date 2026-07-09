@@ -36,7 +36,7 @@ class {{ModuleName}}Service
      * (vía `Illuminate\Foundation\Auth\User`), así que Eloquent hashea
      * automáticamente al asignar `$user->password = 'plain'`. Hashear dos
      * veces (acá + cast) producía `bcrypt(bcrypt(plain))`. El rename
-     * `beforeCreate` → `mutateData` evita el暗示 de que el método es
+     * `beforeCreate` → `mutateData` evita la sugerencia de que el método es
      * solo para create.
      *
      * @param  array<string, mixed>  $data

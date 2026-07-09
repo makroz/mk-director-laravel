@@ -6,8 +6,8 @@ namespace App\Modules\{{ModuleName}}\Http\Controllers;
 
 use App\Modules\{{ModuleName}}\Http\Requests\AssignRolesRequest;
 use App\Modules\{{ModuleName}}\Http\Requests\AssignDirectAbilitiesRequest;
-use App\Modules\{{ModuleName}}\Http\Requests\StoreAdminRequest;
-use App\Modules\{{ModuleName}}\Http\Requests\UpdateAdminRequest;
+use App\Modules\{{ModuleName}}\Http\Requests\Store{{ModuleName}}Request;
+use App\Modules\{{ModuleName}}\Http\Requests\Update{{ModuleName}}Request;
 use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
 use App\Modules\{{ModuleName}}\Services\{{ModuleName}}Service;
 use Illuminate\Http\JsonResponse;
@@ -49,8 +49,8 @@ class {{ModuleName}}Controller extends SmartController
         // porque `property_exists()` da false (modelo sin API Resource).
         'resource'        => \App\Modules\{{ModuleName}}\Http\Resources\{{ModuleName}}Resource::class,
         'service'         => {{ModuleName}}Service::class,
-        'store_request'   => StoreAdminRequest::class,
-        'update_request'  => UpdateAdminRequest::class,
+        'store_request'   => Store{{ModuleName}}Request::class,
+        'update_request'  => Update{{ModuleName}}Request::class,
         // HALLAZGO-NEW-FASE17-04 fix: el stub pineaba
         // `['name', 'full_name', 'email', 'ci']` pero la tabla admins default
         // solo tiene `name` + `email` → mk:status warning. Si el consumer quiere

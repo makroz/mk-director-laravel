@@ -72,8 +72,20 @@ Route::prefix('api/{{moduleNamePluralLower}}')->group(function () {
         ->post('/{{{moduleNameLower}}}/abilities',     [{{ModuleName}}Controller::class, 'assignDirectAbilities']);
 });
 
-// CRUD de Roles del paquete (global).
-Route::prefix('api/roles')->group(function () {
+// CRUD de Roles — GESTIONADO POR el scope `{{moduleNameLower}}`.
+//
+// F6-04 (FEEDBACK6, 🔴 multi-scope): el prefijo se namespacea POR SCOPE
+// (`api/{{moduleNameLower}}/roles`), NO el global `api/roles`. Con dos scopes
+// `--with-crud`, ambos registraban `api/roles` difiriendo sólo en el middleware;
+// el ÚLTIMO scope shadoweaba la URI y un token del 1er scope recibía
+// `401 scope=...` en `/api/roles`. Namespacear deja claro QUIÉN administra
+// estos roles: cada request cae bajo el guard `mk.auth:{{moduleNameLower}}` y
+// las abilities `mk.ability:{{moduleNameLower}}.roles.*` — o sea, el scope
+// `{{moduleNameLower}}` es el dueño de este CRUD de roles.
+//
+// Nota: la TABLA `roles` es global (compartida por todos los scopes, filtrada
+// por columna `guard`); lo que se namespacea es el ENDPOINT que la administra.
+Route::prefix('api/{{moduleNameLower}}/roles')->group(function () {
     Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.roles.viewAny'])
         ->get('/',         [RoleController::class, 'index']);
     Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.roles.view'])
@@ -90,8 +102,13 @@ Route::prefix('api/roles')->group(function () {
         ->put('/{role}/abilities', [RoleController::class, 'syncAbilities']);
 });
 
-// CRUD de Abilities del paquete (global, read-only by default).
-Route::prefix('api/abilities')->group(function () {
+// CRUD de Abilities — GESTIONADO POR el scope `{{moduleNameLower}}` (read-only by default).
+//
+// F6-04 (FEEDBACK6): mismo namespacing por scope que `roles` — endpoint bajo
+// `api/{{moduleNameLower}}/abilities`, gateado con `mk.auth:{{moduleNameLower}}` +
+// `mk.ability:{{moduleNameLower}}.abilities.*`. La tabla `abilities` es global;
+// el owner del endpoint es el scope `{{moduleNameLower}}`.
+Route::prefix('api/{{moduleNameLower}}/abilities')->group(function () {
     Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.abilities.viewAny'])
         ->get('/',         [AbilityController::class, 'index']);
     Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.abilities.view'])

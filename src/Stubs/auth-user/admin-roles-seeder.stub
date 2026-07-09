@@ -40,19 +40,25 @@ class {{ModuleName}}RolesSeeder extends Seeder
         $resources = ['{{moduleNamePluralLower}}', 'roles', 'abilities'];
 
         // ── super-admin ─────────────────────────────────────────────────
+        // F6-03 (FEEDBACK6, 🟠 multi-scope): el match de updateOrCreate incluye
+        // `guard` (= scope), NO sólo `name`. Sin esto, correr el seeder de un 2º
+        // scope pisaba el `guard` de las filas del 1er scope (nombres compartidos
+        // super-admin/admin/editor/viewer) → sólo quedaban 4 filas con el guard del
+        // último scope y el picker de roles del otro scope salía vacío. Va de la mano
+        // con el unique compuesto (name, guard) de la migración de `roles`.
         $superAdmin = Role::query()->updateOrCreate(
-            ['name' => 'super-admin'],
+            ['name' => 'super-admin', 'guard' => $scope],
             // R-PKG-015 BUG-NEW-04: la tabla `roles` del paquete solo tiene `id, name,
             // guard, timestamps`. NO tiene `description`. Quitamos del stub. Si el
             // consumer quiere `description`, agrega una migration custom al paquete.
-            ['guard' => $scope, 'is_fixed' => FixedStatus::Fixed->value],
+            ['is_fixed' => FixedStatus::Fixed->value],
         );
         $this->attachAbility($superAdmin, '*', 'Wildcard: todas las abilities.', true);
 
         // ── admin: CRUD completo sobre los tres recursos ────────────────
         $admin = Role::query()->updateOrCreate(
-            ['name' => 'admin'],
-            ['guard' => $scope],
+            ['name' => 'admin', 'guard' => $scope],
+            [],
         );
         foreach ($resources as $resource) {
             // A8: acciones desde el enum canónico CrudAction (SSoT).
@@ -63,8 +69,8 @@ class {{ModuleName}}RolesSeeder extends Seeder
 
         // ── editor: view + update sobre el módulo (no gestiona RBAC) ─────
         $editor = Role::query()->updateOrCreate(
-            ['name' => 'editor'],
-            ['guard' => $scope],
+            ['name' => 'editor', 'guard' => $scope],
+            [],
         );
         foreach (['viewAny', 'view', 'update'] as $action) {
             $this->attachAbility($editor, "{$scope}.{{moduleNamePluralLower}}.{$action}", ucfirst($action).' {{moduleNamePluralLower}}.');
@@ -72,8 +78,8 @@ class {{ModuleName}}RolesSeeder extends Seeder
 
         // ── viewer: read-only sobre los tres recursos ───────────────────
         $viewer = Role::query()->updateOrCreate(
-            ['name' => 'viewer'],
-            ['guard' => $scope],
+            ['name' => 'viewer', 'guard' => $scope],
+            [],
         );
         foreach ($resources as $resource) {
             foreach (['viewAny', 'view'] as $action) {

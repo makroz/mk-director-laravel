@@ -159,8 +159,10 @@ test('routes stub extendido tiene CRUD + roles + abilities endpoints', function 
     $stub = (string) file_get_contents(packageRootCrud().'/src/Stubs/auth-user/auth-user.routes.with-crud.stub');
 
     expect($stub)->toContain("Route::prefix('api/{{moduleNamePluralLower}}')");
-    expect($stub)->toContain("Route::prefix('api/roles')");
-    expect($stub)->toContain("Route::prefix('api/abilities')");
+    // F6-04 (FEEDBACK6): roles/abilities endpoints se namespacean POR SCOPE
+    // para no colisionar entre scopes multi --with-crud.
+    expect($stub)->toContain("Route::prefix('api/{{moduleNameLower}}/roles')");
+    expect($stub)->toContain("Route::prefix('api/{{moduleNameLower}}/abilities')");
     expect($stub)->toContain('assignRoles');
     expect($stub)->toContain('assignDirectAbilities');
 });
