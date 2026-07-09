@@ -2134,23 +2134,100 @@ protected array $mkConfig = [
 
 ### 5.4 Plugins Disponibles en el Core:
 
-#### `FileStoragePlugin`
-Maneja automáticamente la subida de archivos y la conversión de rutas a URLs completas.
+#### `FileStoragePlugin` (R-PKG-045)
 
-**Configuración en Controlador:**
+Maneja automáticamente la subida de archivos (multipart) y la conversión de rutas
+a URLs completas en la respuesta. **Hook = `beforeSave`** — corre ANTES del
+`Model::create` / `Model::update`. El path se escribe en `$data[$column]`
+que Eloquent luego persiste en la columna del modelo. **NO** se ejecuta
+después del insert (`afterCreate` — drift pre-R-PKG-045, F8-B02).
+
+**R-PKG-045 D1 — Mapeo explícito `request field → column`** (BC-safe):
+
 ```php
-'plugins' => [
-    \Mk\Director\Plugins\FileStoragePlugin::class,
+// BC-safe (array plano): identity map. Request field ES el column name.
+'fields' => ['photo'],  // request 'photo' → column 'photo'
+
+// NEW (asociativo): rename. Request field ≠ column name.
+'fields' => ['photo' => 'photo_path'],  // request 'photo' → column 'photo_path'
+
+// Mixto válido:
+'fields' => ['photo', 'avatar' => 'avatar_path'],  // identity + rename
+```
+
+PHP `foreach` sobre array plano da keys integer (0, 1, 2...) — el plugin
+detecta con `is_int($requestField)` y auto-normaliza como identity map. Consumers
+con `'fields' => ['photo']` (pre-R-PKG-045) ZERO migración.
+
+**R-PKG-045 D2 — Auto-register por default**: el plugin se carga automáticamente
+vía `MkServiceProvider::registerPlugins()`. **Ya NO necesitas pinearlo en `plugins`**.
+Opt-out via `'features.file_storage_plugin' => false` en config (env: `MK_FILE_STORAGE_PLUGIN=false`).
+
+```php
+// config/mk_director.php (publicado)
+'features' => [
+    // ...
+    'file_storage_plugin' => env('MK_FILE_STORAGE_PLUGIN', true),  // R-PKG-045 D2
 ],
+```
+
+Si pineas el plugin explícito en `plugins: [FileStoragePlugin::class, ...]`,
+**dedup** lo respeta — no se duplica.
+
+**R-PKG-045 D3 — Audit levels**: `mk:status` ahora diferencia tres niveles:
+- `key missing` → **error** (rojo) — falta config requerida.
+- `key empty` (`fields: []` pineado a propósito) → **info** (gris) — decisión intencional.
+- `key set` → sin finding.
+
+Pre-R-PKG-045, ambos "missing" y "empty" generaban `warning` (amarillo) — falso
+positivo que distraía al dev (FEEDBACK8 F8-B04).
+
+**Configuración completa en Controlador:**
+```php
 'plugins_config' => [
     'file_storage' => [
-        'fields'   => ['image', 'avatar'], // Campos que son archivos
+        'fields'   => [
+            // BC-safe (array plano): identity map
+            'image', 'avatar',  // request field ES el column name
+
+            // NEW (asociativo): rename request field → column
+            'photo' => 'photo_path',  // request 'photo' → column 'photo_path'
+        ],
         'disk'     => 'public',             // Disco de Laravel
         'path'     => 'surveys/images',     // Carpeta destino
-        'auto_url' => true,                 // Convertir ruta a URL en la respuesta
+        'auto_url' => true,                 // Convertir path a URL en afterResponse
     ]
 ]
 ```
+
+**Configuración global** (alternativa a per-controller):
+```php
+// config/mk_director.php — config merge default del paquete
+'plugins_config' => [
+    'file_storage' => [
+        'fields' => [],
+        'disk'   => 'public',
+        'path'   => 'uploads/files',
+        'auto_url' => true,
+    ],
+],
+```
+
+**Notas operacionales**:
+- Hook = `beforeSave` (corre ANTES del `Model::create`/`update`). El path
+  se escribe en `$data[$column]` para que Eloquent lo persista al insertar.
+- `afterResponse` (si `auto_url=true`) convierte el path almacenado a URL
+  completa vía `Storage::disk($disk)->url($path)`.
+- **YAGNI hasta que un consumer lo pida**: organizar archivos por ID del modelo
+  (`uploads/{id}/file.jpg`) NO está soportado por este plugin (FEEDBACK8 F8-B02
+  backlog deferred). Implementación requeriría hook `afterCreate` con modelo ya
+  persistido.
+- **Cleanup on delete**: `beforeDelete` / `afterDelete` están vacíos
+  intencionalmente (R-PKG-034 R1 MEDIUM). Ver § 6.1 para workaround con
+  Model Observer si necesitás cleanup automático.
+- **Anti-pattern**: NO pinees `fields` como `[]` y luego hagas el upload a mano
+  en un Service (FEEDBACK8 F8-S01 deuda). Post-R-PKG-045, el plugin resuelve
+  el rename vía D1 — refactor a 5 LOC declarativas en vez de 50 LOC imperativas.
 
 ---
 
