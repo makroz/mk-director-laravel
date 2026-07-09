@@ -278,7 +278,16 @@ class MkCheckCommand extends Command
             if (!empty($findings)) {
                 $statusText = "";
                 foreach ($findings as $finding) {
-                    $color = $finding['type'] === 'error' ? 'red' : 'yellow';
+                    // R-PKG-045 D3: diferenciar 'info' (gray) de 'warning' (yellow).
+                    // Pre-fix, 'info' y 'warning' ambos caían a 'yellow' — el audit
+                    // D3 introduce 'info' como nuevo nivel (e.g. fields: [] pineado
+                    // a propósito → info, no warning). Sin esta diferenciación visual
+                    // el consumer sigue viendo ruido amarillo.
+                    $color = match ($finding['type']) {
+                        'error' => 'red',
+                        'info' => 'gray',
+                        default => 'yellow',
+                    };
                     $statusText .= "<fg={$color}>• {$finding['message']}</>\n";
                 }
             }

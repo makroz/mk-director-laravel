@@ -5,6 +5,44 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [UNRELEASED] — FileStoragePlugin hardening (R-PKG-045 — FEEDBACK8)
+
+> Fixes al `FileStoragePlugin` (existed but was silently dead code) + nuevo
+> feature D1 (mapeo explícito `request field → column`) reportados por el
+> piloto RETO corrida 8. Único consumer = RETO (R-G-033). Accumula al lote
+> RELEASE_AT_END: Mario retiene tag GA + Packagist publish.
+>
+> **BC-safe total** (D1 opción B es backward-compatible, D2 default ON con
+> opt-out flag, D3 solo cambia el audit type de `warning` → `info`/`error`).
+> Consumers existentes ZERO migración obligatoria.
+
+### Added
+
+- **D1 — `FileStoragePlugin` acepta mapeo explícito `request field → column`** (FEEDBACK8 F8-B03 + F8-Q01 opción B, Mario sign-off 2026-07-09 14:21). BC-safe — array plano `['photo']` se auto-normaliza como `['photo' => 'photo']` (identity map, comportamiento legacy v1.x preservado). Array asociativo `['photo' => 'photo_path']` pineá el rename, útil cuando el scaffolder genera columnas con sufijo `_path` (FEEDBACK A6 RETO: `--profile-fields=photo_path`). Mixto válido: `['photo', 'avatar' => 'avatar_path']`. **Implementation**: `foreach ($fields as $requestField => $columnName)` con `is_int($requestField)` BC check (PHP foreach sobre array plano da keys integer).
+
+- **D2 — Auto-register `FileStoragePlugin` por default** (FEEDBACK8 F8-B01). El plugin ya NO es silently dead code — `MkServiceProvider::registerPlugins()` lo carga automáticamente vía `MkServiceProvider::register()`, salvo opt-out via `'features.file_storage_plugin' => false` en config (env: `MK_FILE_STORAGE_PLUGIN=false`). Dedup: si el consumer ya lo pineó explícito en `plugins`, no duplica. **BC analysis**: ⚠️ consumer con `'plugins' => []` (vacío pre-R-PKG-045) ahora recibe el plugin por default — escape via flag. ✅ Consumer con `'plugins' => [CustomPlugin::class]` recibe FileStoragePlugin sumado (dedup). ✅ Flag `false` opt-out limpio.
+
+- **D3 — `PluginManager::auditRequirements()` distingue `key-missing` (error) vs `key-empty` (info)** (FEEDBACK8 F8-B04). Pre-fix, `!data_get($mkConfig, $key)` trataba `[]` (array vacío pineado a propósito) como "missing" → warning falso en `mk:status`. Post-fix: tres niveles semánticos — `Arr::has false → error`, `empty(data_get($mkConfig, $key)) → info`, otherwise no finding. **Downstream actualizado**: `validateRequirements()` log levels + `MkCheckCommand` color output (info → gris, warning → amarillo, error → rojo).
+
+- **D4 — `FileStoragePlugin` docblock clarifica hook = `beforeSave` (NO `afterCreate`)** (FEEDBACK8 F8-B02). El path se escribe en `$data[$column]` ANTES del `Model::create` / `Model::update` (no después del insert). YAGNI hasta que un consumer pida organizar archivos por ID (`uploads/{id}/file.jpg`). **Deferred**: `beforeDelete/afterDelete` cleanup + `afterCreate` hook por ID → FEEDBACK8 backlog.
+
+### Tests
+
+- `tests/Unit/Plugins/FileStoragePluginTest.php` (NEW) — 4 runtime tests D5 #1, #2, #4, #5 con Mockery Request + UploadedFile (no source-parsing alone per HALLAZGO-NEW-03).
+- `tests/Unit/MkServiceProviderPluginRegistrationTest.php` (NEW) — 6 tests de auto-register (default ON, dedup, opt-out, BC-safe explícito).
+- `tests/Unit/Managers/PluginManagerAuditTest.php` (NEW) — 6 tests de audit D3 (F8-B04 regression guard + D1 assoc fillable match).
+- `tests/Feature/FileStoragePluginE2ETest.php` (NEW) — 6 e2e tests con `Storage` local adapter + `UploadedFile::fake()` + temp dir (HALLAZGO-NEW-03 e2e).
+- **Total**: 22 tests nuevos. Full suite: 896 passing + 4 pre-existing failures (auth-user stub drift — out of scope para R-PKG-045).
+
+### Documentation (R-G-032 closing)
+
+- `DEVELOPER_GUIDE.md` § 5.4 `FileStoragePlugin` actualizado con D1 mapeo table + D2 auto-register + D3 audit levels.
+- `README.md` Características Core — FileStoragePlugin agregado al feature list con link a DEVELOPER_GUIDE.
+- `mk-director/docs/UPGRADE_2.0.md` § "v2.0.2 — FileStoragePlugin hardening" (feature nueva, BC-safe — no migration guide necesaria).
+- `mk-director/docs/guides/PLUGINS.md` (NEW) — overview de plugins disponibles (FileStorage + MultiTenant + Audit) + cómo agregar uno custom.
+- `mk-director/docs/README.md` — link a PLUGINS.md agregado.
+- `.makromania/agency/skills/mk-director-laravel/SKILL.md` — agregado al Capacidades table + nuevo gotcha (UNSTAGED — Mario retiene pineo per regla NO branches en workspace root).
+
 ## [UNRELEASED] — feedback RETO corrida 7 (FEEDBACK7 — `mk:make:auth-user` + `__extraData` parity)
 
 > Fixes al scaffolder `mk:make:auth-user` + Resource scaffoldeado reportados por

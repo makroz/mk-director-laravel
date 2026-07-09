@@ -6,6 +6,7 @@ namespace Mk\Director\Managers;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Mk\Director\Contracts\MkPluginInterface;
 
@@ -163,14 +164,31 @@ class PluginManager
                 }
             }
 
-            // Check required config keys
+            // Check required config keys.
+            //
+            // R-PKG-045 D3: distinguir "key missing" (error) vs "key empty"
+            // (info). Pre-fix, !data_get(...) trataba `[]` (array vacío pineado
+            // a propósito, e.g. `plugins_config.file_storage.fields: []`) como
+            // "missing" → warning falso en `mk:status`.
+            //
+            // Post-fix:
+            //   - !Arr::has($mkConfig, $key) → 'error' (key realmente no existe).
+            //   - empty(data_get($mkConfig, $key)) → 'info' (key existe pero
+            //     está vacía — decisión intencional del consumer, no warning).
+            //   - otherwise → no finding.
             $requiredConfig = $requirements['required_config'] ?? [];
             foreach ($requiredConfig as $key) {
-                if (!data_get($mkConfig, $key)) {
+                if (!Arr::has($mkConfig, $key)) {
                     $findings[] = [
                         'plugin' => get_class($plugin),
-                        'type' => 'warning',
+                        'type' => 'error',
                         'message' => "Falta la llave de configuración '{$key}' en \$mkConfig."
+                    ];
+                } elseif (empty(data_get($mkConfig, $key))) {
+                    $findings[] = [
+                        'plugin' => get_class($plugin),
+                        'type' => 'info',
+                        'message' => "La llave '{$key}' existe pero está vacía — el plugin está registrado sin fields configurados."
                     ];
                 }
             }
@@ -187,7 +205,15 @@ class PluginManager
 
         $findings = $this->auditRequirements($this->controllerConfig, $fillable);
         foreach ($findings as $finding) {
-            $level = $finding['type'] === 'error' ? 'error' : 'warning';
+            // R-PKG-045 D3: mapear cada tipo a su nivel de log correspondiente.
+            // 'info' (e.g. fields: [] pineado a propósito) NO debe loguear como
+            // 'warning' — sería ruido. 'error' y 'warning' mantienen comportamiento
+            // pre-R-PKG-045.
+            $level = match ($finding['type']) {
+                'error' => 'error',
+                'info' => 'info',
+                default => 'warning',
+            };
             \Illuminate\Support\Facades\Log::$level("Plugin Diagnosis: [{$finding['plugin']}] {$finding['message']}");
         }
     }

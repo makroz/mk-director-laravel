@@ -63,6 +63,14 @@ return [
         // R-PKG-007: auto-run `mk:discover-abilities` on every boot.
         // Solo usar en sandbox/dev. Idempotente (UPSERT), pero agrega overhead.
         'auto_discover_abilities' => env('MK_AUTO_DISCOVER_ABILITIES', false),
+
+        // R-PKG-045 D2: auto-register `FileStoragePlugin` por default en
+        // `MkServiceProvider::registerPlugins()`. Default `true` — opt-out
+        // vía env `MK_FILE_STORAGE_PLUGIN=false` si el consumer quiere
+        // controlar manualmente qué plugins carga (e.g. RETO pre-R-PKG-045
+        // que pineaba `plugins => []` esperando "no plugins"). Ver CHANGELOG
+        // [Unreleased] § "R-PKG-045 D2 BC analysis" para detalles.
+        'file_storage_plugin' => env('MK_FILE_STORAGE_PLUGIN', true),
     ],
 
     /*
