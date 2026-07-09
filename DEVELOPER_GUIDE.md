@@ -1922,6 +1922,118 @@ Route::prefix('api/admins')->group(function () {
 
 - Sprint: `makromania/260704-1935--fase18-scaffolder-fixes`.
 - Tests: 18 nuevos Pest tests (3 + 7 + 8 across HALLAZGO-A/B/C). Total paquete: **536 passing, 0 failing**.
+
+### 3.16 FEEDBACK7 — Scaffolder fixes (B01/B02/B03/W03 — RETO fase 19 feedback)
+
+> **Sprint**: `makromania/260709-1000--feedback7-fixes-batch` (acumula al lote RELEASE_AT_END).
+> **R-G-033**: BC-safe (todos additive). Mario retiene tag + publish.
+> **Source**: `FEEDBACK7.md` (10 hallazgos: 4 🟠 + 6 🟡).
+> **Tests**: 7 nuevos Pest tests en `tests/Unit/Scaffolders/Feedback7FixesTest.php`.
+
+#### 3.16.1 F7-B01 — `--with-crud/--with-auth-rbac` auto-setup Sanctum PAT (silent 500)
+
+**Síntoma pre-fix**: tras scaffoldear el scope Admin con `--with-crud --with-auth-rbac` y correr `migrate`, el primer `POST /api/admin/auth/login` reventaba con 500 silencioso al emitir el Bearer porque **no existía la tabla `personal_access_tokens`**. El scaffolder creaba `admins`, `admin_password_reset_tokens`, roles/abilities, etc., pero NO la tabla de tokens. El output "Siguientes pasos" solo mencionaba `migrate`, abilities y overrides opcionales — nunca Sanctum.
+
+**Workaround pre-fix** (RETO fase 4):
+```bash
+php artisan vendor:publish --tag=sanctum-migrations
+php artisan mk:fix:sanctum-uuids   # parchea a uuidMorphs (los modelos usan HasUuids)
+php artisan migrate
+```
+
+**Fix**: cuando se pasa `--with-crud` o `--with-auth-rbac` (scopes que SÍ emiten tokens Sanctum), el scaffolder auto-invoca `vendor:publish --tag=sanctum-migrations` + `mk:fix:sanctum-uuids` sin requerir el flag `--setup-sanctum` explícito.
+
+```php
+// MakeAuthUserCommand.php handle() — justo después de $setupSanctum resolution
+$emitsTokens = $withAuthRbac || $withCrud;
+$setupSanctum = $setupSanctum || $emitsTokens;
+```
+
+**Output loud** cuando auto-activa (post-fix, RETO feedback 7 §1):
+```
+🔐 F7-B01: Sanctum PAT table setup automático.
+   El scaffolder publicó y parcheó la migration de Sanctum (--setup-sanctum implícito).
+   Para que el login funcione, corré `php artisan migrate` antes del primer /login.
+```
+
+**BC preservado**: el flag `--setup-sanctum` sigue funcionando como opt-in para scopes sin tokens (sin `--with-crud` ni `--with-auth-rbac`). Default mode: idéntico a v2.0.0.
+
+**Idempotente**: si la migration de Sanctum ya está publicada, solo la parchea. Si ya está parcheada (uuidMorphs), no hace nada.
+
+#### 3.16.2 F7-B02 — `me()` y `login()` pinean `abilities: string[]` flat en el response
+
+**Síntoma pre-fix**: el user object de `admin` (login + `/me`) traía `abilities` como array plano de strings — contrato de `hasAbility` que `useMkAuth()` consume. Pero el de `member` (scope sin `--with-crud`, usa el AuthController scaffoldeado default) traía `roles: []` + `direct_abilities: []` pero **NO** la key `abilities`. Para un login+welcome no molestaba, pero rompía `useMkAuth().hasAbility(...)` en mobile/web si el member la usara.
+
+**Fix**: el AuthController scaffoldeado ahora pinea `abilities: $user->getEffectiveAbilities()` ad-hoc en `me()` y `login()`, replicando lo que el `{Scope}Resource` scaffoldeado (con `--with-crud`) ya hacía. Aplica a TODO scope (con o sin `--with-crud`).
+
+```php
+// auth-user.auth-controller.stub — me() post-fix
+public function me(Request $request): JsonResponse
+{
+    $user = $request->user();
+    $user->loadMissing(['roles', 'directAbilities']);
+    // F7-B02: pinear `abilities` flat top-level en el response
+    $payload = $user->toArray();
+    $payload['abilities'] = $user->getEffectiveAbilities();
+    return $this->sendResponse($payload);
+}
+```
+
+**Defense-in-depth**: el `{Scope}Resource` scaffoldeado (`--with-crud`) ya pineaba esto (R-PKG-035 HALLAZGO-NEW-FASE15-06, post-v1.8.3-rc0). El fix F7-B02 es la versión "sin Resource scaffoldeado" — el `AuthController` pinea `abilities` ad-hoc para que el shape sea consistente entre ambos tipos de scope.
+
+**Parity cross-stack**: el shape `data.user.abilities: string[]` ahora aparece en TODAS las responses de `/api/{scope}/auth/me` y `/api/{scope}/auth/login`, independiente de si el scope tiene `--with-crud` o no. Frontend puede llamar `useMkAuth().hasAbility('xxx')` sin chequear el tipo de scope.
+
+#### 3.16.3 F7-B03 — warning scaffolder si tabla del scope YA EXISTE
+
+**Síntoma pre-fix**: si la DB `reto` traía `admins`/`members` de una corrida previa, `php artisan migrate` cortaba con `SQLSTATE[42P07] relation "..." already exists`. El scaffolder no avisaba — el dev descubría el problema al primer `migrate`.
+
+**Fix**: nuevo método `checkScopeTableExists()` invocado antes de scaffoldear. Detecta tabla preexistente via `information_schema` (pgsql/mysql/mariadb) o `sqlite_master` (sqlite). Si existe, warning loud con sugerencia según ambiente:
+
+```
+⚠️  F7-B03: la tabla `members` YA EXISTE en la DB.
+   Si corrés `php artisan migrate` ahora va a fallar con
+   `SQLSTATE[42P07] relation "members" already exists`.
+
+   Sugerencia para entornos piloto:
+     php artisan migrate:fresh    # DESTRUCTIVO — borra datos
+   Para producción, ver § "Migraciones incrementales".
+```
+
+**No-fatal**: el scaffolder sigue generando el código. El dev decide si aborta (migrate:fresh) o continúa (migration incremental).
+
+**Si pidió `--migrate` y la tabla existe**: el scaffolder intenta migrar igual (cayendo al `migrate` específico que falla con el error SQLSTATE). Mejor que el silencio anterior.
+
+#### 3.16.4 F7-W03 — `--profile-fields` ahora se exponen en `{Scope}Resource`
+
+**Síntoma pre-fix**: el `--profile-fields="phone"` creaba la columna + validación (`StoreAdminRequest`/`UpdateAdminRequest`) + fillable, pero el `AdminResource::toArray()` scaffoldeado **no incluía `phone`**. Quedaba write-only: se podía crear/editar pero nunca leer de vuelta ni pre-fillear en edición.
+
+**Fix**: el stub `admin-resource.stub` pinea el placeholder `{{profileFieldsResourceEntry}}` que el scaffolder popula reusando `buildProfileFieldsToArray()` (método que ya existía, lo usaba el DTO `AdminData`):
+
+```php
+// MakeAuthUserCommand.php generateCrudPack() — en $crudReplacements
+'{{profileFieldsResourceEntry}}' => $this->buildProfileFieldsToArray($profileFields),
+```
+
+```php
+// admin-resource.stub post-fix
+public function toArray(Request $request): array
+{
+    return [
+        'id' => $this->id,
+        'name' => $this->name,
+        'email' => $this->email,
+        // ...
+        'auth_scope' => $this->auth_scope,
+{{statusResourceEntry}}{{profileFieldsResourceEntry}}            // HALLAZGO-NEW-FASE15-06: abilities flat top-level
+        'abilities' => $this->getEffectiveAbilities(),
+        // ...
+    ];
+}
+```
+
+**BC-safe**: scopes sin `--with-crud` (no tienen Resource scaffoldeado) no se afectan. El fix es solo en el flow CRUD. Si no hay `--profile-fields`, el placeholder queda string vacío (no se renderizan líneas extra).
+
+**Round-trip completo**: `phone`, `full_name`, `address`, `birthdate`, etc. ahora son legibles de vuelta y pre-filleables en edición. Frontend puede usar `form.setField('phone', data.phone)` sin pedir el field extra fuera del Resource.
 - Stubs modificados: `src/Stubs/auth-user.auth-controller.stub` (A), `src/Stubs/auth-user/auth-user.routes.with-crud.stub` (C).
 - Source: `.makromania/projects/mk-director/operations/s8-f6-admin-clean-rebuild-result.md` § "Consumer-side fixes pineados" + § "Hallazgo adicional".
 

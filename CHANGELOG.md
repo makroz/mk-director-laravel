@@ -5,6 +5,41 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [UNRELEASED] — feedback RETO corrida 7 (FEEDBACK7 — `mk:make:auth-user` + `__extraData` parity)
+
+> Fixes al scaffolder `mk:make:auth-user` + Resource scaffoldeado reportados por
+> el piloto RETO corrida 7. BC-safe (todos additive o deprecation-friendly).
+> Único consumer = RETO (R-G-033). Accumula al lote RELEASE_AT_END: Mario retiene
+> tag GA + npm/Packagist publish.
+
+### Fixed
+
+- **F7-B01 (🟠 silent 500) — `mk:make:auth-user --with-crud/--with-auth-rbac` no seteaba la tabla Sanctum**. El scaffolder creaba `admins`, `admin_password_reset_tokens`, roles/abilities, etc., pero NO la tabla `personal_access_tokens`. El primer `POST /api/admin/auth/login` reventaba con 500 silencioso al emitir el Bearer. **Fix**: cuando se pasa `--with-crud` o `--with-auth-rbac` (scopes que SÍ emiten tokens Sanctum), el scaffolder auto-invoca `vendor:publish --tag=sanctum-migrations` + `mk:fix:sanctum-uuids` sin requerir `--setup-sanctum` explícito. El flag `--setup-sanctum` sigue funcionando como opt-in para scopes sin tokens (BC). Output loud cuando auto-activa para recordarle al dev el `php artisan migrate` post-scaffold.
+
+- **F7-B02 — `AuthController::me()` y `AuthController::login()` pinean `abilities: string[]` flat en el response**. Antes scopes sin `--with-crud` (Member en RETO feedback 7) no exponían la key `abilities` — solo `roles: []` y `direct_abilities: []`. Eso rompía el contrato `useMkAuth().hasAbility(...)` en web/mobile. **Fix**: ambos métodos ahora calculan `$user->getEffectiveAbilities()` (helper del trait `HasAbilities`) y lo pinea en `$payload['abilities']` antes de `sendResponse()`. El Resource scaffoldeado (`--with-crud`) ya tenía esto; acá lo replicamos ad-hoc para scopes sin Resource scaffoldeado.
+
+- **F7-B03 — `mk:make:auth-user` chequea si la tabla del scope YA EXISTE en la DB**. Si la DB trae tablas de una corrida previa, `php artisan migrate` corta con `SQLSTATE[42P07] relation "..." already exists`. **Fix**: nuevo método `checkScopeTableExists()` que se invoca antes de scaffoldear. Detecta tabla preexistente via `information_schema` (pgsql/mysql/mariadb) o `sqlite_master` (sqlite). Si existe, warning loud + sugerencia `migrate:fresh` (piloto) o migration incremental (producción). No-fatal.
+
+- **F7-W03 — `{Scope}Resource::toArray()` scaffoldeado no incluía los `--profile-fields`**. Eran write-only: se podían crear/editar pero nunca leer de vuelta ni pre-fillear en edición. **Fix**: el stub `admin-resource.stub` ahora pinea el placeholder `{{profileFieldsResourceEntry}}` que el scaffolder popula reusando `buildProfileFieldsToArray()`. Si no hay `--profile-fields`, queda string vacío (no se renderizan líneas). `phone`, `full_name`, `address` ahora son round-trip.
+
+### Added
+
+- **F7-B01** — Auto-setup de Sanctum PAT para `--with-crud` y `--with-auth-rbac`. Opt-in via flag `--setup-sanctum` para scopes sin tokens.
+- **F7-B02** — `abilities: []` flat en response de `me()` y `login()`. Aplica a TODO scope (con o sin `--with-crud`).
+- **F7-B03** — `checkScopeTableExists()` + warning loud si la tabla ya existe.
+
+### Tests
+
+- `tests/Unit/Scaffolders/Feedback7FixesTest.php` — 7 source-parsing tests pines los 4 fixes (F7-B01 × 2 + F7-B02 × 2 + F7-B03 × 1 + F7-W03 × 2). Suite: **885 verdes** (878 + 7 nuevos), `pint` limpio.
+
+### Documentation
+
+- `.makromania/agency/skills/mk-director-laravel/SKILL.md` + `references/01-scaffolders.md` (F7-B01, F7-B02, F7-B03, F7-W03).
+- `DEVELOPER_GUIDE.md` § 3.15.4 (F7-B01 auto-Sanctum) + § 3.15.5 (F7-B02 abilities[] contract).
+- `docs/guides/AUTH.md` § "F7-B01 auto-Sanctum setup" (canónico flow).
+- `docs/guides/API_REFERENCE_LARAVEL.md` § "F7-B02 abilities[] en /me" + § "F7-W03 profile-fields en {Scope}Resource".
+- `docs/UPGRADE_2.0.md` § "F7-B01 pre-bumpear migrate" (operational reminder).
+
 ## [UNRELEASED] — feedback RETO corrida 4 (FEEDBACK4 — `mk:make:auth-user`)
 
 > Fixes al scaffolder `mk:make:auth-user --with-crud`/`--with-status` reportados por

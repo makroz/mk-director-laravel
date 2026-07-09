@@ -185,12 +185,20 @@ class AuthController extends BaseController
         // completo. BC: este cambio SOLO afecta el contenido dentro de
         // `data.{{moduleNameLower}}` — `access_token`/`refresh_token`/
         // `token_type`/`expires_in` siguen iguales (header-level).
+        //
+        // F7-B02: pinear `abilities` flat top-level en el response de login
+        // para parity de contrato con `useMkAuth().hasAbility()`. El
+        // Resource scaffoldeado (--with-crud) ya tiene esto; acá lo
+        // pineamos ad-hoc para scopes sin CRUD (Member en RETO feedback 7)
+        // que también necesitan el contrato `hasAbility` desde web/mobile.
+        $userPayload = $user->toArray();
+        $userPayload['abilities'] = $user->getEffectiveAbilities();
         return $this->sendResponse([
             'access_token' => $accessToken->plainTextToken,
             'refresh_token' => $refreshToken,
             'token_type' => 'Bearer',
             'expires_in' => config('mk_director.auth.ttl.access_seconds', 15 * 60),
-            '{{moduleNameLower}}' => $user,
+            '{{moduleNameLower}}' => $userPayload,
         ], 'Login exitoso');
     }
 
@@ -284,13 +292,20 @@ class AuthController extends BaseController
      *
      * R-PKG-014 BUG-06 fix: eager-load `roles` + `directAbilities` antes
      * del `sendResponse` para que `autoTransform()` los serialice correctamente.
+     *
+     * F7-B02: pinear `abilities` flat top-level en el response (parity con
+     * `useMkAuth().hasAbility()` en web/mobile). El Resource scaffoldeado
+     * (--with-crud) ya incluye esto; acá lo hacemos ad-hoc para scopes sin
+     * Resource scaffoldeado (sin --with-crud) que igual necesitan el contrato.
      */
     public function me(Request $request): JsonResponse
     {
         $user = $request->user();
         $user->loadMissing(['roles', 'directAbilities']);
         {{rbacAbilityCheckMe}}
-        return $this->sendResponse($user);
+        $payload = $user->toArray();
+        $payload['abilities'] = $user->getEffectiveAbilities();
+        return $this->sendResponse($payload);
     }
 
     /**

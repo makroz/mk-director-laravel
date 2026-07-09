@@ -186,6 +186,15 @@ class MakeAuthUserCommand extends Command
         $migrate = (bool) $this->option('migrate');
         $seed = (bool) $this->option('seed');
         $discover = (bool) $this->option('discover');
+        // F7-B01: cuando se pasa --with-crud o --with-auth-rbac (scopes que SÍ
+        // emiten tokens Sanctum), auto-invocar setup-sanctum sin requerir que
+        // el dev pase --setup-sanctum explícito. Antes el dev corría
+        // `vendor:publish --tag=sanctum-migrations` + `mk:fix:sanctum-uuids`
+        // a mano, y el primer /login reventaba con 500 silencioso porque la
+        // tabla `personal_access_tokens` no existía. El flag --setup-sanctum
+        // sigue funcionando como opt-in explícito (BC) para scopes sin tokens.
+        $emitsTokens = $withAuthRbac || $withCrud;
+        $setupSanctum = $setupSanctum || $emitsTokens;
         // ARCH-01/FEEDBACK6: scope MANAGER que administra ESTE scope (cross-scope CRUD).
         $managedByRaw = trim((string) $this->option('managed-by'));
         $managedBy = $managedByRaw === '' ? null : Str::studly($managedByRaw);
@@ -618,6 +627,14 @@ PHP,
 
         $this->info("🔐 Generando scope de autenticación MK: {$scope}".($withAuthRbac ? ' (with RBAC)' : ''));
 
+        // F7-B03: check si la tabla del scope ya existe en la DB. El scaffolder
+        // genera la migration `create_{scope_plural}_table`, pero si la tabla
+        // preexiste (corrida previa que no se limpió), `php artisan migrate`
+        // revienta con `SQLSTATE[42P07] relation "..." already exists`. No
+        // bloqueamos el scaffold (el dev puede estar regenerando el código),
+        // pero avisamos loud + sugerimos `migrate:fresh` para entornos piloto.
+        $this->checkScopeTableExists($scopeLower, $scopePlural, $migrate);
+
         $basePath = app_path("Modules/{$scope}");
 
         if (File::exists($basePath)) {
@@ -757,6 +774,19 @@ PHP,
             $this->line("   4. (Opcional) Override de {$scope}Service::beforeCreate() para photo upload logic");
         }
 
+        // F7-B01: si auto-setup-Sanctum se disparó (--with-crud o --with-auth-rbac
+        // y no se pidió --migrate), recordar el paso loud al dev. Aunque el
+        // scaffolder ya publicó+parcheó la migration, el dev todavía tiene que
+        // correr `php artisan migrate` para que la tabla `personal_access_tokens`
+        // exista antes del primer /login.
+        if ($emitsTokens && ! $migrate) {
+            $this->newLine();
+            $this->warn('🔐 F7-B01: Sanctum PAT table setup automático.');
+            $this->line('   El scaffolder publicó y parcheó la migration de Sanctum (--setup-sanctum implícito).');
+            $this->line('   Para que el login funcione, corré `php artisan migrate` antes del primer /login,');
+            $this->line('   o re-scaffoldeá con --migrate para automatizar el paso.');
+        }
+
         // ── A4: cablear config/auth.php (idempotente + backup) ─────────────
         // Antes solo se IMPRIMÍAN los snippets (decisión de least-surprise).
         // FEEDBACK A4: el dev igual tenía que pegarlos a mano en cada scope.
@@ -773,6 +803,71 @@ PHP,
         $this->runPostScaffoldSteps($scope, $scopeLower, $withCrud, $setupSanctum, $migrate, $seed, $discover);
 
         return self::SUCCESS;
+    }
+
+    /**
+     * F7-B03: chequea si la tabla del scope YA EXISTE en la DB y avisa loud.
+     *
+     * El scaffolder genera la migration `create_{scope_plural}_table`, pero
+     * si la tabla preexiste (corrida previa sin `migrate:fresh`), correr
+     * `php artisan migrate` revienta con `SQLSTATE[42P07] relation "..."
+     * already exists`. El warning es no-fatal — el dev puede estar
+     * regenerando el código del módulo sin querer migrar. Si pidió `--migrate`
+     * igual lo intenta (el `migrate` falla pero el scaffold quedó).
+     *
+     * Es silencioso si la DB no está disponible (proyectos sin DB
+     * configurada aún) o si el schema no se puede resolver.
+     */
+    protected function checkScopeTableExists(string $scopeLower, string $scopePlural, bool $willMigrate): void
+    {
+        try {
+            $connection = function_exists('app') && function_exists('config')
+                ? \Illuminate\Support\Facades\DB::connection()
+                : null;
+            if ($connection === null) {
+                return;
+            }
+            // SQLite (sqlite in-memory): `select 1 from sqlite_master` es lo
+            // más portable para chequear existencia de tabla.
+            $driver = $connection->getDriverName();
+            $tableName = $scopePlural;
+            $exists = match ($driver) {
+                'sqlite' => count($connection->select(
+                    "select name from sqlite_master where type='table' and name=?",
+                    [$tableName],
+                )) > 0,
+                'pgsql' => count($connection->select(
+                    'select 1 from information_schema.tables where table_schema = current_schema() and table_name = ?',
+                    [$tableName],
+                )) > 0,
+                'mysql', 'mariadb' => count($connection->select(
+                    'select 1 from information_schema.tables where table_schema = database() and table_name = ?',
+                    [$tableName],
+                )) > 0,
+                default => false, // Driver desconocido — no bloqueamos.
+            };
+            if (! $exists) {
+                return;
+            }
+            $this->newLine();
+            $this->warn("⚠️  F7-B03: la tabla `{$tableName}` YA EXISTE en la DB.");
+            $this->line('   Si corrés `php artisan migrate` ahora va a fallar con');
+            $this->line("   `SQLSTATE[42P07] relation \"{$tableName}\" already exists`.");
+            $this->newLine();
+            if ($willMigrate) {
+                $this->line('   Pediste --migrate, así que el scaffolder va a intentar migrar igual.');
+                $this->line('   Si falla, corré `php artisan migrate:fresh` para empezar limpio');
+                $this->line('   (DESTRUCTIVO — borra datos). Para producción, usá una migration');
+                $this->line('   `add_columns_to_{tableName}_table` en vez de regenerate.');
+            } else {
+                $this->line('   Sugerencia para entornos piloto:');
+                $this->line('     php artisan migrate:fresh    # DESTRUCTIVO — borra datos');
+                $this->line('   Para producción, ver `mk-director-laravel` DEVELOPER_GUIDE §');
+                $this->line('   "Migraciones incrementales" antes de regenerar el módulo.');
+            }
+        } catch (\Throwable $e) {
+            // DB no disponible / permission denied / etc. — no bloqueamos.
+        }
     }
 
     /**
@@ -1312,6 +1407,18 @@ PHP,
             '{{profileFieldsFromRequest}}' => $this->buildProfileFieldsFromRequest($profileFields),
             '{{profileFieldsFromArray}}' => $this->buildProfileFieldsFromArray($profileFields),
             '{{profileFieldsToArray}}' => $this->buildProfileFieldsToArray($profileFields),
+            // F7-W03: emitir los --profile-fields en {Scope}Resource::toArray().
+            // Antes (pre-F7-W03) el Resource scaffoldeado no incluía los
+            // profile fields, así que `phone`, `full_name`, etc. quedaban
+            // write-only (se podían crear/editar pero nunca leer de vuelta).
+            // El frontend los tenía que pedir en el form pero no podía
+            // pre-fillear en edición. Reusamos `buildProfileFieldsToArray()`
+            // que ya produce el shape exacto (`'key' => $this->key,`) que
+            // espera el Resource. Si no hay profile fields, queda string
+            // vacío (no se renderiza ninguna línea — el stub las pinea
+            // condicionalmente con `{{profileFieldsResourceEntry}}` que es
+            // reemplazado por vacío si no hay fields).
+            '{{profileFieldsResourceEntry}}' => $this->buildProfileFieldsToArray($profileFields),
             '{{profileFieldsUniqueRules}}' => $fieldRules['store'],
             '{{profileFieldsUniqueRulesUpdate}}' => $fieldRules['update'],
             '{{loginFieldValidationRule}}' => $loginField === 'email'

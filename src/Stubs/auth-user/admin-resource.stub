@@ -48,7 +48,7 @@ class {{ModuleName}}Resource extends JsonResource
             'photo_path' => $this->photo_path,
             'photo_url' => $this->photo_url,
             'auth_scope' => $this->auth_scope,
-{{statusResourceEntry}}            // HALLAZGO-NEW-FASE15-06: abilities flat top-level — cross-stack contract.
+{{statusResourceEntry}}{{profileFieldsResourceEntry}}            // HALLAZGO-NEW-FASE15-06: abilities flat top-level — cross-stack contract.
             'abilities' => $this->getEffectiveAbilities(),
             'roles' => $this->whenLoaded('roles', fn () => $this->roles->map(fn ($r) => [
                 'id' => $r->id,
