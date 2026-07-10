@@ -1666,14 +1666,33 @@ PHP,
      * R-PKG-027 PKG-NEW-06 fix: `toArray` también debe incluir los profile fields
      * para persistencia. Antes los descartaba silenciosamente.
      *
+     * **R-PKG-046 F9-B02 fix — dedup contra core fields**:
+     * El stub `admin-resource.stub` pinea hardcoded las entradas para los core
+     * fields (id, name, email, photo_path, photo_url, auth_scope, created_at,
+     * updated_at). Pre-fix, si un consumer ejecutaba `--profile-fields="!email,phone"`,
+     * el scaffolder pineaba DOS `'email' => $this->email` en `toArray()`: una
+     * hardcoded + una de `{{profileFieldsResourceEntry}}`. PHP array merge con
+     * key duplicada descarta el primero. El output era OK porque el valor es el
+     * mismo, pero el código generado era inconsistente.
+     *
+     * Post-fix: SKIP core fields (que ya tienen su entrada canónica en el stub).
+     *
      * Indent: 12 spaces.
      *
      * @param  array<string, array{type: string, unique: bool}>  $profileFields
      */
     protected function buildProfileFieldsToArray(array $profileFields): string
     {
+        // R-PKG-046 F9-B02: core fields ya pineados hardcoded en admin-resource.stub.
+        $coreFields = ['id', 'name', 'email', 'photo_path', 'photo_url', 'auth_scope'];
+
         $out = '';
         foreach ($profileFields as $key => $meta) {
+            // R-PKG-046 F9-B02 — skip core fields (ya pineados en el stub).
+            if (in_array($key, $coreFields, true)) {
+                continue;
+            }
+
             $paramName = lcfirst(str_replace('_', '', ucwords($key, '_')));
             $out .= "            '{$key}' => \$this->{$paramName},\n";
         }
@@ -1692,6 +1711,32 @@ PHP,
      *   - tipo de validación acorde al tipo del field (string/integer/date/...).
      *   - `unique` (con ignore en update) solo si el field lo declaró (prefijo `!`).
      *
+     * **R-PKG-046 F9-B01 fix — dedup contra core fields**:
+     * Los stubs `store-admin-request.stub` y `update-admin-request.stub` pinean
+     * hardcoded las reglas para los "core fields" (name, email, password, photo).
+     * Pre-fix, si un consumer ejecutaba `--profile-fields="!email,phone"`, el
+     * scaffolder pineaba DOS entries `'email' => [...]` en el array `rules()`:
+     * una hardcoded del stub + una de `{{profileFieldsUniqueRules}}`. PHP array
+     * merge con key duplicada descarta el primero — el `email` rule + `max:255`
+     * se perdían, dejando solo la versión genérica `['required', 'string',
+     * 'unique:...,email']`. Resultado: emails inválidos pasaban validación.
+     *
+     * Post-fix: este método SKIP los core fields (que ya tienen su rule
+     * canónica en el stub). Solo pine reglas para profile fields custom
+     * (phone, full_name, address, etc.). Si el consumer quiere override las
+     * reglas canónicas de email/password, debe hacerlo editando el stub
+     * generado (post-fix pineado canónico, no por scaffolder).
+     *
+     * Core fields pineados hardcoded en los stubs:
+     *   - name: `['required', 'string', 'max:255']` (store) /
+     *           `['sometimes', 'required', 'string', 'max:255']` (update)
+     *   - email: `['required', 'email', 'max:255', 'unique:...,email']` (store) /
+     *            `['sometimes', 'required', 'email', 'max:255', Rule::unique(...)->ignore($id)]` (update)
+     *   - password: `['required', 'string', 'min:8', 'max:255']` (store) /
+     *               `['sometimes', 'nullable', 'string', 'min:8', 'max:255']` (update)
+     *   - photo: `['nullable', 'file', 'image', 'mimes:...', 'max:2048']` (store) /
+     *           `['sometimes', 'nullable', 'file', 'image', 'mimes:...', 'max:2048']` (update)
+     *
      * @param  array<string, array{type: string, unique: bool}>  $profileFields
      * @param  array<string, bool>  $requiredFields
      * @param  string  $scopePlural  Nombre de la tabla del scope (e.g. `admins`).
@@ -1699,9 +1744,18 @@ PHP,
      */
     protected function buildProfileFieldRules(array $profileFields, array $requiredFields, string $scopePlural): array
     {
+        // R-PKG-046 F9-B01: core fields ya pineados hardcoded en los stubs.
+        // Skip para evitar duplicate keys en el array final `rules()`.
+        $coreFields = ['name', 'email', 'password', 'photo'];
+
         $store = '';
         $update = '';
         foreach ($profileFields as $key => $meta) {
+            // R-PKG-046 F9-B01 — skip core fields (ya pineados en el stub).
+            if (in_array($key, $coreFields, true)) {
+                continue;
+            }
+
             $isRequired = isset($requiredFields[$key]);
             $requiredRule = $isRequired ? 'required' : 'nullable';
 
@@ -1721,6 +1775,26 @@ PHP,
             if ($meta['unique']) {
                 $storeRules[] = "'unique:{$scopePlural},{$key}'";
                 $updateRules[] = "\\Illuminate\\Validation\\Rule::unique('{$scopePlural}', '{$key}')->ignore(\$id)";
+            }
+
+            // R-PKG-046 F9-B04 — Heurística E.164 para campos phone-like.
+            //
+            // Pre-fix, un POST con `phone: "70123456"` (formato nacional Bolivia
+            // sin prefijo país) pasaba la validación del backend porque el scaffolder
+            // pineaba solo `'string'`. El frontend pineaba E.164 (`+59170123456`),
+            // así que había drift entre client/server.
+            //
+            // Post-fix: si el field matchea nombres comunes de teléfono
+            // (phone, tel, telefono, mobile, whatsapp, cellphone), pinear
+            // `regex:/^\+[1-9]\d{1,14}$/'` automáticamente — formato E.164
+            // (prefijo `+` + 1-15 dígitos, sin espacios ni guiones). 80% del
+            // caso de uso queda pineado sin config extra.
+            //
+            // Para consumers con naming custom (`numero_tel`, `celular`, etc.),
+            // pueden pinear el regex manualmente post-scaffold.
+            if (preg_match('/^(phone|tel|telefono|mobile|cellphone|whatsapp)$/i', $key)) {
+                $storeRules[] = "'regex:/^\\\\+[1-9]\\\\d{1,14}\$/'";
+                $updateRules[] = "'regex:/^\\\\+[1-9]\\\\d{1,14}\$/'";
             }
 
             $store .= "            '{$key}' => [".implode(', ', $storeRules)."],\n";
@@ -1922,9 +1996,28 @@ PHP,
     }
 
     /**
-     * ARCH-01/FEEDBACK6 — registra `Http/Routes/managed.php` en el `boot()` del
-     * ServiceProvider del scope, justo después del `loadRoutesFrom` de `api.php`.
-     * Idempotente: si ya está registrado, no re-inyecta.
+     * **R-PKG-046 F9-B09 fix** — genera `{Scope}ManagedRoutesServiceProvider`
+     * y lo auto-registra en `bootstrap/providers.php` DESPUÉS del SP base.
+     *
+     * Pre-fix (ARCH-01/FEEDBACK6), este método pineaba el segundo
+     * `loadRoutesFrom(managed.php)` en el SP base del scope, junto al
+     * `loadRoutesFrom(api.php)`. Resultado: Laravel acumulaba middlewares
+     * globales del Router entre los dos loadRoutesFrom, y las rutas managed
+     * (`/api/admin/members` con `mk.auth:admin`) heredaban middlewares de
+     * las rutas self-service (`mk.auth:member`). Un admin token intentando
+     * crear member fallaba con `ERR_SCOPE_MISMATCH` antes de que
+     * `mk.auth:admin` corriera.
+     *
+     * Post-fix: SP separado `{Scope}ManagedRoutesServiceProvider` que SOLO
+     * carga `managed.php`. Cada SP arranca con el accumulator de middlewares
+     * limpio → no hay leak. Auto-register en `bootstrap/providers.php` después
+     * del SP base (orden importa: Laravel procesa SPs en orden de declaración).
+     *
+     * BC: si un consumer ya pineó el patrón viejo (dos loadRoutesFrom en el
+     * mismo SP), se mantiene — el script detecta el patrón previo via
+     * `Http/Routes/managed.php` check y skip. El consumer puede migrar
+     * manualmente al patrón nuevo (separar SPs) si quiere defense-in-depth
+     * contra el leak.
      */
     protected function extendServiceProviderWithManagedRoutes(string $basePath, string $scope): void
     {
@@ -1937,25 +2030,86 @@ PHP,
 
         $content = File::get($providerPath);
 
+        // BC: si el patrón viejo está pineado (dos loadRoutesFrom en el mismo SP),
+        // skip. El consumer puede migrar manualmente.
         if (str_contains($content, "Http/Routes/managed.php")) {
-            $this->line('   ✅ ServiceProvider ya carga Http/Routes/managed.php (sin cambios).');
+            $this->line('   ✅ ServiceProvider ya carga Http/Routes/managed.php (patrón BC, sin cambios).');
 
             return;
         }
 
-        $anchor = "\$this->loadRoutesFrom(__DIR__ . '/../Http/Routes/api.php');";
-        $managedLoad = $anchor."\n        \$this->loadRoutesFrom(__DIR__ . '/../Http/Routes/managed.php');";
-
-        if (! str_contains($content, $anchor)) {
-            $this->warn('   ⚠️  No se encontró el loadRoutesFrom de api.php; agregá manualmente:');
-            $this->line("        \$this->loadRoutesFrom(__DIR__ . '/../Http/Routes/managed.php');");
+        // R-PKG-046 F9-B09: generar SP separado para managed routes.
+        $managedSpPath = "{$basePath}/Providers/{$scope}ManagedRoutesServiceProvider.php";
+        if (File::exists($managedSpPath)) {
+            $this->line("   ✅ {$scope}ManagedRoutesServiceProvider ya existe (sin cambios).");
 
             return;
         }
 
-        $content = str_replace($anchor, $managedLoad, $content);
-        File::put($providerPath, $content);
-        $this->line('   ✅ ServiceProvider: Http/Routes/managed.php registrado en boot().');
+        // Generar el SP separado via stub.
+        $this->generateStub(
+            $scope,
+            Str::snake($scope),
+            Str::plural(Str::snake($scope)),
+            'email',
+            'auth-user.managed-routes-service-provider.stub',
+            'Providers',
+            "{$scope}ManagedRoutesServiceProvider.php",
+            [],
+        );
+
+        // Auto-registrar el SP en bootstrap/providers.php después del SP base.
+        $this->registerProviderInBootstrap(
+            "App\\Modules\\{$scope}\\Providers\\{$scope}ManagedRoutesServiceProvider",
+            afterProvider: "App\\Modules\\{$scope}\\Providers\\{$scope}ServiceProvider",
+        );
+
+        $this->line("   ✅ {$scope}ManagedRoutesServiceProvider generado y registrado en bootstrap/providers.php.");
+    }
+
+    /**
+     * R-PKG-046 F9-B09 — Auto-registra un ServiceProvider en bootstrap/providers.php
+     * (Laravel 11+) o config/app.php (Laravel 10).
+     *
+     * Para Laravel 11+ (default), agrega una entrada al array del archivo,
+     * después del provider canónico (`$afterProvider`).
+     *
+     * @param  string  $providerFqcn  FQCN del provider a registrar (e.g. `App\Modules\Member\Providers\MemberManagedRoutesServiceProvider`).
+     * @param  string|null  $afterProvider  FQCN del provider que debe aparecer ANTES en la lista (null = al final).
+     */
+    protected function registerProviderInBootstrap(string $providerFqcn, ?string $afterProvider = null): void
+    {
+        $bootstrapPath = base_path('bootstrap/providers.php');
+
+        if (! File::exists($bootstrapPath)) {
+            // Fallback Laravel 10 / config/app.php.
+            $this->warn("   ⚠️  bootstrap/providers.php no encontrado. Registrá manualmente:");
+            $this->line("        App\\\\Providers\\\\...::class  // agregar a config/app.php");
+            $this->line("        {$providerFqcn}::class");
+
+            return;
+        }
+
+        $content = File::get($bootstrapPath);
+
+        // Idempotencia: si ya está registrado, skip.
+        if (str_contains($content, $providerFqcn)) {
+            return;
+        }
+
+        // Insertar después del $afterProvider (si está pineado).
+        if ($afterProvider !== null && str_contains($content, $afterProvider)) {
+            $anchor = $afterProvider.'::class,';
+            $replacement = $anchor."\n    {$providerFqcn}::class,";
+            $content = str_replace($anchor, $replacement, $content);
+        } else {
+            // Sin anchor: agregar al final del array (antes del `];`).
+            $anchor = '];';
+            $replacement = "    {$providerFqcn}::class,\n];";
+            $content = str_replace($anchor, $replacement, $content);
+        }
+
+        File::put($bootstrapPath, $content);
     }
 
     /**
@@ -2728,11 +2882,40 @@ PHP,
             $fillable .= "        '{$key}',\n";
 
             // Migration column: usa column_method + column_args (e.g. decimal('x', 8, 2)).
+            //
             // R-PKG-014 BUG-09: si unique=true, agregar ->unique() a la cadena.
+            //
+            // **R-PKG-046 F9-B03 fix — respetar --profile-fields-required**:
+            // Pre-fix, el scaffolder pine `->nullable()` INCONDICIONALMENTE en la
+            // columna del profile field, ignorando el flag `--profile-fields-required=<csv>`
+            // que el consumer pasó. Resultado: si un consumer ejecutaba
+            // `--profile-fields="!email" --profile-fields-required="email"`, la migration
+            // pineaba `$table->string('email')->unique()->nullable()` aunque el FormRequest
+            // validaba `required`. Un POST sin email fallaba con
+            // `Integrity constraint violation: NOT NULL constraint failed: admins.email`
+            // (500 SQL) en vez de `ValidationException` (422).
+            //
+            // Post-fix: `shouldBeNullable($key, $requiredFields)` helper centraliza la
+            // decisión. Reglas:
+            //   - field en requiredFields → NO nullable (ni unique(true) → `->unique()` sin nullable).
+            //   - field NO en requiredFields → nullable (default BC).
+            //
+            // El helper pinea nullable=true cuando NO está en required. Es la inversa
+            // de la lógica de validación: si validation rule es `required`, column constraint
+            // es `NOT NULL`; si validation rule es `nullable`, column puede ser NULL.
             $args = empty($config['column_args'])
                 ? ''
                 : ', '.implode(', ', $config['column_args']);
-            $chain = $unique ? '->unique()->nullable()' : '->nullable()';
+            $isRequired = isset($requiredFields[$key]);
+            $shouldBeNullable = ! $isRequired;
+
+            $chain = '';
+            if ($unique) {
+                $chain .= '->unique()';
+            }
+            if ($shouldBeNullable) {
+                $chain .= '->nullable()';
+            }
             $columns .= "        \$table->{$config['column_method']}('{$key}'{$args}){$chain};\n            ";
 
             // Docblock @property typed (phpstan-style hint).

@@ -5,6 +5,86 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [UNRELEASED] — FEEDBACK9 fixes (R-PKG-046 — RETO corrida 9)
+
+> Sprint consolidado con 10 hallazgos del paquete pineados por RETO corrida 9
+> (login field `ci`, `--managed-by=Admin`, profile fields custom). El sprint
+> cierra bugs scaffolder (5) + runtime (5) que el piloto RETO detectó al
+> salir del happy path email-only. Único consumer = RETO (R-G-033).
+> Mario retiene bumpeo + tag + publish per RELEASE_AT_END.
+>
+> **2 🔴 bloqueantes** (app no bootea o validación scaffoldeada dead):
+>   - F9-B07: PluginManager loop infinito (auto-register FileStoragePlugin)
+>   - F9-B08: CRUDSmart NO aplica FormRequest scaffoldeado
+>
+> **5 🟠 fricción scaffolder** (workaround consumer-side pineado en RETO):
+>   - F9-B01/B02: duplicate `email` key en FormRequest + Resource
+>   - F9-B03: migration pinea nullable aunque `--profile-fields-required`
+>   - F9-B04: scaffolder NO pinea validación E.164 para phone
+>   - F9-B05: `mk:auth:create-super-admin` no soporta `--ci`
+>   - F9-B09: `loadRoutesFrom` consecutivos acumulan middlewares
+>   - F9-B10: controller constructor pinea middleware redundante
+>
+> **3 🟡 runtime** (defense-in-depth + observability):
+>   - F9-B06: TokenIssuer soporta `{key: bool}` de Sanctum 4.x
+>   - F9-B11: MkAuthenticate responde `ERR_SCOPE_MISMATCH` (no `ERR_UNAUTHENTICATED`)
+>
+> **BC analysis**: 100% BC-safe. Consumers existentes siguen funcionando
+> idéntico. Cambios detectados solo en nuevos scaffolds o nuevas
+> invocaciones de los paths pineados (e.g. `--login-field=ci`).
+
+### Fixed
+
+- **F9-B07 🔴 — `PluginManager` lazy boot fix** (FEEDBACK9 F9-B07). Pre-fix, `PluginManager::__construct()` llamaba `loadPluginsFromConfig()` que resolvía `FileStoragePlugin::class` via `app()`. Como `FileStoragePlugin::__construct(PluginManager $manager)` requiere `PluginManager`, container entraba en **dependency circular infinita** y la app bricked al boot con `MK_FILE_STORAGE_PLUGIN=true`. Stack trace bug pineado en `src/Managers/PluginManager.php` docblock. Post-fix: constructor es lazy (solo `plugins = collect()`); método público `boot()` carga plugins; `MkServiceProvider::boot()` llama `$pluginManager->boot()` DESPUÉS de que el singleton YA está construido. Idempotente (`$booted` flag). **Test E2E consumer**: RETO ahora puede bootear con `MK_FILE_STORAGE_PLUGIN=true` sin workaround.
+
+- **F9-B08 🔴 — `CRUDSmart::store()/update()` aplican FormRequest** (FEEDBACK9 F9-B08). Pre-fix, el scaffolder pine `'store_request' => StoreXRequest::class` en `$mkConfig` pero `CRUDSmart::store()` hacía `$request->all()` directo sin validar. La validación scaffoldeada era dead code — un POST sin email fallaba con `Integrity constraint violation: NOT NULL constraint failed: admins.email` (500 SQL) en vez de `ValidationException` (422). Post-fix: nuevo helper `resolveFormRequest(configKey, request, routeParamName, routeParamValue)` que resuelve via `app()`, setContainer, setRedirector, setRouteResolver (con `{resource} = $id` para `Rule::unique(...)->ignore($this->route('admin'))`), y corre `validateResolved()`. Para `update()`, route resolver pineado con `$id` para que unique check ignore el row actual. BC: si `store_request` no pineado, retorna `$request` sin tocar.
+
+- **F9-B01 — Scaffolder deduplica keys en `Store{Scope}Request::rules()`** (FEEDBACK9 F9-B01). Pre-fix, si el consumer ejecutaba `--profile-fields="!email,phone"`, el scaffolder pineaba `'email' => [...]` DOS veces en el array `rules()` (una hardcoded del stub + una vía `{{profileFieldsUniqueRules}}`). PHP array merge con key duplicada descarta el primero — el `email` rule + `max:255` se perdían, dejando solo `['required', 'string', 'unique:...,email']`. Emails inválidos pasaban validación. Post-fix: `buildProfileFieldRules()` SKIP core fields (`name`, `email`, `password`, `photo`) que ya están pineados hardcoded en los stubs.
+
+- **F9-B02 — Scaffolder deduplica keys en `{Scope}Resource::toArray()`** (FEEDBACK9 F9-B02). Mismo bug que F9-B01 pero en el Resource — `'email' => $this->email` pineado 2 veces. Output funcionalmente OK (mismo valor) pero código generado inconsistente. Post-fix: `buildProfileFieldsToArray()` SKIP core fields (`id`, `name`, `email`, `photo_path`, `photo_url`, `auth_scope`).
+
+- **F9-B03 — Migration respeta `--profile-fields-required`** (FEEDBACK9 F9-B03). Pre-fix, el scaffolder pine `->nullable()` INCONDICIONALMENTE en la columna del profile field, ignorando el flag `--profile-fields-required=<csv>`. Si el consumer ejecutaba `--profile-fields="!email" --profile-fields-required="email"`, la migration pineaba `$table->string('email')->unique()->nullable()` aunque el FormRequest validaba `required`. POST sin email → 500 SQL constraint violation (no 422). Post-fix: lógica del chain respeta `$requiredFields`. Field en required → NOT NULL (sin `->nullable()`). Field no en required → `->nullable()` (BC default).
+
+- **F9-B04 — Scaffolder pinea validación E.164 para phone-like fields** (FEEDBACK9 F9-B04). Pre-fix, scaffolder pine `'string'` para phone/tel/telefono/mobile. Frontend pineaba E.164 (`+59170123456`) pero backend aceptaba cualquier string. Drift client/server. Post-fix: heurística `if (preg_match('/^(phone|tel|telefono|mobile|cellphone|whatsapp)$/i', $key))` pinea `regex:/^\+[1-9]\d{1,14}$/'` automáticamente. 80% del caso de uso pineado sin config extra. Para naming custom (`numero_tel`, `celular`), pinear regex manualmente post-scaffold.
+
+- **F9-B05 — `mk:auth:create-super-admin` soporta `--{loginField}` dinámico** (FEEDBACK9 F9-B05). Pre-fix, command pineaba hardcoded `--email` en signature, validación y `where()`. Si consumer ejecutó `--login-field=ci`, el command pedía `--email` y buscaba por `where('email', ...)`. Workaround consumer-side (RETO): tinker manual con `firstOrCreate(['ci' => ...])`. Post-fix: el command detecta `$admin->getLoginField()` (default `'email'`, override `'ci'`, etc.). `configure()` agrega `--{loginField}` dinámicamente via Symfony `InputOption` si difiere del BC `--email`. `resolveLoginFieldValue()` fallback chain: `--{loginField}` flag → `--email` (BC) → prompt pineado con nombre del field. Validación dinámica (`FILTER_VALIDATE_EMAIL` solo si `loginField='email'`). `where()` dinámico. `create()` solo pinea el login field value (no `email` hardcoded). Tabla final + Login: output usan el field name correcto.
+
+- **F9-B09 — `loadRoutesFrom` consecutivos: SP separado para managed routes** (FEEDBACK9 F9-B09). Pre-fix, cuando el consumer scaffoldeaba `--managed-by=Admin`, el SP base del scope hacía DOS `loadRoutesFrom` consecutivos (`api.php` + `managed.php`). Laravel acumula middlewares globales del Router entre invocaciones de `loadRoutesFrom`. Resultado: rutas managed (`POST /api/admin/members` con `mk.auth:admin`) heredaban middlewares de las rutas self-service (`mk.auth:member`). Un admin token intentando crear member fallaba con `ERR_SCOPE_MISMATCH` antes de que `mk.auth:admin` corriera. Post-fix: nuevo stub `auth-user.managed-routes-service-provider.stub` que genera `{Scope}ManagedRoutesServiceProvider`. SP separado solo carga `managed.php`. Auto-register en `bootstrap/providers.php` después del SP base (orden importa). BC: si el patrón viejo está pineado (`Http/Routes/managed.php` en el SP base), skip. Consumer puede migrar manualmente al patrón nuevo.
+
+- **F9-B10 — Scaffolder NO pinea `$this->middleware('mk.auth:{scope}')` en constructor** (FEEDBACK9 F9-B10). Pre-fix, el constructor del Controller scaffoldeado pineaba middleware redundante que se aplicaba a TODAS las acciones del controller, incluyendo cuando se invocaban desde rutas managed (que ya pinean `mk.auth:{managerScope}`). Combinado con F9-B09, el efecto se duplicaba. Defense-in-depth con middlewares redundantes causa más bugs que defensa. Post-fix: constructor vacío. Las rutas per-route (en `routes/api.php` + `routes/managed.php`) pinean el middleware correcto per endpoint. Defense-in-depth per-route es suficiente.
+
+- **F9-B06 — `TokenIssuer::extractScopeFromAbilities()` soporta `{key: bool}` de Sanctum 4.x** (FEEDBACK9 F9-B06). Pre-fix, el método esperaba flat array de strings (`['refresh', 'auth_scope:admin']`). Sanctum 4.x guarda abilities como objeto JSON `{key: bool}` (`['refresh' => true, 'auth_scope:admin' => true]`). Con `{key: bool}`, `foreach` leía los values (true/false), no las keys. Scope nunca se extraía. Tests directos con `createToken(['auth_scope:admin' => true])` rompían. Post-fix: normalizar assoc array a flat list de strings (si key es string, tomar la key; si key es int, tomar el value si string). BC: production sigue funcionando porque `issueAccessToken()` pine array plano.
+
+- **F9-B11 — `MkAuthenticate` responde `ERR_SCOPE_MISMATCH` con `actual_scope`** (FEEDBACK9 F9-B11). Pre-fix, cuando un admin token atacaba `/api/member/auth/me`, el paquete respondía `ERR_UNAUTHENTICATED` (genérico). El cliente no podía distinguir "no estoy autenticado" de "estoy autenticado con el scope equivocado". El spec de FEEDBACK7 y `docs/AUTH.md` prometía `ERR_SCOPE_MISMATCH` cuando el token pertenece a otro scope. Post-fix: si `Auth::guard($scope)->user()` retorna null, intentar `Auth::guard()` (default scope-agnostic). Si default retorna user con `auth_scope !== $scope`, responder `ERR_SCOPE_MISMATCH` con `actual_scope: $user->getAuthScope()`. BC: si genuinamente no autenticado (default también null), mantiene `ERR_UNAUTHENTICATED`.
+
+### Tests
+
+- **F9-B07 regression guard**: `tests/Feature/PluginManagerLazyBootTest.php` (5 tests) — boot lazy + singleton integrity + opt-out + idempotente. **Coverage**: EFECTIVIDAD via runtime con container, no source-parsing.
+- **F9-B08 regression guard**: `tests/Unit/CRUDSmartFormRequestTest.php` (7 tests) — `resolveFormRequest` pineado en store/update + route resolver + validateResolved + BC. **Coverage**: INTENCIÓN (source-parsing per HALLAZGO-NEW-03). EFECTIVIDAD se valida en RETO post-merge.
+- **F9-B01/B02 regression guard**: `tests/Unit/Console/ScaffolderDedupeF9B01B02Test.php` (6 tests) — `buildProfileFieldRules` skip core fields + `buildProfileFieldsToArray` skip core fields + JSDoc + stub content.
+- **F9-B03 regression guard**: `tests/Unit/Console/MigrationRequiredF9B03Test.php` (3 tests) — chain respeta requiredFields + JSDoc explica bug.
+- **F9-B04 regression guard**: `tests/Unit/Console/ScaffolderE164F9B04Test.php` (2 tests) — heurística pine regex E.164 + JSDoc.
+- **F9-B05 regression guard**: `tests/Unit/Console/AuthCreateSuperAdminF9B05Test.php` (7 tests) — `configure()` dinámico + `resolveLoginFieldValue` + where dinámico + create dinámico + validación + output.
+- **F9-B06 regression guard**: `tests/Unit/Auth/TokenIssuerScopeExtractionTest.php` (7 tests) — flat array BC + assoc {key:bool} NEW + mixed + scope vacío + non-string filter + JSDoc.
+- **F9-B07 side-effect**: `tests/Unit/PluginManagerTest.php` y `tests/Unit/Managers/PluginManagerAuditTest.php` actualizados para llamar `$manager->boot()` después de `new PluginManager()` (lazy constructor).
+
+### Migration consumer (RETO)
+
+RETO puede bumpear `composer.json` a `^2.0.3` post-merge. Los workarounds consumer-side pineados con referencias `F9-XXX` se borran automáticamente al regenerar Admin/Member scopes desde 0:
+
+```bash
+# RETO pre-F9 fixes (workarounds consumer-side pineados):
+MK_FILE_STORAGE_PLUGIN=false                          # F9-B07 — ya no necesario
+app/Http/Controllers/Admin/AdminController.php        # workaround manual `validateResolved()` — F9-B08 — borrar
+app/Http/Controllers/Member/MemberController.php      # idem — F9-B08 — borrar
+config/mk_director.php: 'plugins' => []               # F9-B07 — re-habilitar auto-register
+app/Modules/Member/Providers/MemberManagedRoutesServiceProvider.php  # F9-B09 — regenerar
+```
+
+Validar e2e: `POST /api/admin/auth/login` + `POST /api/admin/members` + cross-scope attack (`admin token → /api/member/auth/me` → 401 con `code: ERR_SCOPE_MISMATCH, actual_scope: admin`).
+
+---
+
 ## [UNRELEASED] — FileStoragePlugin hardening (R-PKG-045 — FEEDBACK8)
 
 > Fixes al `FileStoragePlugin` (existed but was silently dead code) + nuevo

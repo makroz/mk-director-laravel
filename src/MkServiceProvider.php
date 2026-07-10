@@ -42,10 +42,22 @@ class MkServiceProvider extends ServiceProvider
         // R-PKG-045 D2: auto-register FileStoragePlugin by default unless the
         // consumer explicitly opts out via `features.file_storage_plugin = false`.
         // MUST run BEFORE the PluginManager singleton binding (which reads
-        // `config('mk_director.plugins')` in its constructor).
+        // `config('mk_director.plugins')` in its boot() — see R-PKG-046 F9-B07).
         $this->registerPlugins();
 
-        // MK-Director Plugin Manager
+        // MK-Director Plugin Manager — R-PKG-046 F9-B07 lazy singleton.
+        //
+        // Pre-fix, `new PluginManager` en el closure disparaba
+        // `loadPluginsFromConfig()` desde el constructor, que resolvía
+        // `FileStoragePlugin` via container. Como `FileStoragePlugin::__construct(PluginManager)`
+        // requiere `PluginManager`, container entraba en dependency circular
+        // y la app bricked.
+        //
+        // Post-fix: el closure solo construye el PluginManager vacío.
+        // El método público `boot()` carga los plugins. Disparado desde
+        // `MkServiceProvider::boot()` DESPUÉS de que el singleton YA está
+        // en el container — así cuando boot() resuelve FileStoragePlugin,
+        // PluginManager ya existe y puede inyectarse sin loop.
         $this->app->singleton(PluginManager::class, function ($app) {
             return new PluginManager;
         });
@@ -105,6 +117,22 @@ class MkServiceProvider extends ServiceProvider
         // Load the package's Auth migrations so the abilities / roles /
         // admins tables are available to every project.
         $this->loadMigrationsFrom(__DIR__.'/Auth/Database/Migrations');
+
+        // R-PKG-046 F9-B07 — Lazy plugin boot.
+        //
+        // El singleton PluginManager está registrado en `register()` pero su
+        // constructor es lazy (no carga plugins). Llamar `boot()` ahora,
+        // después del `loadMigrationsFrom` (para que DB esté lista) y
+        // después de `mergeConfigFrom` (hecho en register()), pero ANTES
+        // de cualquier resolución del container que pueda depender de
+        // plugins (e.g. CRUDSmart trait en controllers).
+        //
+        // `$this->app->make(PluginManager::class)` resuelve el singleton (ejecuta
+        // el closure `new PluginManager` que solo pinear `plugins = collect()`).
+        // Luego `->boot()` carga config + llama `app(FileStoragePlugin::class)`.
+        // Container resuelve FileStoragePlugin buscando PluginManager → encuentra
+        // el singleton YA CONSTRUIDO. Inyecta OK. No loop.
+        $this->app->make(PluginManager::class)->boot();
 
         $this->registerTenantMiddleware();
 

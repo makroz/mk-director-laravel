@@ -82,7 +82,12 @@ test('AdminController stub extends SmartController y tiene mkConfig', function (
     expect($stub)->toContain('class {{ModuleName}}Controller extends SmartController');
     expect($stub)->toContain("'model'           => {{ModuleName}}::class");
     expect($stub)->toContain("'service'         => {{ModuleName}}Service::class");
-    expect($stub)->toContain('$this->middleware(\'mk.auth:{{moduleNameLower}}\');');
+    // R-PKG-046 F9-B10: el constructor del Controller ya NO pinea
+    // `$this->middleware('mk.auth:{{scope}}')` — defense-in-depth pineado
+    // per-route en routes/api.php + routes/managed.php. El stub debe tener
+    // constructor vacío (no middleware en constructor).
+    expect($stub)->not->toContain('$this->middleware(\'mk.auth:{{moduleNameLower}}\');');
+    expect($stub)->toContain('public function __construct()');
 });
 
 test('RoleController stub extends SmartController y opera sobre Role del paquete', function () {

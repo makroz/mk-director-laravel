@@ -51,7 +51,12 @@ function buildPluginManagerWithFakePlugin(): PluginManager
     config(['mk_director.plugins' => [get_class($fakePlugin)]]);
     app()->instance(get_class($fakePlugin), $fakePlugin);
 
-    return new PluginManager();
+    // R-PKG-046 F9-B07: constructor lazy. Llamar boot() explícito después
+    // de new PluginManager() para que el fake plugin quede registrado.
+    $manager = new PluginManager();
+    $manager->boot();
+
+    return $manager;
 }
 
 test('audit con fields vacío no dispara warning — solo info (F8-B04 regression guard)', function () {
@@ -159,7 +164,9 @@ test('audit con D1 mapeo explícito (assoc) trata value como el fillable esperad
 
     config(['mk_director.plugins' => [get_class($fakePlugin)]]);
     app()->instance(get_class($fakePlugin), $fakePlugin);
+    // R-PKG-046 F9-B07: boot() explícito (constructor lazy).
     $manager = new PluginManager();
+    $manager->boot();
 
     // fillable tiene 'photo_path' (el column name post-D1) → no error.
     $findings = $manager->auditRequirements(

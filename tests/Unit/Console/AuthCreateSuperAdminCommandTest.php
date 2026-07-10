@@ -73,7 +73,8 @@ test('mk:auth:create-super-admin requires password confirmation and minimum 8 ch
 test('mk:auth:create-super-admin is idempotent on duplicate email', function () {
     $source = createSuperAdminSource();
 
-    expect($source)->toContain('where(\'email\', $email)->exists()');
+    // R-PKG-046 F9-B05: where() dinámico según loginField (no hardcoded 'email').
+    expect($source)->toContain('where($this->loginField, $loginFieldValue)->exists()');
     expect($source)->toContain('No se creó nada');
 });
 

@@ -29,7 +29,9 @@ test('PluginManager loads plugins from config and boots them', function () {
     config(['mk_director.plugins' => [get_class($mockPlugin)]]);
     app()->instance(get_class($mockPlugin), $mockPlugin);
 
+    // R-PKG-046 F9-B07: el constructor es lazy. Llamar boot() explícitamente.
     $manager = new PluginManager();
+    $manager->boot();
     expect($mockPlugin->booted)->toBeTrue();
 });
 
@@ -50,6 +52,7 @@ test('PluginManager fires beforeQuery hook', function () {
     app()->instance(get_class($mockPlugin), $mockPlugin);
 
     $manager = new PluginManager();
+    $manager->boot();
     $manager->fireBeforeQuery(Mockery::mock(Builder::class), Request::create('/', 'GET'));
 
     expect($mockPlugin->called)->toBeTrue();
@@ -71,6 +74,7 @@ test('PluginManager fires beforeSave and modifies data', function () {
     app()->instance(get_class($mockPlugin), $mockPlugin);
 
     $manager = new PluginManager();
+    $manager->boot();
     $data = ['original' => true];
     $manager->fireBeforeSave(Request::create('/', 'POST'), $data);
 
@@ -94,6 +98,7 @@ test('PluginManager fires afterSave hook', function () {
     app()->instance(get_class($mockPlugin), $mockPlugin);
 
     $manager = new PluginManager();
+    $manager->boot();
     $manager->fireAfterSave(new \stdClass(), Request::create('/', 'POST'));
 
     expect($mockPlugin->called)->toBeTrue();
@@ -115,8 +120,61 @@ test('PluginManager fires afterResponse hook and modifies response', function ()
     app()->instance(get_class($mockPlugin), $mockPlugin);
 
     $manager = new PluginManager();
+    $manager->boot();
     $response = ['data' => []];
     $manager->fireAfterResponse($response);
 
     expect($response)->toHaveKey('plugin_applied');
+});
+
+// R-PKG-046 F9-B07 — Lazy boot guard: boot() es idempotente.
+test('PluginManager::boot() es idempotente (segunda llamada es no-op)', function () {
+    $mockPlugin = new class implements MkPluginInterface {
+        public int $bootCount = 0;
+        public function boot(): void { $this->bootCount++; }
+        public function getRequirements(): array { return []; }
+        public function beforeQuery(Builder $query, Request $request): void {}
+        public function beforeSave(Request $request, array &$data, string $mode): void {}
+        public function afterSave($model, Request $request, string $mode): void {}
+        public function beforeDelete($model, Request $request): void {}
+        public function afterDelete($model, Request $request): void {}
+        public function afterResponse(&$responseData): void {}
+    };
+
+    config(['mk_director.plugins' => [get_class($mockPlugin)]]);
+    app()->instance(get_class($mockPlugin), $mockPlugin);
+
+    $manager = new PluginManager();
+    $manager->boot();
+    $manager->boot();
+    $manager->boot();
+
+    expect($mockPlugin->bootCount)->toBe(1);  // Pinear 1 boot, no 3.
+});
+
+// R-PKG-046 F9-B07 — Lazy boot smoke: nuevo PluginManager NO carga plugins
+// hasta que se llame boot() (regression guard del bug de loop).
+test('PluginManager NO carga plugins en constructor (lazy boot)', function () {
+    $mockPlugin = new class implements MkPluginInterface {
+        public bool $booted = false;
+        public function boot(): void { $this->booted = true; }
+        public function getRequirements(): array { return []; }
+        public function beforeQuery(Builder $query, Request $request): void {}
+        public function beforeSave(Request $request, array &$data, string $mode): void {}
+        public function afterSave($model, Request $request, string $mode): void {}
+        public function beforeDelete($model, Request $request): void {}
+        public function afterDelete($model, Request $request): void {}
+        public function afterResponse(&$responseData): void {}
+    };
+
+    config(['mk_director.plugins' => [get_class($mockPlugin)]]);
+    app()->instance(get_class($mockPlugin), $mockPlugin);
+
+    $manager = new PluginManager();
+    // Sin boot() explícito → el plugin mock NO debe estar booted.
+    expect($mockPlugin->booted)->toBeFalse();
+
+    // Después de boot() → el plugin mock DEBE estar booted.
+    $manager->boot();
+    expect($mockPlugin->booted)->toBeTrue();
 });

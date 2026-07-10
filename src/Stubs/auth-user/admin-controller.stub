@@ -64,9 +64,25 @@ class {{ModuleName}}Controller extends SmartController
         ],
     ];
 
+    /**
+     * R-PKG-046 F9-B10 — Constructor vacío.
+     *
+     * Pre-fix pineaba `$this->middleware('mk.auth:{{moduleNameLower}}')` que
+     * se aplicaba a TODAS las acciones del controller, incluyendo cuando se
+     * invocaban desde rutas managed (que ya pinean `mk.auth:{{managerNameLower}}`).
+     * Combinado con F9-B09 (loadRoutesFrom acumulado), el efecto se duplicaba
+     * y un admin token intentando `POST /api/admin/members` fallaba con
+     * `ERR_SCOPE_MISMATCH` antes de que `mk.auth:admin` corriera.
+     *
+     * Post-fix: las rutas per-route (pineadas en `Http/Routes/api.php` y
+     * `Http/Routes/managed.php`) ya pinean el middleware correcto per endpoint
+     * (`mk.auth:{scope}` + `mk.ability:{scope}.{resource}.{action}`). Defense-in-depth
+     * per-route es suficiente — el constructor queda vacío para evitar
+     * leak entre controllers reusados cross-scope.
+     */
     public function __construct()
     {
-        $this->middleware('mk.auth:{{moduleNameLower}}');
+        // vacío — defense-in-depth cubierta per-route
     }
 
     /**

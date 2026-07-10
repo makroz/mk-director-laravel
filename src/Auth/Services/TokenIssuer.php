@@ -121,11 +121,42 @@ class TokenIssuer
      * Extrae el scope a partir de un array de abilities.
      * Usado por AuthScopeResolver y por tests.
      *
-     * @param  array<int,mixed>  $abilities
+     * **R-PKG-046 F9-B06 fix — soporta {key: bool} de Sanctum 4.x**:
+     * Sanctum 4.x guarda abilities como objeto JSON `{key: bool}` en
+     * `personal_access_tokens.abilities`. El formato pre-fix esperaba
+     * flat array de strings:
+     *
+     *   ['refresh', 'auth_scope:admin', '*']  ← pre-fix OK
+     *   ['refresh' => true, 'auth_scope:admin' => true]  ← Sanctum 4.x
+     *
+     * Con `{key: bool}`, `foreach` lee los **values** (true/false), no las
+     * **keys**. El scope nunca se extraía con el formato nuevo.
+     *
+     * Post-fix: normalizar a un flat list de keys (si string) + values (si string)
+     * antes de iterar. Production sigue funcionando porque `issueAccessToken`
+     * pine array plano de strings. Solo se rompe el path de testing directo con
+     * `createToken(['auth_scope:admin' => true])` — pine manual para tests.
+     *
+     * @param  array<int|string,mixed>  $abilities  Acepta flat array o assoc map.
      */
     public static function extractScopeFromAbilities(array $abilities): ?string
     {
-        foreach ($abilities as $ability) {
+        // R-PKG-046 F9-B06 — Normalizar {key: bool} a flat list de strings.
+        $flat = [];
+        foreach ($abilities as $key => $value) {
+            // Si key es string (assoc array / Sanctum 4.x), tomar la key.
+            if (is_string($key)) {
+                $flat[] = $key;
+                continue;
+            }
+
+            // Si key es int (flat array), tomar el value.
+            if (is_string($value)) {
+                $flat[] = $value;
+            }
+        }
+
+        foreach ($flat as $ability) {
             if (is_string($ability) && str_starts_with($ability, self::SCOPE_ABILITY_PREFIX)) {
                 $value = substr($ability, strlen(self::SCOPE_ABILITY_PREFIX));
                 return $value !== '' ? $value : null;
