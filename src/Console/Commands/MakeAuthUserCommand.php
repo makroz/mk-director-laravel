@@ -126,6 +126,18 @@ class MakeAuthUserCommand extends Command
             'cast' => 'array',
             'validation' => ['nullable', 'array'],
         ],
+        // R-PKG-047 D3 — FileStorage auto-wire via suffix :file.
+        //
+        // `column_method` es `'string'` porque el path del archivo
+        // (`uploads/files/abc.jpg`) se guarda como string en la columna
+        // `{field}_path`. El scaffolder pine auto el config del
+        // FileStoragePlugin (ver `detectFileFields()` + `buildFileFieldsConfig()`).
+        'file' => [
+            'column_method' => 'string',
+            'column_args' => [],
+            'cast' => null,
+            'validation' => ['nullable', 'string'],
+        ],
     ];
 
     /**
@@ -1450,6 +1462,20 @@ PHP,
             '{{loginFieldValidationRule}}' => $loginField === 'email'
                 ? "['required', 'email', 'max:255', 'unique:{$scopePlural},{$loginField}']"
                 : "['required', 'string', 'max:255', 'unique:{$scopePlural},{$loginField}']",
+
+            // R-PKG-047 D3 — auto-wire FileStoragePlugin via :file suffix.
+            //
+            // Detecta fields con type=file (e.g. `--profile-fields='avatar:file'`)
+            // y pinea automaticamente el map `request => column` en `$mkConfig['plugins']`
+            // del admin-controller scaffoldeado. Pre-D3: el consumer tenia que
+            // pinear manualmente `mkConfig['plugins']['file_storage']['fields']` despues
+            // de scaffoldear (cross-cutting risk: campos olvidados rompen upload).
+            //
+            // Si no hay file fields, retorna `[]` (omitir el key `plugins` del mkConfig).
+            // Si hay file fields, retorna el array PHP literal pineable directo en el stub.
+            '{{pluginsConfig}}' => $this->buildPluginsConfigLiteral(
+                $this->detectFileFields($profileFields),
+            ),
         ], $this->buildStatusCrudReplacements($withStatus, $statusStates, $scope, $scopeLower));
 
         // ── Controllers (3) ──
@@ -1689,6 +1715,130 @@ PHP,
         }
 
         return $merged;
+    }
+
+    /**
+     * R-PKG-047 D3 — detecta profile fields con type=file (auto-wire FileStoragePlugin).
+     *
+     * Pre-D3: el consumer tenía que pinear manualmente en
+     * `mkConfig['plugins']['file_storage']['fields']` el mapping `request => column`
+     * después de scaffoldear. Era cross-cutting risk: si olvidaba un campo, el
+     * upload reventaba con `Call to a member function store() on null` o similar.
+     *
+     * Post-D3: el scaffolder detecta type=file automáticamente y pinea el config
+     * en el admin-controller scaffoldeado. Sufijo `:file` en `--profile-fields`
+     * (e.g. `--profile-fields='avatar:file,phone:string'`) es el trigger.
+     *
+     * @param  array<string, array{type: string, unique: bool, is_file?: bool}>  $profileFields
+     * @return array<int, string> Lista de field names (sin suffix, sin tipo) que son `file`.
+     */
+    private function detectFileFields(array $profileFields): array
+    {
+        $fileFields = [];
+        foreach ($profileFields as $key => $meta) {
+            // Soportar tanto is_file=true como type='file' (defense-in-depth
+            // para consumers que pinean el meta manualmente).
+            $isFile = ($meta['is_file'] ?? false) === true || ($meta['type'] ?? '') === 'file';
+            if ($isFile) {
+                $fileFields[] = $key;
+            }
+        }
+
+        return $fileFields;
+    }
+
+    /**
+     * R-PKG-047 D3 — construye el config map `request field => column` para
+     * el FileStoragePlugin de mk-director-laravel.
+     *
+     * Convención: `request field` (e.g. 'avatar') → `column` (e.g. 'avatar_path').
+     * El column lleva sufijo `_path` por convención de la agencia (file storage
+     * siempre se almacena como path string, no como binario).
+     *
+     * El consumer NO necesita override `mutateData()` ni pinear manualmente
+     * `mkConfig['plugins']['file_storage']['fields']` — el scaffolder lo emite
+     * out-of-the-box.
+     *
+     * Shape pineada en `mkConfig['plugins']['file_storage']['fields']`:
+     *   - array plano (BC pre-R-PKG-045): ['photo']  (request === column).
+     *   - array asociativo (R-PKG-045 D1): ['avatar' => 'avatar_path'] (rename).
+     *   - mixto: ['photo', 'avatar' => 'avatar_path'] válido.
+     *
+     * Post-D3 pineamos SIEMPRE formato asociativo (más explícito, mejor para
+     * code review), pero FileStoragePlugin ya soporta ambos formatos.
+     *
+     * @param  array<int, string>  $fileFieldNames  Lista de field names.
+     * @return array<string, string> Mapa `request field => column`.
+     */
+    private function buildFileFieldsConfig(array $fileFieldNames): array
+    {
+        $map = [];
+        foreach ($fileFieldNames as $fieldName) {
+            $map[$fieldName] = $fieldName . '_path';
+        }
+
+        return $map;
+    }
+
+    /**
+     * R-PKG-047 D3 — emite el bloque PHP literal para pinear en `$mkConfig['plugins']`
+     * del admin-controller scaffoldeado.
+     *
+     * Si NO hay file fields, retorna `[]` (omitir el key `plugins` del mkConfig).
+     * Si hay file fields, retorna el array completo de file_storage config con
+     * disk/path/auto_url defaults + fields map.
+     *
+     * Output format: string PHP literal (e.g. `['file_storage' => [...]]`)
+     * pineado directamente en el stub. NO escape — el stub es PHP nativo.
+     *
+     * @param  array<int, string>  $fileFieldNames
+     * @return string PHP literal pineable en stub. `[]` si no hay fields.
+     */
+    private function buildPluginsConfigLiteral(array $fileFieldNames): string
+    {
+        if ($fileFieldNames === []) {
+            return '[]';
+        }
+
+        $fieldsMap = $this->buildFileFieldsConfig($fileFieldNames);
+        $fieldsPhp = $this->arrayLiteral($fieldsMap, 2);
+
+        return <<<PHP
+[
+            'file_storage' => [
+                'fields' => {$fieldsPhp},
+                'disk' => 'public',
+                'path' => 'uploads/{scopeLower}',
+                'auto_url' => true,
+            ],
+        ]
+PHP;
+    }
+
+    /**
+     * R-PKG-047 D3 — helper para serializar un array asociativo a literal PHP.
+     *
+     * Usado por `buildPluginsConfigLiteral()` y posiblemente por otros helpers
+     * de D5/D8 que necesiten emitir arrays PHP complexes desde código.
+     *
+     * @param  array<string, string>  $map
+     * @param  int  $indentLevels  Número de 4-space indents a aplicar.
+     */
+    private function arrayLiteral(array $map, int $indentLevels = 0): string
+    {
+        if ($map === []) {
+            return '[]';
+        }
+
+        $indent = str_repeat('    ', $indentLevels);
+
+        $out = '[' . PHP_EOL;
+        foreach ($map as $key => $value) {
+            $out .= $indent . "    '{$key}' => '{$value}'," . PHP_EOL;
+        }
+        $out .= $indent . ']';
+
+        return $out;
     }
 
     /**
@@ -2698,9 +2848,16 @@ PHP,
                 return null;
             }
 
+            // R-PKG-047 D3 — marcar `is_file` cuando type=file para que el
+            // scaffolder pinea el FileStoragePlugin config automáticamente.
+            // El BC pre-D3 pine fields sin is_file (default false). D3
+            // agrega el flag sin remover los anteriores.
+            $isFile = $type === 'file';
+
             $fields[$key] = [
                 'type' => $type,
                 'unique' => $unique,
+                'is_file' => $isFile,
             ];
         }
 
