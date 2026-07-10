@@ -23,7 +23,7 @@ namespace Mk\Director\Auth\Enums;
  *
  *   - **Active**:    usuario con permiso de autenticarse normalmente.
  *   - **Inactive**:  usuario explícitamente dado de baja (no se loguea).
- *   - **Suspended**: usuario bloqueado temporalmente por admin (ban).
+ *   - **Blocked**: usuario bloqueado temporalmente por admin (ban).
  *   - **Pending**:   usuario creado pero pendiente de aprobación / verify.
  *
  * El scaffolder `mk:make:auth-user {Scope}` pine un **thin wrapper**
@@ -64,14 +64,14 @@ enum ScopeStatus: string
 {
     case Active = 'active';
     case Inactive = 'inactive';
-    case Suspended = 'suspended';
+    case Blocked = 'blocked';
     case Pending = 'pending';
 
     /**
      * ¿Este status permite al usuario autenticarse?
      *
      * Por convención de la agencia: solo `Active` puede auth. Los demás
-     * estados (`Inactive`, `Suspended`, `Pending`) bloquean en /login,
+     * estados (`Inactive`, `Blocked`, `Pending`) bloquean en /login,
      * /refresh, /me — antes de emitir tokens.
      *
      * Si el consumer quiere agregar un estado `canAuthenticate === true`
@@ -121,7 +121,7 @@ enum ScopeStatus: string
         return match ($this) {
             self::Active    => 'Activo',
             self::Inactive  => 'Inactivo',
-            self::Suspended => 'Suspendido',
+            self::Blocked => 'Bloqueado',
             self::Pending   => 'Pendiente',
         };
     }

@@ -17,7 +17,7 @@ use Mk\Director\Auth\Enums\ScopeStatus;
 it('ScopeStatus enum tiene 4 casos pineados con valores string canónicos (D4 SSoT)', function () {
     expect(ScopeStatus::Active->value)->toBe('active');
     expect(ScopeStatus::Inactive->value)->toBe('inactive');
-    expect(ScopeStatus::Suspended->value)->toBe('suspended');
+    expect(ScopeStatus::Blocked->value)->toBe('blocked');
     expect(ScopeStatus::Pending->value)->toBe('pending');
 });
 
@@ -25,9 +25,9 @@ it('ScopeStatus::Active->canAuthenticate() retorna true (gate default de BaseAut
     expect(ScopeStatus::Active->canAuthenticate())->toBeTrue();
 });
 
-it('ScopeStatus::Inactive/Suspended/Pending->canAuthenticate() retornan false (deny-by-default)', function () {
+it('ScopeStatus::Inactive/Blocked/Pending->canAuthenticate() retornan false (deny-by-default)', function () {
     expect(ScopeStatus::Inactive->canAuthenticate())->toBeFalse();
-    expect(ScopeStatus::Suspended->canAuthenticate())->toBeFalse();
+    expect(ScopeStatus::Blocked->canAuthenticate())->toBeFalse();
     expect(ScopeStatus::Pending->canAuthenticate())->toBeFalse();
 });
 
@@ -41,5 +41,5 @@ it('ScopeStatus::values() retorna array de 4 strings canónicos en orden de decl
     expect($values)
         ->toBeArray()
         ->toHaveCount(4)
-        ->toBe(['active', 'inactive', 'suspended', 'pending']);
+        ->toBe(['active', 'inactive', 'blocked', 'pending']);
 });

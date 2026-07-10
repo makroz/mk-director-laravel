@@ -633,3 +633,47 @@ test('F10-B02: resolveRequiredProfileFields() acepta ?array y retorna [] si null
     // Pin 2: la función pine early return `[]` si `$profileFields === null`.
     expect($source)->toMatch('/function resolveRequiredProfileFields\([\s\S]*?if\s*\(\s*\$profileFields\s*===\s*null\s*\)\s*\{\s*return\s*\[\s*\]\s*;\s*\}/');
 });
+// ── F10-B12 regression tests (R-PKG-050) ──────────────────────────────────
+//
+// Bug: `enum-status.stub` pineaba `case Suspended = 'suspended'` (pre-D4
+// legacy). R-PKG-047 D4 BC break cambió el canon a `Blocked`. Además, el
+// wrapper extiende `ScopeStatus` (base enum del paquete) que también tenía
+// `case Suspended` — el scaffolder pineaba stubs que NO podían extender
+// el case (mismatch entre base + wrapper).
+//
+// Fix: cambiar `Suspended` → `Blocked` en 3 lugares sincronizados:
+// - `ScopeStatus` (base enum) — case + label match.
+// - `enum-status.stub` (thin wrapper) — case + label match.
+// - `$statusStates` array en handle() — para que el factory pinea
+//   `blocked()` method (no `suspended()`).
+
+test('F10-B12: ScopeStatus base enum pinea Blocked (no Suspended) — R-PKG-047 D4', function () {
+    $source = file_get_contents(packageRoot().'/src/Auth/Enums/ScopeStatus.php');
+
+    // Pin: la case `Blocked` existe con value 'blocked'.
+    expect($source)->toMatch('/case\s+Blocked\s*=\s*[\'"]blocked[\'"]/');
+
+    // Pin: la case `Suspended` NO existe (pre-D4 removida).
+    expect($source)->not->toMatch('/case\s+Suspended\s*=/');
+});
+
+test('F10-B12: enum-status.stub pinea Blocked (no Suspended)', function () {
+    $source = stubSource('auth-user/enum-status.stub');
+
+    // Pin: la case `Blocked` existe.
+    expect($source)->toMatch('/case\s+Blocked\s*=\s*[\'"]blocked[\'"]/');
+
+    // Pin: la case `Suspended` NO existe.
+    expect($source)->not->toMatch('/case\s+Suspended\s*=/');
+
+    // Pin: el match del label() tiene `self::Blocked => 'Bloqueado'`.
+    expect($source)->toMatch("/self::Blocked\\s*=>\\s*'Bloqueado'/");
+});
+
+test('F10-B12: \$statusStates array pinea Blocked (no Suspended) para factory state methods', function () {
+    $source = commandSource();
+
+    // Pin: \$statusStates incluye 'Blocked', no 'Suspended'.
+    expect($source)->toMatch("/\\\$statusStates\\s*=\\s*\\\$withStatus\\s*\\?\\s*\\[[^\\]]*'Blocked'[^\\]]*\\]\\s*:\\s*\\[\\s*\\]/");
+    expect($source)->not->toMatch("/\\\$statusStates\\s*=\\s*\\\$withStatus\\s*\\?\\s*\\[[^\\]]*'Suspended'[^\\]]*\\]/");
+});

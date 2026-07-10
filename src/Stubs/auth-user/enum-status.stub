@@ -20,7 +20,7 @@ use Mk\Director\Auth\Enums\ScopeStatus;
  *
  * Post-D4 (R-PKG-047), el paquete expone UN enum canónico `ScopeStatus`
  * (string-backed, 4 estados pineados por la agencia: Active / Inactive /
- * Suspended / Pending). Este thin wrapper pinea los 4 casos del canónico
+ * Blocked / Pending). Este thin wrapper pinea los 4 casos del canónico
  * con `value = ScopeStatus::{case}->value` para preservar BC de consumers
  * que pinean `use App\Modules\Admin\Enums\AdminStatus;` directo.
  *
@@ -45,7 +45,7 @@ use Mk\Director\Auth\Enums\ScopeStatus;
  *   retorna true (gate default del BaseAuthController::userHasValidStatus()).
  *
  * - **`values()` y `default()`**: pre-D4 retornaban int[] 1..N. Post-D4:
- *   string[] (los 4 values canónicos en orden Active/Inactive/Suspended/Pending).
+ *   string[] (los 4 values canónicos en orden Active/Inactive/Blocked/Pending).
  *
  * - **Drop de `--status-values` flag** (R-PKG-047 D2): los 4 estados son
  *   pineados forzosamente — no hay opción de configurar otros. Override
@@ -57,10 +57,10 @@ use Mk\Director\Auth\Enums\ScopeStatus;
  */
 enum {{ModuleName}}Status: string
 {
-    case Active    = 'active';
-    case Inactive  = 'inactive';
-    case Suspended = 'suspended';
-    case Pending   = 'pending';
+    case Active   = 'active';
+    case Inactive = 'inactive';
+    case Blocked  = 'blocked';
+    case Pending  = 'pending';
 
     /**
      * Estado por default al crear un `{{moduleNameLower}}` nuevo.
@@ -98,10 +98,10 @@ enum {{ModuleName}}Status: string
     public function label(): string
     {
         return match ($this) {
-            self::Active    => 'Activo',
-            self::Inactive  => 'Inactivo',
-            self::Suspended => 'Suspendido',
-            self::Pending   => 'Pendiente',
+            self::Active   => 'Activo',
+            self::Inactive => 'Inactivo',
+            self::Blocked  => 'Bloqueado',
+            self::Pending  => 'Pendiente',
         };
     }
 }

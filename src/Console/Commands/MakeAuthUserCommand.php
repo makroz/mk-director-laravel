@@ -150,7 +150,7 @@ class MakeAuthUserCommand extends Command
         {--profile-fields= : (D2) Campos adicionales para el perfil del scope (CSV con sintaxis key[:type], default: ninguno = BC). Default ON: el scaffolder pine automáticamente `name, email (nullable si login-field≠email), {loginField}, phone, status` como baseline (5 columnas). --profile-fields AGREGA sobre el baseline, NO pisa (fail-fast si intenta pisar `name`). Tipos soportados: string, text, int, decimal, bool, date, datetime, json.}
         {--no-crud : (D2 opt-out) NO generar el CRUD pack completo del scope. Default: CRUD ON (AdminController + RoleController + AbilityController + DTOs + Repository + Service + Factory + Seeder + Requests + Resources + ServiceProvider). Si el scope no necesita CRUD (login-only flows), pinear este flag.}
         {--no-rbac : (D2 opt-out) NO integrar RBAC (ability checks en /me y /logout, rate limiting en /login, /forgot, /reset, audit log via AuthEvent). Default: RBAC ON. Pinear solo si tu app no usa roles/abilities (e.g. trivial login-only).}
-        {--no-status : (D2 opt-out) NO generar el enum {Scope}Status ni la columna `status` en la migración. Default: status ON (enum de 4 estados post-D4: Active/Inactive/Suspended/Pending). Pinear solo si tu scope no necesita status (e.g. login-only sin admin gating).}
+        {--no-status : (D2 opt-out) NO generar el enum {Scope}Status ni la columna `status` en la migración. Default: status ON (enum de 4 estados post-D4: Active/Inactive/Blocked/Pending). Pinear solo si tu scope no necesita status (e.g. login-only sin admin gating).}
         {--verify-email : Habilita verificación por email: columna email_verified_at, endpoints /email/verify/<id>/<hash> y /email/resend, dispatch de Illuminate\Auth\Notifications\VerifyEmail en /register. Default BC: false. Aplican cuando --login-field=email. Se ignora con warning si --login-field≠email.}
         {--with-permissions-endpoint : Genera endpoint opt-in `GET /api/{scope}/auth/me/permissions` (MePermissionsController) que retorna el desglose de abilities (direct + via roles). Opt-in porque pinea un controller extra; pinearlo solo si tu UI tiene pantalla de "Manage permissions". Default BC: false. (R-PKG-042 FASE18-05).}
         {--force-cors : Re-pinear `config/cors.php` aunque ya exista. Default: skip si ya existe (BC). (R-PKG-042 FASE18-07).}
@@ -198,8 +198,13 @@ class MakeAuthUserCommand extends Command
         // `auth-user/enum-status.stub` pinea los cases directamente con `case Active = 'active'`,
         // eliminando el templating de `{{statusCases}}`/`{{statusDefaultCase}}`/`{{statusLabelArms}}`.
         // Helpers `buildStatusCases()` y `buildStatusLabelArms()` deprecated (sin callers — eliminados en este commit).
+        // F10-B12 (R-PKG-050): `Blocked` en vez de `Suspended` (R-PKG-047 D4
+        // BC break completado). Esta lista pinea los nombres canónicos que
+        // `buildStatusFactoryStateMethods()` itera para generar los factory
+        // state methods (e.g. `blocked()` en vez de `suspended()`). Debe
+        // matchear los 4 cases de `ScopeStatus` (la source of truth).
         $statusStates = $withStatus
-            ? ['Active', 'Inactive', 'Suspended', 'Pending']
+            ? ['Active', 'Inactive', 'Blocked', 'Pending']
             : [];
 
         // R-PKG-042 FASE18-05: opt-in endpoint para desglose de abilities.

@@ -100,12 +100,12 @@ it('E2E 2: userHasValidStatus() retorna true para ScopeStatus::Active vía refle
 
 // ── E2E 3 — userHasValidStatus() con ScopeStatus::Suspended retorna false ──
 
-it('E2E 3: userHasValidStatus() retorna false para ScopeStatus::Suspended vía reflection', function () {
+it('E2E 3: userHasValidStatus() retorna false para ScopeStatus::Blocked vía reflection', function () {
     $controller = new ConcreteAuthController();
     $reflection = new \ReflectionMethod($controller, 'userHasValidStatus');
 
     $user = new class implements Authenticatable {
-        public ?ScopeStatus $status = ScopeStatus::Suspended;
+        public ?ScopeStatus $status = ScopeStatus::Blocked;
         public string $table = 'test_users';
 
         public function getAuthIdentifierName() { return 'id'; }
