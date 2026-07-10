@@ -1960,6 +1960,14 @@ PHP;
                 'bool' => '?bool',
                 'date', 'datetime' => '?\\Carbon\\Carbon',
                 'json' => '?array',
+                // F10-B07 (R-PKG-050): el type `file` (R-PKG-047 D3 — auto-wire
+                // FileStoragePlugin via :file suffix) pinea el path del archivo
+                // como string en la columna `{field}_path`. Antes de este fix,
+                // el `default` caía en `?mixed`, que es **inválido en PHP 8**
+                // (`Type mixed cannot be marked as nullable since mixed already
+                // includes null`). Resultado: el DTO scaffoldeado no se podía
+                // cargar — `ParseError` al primer uso.
+                'file' => '?string',
                 default => '?mixed',
             };
 

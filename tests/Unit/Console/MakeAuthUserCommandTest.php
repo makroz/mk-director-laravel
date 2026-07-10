@@ -496,3 +496,23 @@ test('F10-B05: $crudReplacements pasa $loginField a los 3 helpers DTO (regressio
     expect($source)->toContain("buildProfileFieldsFromRequest(\$profileFields, \$loginField)");
     expect($source)->toContain("buildProfileFieldsFromArray(\$profileFields, \$loginField)");
 });
+// ── F10-B07 regression test (R-PKG-050) ────────────────────────────────────
+//
+// Bug: el match de tipos en `buildProfileFieldsFillable()` mapaba `file` al
+// `default => '?mixed'`. Pero `?mixed` es **inválido en PHP 8** (`Type
+// mixed cannot be marked as nullable since mixed already includes null`).
+// Resultado: el DTO scaffoldeado no se podía cargar (ParseError).
+//
+// Fix: agregar `'file' => '?string'` al match. El path del archivo
+// (`uploads/avatars/abc.jpg`) se guarda como string en la columna
+// `{field}_path` (ver `PROFILE_FIELD_TYPES['file']['column_method']`).
+
+test('F10-B07: buildProfileFieldsFillable() mapea type=file a ?string (PHP válido)', function () {
+    $source = commandSource();
+
+    // Pin: el match en buildProfileFieldsFillable() tiene el case `file => '?string'`.
+    // Sin este case, `file` cae en el `default => '?mixed'` que PHP rechaza.
+    expect($source)->toMatch(
+        "/'file'\s*=>\s*'\\?string'/",
+    );
+});
