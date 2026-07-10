@@ -37,7 +37,6 @@ class Store{{ModuleName}}Request extends FormRequest
             'name' => ['required', 'string', 'max:255'],
             '{{loginField}}' => {{loginFieldValidationRuleStore}},
             'password' => ['required', 'string', 'min:8', 'max:255'],
-            'photo' => ['nullable', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
-{{profileFieldsUniqueRules}}{{statusRequestRuleStore}}        ];
+{{fileFieldsValidationStore}}{{profileFieldsUniqueRules}}{{statusRequestRuleStore}}        ];
     }
 }

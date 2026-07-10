@@ -50,9 +50,7 @@ class {{ModuleName}}Resource extends JsonResource
             // scope con `--login-field=ci`, `--login-field=phone`, etc.
             // expone el campo correcto en el Resource.
             '{{loginField}}' => $this->{{loginField}},
-            'photo_path' => $this->photo_path,
-            'photo_url' => $this->photo_url,
-            'auth_scope' => $this->auth_scope,
+{{fileFieldsResourceEntry}}            'auth_scope' => $this->auth_scope,
 {{statusResourceEntry}}{{profileFieldsResourceEntry}}            // HALLAZGO-NEW-FASE15-06: abilities flat top-level — cross-stack contract.
             'abilities' => $this->getEffectiveAbilities(),
             'roles' => $this->whenLoaded('roles', fn () => $this->roles->map(fn ($r) => [

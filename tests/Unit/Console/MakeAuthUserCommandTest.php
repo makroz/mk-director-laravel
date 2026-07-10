@@ -521,16 +521,22 @@ test('F10-B07: buildProfileFieldsFillable() mapea type=file a ?string (PHP váli
 // Bug B10: la migration pineaba columnas duplicadas (name, email, status)
 // porque `buildProfileFieldsReplacements()` emitía todas las profile fields
 // (defaults + user) sin dedup contra las columnas hardcoded en el stub
-// (`name`, `{{loginField}}`, `photo_path`, `email_verified_at`, `password`).
-// Resultado: `migrate:fresh` fallaba con `column "X" specified more than once`.
+// (`name`, `{{loginField}}`, `email_verified_at`, `password`). Resultado:
+// `migrate:fresh` fallaba con `column "X" specified more than once`.
 //
 // Bug B13: el Model $fillable tenía el mismo bug — pineaba 'name', 'email',
 // 'status' duplicados (hardcoded + helper).
 //
 // Fix: ambos bugs viven en `buildProfileFieldsReplacements()`. El helper
 // ahora acepta `$loginField` y dedup contra los core fields pineados
-// hardcoded en los stubs (`name`, `$loginField`, `photo_path`,
-// `email_verified_at`, `password`, `auth_scope`, `client_id`, `status`).
+// hardcoded en los stubs (`name`, `$loginField`, `email_verified_at`,
+// `password`, `auth_scope`, `client_id`, `status`).
+//
+// FEEDBACK10 (R-PKG-050, Mario 2026-07-10): `photo_path` ya NO está en la
+// dedup list — los file fields se pinean dinámicamente desde `:file` suffix
+// via {{fileFields*}} placeholders. Si el consumer pinea
+// `--profile-fields="photo_path:file"`, el scaffolder lo trata como un file
+// field normal (columna `photo_path`, accessor `getPhotoPathUrlAttribute`).
 //
 // Side fix: el enum en `{{statusColumn}}` ahora pinea 'blocked' (R-PKG-047
 // D4 BC break) en vez del legacy 'suspended'. Idem el enum-status.stub
@@ -885,4 +891,143 @@ test('F10-B15: SKILL.md documenta gotcha de RefreshDatabase + SQLite in-memory',
 
     // Pin 3: el antipatrón `RefreshDatabase` está marcado como NO usar.
     expect($source)->toContain('NO HACER ESTO');
+});
+
+// ── FEEDBACK10 (R-PKG-050, Mario 2026-07-10) — file fields: dynamic scaffolding ─
+//
+// Post-FEEDBACK10, todos los artifacts que el scaffolder emitía con
+// `photo_path` hardcoded se generan dinámicamente desde `:file` suffix.
+// Estos tests pinean la INTENCIÓN (source-parsing) per HALLAZGO-NEW-03.
+// EFECTIVIDAD se valida en RETO via smoke test E2E post-merge.
+//
+// Reflection sobre métodos protected (patrón feedback4Invoke).
+function feedback10Invoke(string $method, array $args): mixed
+{
+    $command = new \Mk\Director\Console\Commands\MakeAuthUserCommand;
+    $ref = new \ReflectionMethod($command, $method);
+    $ref->setAccessible(true);
+
+    return $ref->invoke($command, ...$args);
+}
+
+test('FEEDBACK10: buildFileFieldsFillableEntries() emite fillable entries identity', function () {
+    $out = feedback10Invoke('buildFileFieldsFillableEntries', [['avatar', 'cover_photo']]);
+
+    expect($out)->toContain("'avatar',");
+    expect($out)->toContain("'cover_photo',");
+    // No sufijo _path.
+    expect($out)->not->toContain("'avatar_path',");
+});
+
+test('FEEDBACK10: buildFileFieldsFillableEntries() retorna vacío si no hay file fields', function () {
+    $out = feedback10Invoke('buildFileFieldsFillableEntries', [[]]);
+
+    expect($out)->toBe('');
+});
+
+test('FEEDBACK10: buildFileFieldsAccessors() emite get{Name}UrlAttribute dinámico', function () {
+    $out = feedback10Invoke('buildFileFieldsAccessors', [['avatar', 'cover_photo']]);
+
+    // accessor para `avatar` → `getAvatarUrlAttribute`.
+    expect($out)->toMatch('/function\s+getAvatarUrlAttribute\s*\(\s*\)\s*:\s*\?string/');
+    expect($out)->toContain('Storage::url($this->avatar)');
+    expect($out)->toContain('`avatar_url`');   // backticks en el docblock
+
+    // accessor para `cover_photo` → `getCoverPhotoUrlAttribute`.
+    expect($out)->toMatch('/function\s+getCoverPhotoUrlAttribute\s*\(\s*\)\s*:\s*\?string/');
+    expect($out)->toContain('Storage::url($this->cover_photo)');
+    expect($out)->toContain('`cover_photo_url`');
+
+    // NO `getPhotoUrlAttribute` hardcoded.
+    expect($out)->not->toMatch('/function\s+getPhotoUrlAttribute/');
+});
+
+test('FEEDBACK10: buildFileFieldsAccessors() retorna vacío si no hay file fields', function () {
+    $out = feedback10Invoke('buildFileFieldsAccessors', [[]]);
+
+    expect($out)->toBe('');
+});
+
+test('FEEDBACK10: buildFileFieldsResourceEntry() emite resource keys identity + _url', function () {
+    $out = feedback10Invoke('buildFileFieldsResourceEntry', [['avatar']]);
+
+    // `'avatar' => $this->avatar` + `'avatar_url' => $this->avatar_url`.
+    expect($out)->toContain("'avatar' => \$this->avatar,");
+    expect($out)->toContain("'avatar_url' => \$this->avatar_url,");
+    // NO `photo_path`/`photo_url` hardcoded.
+    expect($out)->not->toContain("'photo_path'");
+    expect($out)->not->toContain("'photo_url'");
+});
+
+test('FEEDBACK10: buildFileFieldsValidationStore() emite rules de upload (nullable + file + image + mimes)', function () {
+    $out = feedback10Invoke('buildFileFieldsValidationStore', [['avatar']]);
+
+    expect($out)->toContain("'avatar' => ['nullable', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],");
+});
+
+test('FEEDBACK10: buildFileFieldsValidationUpdate() emite rules de upload con `sometimes` prefix', function () {
+    $out = feedback10Invoke('buildFileFieldsValidationUpdate', [['avatar']]);
+
+    expect($out)->toContain("'avatar' => ['sometimes', 'nullable', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],");
+});
+
+test('FEEDBACK10: buildPluginsConfigLiteral() pine IDENTITY map en fields (no sufijo _path)', function () {
+    $out = feedback10Invoke('buildPluginsConfigLiteral', [['avatar']]);
+
+    // El map fields es `['avatar' => 'avatar']` (identity), no
+    // `['avatar' => 'avatar_path']` (rename legacy).
+    expect($out)->toContain("'avatar' => 'avatar'");
+    expect($out)->not->toContain("'avatar_path'");
+    expect($out)->not->toContain("'photo' => 'photo_path'");
+});
+
+test('FEEDBACK10: crudReplacements pine los 7 file fields placeholders', function () {
+    $source = commandSource();
+
+    // Pinear que los 7 placeholders nuevos se pinean en el array $crudReplacements.
+    foreach ([
+        '{{fileFieldsFillableEntries}}',
+        '{{fileFieldsAccessors}}',
+        '{{fileFieldsResourceEntry}}',
+        '{{fileFieldsUploadPipeline}}',
+        '{{fileFieldsDeleteOldPipeline}}',
+        '{{fileFieldsValidationStore}}',
+        '{{fileFieldsValidationUpdate}}',
+    ] as $placeholder) {
+        expect($source)->toContain($placeholder);
+    }
+});
+
+test('FEEDBACK10: stubs pinean placeholders `{{fileFields*}}` (no photo/photo_path hardcoded)', function () {
+    $stubsBase = dirname(__DIR__, 3) . '/src/Stubs/';
+
+    // Map: stub relativo → placeholders esperados. Los stubs `--with-crud`
+    // viven en `auth-user/` subfolder, el model stub vive un nivel arriba
+    // (heredado del auth-user base, no del CRUD pack).
+    $expectedPlaceholders = [
+        'auth-user.model.stub' => ['{{fileFieldsFillableEntries}}', '{{fileFieldsAccessors}}'],
+        'auth-user/admin-resource.stub' => ['{{fileFieldsResourceEntry}}'],
+        'auth-user/admin-service.stub' => ['{{fileFieldsUploadPipeline}}', '{{fileFieldsDeleteOldPipeline}}'],
+        'auth-user/store-admin-request.stub' => ['{{fileFieldsValidationStore}}'],
+        'auth-user/update-admin-request.stub' => ['{{fileFieldsValidationUpdate}}'],
+    ];
+
+    foreach ($expectedPlaceholders as $stubRelPath => $placeholders) {
+        $stubPath = $stubsBase . $stubRelPath;
+        expect(file_exists($stubPath))->toBeTrue("Stub $stubRelPath must exist at $stubPath");
+        $stub = (string) file_get_contents($stubPath);
+
+        foreach ($placeholders as $placeholder) {
+            expect($stub)->toContain($placeholder);
+        }
+
+        // Verificación cruzada por stub individual: NO pine CÓDIGO pineado
+        // con `photo_path` (string con comillas, variable, o method).
+        // Docblocks que mencionan el refactor (e.g. admin-service.stub
+        // línea 24) son válidos — pinean el contexto histórico, no el código.
+        expect($stub)->not->toMatch("/'photo_path'/");          // string 'photo_path'
+        expect($stub)->not->toMatch('/\$photo_path/');          // variable $photo_path
+        expect($stub)->not->toMatch('/function\s+getPhotoUrlAttribute/');
+        expect($stub)->not->toMatch("/'photo'\s*=>\s*\['nullable',\s*'file'/");
+    }
 });

@@ -67,17 +67,15 @@ class {{ModuleName}} extends AuthUser
      * `{{moduleNameLower}}`; las subclases (Admin, Member, etc.) lo setean
      * al crear. `{{loginField}}` es el campo de login (default `email`).
      * Profile fields (R-PKG-011) se agregan vía `--profile-fields=<csv>`.
+     * File fields (`avatar:file`, etc.) se agregan vía `{{fileFieldsFillableEntries}}`
+     * pineado por `buildFileFieldsFillableEntries()` (FEEDBACK10, R-PKG-050).
      *
      * @var array<int, string>
      */
     protected $fillable = [
         'name',
         '{{loginField}}',
-        // FEEDBACK A6: photo pipeline is always emitted (Resource/Service),
-        // so the column + fillable + accessor ship together — no more
-        // "column photo_path not found" on upload.
-        'photo_path',
-{{profileFieldsFillableEntries}}{{statusFillableEntry}}        'password',
+{{profileFieldsFillableEntries}}{{fileFieldsFillableEntries}}{{statusFillableEntry}}        'password',
         'auth_scope',
         'client_id',
     ];
@@ -104,17 +102,16 @@ class {{ModuleName}} extends AuthUser
     }
 
     /**
-     * FEEDBACK A6: accessor `photo_url` que el {{ModuleName}}Resource expone.
-     * Resuelve la URL pública de `photo_path` vía el disk configurado
-     * (`Storage::url`). Devuelve `null` si no hay foto. Requiere `storage:link`
-     * si usás el disk `public` (el scaffolder lo recuerda en el post-scaffold).
+     * FEEDBACK10 (R-PKG-050, Mario 2026-07-10): accessors `*_url` se generan
+     * dinámicamente desde los `:file` suffix de `--profile-fields`. Para
+     * `--profile-fields="avatar:file"`, se emite `getAvatarUrlAttribute()`
+     * que resuelve la URL pública de la columna `avatar` vía `Storage::url`.
+     * Para `cover_photo:file` → `getCoverPhotoUrlAttribute()`. Si no hay
+     * file fields, este placeholder queda como whitespace (PHP lo tolera).
+     *
+     * Pre-FEEDBACK10: el stub pineaba `getPhotoUrlAttribute()` hardcoded.
+     * Post-FEEDBACK10: pine dinámico, derivado del nombre declarado.
      */
-    public function getPhotoUrlAttribute(): ?string
-    {
-        return $this->photo_path
-            ? \Illuminate\Support\Facades\Storage::url($this->photo_path)
-            : null;
-    }
- {{factoryNewFactoryMethod}}
+{{fileFieldsAccessors}} {{factoryNewFactoryMethod}}
 {{rolesRelationOverride}}{{directAbilitiesRelationOverride}}{{managedByRelation}}
 }

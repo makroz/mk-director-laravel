@@ -1603,7 +1603,7 @@ PHP,
             '{{profileFieldsFillable}}' => $this->buildProfileFieldsFillable($profileFields, $loginField),
             '{{profileFieldsFromRequest}}' => $this->buildProfileFieldsFromRequest($profileFields, $loginField),
             '{{profileFieldsFromArray}}' => $this->buildProfileFieldsFromArray($profileFields, $loginField),
-            '{{profileFieldsToArray}}' => $this->buildProfileFieldsToArray($profileFields),
+            '{{profileFieldsToArray}}' => $this->buildProfileFieldsToArray($profileFields, $loginField),
             // F7-W03: emitir los --profile-fields en {Scope}Resource::toArray().
             // Antes (pre-F7-W03) el Resource scaffoldeado no incluía los
             // profile fields, así que `phone`, `full_name`, etc. quedaban
@@ -1615,7 +1615,7 @@ PHP,
             // vacío (no se renderiza ninguna línea — el stub las pinea
             // condicionalmente con `{{profileFieldsResourceEntry}}` que es
             // reemplazado por vacío si no hay fields).
-            '{{profileFieldsResourceEntry}}' => $this->buildProfileFieldsToArray($profileFields),
+            '{{profileFieldsResourceEntry}}' => $this->buildProfileFieldsToArray($profileFields, $loginField),
             '{{profileFieldsUniqueRules}}' => $fieldRules['store'],
             '{{profileFieldsUniqueRulesUpdate}}' => $fieldRules['update'],
             '{{loginFieldValidationRule}}' => $loginField === 'email'
@@ -1649,6 +1649,41 @@ PHP,
             // Si no hay file fields, retorna `[]` (omitir el key `plugins` del mkConfig).
             // Si hay file fields, retorna el array PHP literal pineable directo en el stub.
             '{{pluginsConfig}}' => $this->buildPluginsConfigLiteral(
+                $this->detectFileFields($profileFields),
+            ),
+
+            // FEEDBACK10 (R-PKG-050, Mario 2026-07-10): pine dinámico de los
+            // file fields en todos los stubs (no más `photo_path` hardcoded).
+            // El mismo `fileFieldNames` (detectado via `:file` suffix) se
+            // reusa en 7 placeholders — uno por stub que lo necesita.
+            //
+            // - `{{fileFieldsFillableEntries}}` → `{{fileFieldsAccessors}}` (model)
+            // - `{{fileFieldsResourceEntry}}` (admin-resource)
+            // - `{{fileFieldsUploadPipeline}}` (admin-service: cuerpo de mutateData)
+            // - `{{fileFieldsDeleteOldPipeline}}` (admin-service: cuerpo de update)
+            // - `{{fileFieldsValidationStore}}` / `{{fileFieldsValidationUpdate}}` (request stubs)
+            //
+            // Si NO hay file fields, todos los helpers retornan string vacío
+            // (los placeholders quedan como whitespace, PHP lo tolera sin error).
+            '{{fileFieldsFillableEntries}}' => $this->buildFileFieldsFillableEntries(
+                $this->detectFileFields($profileFields),
+            ),
+            '{{fileFieldsAccessors}}' => $this->buildFileFieldsAccessors(
+                $this->detectFileFields($profileFields),
+            ),
+            '{{fileFieldsResourceEntry}}' => $this->buildFileFieldsResourceEntry(
+                $this->detectFileFields($profileFields),
+            ),
+            '{{fileFieldsUploadPipeline}}' => $this->buildFileFieldsUploadPipeline(
+                $this->detectFileFields($profileFields),
+            ),
+            '{{fileFieldsDeleteOldPipeline}}' => $this->buildFileFieldsDeleteOldPipeline(
+                $this->detectFileFields($profileFields),
+            ),
+            '{{fileFieldsValidationStore}}' => $this->buildFileFieldsValidationStore(
+                $this->detectFileFields($profileFields),
+            ),
+            '{{fileFieldsValidationUpdate}}' => $this->buildFileFieldsValidationUpdate(
                 $this->detectFileFields($profileFields),
             ),
         ], $this->buildStatusCrudReplacements($withStatus, $statusStates, $scope, $scopeLower));
@@ -1926,30 +1961,39 @@ PHP,
      * R-PKG-047 D3 — construye el config map `request field => column` para
      * el FileStoragePlugin de mk-director-laravel.
      *
-     * Convención: `request field` (e.g. 'avatar') → `column` (e.g. 'avatar_path').
-     * El column lleva sufijo `_path` por convención de la agencia (file storage
-     * siempre se almacena como path string, no como binario).
+     * **Convención post-FEEDBACK10 refactor** (R-PKG-050, Mario 2026-07-10):
+     * Identity map. El nombre del field que el usuario declara con sufijo `:file`
+     * (e.g. `avatar:file`) ES la columna, ES el request field, ES el DTO property,
+     * ES el resource key. La convención legacy de pine sufijo `_path` (`avatar`
+     * → `avatar_path`) está ELIMINADA — el scaffolder pineaba `photo_path`
+     * hardcoded en stubs, lo que rompía `--profile-fields="adress,avatar:file"`
+     * (el scaffolder pineaba `photo_path` SIEMPRE aunque el consumer no lo pidiera,
+     * y la columna nueva `avatar` no matcheaba con la config del plugin).
      *
-     * El consumer NO necesita override `mutateData()` ni pinear manualmente
-     * `mkConfig['plugins']['file_storage']['fields']` — el scaffolder lo emite
-     * out-of-the-box.
+     * Con identity map:
+     *   - `--profile-fields="avatar:file"` → columna `avatar` (string nullable).
+     *   - Plugin config: `fields: ['avatar' => 'avatar']`.
+     *   - Accessor: `getAvatarUrlAttribute` (derivado del nombre).
+     *   - Resource: `'avatar' => $this->avatar, 'avatar_url' => $this->avatar_url`.
+     *   - DTO: `public ?string $avatar = null`.
      *
      * Shape pineada en `mkConfig['plugins']['file_storage']['fields']`:
-     *   - array plano (BC pre-R-PKG-045): ['photo']  (request === column).
-     *   - array asociativo (R-PKG-045 D1): ['avatar' => 'avatar_path'] (rename).
-     *   - mixto: ['photo', 'avatar' => 'avatar_path'] válido.
-     *
-     * Post-D3 pineamos SIEMPRE formato asociativo (más explícito, mejor para
-     * code review), pero FileStoragePlugin ya soporta ambos formatos.
+     *   - identity map (post-refactor): ['avatar' => 'avatar'].
+     *   - rename sigue siendo válido en el plugin (BC pre-R-PKG-045) — el consumer
+     *     puede pinear `'avatar' => 'avatar_path'` manualmente si quiere mantener
+     *     la convención legacy, pero el scaffolder ya no la pinea por default.
      *
      * @param  array<int, string>  $fileFieldNames  Lista de field names.
-     * @return array<string, string> Mapa `request field => column`.
+     * @return array<string, string> Mapa `request field => column` (identity).
      */
-    private function buildFileFieldsConfig(array $fileFieldNames): array
+    protected function buildFileFieldsConfig(array $fileFieldNames): array
     {
         $map = [];
         foreach ($fileFieldNames as $fieldName) {
-            $map[$fieldName] = $fieldName . '_path';
+            // Identity map: el column name === el request field name.
+            // Pre-FEEDBACK10: pinea sufijo `_path` (`avatar` → `avatar_path`).
+            // Post-FEEDBACK10: identity, derivado del nombre declarado en --profile-fields.
+            $map[$fieldName] = $fieldName;
         }
 
         return $map;
@@ -2015,6 +2059,294 @@ PHP;
 
         return $out;
     }
+
+    // ────────────────────────────────────────────────────────────────────
+    // FEEDBACK10 — file fields: dynamic scaffolding (no more photo_path hardcode)
+    // ────────────────────────────────────────────────────────────────────
+    //
+    // Post-FEEDBACK10 (R-PKG-050, Mario 2026-07-10): todos los artifacts que
+    // el scaffolder emitía con `photo_path` hardcoded ahora se generan
+    // dinámicamente desde los `:file` suffix de `--profile-fields`.
+    //
+    // Naming convention (identity map, sin sufijo `_path`):
+    //   - field declarado:    `avatar` (vía `--profile-fields="avatar:file"`)
+    //   - columna DB:         `avatar` (string nullable)
+    //   - request field:      `avatar` (multipart, en FormRequest)
+    //   - plugin config:      `fields: ['avatar' => 'avatar']`
+    //   - $fillable entry:    `'avatar'`
+    //   - accessor:           `getAvatarUrlAttribute` (StudlyCase + 'Url' + 'Attribute')
+    //   - DTO property:       `public ?string $avatar = null`
+    //   - resource key:       `'avatar' => $this->avatar, 'avatar_url' => $this->avatar_url`
+    //
+    // Si NO hay file fields, todos los helpers retornan string vacío (los
+    // stubs usan `{{fileFields*}}` placeholders que quedan como whitespace,
+    // que PHP tolera sin error).
+    //
+    // Side note: el nombre del accessor se deriva con `Str::studly($key)`.
+    // Para `avatar` → `Avatar` → `getAvatarUrlAttribute`. Para `cover_photo` →
+    // `CoverPhoto` → `getCoverPhotoUrlAttribute`. Para `profile_pic` →
+    // `ProfilePic` → `getProfilePicUrlAttribute`. Idem `<field>_url` resource
+    // key se computa como `{$key}_url` (snake_case con sufijo).
+
+    /**
+     * FEEDBACK10 — emite entries para `$fillable` del Model a partir de file fields.
+     *
+     * Formato: `        'avatar',\n        'cover_photo',\n` (8 spaces indent).
+     *
+     * Si no hay file fields, retorna string vacío. Los stubs pinean este helper
+     * en `{{fileFieldsFillableEntries}}` que se inserta después de los core fields
+     * (`name`, `{{loginField}}`, `password`, `auth_scope`, `client_id`).
+     *
+     * @param  array<int, string>  $fileFieldNames  Lista de field names con type=file.
+     * @return string PHP literal pineable en stub.
+     */
+    protected function buildFileFieldsFillableEntries(array $fileFieldNames): string
+    {
+        if ($fileFieldNames === []) {
+            return '';
+        }
+
+        $out = '';
+        foreach ($fileFieldNames as $fieldName) {
+            $out .= "        '{$fieldName}',\n";
+        }
+
+        return $out;
+    }
+
+    /**
+     * FEEDBACK10 — emite accessors `get{Name}UrlAttribute` para cada file field.
+     *
+     * Formato: un método accessor por file field, separado por línea en blanco:
+     *
+     *     /**
+     *      * FEEDBACK10: accessor `avatar_url` que el {Scope}Resource expone.
+     *      * Resuelve la URL pública de `avatar` vía el disk configurado.
+     *      * Requiere `storage:link` si usás el disk `public`.
+     *      *\/
+     *     public function getAvatarUrlAttribute(): ?string
+     *     {
+     *         return $this->avatar
+     *             ? \Illuminate\Support\Facades\Storage::url($this->avatar)
+     *             : null;
+     *     }
+     *
+     * El método se pine después de los accessors hardcoded del stub (`getPhotoUrlAttribute`
+     * ya fue removido en el refactor). Si no hay file fields, retorna string vacío.
+     *
+     * @param  array<int, string>  $fileFieldNames
+     * @return string PHP literal pineable en stub.
+     */
+    protected function buildFileFieldsAccessors(array $fileFieldNames): string
+    {
+        if ($fileFieldNames === []) {
+            return '';
+        }
+
+        $out = '';
+        foreach ($fileFieldNames as $fieldName) {
+            $studly = str_replace('_', '', ucwords($fieldName, '_'));
+            $urlKey = $fieldName . '_url';
+            $out .= <<<PHP
+
+    /**
+     * FEEDBACK10: accessor `{$urlKey}` que el {Scope}Resource expone.
+     * Resuelve la URL pública de `{$fieldName}` vía el disk configurado
+     * (`Storage::url`). Devuelve `null` si no hay archivo. Requiere
+     * `storage:link` si usás el disk `public`.
+     */
+    public function get{$studly}UrlAttribute(): ?string
+    {
+        return \$this->{$fieldName}
+            ? \\Illuminate\\Support\\Facades\\Storage::url(\$this->{$fieldName})
+            : null;
+    }
+PHP;
+        }
+
+        return $out;
+    }
+
+    /**
+     * FEEDBACK10 — emite entries para `toArray()` del Resource a partir de file fields.
+     *
+     * Formato: 2 líneas por file field (path + url):
+     *
+     *             'avatar' => $this->avatar,
+     *             'avatar_url' => $this->avatar_url,
+     *
+     * El accessor resuelve la URL (post-fix el resource ya no hardcodea `photo_path` /
+     * `photo_url` — se generan desde file fields). Si no hay file fields, retorna ''.
+     *
+     * @param  array<int, string>  $fileFieldNames
+     * @return string PHP literal pineable en stub.
+     */
+    protected function buildFileFieldsResourceEntry(array $fileFieldNames): string
+    {
+        if ($fileFieldNames === []) {
+            return '';
+        }
+
+        $out = '';
+        foreach ($fileFieldNames as $fieldName) {
+            $urlKey = $fieldName . '_url';
+            $out .= "            '{$fieldName}' => \$this->{$fieldName},\n";
+            $out .= "            '{$urlKey}' => \$this->{$urlKey},\n";
+        }
+
+        return $out;
+    }
+
+    /**
+     * FEEDBACK10 — emite el CUERPO del bloque `mutateData()` con upload pipeline.
+     *
+     * Solo se pine el cuerpo (no la signature — esa vive hardcoded en el stub).
+     * Formato pineado en el stub `admin-service.stub`:
+     *
+     *     {{fileFieldsUploadPipeline}}  // pinea:
+     *         // FEEDBACK10: auto-upload pipeline para file fields declarados via
+     *         // --profile-fields (e.g. `avatar:file`).
+     *         foreach (['avatar'] as $fieldName) {
+     *             if (isset($data[$fieldName]) && $data[$fieldName] instanceof \Illuminate\Http\UploadedFile) {
+     *                 $path = $data[$fieldName]->store(
+     *                     '{{moduleNamePluralLower}}',
+     *                     config('mk_director.storage.disk', 'public'),
+     *                 );
+     *                 $data[$fieldName] = $path;
+     *             }
+     *         }
+     *
+     * Identity map: `$data[$fieldName]` no `$data[$fieldName . '_path']`.
+     *
+     * Si NO hay file fields, retorna string vacío (el stub queda como
+     * passthrough: solo `return $data;`).
+     *
+     * @param  array<int, string>  $fileFieldNames
+     * @return string PHP literal pineable en stub (cuerpo de mutateData).
+     */
+    protected function buildFileFieldsUploadPipeline(array $fileFieldNames): string
+    {
+        if ($fileFieldNames === []) {
+            return '';
+        }
+
+        $fieldsList = "['" . implode("', '", $fileFieldNames) . "']";
+
+        return <<<PHP
+        // FEEDBACK10 (R-PKG-050): auto-upload pipeline para file fields declarados via
+        // --profile-fields (e.g. `avatar:file`). IDENTITY MAP — el column name ES el
+        // request field name (`avatar` no `avatar_path`). El path devuelto por
+        // `UploadedFile::store()` se escribe en `$data[$fieldName]`.
+        foreach ({$fieldsList} as \$fieldName) {
+            if (isset(\$data[\$fieldName]) && \$data[\$fieldName] instanceof \\Illuminate\\Http\\UploadedFile) {
+                \$path = \$data[\$fieldName]->store(
+                    '{{moduleNamePluralLower}}',
+                    config('mk_director.storage.disk', 'public'),
+                );
+                \$data[\$fieldName] = \$path;
+            }
+        }
+
+PHP;
+    }
+
+    /**
+     * FEEDBACK10 — emite el CUERPO del inicio de `update()` con delete-old pipeline.
+     *
+     * Solo se pine el cuerpo (no la signature — esa vive hardcoded en el stub).
+     * Formato pineado en el stub `admin-service.stub`:
+     *
+     *     {{fileFieldsDeleteOldPipeline}}  // pinea:
+     *         // FEEDBACK10: si hay nuevo file, borrar el viejo antes de subir.
+     *         foreach (['avatar'] as $fieldName) {
+     *             if (isset($data[$fieldName]) && $data[$fieldName] instanceof \Illuminate\Http\UploadedFile) {
+     *                 if (! empty(${{moduleNameLower}}->$fieldName)) {
+     *                     Storage::disk(...)->delete(${{moduleNameLower}}->$fieldName);
+     *                 }
+     *             }
+     *         }
+     *
+     * Si NO hay file fields, retorna string vacío.
+     *
+     * @param  array<int, string>  $fileFieldNames
+     * @return string PHP literal pineable en stub (cuerpo del preámbulo de update()).
+     */
+    protected function buildFileFieldsDeleteOldPipeline(array $fileFieldNames): string
+    {
+        if ($fileFieldNames === []) {
+            return '';
+        }
+
+        $fieldsList = "['" . implode("', '", $fileFieldNames) . "']";
+
+        return <<<PHP
+        // FEEDBACK10 (R-PKG-050): si hay nuevo file, borrar el viejo antes de subir.
+        // Iteramos sobre los file fields declarados via --profile-fields.
+        foreach ({$fieldsList} as \$fieldName) {
+            if (isset(\$data[\$fieldName]) && \$data[\$fieldName] instanceof \\Illuminate\\Http\\UploadedFile) {
+                if (! empty(\${{moduleNameLower}}->{\$fieldName})) {
+                    \\Illuminate\\Support\\Facades\\Storage::disk(config('mk_director.storage.disk', 'public'))
+                        ->delete(\${{moduleNameLower}}->{\$fieldName});
+                }
+            }
+        }
+
+PHP;
+    }
+
+    /**
+     * FEEDBACK10 — emite validation rules para el Store Request de file fields.
+     *
+     * Formato (un file field por línea):
+     *
+     *             'avatar' => ['nullable', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
+     *             'cover_photo' => ['nullable', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
+     *
+     * Las reglas pineadas canónicas son: `nullable + file + image + mimes + max:2048`.
+     * El consumer puede pinear reglas más estrictas (e.g. `max:5120`) editando
+     * el StoreRequest post-scaffold.
+     *
+     * @param  array<int, string>  $fileFieldNames
+     * @return string PHP literal pineable en stub.
+     */
+    protected function buildFileFieldsValidationStore(array $fileFieldNames): string
+    {
+        if ($fileFieldNames === []) {
+            return '';
+        }
+
+        $out = '';
+        foreach ($fileFieldNames as $fieldName) {
+            $out .= "            '{$fieldName}' => ['nullable', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],\n";
+        }
+
+        return $out;
+    }
+
+    /**
+     * FEEDBACK10 — emite validation rules para el Update Request de file fields.
+     *
+     * Idem Store pero con `'sometimes'` prefix (partial update: solo se valida
+     * si viene en el request).
+     *
+     * @param  array<int, string>  $fileFieldNames
+     * @return string PHP literal pineable en stub.
+     */
+    protected function buildFileFieldsValidationUpdate(array $fileFieldNames): string
+    {
+        if ($fileFieldNames === []) {
+            return '';
+        }
+
+        $out = '';
+        foreach ($fileFieldNames as $fieldName) {
+            $out .= "            '{$fieldName}' => ['sometimes', 'nullable', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],\n";
+        }
+
+        return $out;
+    }
+
+    // ─── fin FEEDBACK10 helpers ───
 
     /**
      * Helper: genera declaraciones de parámetros del constructor de AdminData DTO.
@@ -2173,10 +2505,19 @@ PHP;
      *
      * @param  array<string, array{type: string, unique: bool}>  $profileFields
      */
-    protected function buildProfileFieldsToArray(array $profileFields): string
+    protected function buildProfileFieldsToArray(array $profileFields, string $loginField = 'email'): string
     {
         // R-PKG-046 F9-B02: core fields ya pineados hardcoded en admin-resource.stub.
-        $coreFields = ['id', 'name', 'email', 'photo_path', 'photo_url', 'auth_scope'];
+        //
+        // FEEDBACK10 (R-PKG-050, Mario 2026-07-10): `photo_path` y `photo_url`
+        // ya NO son core fields. El resource stub ya no los pinea hardcoded —
+        // se generan dinámicamente desde los `:file` suffix de `--profile-fields`
+        // vía `{{fileFieldsResourceEntry}}`. Idem `email` queda pineado por
+        // `'{{loginField}}' => $this->{{loginField}}` (post-D5), pero si
+        // `email` se declara via --profile-fields cuando loginField != email,
+        // el DTO/resource pinean `'email'` también. Mantenemos el dedup para
+        // el caso de `email` (profile field extra) cuando loginField es distinto.
+        $coreFields = ['id', 'name', $loginField, 'auth_scope'];
 
         $out = '';
         foreach ($profileFields as $key => $meta) {
@@ -2251,7 +2592,16 @@ PHP;
         // Post-fix: skip `status` acá, el rule con enum check (canónico)
         // queda como única source of truth. Idempotente cuando --no-status
         // (status no está en profile fields, no se skipea nada).
-        $coreFields = ['name', 'email', 'password', 'photo', 'status'];
+        //
+        // FEEDBACK10 (R-PKG-050, Mario 2026-07-10): `photo` ya NO está en la
+        // dedup list. Pre-FEEDBACK10, `photo` era un request field hardcoded
+        // con rule `['nullable', 'file', 'image', ...]`. Post-FEEDBACK10, los
+        // file fields se pinean dinámicamente desde los `:file` suffix de
+        // `--profile-fields` vía `{{fileFieldsValidationStore/Update}}` y se
+        // pinea el rule genérico `['nullable', 'string']` desde
+        // `buildProfileFieldRules()` (la regla `file`/`image`/`mimes` se pinea
+        // en el stub pineado por `{{fileFieldsValidationStore/Update}}`).
+        $coreFields = ['name', 'email', 'password', 'status'];
 
         $store = '';
         $update = '';
@@ -3028,14 +3378,22 @@ PHP,
         ];
 
         // N7 fix: columnas que el scaffolder emite SIEMPRE por su cuenta.
-        //   - `photo_path`: se pinea siempre en la migración + $fillable (A6).
         //   - `status`: la pinea --with-status (columna + cast + enum).
-        // Si el usuario las pasa en --profile-fields (¡el ejemplo canónico de la
-        // doc incluía `photo_path`!), el scaffolder emitía la columna DOS veces
-        // → en Postgres la migración aborta con "column ... specified twice".
-        // En vez de errorear, las OMITIMOS silenciosamente (dedup) con un aviso:
-        // el resultado es el mismo (columna presente) sin romper el ejemplo.
-        $alwaysEmitted = ['photo_path'];
+        // Si el usuario las pasa en --profile-fields, el scaffolder las
+        // omitiría DOS veces → en Postgres la migración aborta con
+        // "column ... specified twice". En vez de errorear, las OMITIMOS
+        // silenciosamente (dedup) con un aviso: el resultado es el mismo
+        // (columna presente) sin romper el ejemplo.
+        //
+        // FEEDBACK10 (R-PKG-050, Mario 2026-07-10): `photo_path` ya NO está
+        // en esta lista. Pre-FEEDBACK10, el scaffolder pineaba `photo_path`
+        // hardcoded en migration + fillable + accessor (FEEDBACK A6 RETO).
+        // Post-FEEDBACK10, los file fields son 100% declarados via `:file`
+        // suffix en --profile-fields (e.g. `avatar:file`); no hay columna
+        // `photo_path` implícita. Si el consumer pinea `photo_path:file` en
+        // --profile-fields, el scaffolder lo trata como un file field normal
+        // (columna `photo_path`, accessor `getPhotoPathUrlAttribute`).
+        $alwaysEmitted = [];
         if ($withStatus) {
             $alwaysEmitted[] = 'status';
         }
@@ -3358,10 +3716,17 @@ PHP,
         }
 
         // F10-B10 + F10-B13 (R-PKG-050): dedup contra los core fields pineados
-        // hardcoded en el migration stub (`name`, `{{loginField}}`, `photo_path`,
+        // hardcoded en el migration stub (`name`, `{{loginField}}`,
         // `email_verified_at`, `password`, `auth_scope`, `remember_token`) y
-        // en el model stub (`name`, `{{loginField}}`, `photo_path`, `password`,
-        // `auth_scope`, `client_id`).
+        // en el model stub (`name`, `{{loginField}}`, `password`, `auth_scope`,
+        // `client_id`).
+        //
+        // FEEDBACK10 (R-PKG-050, Mario 2026-07-10): `photo_path` ya NO está en
+        // la dedup list. Pre-FEEDBACK10, `photo_path` era un column pineado
+        // hardcoded en migration + fillable + accessor. Post-FEEDBACK10, los
+        // file fields son 100% declarados via `:file` suffix (e.g. `avatar:file`)
+        // y se pinean como columnas profile-fields normales vía
+        // `{{profileFieldsColumns}}` + `{{profileFieldsFillableEntries}}`.
         //
         // Los defaults (`defaultProfileFields()`) incluyen `name`, `$loginField`,
         // `email` (si ≠ loginField), `phone`, `status` (si withStatus). Los
@@ -3375,11 +3740,11 @@ PHP,
         // `$table->string('name')->nullable()` (de este helper) → SQLSTATE
         // `column "name" specified more than once`. Idem para Model $fillable.
         //
-        // Side note: 'photo_path', 'email_verified_at', 'password', 'auth_scope',
-        // 'client_id' están en la dedup list aunque no estén en defaults — es
-        // defense-in-depth por si el consumer pinea alguno via
-        // `--profile-fields=photo_path:file` (raro pero posible).
-        $coreFields = ['name', $loginField, 'photo_path', 'email_verified_at', 'password', 'auth_scope', 'client_id', 'status'];
+        // Side note: 'email_verified_at', 'password', 'auth_scope', 'client_id'
+        // están en la dedup list aunque no estén en defaults — es defense-in-depth
+        // por si el consumer pinea alguno via `--profile-fields=email_verified_at`
+        // (raro pero posible).
+        $coreFields = ['name', $loginField, 'email_verified_at', 'password', 'auth_scope', 'client_id', 'status'];
 
         $fillable = '';
         $columns = '';

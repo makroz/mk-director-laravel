@@ -35,7 +35,6 @@ class Update{{ModuleName}}Request extends FormRequest
             'name' => ['sometimes', 'required', 'string', 'max:255'],
             '{{loginField}}' => ['sometimes', 'required', {{loginFieldValidationRuleUpdate}}, Rule::unique('{{moduleNamePluralLower}}', '{{loginField}}')->ignore($id)],
             'password' => ['sometimes', 'nullable', 'string', 'min:8', 'max:255'],
-            'photo' => ['sometimes', 'nullable', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
-{{profileFieldsUniqueRulesUpdate}}{{statusRequestRuleUpdate}}        ];
+{{fileFieldsValidationUpdate}}{{profileFieldsUniqueRulesUpdate}}{{statusRequestRuleUpdate}}        ];
     }
 }

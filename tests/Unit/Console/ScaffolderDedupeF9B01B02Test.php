@@ -23,9 +23,13 @@ use Mk\Director\Tests\MkLaravelTestCase;
  * generado inconsistente.
  *
  * **Fix**: `buildProfileFieldRules()` y `buildProfileFieldsToArray()` ahora
- * SKIP los core fields (name, email, password, photo / id, name, email,
- * photo_path, photo_url, auth_scope) que ya están pineados hardcoded en los
- * stubs. Solo pine reglas para profile fields custom.
+ * SKIP los core fields que ya están pineados hardcoded en los stubs. Solo
+ * pine reglas para profile fields custom.
+ *
+ * **FEEDBACK10 (R-PKG-050, Mario 2026-07-10)**: `photo` y `photo_path` ya NO
+ * son core fields. Pre-FEEDBACK10, `photo` (request field) y `photo_path`
+ * (column/accessor) eran hardcoded en stubs. Post-FEEDBACK10, se generan
+ * dinámicamente desde `:file` suffix via `{{fileFields*}}` placeholders.
  *
  * Per HALLAZGO-NEW-03, pinea INTENCIÓN (source-parsing). El package no bootea
  * full Laravel app en unit tests, así que EFECTIVIDAD se valida en el consumer
@@ -41,7 +45,7 @@ function makeAuthUserCommandSource(): string
     return (string) file_get_contents($path);
 }
 
-test('R-PKG-046 F9-B01 — buildProfileFieldRules() SKIP core fields (name, email, password, photo, status)', function () {
+test('R-PKG-046 F9-B01 — buildProfileFieldRules() SKIP core fields (name, email, password, status)', function () {
     $src = makeAuthUserCommandSource();
 
     $helperPos = strpos($src, 'protected function buildProfileFieldRules(');
@@ -49,20 +53,24 @@ test('R-PKG-046 F9-B01 — buildProfileFieldRules() SKIP core fields (name, emai
 
     $helperBody = substr($src, (int) $helperPos);
 
-    // F10-B18 (R-PKG-050): la dedup ahora incluye 'status' además de los
-    // core fields F9-B01 (name, email, password, photo). Pre-fix, con
+    // F10-B18 (R-PKG-050): la dedup incluye 'status' además de los
+    // core fields F9-B01 (name, email, password). Pre-fix, con
     // --with-status default ON, el helper pineaba 'status' => ['nullable',
     // 'string'] (rule genérica) Y el helper de status pineaba
     // 'status' => ['sometimes', 'nullable', 'string', Rule::enum(...)] —
     // PHP array merge descartaba el primero y el enum check se perdía.
-    expect($helperBody)->toContain("\$coreFields = ['name', 'email', 'password', 'photo', 'status']");
+    //
+    // FEEDBACK10: `photo` ya NO está en la dedup list (los file fields
+    // se pinean via {{fileFieldsValidationStore/Update}} con rule
+    // `['nullable', 'file', 'image', ...]`).
+    expect($helperBody)->toContain("\$coreFields = ['name', 'email', 'password', 'status']");
 
     // Y debe skip esos fields con in_array check.
     expect($helperBody)->toContain("if (in_array(\$key, \$coreFields, true))");
     expect($helperBody)->toContain('continue;');
 });
 
-test('R-PKG-046 F9-B02 — buildProfileFieldsToArray() SKIP core fields (id, name, email, photo_path, photo_url, auth_scope)', function () {
+test('R-PKG-046 F9-B02 — buildProfileFieldsToArray() SKIP core fields (id, name, loginField, auth_scope)', function () {
     $src = makeAuthUserCommandSource();
 
     $helperPos = strpos($src, 'protected function buildProfileFieldsToArray(');
@@ -70,10 +78,11 @@ test('R-PKG-046 F9-B02 — buildProfileFieldsToArray() SKIP core fields (id, nam
 
     $helperBody = substr($src, (int) $helperPos);
 
-    // Helper debe declarar $coreFields array específico del Resource.
-    expect($helperBody)->toContain(
-        "\$coreFields = ['id', 'name', 'email', 'photo_path', 'photo_url', 'auth_scope']"
-    );
+    // FEEDBACK10: `photo_path` y `photo_url` ya NO son core fields. El
+    // resource stub los genera dinámicamente via {{fileFieldsResourceEntry}}.
+    // El nuevo core list es `id, name, loginField, auth_scope` (4 fields
+    // pineados hardcoded en el stub).
+    expect($helperBody)->toContain("\$coreFields = ['id', 'name', \$loginField, 'auth_scope']");
 
     // Y debe skip esos fields con in_array check.
     expect($helperBody)->toContain("if (in_array(\$key, \$coreFields, true))");

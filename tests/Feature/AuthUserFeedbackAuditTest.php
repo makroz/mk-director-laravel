@@ -585,23 +585,85 @@ test('BUG-NEW-10 drift: checkSanctumInstalled tiene fallback file_exists para dr
     expect($src)->toMatch('/file_exists\(/');
 });
 
-// ─── FEEDBACK-A6 — photo_path column + accessor shipped with the pipeline ────
+// ─── FEEDBACK10 — file fields son DYNAMIC, no photo_path hardcoded ──────────
 
-test('FEEDBACK-A6: migration stub crea la columna photo_path nullable', function () {
+test('FEEDBACK10: migration stub NO pinea photo_path hardcoded (columnas file son del scaffolder)', function () {
     $migration = stubContents('auth-user.migration.stub');
 
-    // La columna se emite SIEMPRE (el Resource/Service la referencian siempre).
-    expect($migration)->toContain("\$table->string('photo_path')->nullable();");
+    // FEEDBACK10 (R-PKG-050, Mario 2026-07-10): la columna `photo_path` ya
+    // NO se pinea hardcoded en el migration stub. Los file fields (avatar,
+    // cover_photo, etc.) se generan dinámicamente via
+    // `{{profileFieldsColumns}}` desde los `:file` suffix de --profile-fields.
+    //
+    // El stub debe usar el placeholder `{{profileFieldsColumns}}` (que se
+    // resuelve en runtime con las columnas del profile field).
+    expect($migration)->not->toContain("\$table->string('photo_path')");
+    expect($migration)->toContain('{{profileFieldsColumns}}');
 });
 
-test('FEEDBACK-A6: model stub tiene photo_path en fillable + accessor getPhotoUrlAttribute', function () {
+test('FEEDBACK10: model stub NO pinea photo_path hardcoded, usa {{fileFields*}} placeholders', function () {
     $model = stubContents('auth-user.model.stub');
 
-    // photo_path fillable.
-    expect($model)->toContain("'photo_path',");
-    // accessor que resuelve photo_url desde photo_path.
-    expect($model)->toMatch('/function\s+getPhotoUrlAttribute\s*\(\s*\)\s*:\s*\?string/');
-    expect($model)->toContain('Storage::url($this->photo_path)');
+    // El model stub debe tener los placeholders `{{fileFields*}}` que el
+    // scaffolder resuelve con los file fields declarados.
+    expect($model)->toContain('{{fileFieldsFillableEntries}}');
+    expect($model)->toContain('{{fileFieldsAccessors}}');
+
+    // Y NO debe pinear `photo_path` ni `getPhotoUrlAttribute` hardcoded.
+    expect($model)->not->toContain("'photo_path',");
+    expect($model)->not->toMatch('/function\s+getPhotoUrlAttribute/');
+});
+
+test('FEEDBACK10: admin-resource stub NO pinea photo_path/photo_url hardcoded, usa {{fileFieldsResourceEntry}}', function () {
+    $resource = stubContents('auth-user/admin-resource.stub');
+
+    expect($resource)->toContain('{{fileFieldsResourceEntry}}');
+    expect($resource)->not->toContain("'photo_path' => \$this->photo_path");
+    expect($resource)->not->toContain("'photo_url' => \$this->photo_url");
+});
+
+test('FEEDBACK10: admin-service stub NO pinea photo/photo_path hardcoded, usa {{fileFieldsUploadPipeline}} + {{fileFieldsDeleteOldPipeline}}', function () {
+    $service = stubContents('auth-user/admin-service.stub');
+
+    // Stub pinea signatures hardcoded (mutateData + update) con placeholders
+    // para los cuerpos dinámicos. Si NO hay file fields, los placeholders
+    // quedan como string vacío (passthrough).
+    expect($service)->toContain('{{fileFieldsUploadPipeline}}');
+    expect($service)->toContain('{{fileFieldsDeleteOldPipeline}}');
+    expect($service)->toContain('protected function mutateData(array $data): array');
+    expect($service)->toContain('public function update({{ModuleName}} ${{moduleNameLower}}, array $data): {{ModuleName}}');
+    expect($service)->not->toContain("\$data['photo_path'] = \$path");
+    expect($service)->not->toContain("isset(\$data['photo'])");
+});
+
+test('FEEDBACK10: store/update-admin-request stubs NO pinean photo hardcoded, usan {{fileFieldsValidation*}}', function () {
+    $store = stubContents('auth-user/store-admin-request.stub');
+    $update = stubContents('auth-user/update-admin-request.stub');
+
+    // El request stub pinea el placeholder que el scaffolder resuelve
+    // con las rules de los file fields.
+    expect($store)->toContain('{{fileFieldsValidationStore}}');
+    expect($update)->toContain('{{fileFieldsValidationUpdate}}');
+
+    // Y NO pinea `'photo' => [...]` hardcoded.
+    expect($store)->not->toContain("'photo' => ['nullable', 'file', 'image'");
+    expect($update)->not->toContain("'photo' => ['sometimes', 'nullable', 'file', 'image'");
+});
+
+test('FEEDBACK10: buildFileFieldsConfig() pine IDENTITY map (no sufijo _path)', function () {
+    $src = pkgFileContents('src/Console/Commands/MakeAuthUserCommand.php');
+
+    // Localizar el helper buildFileFieldsConfig() y pinear que el map es
+    // identity (request field === column), no `'avatar' => 'avatar_path'`.
+    // El helper puede ser `private` o `protected` — matcheamos cualquiera
+    // de los dos (visibility no afecta la intención pineada).
+    $helperPos = strpos($src, 'function buildFileFieldsConfig(');
+    expect($helperPos)->not->toBeFalse();
+    $helperBody = substr($src, (int) $helperPos);
+
+    // Pin: el map pinea el field name como value (identity), no sufijo _path.
+    expect($helperBody)->toContain("\$map[\$fieldName] = \$fieldName;");
+    expect($helperBody)->not->toContain("\$map[\$fieldName] = \$fieldName . '_path'");
 });
 
 // ─── FEEDBACK-A7 — RBAC seeder cubre TODOS los recursos ruteados ─────────────

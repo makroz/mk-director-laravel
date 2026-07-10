@@ -133,9 +133,11 @@ test('F7-W03 — MakeAuthUserCommand popula {{profileFieldsResourceEntry}} con b
     expect($command)->toBeString();
 
     // The fix: el array `$crudReplacements` ahora incluye
-    // `'{{profileFieldsResourceEntry}}' => $this->buildProfileFieldsToArray($profileFields)`.
+    // `'{{profileFieldsResourceEntry}}' => $this->buildProfileFieldsToArray($profileFields, $loginField)`.
     // El método `buildProfileFieldsToArray()` ya existía (lo usa AdminData DTO);
-    // solo lo reusamos acá.
+    // solo lo reusamos acá. FEEDBACK10 (R-PKG-050) agregó `$loginField` como
+    // segundo argumento para pinear correctamente el dedup contra `'{{loginField}}'`
+    // en el resource stub (post-F10-B02 fix).
     expect($command)
-        ->toContain("'{{profileFieldsResourceEntry}}' => \$this->buildProfileFieldsToArray(\$profileFields)");
+        ->toContain("'{{profileFieldsResourceEntry}}' => \$this->buildProfileFieldsToArray(\$profileFields, \$loginField)");
 })->group('feedback7', 'scaffolder');

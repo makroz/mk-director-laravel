@@ -5,6 +5,184 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [UNRELEASED] — File fields: identity map dinámico (R-PKG-050 — FEEDBACK10)
+
+> Refactor de cierre de la deuda técnica pineada por Mario en sesión 2026-07-10:
+> el scaffolder pineaba `photo_path` como columna hardcoded en TODOS los stubs
+> (migration + model.fillable + accessor + service.mutateData + service.update
+> + resource + request rules). La convención legacy rompía
+> `--profile-fields="adress,avatar:file"` (el scaffolder pineaba `photo_path`
+> SIEMPRE aunque el consumer no lo pidiera, y la columna nueva `avatar` no
+> matcheaba con el plugin config `{'photo' => 'photo_path'}`).
+>
+> **Post-FEEDBACK10**: los file fields se generan 100% dinámicamente desde el
+> sufijo `:file` de `--profile-fields`. Identity map: el field name ES la
+> columna, ES el request field, ES el DTO property, ES el resource key.
+> Accesor derivado (`getAvatarUrlAttribute`, `getCoverPhotoUrlAttribute`, etc.).
+> Plugin config `fields: ['avatar' => 'avatar']` (no más `avatar_path`).
+>
+> **Driver**: Mario feedback 2026-07-10 17:14 ("hize correr el comando
+> `php artisan mk:make:auth-user Admin --login-field=ci --profile-fields='adress,avatar:file'`
+> y vi que está hardcodeando photo_path — debe usar el field declarado"). Único
+> consumer = RETO (R-G-033). Mario retiene bumpeo + tag + publish per
+> RELEASE_AT_END.
+>
+> **BC analysis**: BC BREAK para consumers que pineaban el patrón legacy
+> `{'photo' => 'photo_path'}` en `mkConfig['plugins']['file_storage']`. Post-refactor
+> el scaffolder pinea identity map (no más sufijo `_path` automático). Si un
+> consumer quiere mantener la convención `_path`, pine manualmente en su
+> `mkConfig`. Consumers que ya scaffoldearon con FEEDBACK-A6 (`avatar:file` →
+> `avatar_path` hardcoded) deben regenerar su módulo desde 0 (o patch
+> manual del accessor + rename de columna). RETO aplica esto en sprint
+> posterior al post-merge.
+
+### 🔴 BREAKING CHANGES
+
+- **BC BREAK — `photo_path` hardcoded ELIMINADO de TODOS los stubs scaffolder**.
+  Pre-FEEDBACK10, el scaffolder pineaba `photo_path` siempre en migration +
+  model.fillable + accessor `getPhotoUrlAttribute` + service.mutateData +
+  service.update + resource. Post-FEEDBACK10, los file fields son 100%
+  declarados via sufijo `:file` (e.g. `--profile-fields="avatar:file"` →
+  columna `avatar`, accessor `getAvatarUrlAttribute`). Si el consumer quiere
+  mantener el patrón legacy `photo_path`, pinear manualmente post-scaffold
+  (o vía `mkConfig['plugins']['file_storage']['fields']`).
+- **BC BREAK — `buildFileFieldsConfig()` ya NO pinea sufijo `_path` automático**.
+  Pre-FEEDBACK10, el helper retornaba `['avatar' => 'avatar_path']`. Post-FEEDBACK10
+  retorna identity map `['avatar' => 'avatar']`. El plugin standalone
+  `FileStoragePlugin` sigue soportando el formato rename (BC intacto), pero el
+  scaffolder no lo pine por default.
+- **BC BREAK — `buildProfileFieldRules()` ya NO skipa `photo`** del dedup contra
+  core fields. Pre-FEEDBACK10, `photo` era un request field hardcoded en
+  StoreRequest/UpdateRequest con rule `['nullable', 'file', 'image', ...]`.
+  Post-FEEDBACK10, se genera dinámicamente via `{{fileFieldsValidationStore/Update}}`
+  desde los `:file` suffix.
+
+### 🟠 ADDED — file fields dinámicos (F10-B19+)
+
+- **Stub `auth-user.model.stub`**: `'photo_path'` y `getPhotoUrlAttribute` removidos.
+  Reemplazados con `{{fileFieldsFillableEntries}}` (en `$fillable`) +
+  `{{fileFieldsAccessors}}` (accessors `get{Name}UrlAttribute` dinámicos).
+- **Stub `auth-user/admin-resource.stub`**: `'photo_path' => $this->photo_path` y
+  `'photo_url' => $this->photo_url` removidos. Reemplazados con
+  `{{fileFieldsResourceEntry}}` (resource keys dinámicos: `'<field>'` + `'<field>_url'`).
+- **Stub `auth-user/admin-service.stub`**: `mutateData()` y `update()` con lógica
+  hardcoded de `photo`/`photo_path` removidos. Las signatures canónicas siguen
+  pineadas hardcoded (BC con PKG-NEW-02), pero el CUERPO se genera dinámicamente
+  via `{{fileFieldsUploadPipeline}}` (mutateData) y `{{fileFieldsDeleteOldPipeline}}`
+  (update preámbulo). Si NO hay file fields, los placeholders quedan como
+  string vacío (passthrough).
+- **Stub `auth-user/store-admin-request.stub`** + **`update-admin-request.stub`**:
+  `'photo' => ['nullable', 'file', 'image', ...]` y `'photo' => ['sometimes',
+  'nullable', 'file', 'image', ...]` removidos. Reemplazados con
+  `{{fileFieldsValidationStore}}` y `{{fileFieldsValidationUpdate}}`.
+- **Stub `auth-user/admin-data-dto.stub`**: docblock actualizado (foto →
+  file fields). No hay cambio de código pineado.
+- **Stub `auth-user.migration.stub`**: `'photo_path'` ya estaba removido en
+  commit `2d06009` (R-PKG-050 F10-B19 partial fix).
+
+### 🟢 CHANGED — scaffolder helpers
+
+- `buildFileFieldsConfig()`: identity map (`'avatar' => 'avatar'`) en vez de
+  sufijo `_path` (`'avatar' => 'avatar_path'`).
+- `resolveProfileFields()`: `$alwaysEmitted` array ya NO contiene `photo_path`.
+  Los file fields se pinean como profile fields normales con `is_file=true`.
+- `buildProfileFieldsToArray()`: nueva signature `($profileFields, $loginField =
+  'email')`. El skip-list ya NO incluye `photo_path`/`photo_url` (ahora son
+  `id`/`name`/`$loginField`/`auth_scope`).
+- `buildProfileFieldRules()`: skip-list ya NO incluye `photo` (solo `name`,
+  `email`, `password`, `status`).
+- `buildProfileFieldsReplacements()`: skip-list ya NO incluye `photo_path` (solo
+  `name`/`$loginField`/`email_verified_at`/`password`/`auth_scope`/`client_id`/`status`).
+
+### 🟢 NEW HELPERS
+
+- `buildFileFieldsFillableEntries(array $fileFieldNames): string` — emite
+  `'<field>',\n` por cada file field para `$fillable` del Model.
+- `buildFileFieldsAccessors(array $fileFieldNames): string` — emite
+  `get{Name}UrlAttribute` accessor por cada file field, resolviendo
+  `Storage::url($this->{field})`.
+- `buildFileFieldsResourceEntry(array $fileFieldNames): string` — emite
+  `'<field>' => $this->{field}, '<field>_url' => $this->{field}_url,` para el
+  Resource.
+- `buildFileFieldsUploadPipeline(array $fileFieldNames): string` — cuerpo de
+  `mutateData()` con `foreach` sobre file fields, llamando `UploadedFile::store()`
+  con `disk='public'` y `path='{moduleNamePluralLower}'`.
+- `buildFileFieldsDeleteOldPipeline(array $fileFieldNames): string` — cuerpo
+  del preámbulo de `update()` que borra el file viejo antes de subir el nuevo.
+- `buildFileFieldsValidationStore(array $fileFieldNames): string` — rules
+  `['nullable', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048']` por
+  cada file field para StoreRequest.
+- `buildFileFieldsValidationUpdate(array $fileFieldNames): string` — idem con
+  `'sometimes'` prefix para UpdateRequest.
+
+### 🟢 TESTS
+
+- **Source-parsing (INTENCIÓN)** — 13 tests nuevos en
+  `tests/Feature/AuthUserFeedbackAuditTest.php` y
+  `tests/Unit/Console/MakeAuthUserCommandTest.php`:
+  - Stubs NO pinean `photo_path`/`photo`/`photo_url` hardcoded.
+  - 7 placeholders `{{fileFields*}}` pineados en `$crudReplacements`.
+  - `buildFileFieldsConfig()` pinea identity map (no sufijo `_path`).
+  - `buildFileFieldsFillableEntries`/`Accessors`/`ResourceEntry`/
+    `ValidationStore`/`ValidationUpdate` retornan output correcto.
+  - `buildPluginsConfigLiteral` pinea `fields: ['avatar' => 'avatar']` identity.
+- **Pre-existing tests actualizados** (R-PKG-046 F9-B01/B02 + F10-A6 + F10-N7):
+  - `ScaffolderDedupeF9B01B02Test` ahora pinea `['name', 'email', 'password',
+    'status']` (sin `photo`) y `['id', 'name', $loginField, 'auth_scope']` (sin
+    `photo_path`/`photo_url`).
+  - `AuthUserFeedbackAuditTest` FEEDBACK-A6 tests reescritos como FEEDBACK10
+    (validan el nuevo comportamiento, no el legacy `photo_path`).
+  - `AuthUserFeedback4AuditTest` N7 test reescrito: `resolveProfileFields` ya NO
+    omite `photo_path` (no es alwaysEmitted). Test adicional: `photo_path:file`
+    se trata como file field normal.
+  - `ProfileFieldsTypeParsingTest` D3 test actualizado para pinear identity map
+    y visibility flexible (`function buildFileFieldsConfig(`).
+  - `Feedback7FixesTest` F7-W03 actualizado: `buildProfileFieldsToArray` ahora
+    acepta `$loginField` como 2do arg.
+- **E2E (EFECTIVIDAD)**: pendiente validación en RETO post-merge per
+  HALLAZGO-NEW-03 (consumer piloto real). El test e2e flow completo requiere
+  app Laravel activa (RETO pattern) — el package es minimalista, e2e vive en
+  consumer.
+
+### Migration consumer (RETO)
+
+RETO puede bumpear `composer.json` a `^2.0.3+` post-merge. Los módulos
+scaffoldeados pre-FEEDBACK10 que pineaban `avatar:file` → `avatar_path` deben
+regenerar su módulo desde 0 (o patch manual del accessor + rename de columna).
+Eliminación de workarounds:
+
+```bash
+# RETO pre-FEEDBACK10 (workarounds consumer-side pineados):
+app/Modules/Admin/Models/Admin.php            # accessor getAvatarUrlAttribute hardcoded → regenerar
+app/Modules/Admin/Http/Resources/AdminResource.php  # 'photo_path'/'photo_url' hardcoded → regenerar
+app/Modules/Admin/Services/AdminService.php   # mutateData() con photo hardcoded → regenerar
+app/Modules/Admin/Http/Requests/StoreAdminRequest.php  # 'photo' => [...] hardcoded → regenerar
+```
+
+Validar e2e:
+```bash
+# 1. Regenerar Admin scope desde 0 con --profile-fields="phone,avatar:file"
+php artisan mk:make:auth-user Admin --login-field=email --profile-fields="phone,avatar:file" --with-crud --discover
+
+# 2. Verificar que la migration NO contiene photo_path
+grep -E "photo_path|avatar_path" database/migrations/*_create_admins_table.php
+# → solo `avatar` (no `photo_path`, no `avatar_path`)
+
+# 3. Verificar que el model tiene el accessor dinámico
+grep -E "getAvatarUrlAttribute|getPhotoUrlAttribute" app/Modules/Admin/Models/Admin.php
+# → solo getAvatarUrlAttribute
+
+# 4. Smoke test: POST /api/admin/auth/register con multipart `avatar` file
+# → 201 + data.admin.avatar = "admins/xyz.jpg", data.admin.avatar_url = "http://..."
+```
+
+Refs:
+- openspec/changes/2026-07-10-r-pkg-050-file-fields-identity-map/ (pendiente crear)
+- feedback-api.md §5.4 (Avatar upload — FEEDBACK10)
+- commit `2d06009` (R-PKG-050 F10-B19 partial: drop photo_path from migration)
+
+---
+
 ## [UNRELEASED] — BaseAuthController refactor + scaffolder defaults (R-PKG-047)
 
 > Sprint consolidado para eliminar la duplicación AuthController (~500 LOC per

@@ -45,16 +45,6 @@ function feedback4Stub(string $relative): string
 
 // ─── N7 — dedup de columnas siempre-emitidas ──────────────────────────────
 
-test('N7: resolveProfileFields omite photo_path (se emite siempre)', function () {
-    // photo_path se pinea SIEMPRE en migración + $fillable. Si el usuario lo pasa
-    // en --profile-fields (como el ejemplo canónico de la doc), NO debe emitirse
-    // dos veces → la migración Postgres abortaba con "column specified twice".
-    $result = feedback4Invoke('resolveProfileFields', ['full_name,photo_path,phone', 'email', false]);
-
-    expect($result)->toHaveKeys(['full_name', 'phone']);
-    expect($result)->not->toHaveKey('photo_path');
-});
-
 test('N7: resolveProfileFields omite status cuando --with-status está activo', function () {
     $result = feedback4Invoke('resolveProfileFields', ['status,phone', 'email', true]);
 
@@ -64,6 +54,22 @@ test('N7: resolveProfileFields omite status cuando --with-status está activo', 
     // Sin --with-status, `status` es un field normal (no lo emite el flag).
     $noStatus = feedback4Invoke('resolveProfileFields', ['status', 'email', false]);
     expect($noStatus)->toHaveKey('status');
+});
+
+test('FEEDBACK10: resolveProfileFields NO omite photo_path (no es alwaysEmitted post-refactor)', function () {
+    // Pre-FEEDBACK10: `photo_path` estaba en `$alwaysEmitted` (se pineaba
+    // SIEMPRE en migración + $fillable). Post-FEEDBACK10 (R-PKG-050):
+    // `photo_path` ya NO es alwaysEmitted. Si el consumer lo declara via
+    // `--profile-fields="photo_path:file"`, el scaffolder lo trata como un
+    // file field normal (columna `photo_path`, accessor `getPhotoPathUrlAttribute`).
+    //
+    // Idem `full_name,phone,photo_path` → `photo_path` se queda en el map
+    // (NO se omite silenciosamente), con type=file + is_file=true.
+    $result = feedback4Invoke('resolveProfileFields', ['full_name,phone,photo_path:file', 'email', false]);
+
+    expect($result)->toHaveKeys(['full_name', 'phone', 'photo_path']);
+    expect($result['photo_path']['type'])->toBe('file');
+    expect($result['photo_path']['is_file'])->toBeTrue();
 });
 
 // ─── N11 — DTO named args camelCase ───────────────────────────────────────

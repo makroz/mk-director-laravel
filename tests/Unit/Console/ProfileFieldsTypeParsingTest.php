@@ -46,11 +46,16 @@ it('D3: detectFileFields() helper pineado en el scaffolder', function () {
     expect(scaffolderSource047D3())->toContain('private function detectFileFields(array $profileFields): array');
 });
 
-it('D3: buildFileFieldsConfig() helper pineado (map request => column)', function () {
+it('D3: buildFileFieldsConfig() helper pineado (map request => column, IDENTITY post-FEEDBACK10)', function () {
     $src = scaffolderSource047D3();
-    expect($src)->toContain('private function buildFileFieldsConfig(array $fileFieldNames): array');
-    // Convention: column = `{field}_path`. Pineado en el helper via `$map[$fieldName] = $fieldName . '_path';`.
-    expect($src)->toContain("\$map[\$fieldName] = \$fieldName . '_path';");
+    // El helper puede ser `private` o `protected` (FEEDBACK10 lo pineó
+    // como protected para permitir testeo via reflection). Matcheamos
+    // cualquiera de los dos.
+    expect($src)->toMatch('/function buildFileFieldsConfig\(array \$fileFieldNames\): array/');
+    // FEEDBACK10 (R-PKG-050, Mario 2026-07-10): convention es IDENTITY MAP,
+    // no sufijo `_path`. La columna ES el field name (`avatar` no `avatar_path`).
+    expect($src)->toContain("\$map[\$fieldName] = \$fieldName;");
+    expect($src)->not->toContain("\$map[\$fieldName] = \$fieldName . '_path'");
 });
 
 // ── F3.3 — admin-controller.stub pino 'plugins' key ───────────────────────

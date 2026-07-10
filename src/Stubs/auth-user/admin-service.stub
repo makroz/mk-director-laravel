@@ -16,48 +16,23 @@ use Mk\Director\Auth\Models\Role;
  * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
  *
  * Thin layer: delega al Repository para queries, pero concentra side effects
- * (photo upload, sync de roles/abilities). Override `mutateData()` para
- * lógica custom (e.g. validar dimensiones de la foto). Se ejecuta tanto en
- * `create()` como en `update()`.
+ * (file upload pipeline via FileStoragePlugin, sync de roles/abilities). Override
+ * `mutateData()` para lógica custom (e.g. validar dimensiones de un avatar).
+ * Se ejecuta tanto en `create()` como en `update()`.
+ *
+ * FEEDBACK10 (R-PKG-050, Mario 2026-07-10): este stub pinea `mutateData()` y
+ * `update()` con signature canónica hardcoded (no más `photo`/`photo_path`
+ * hardcoded). Los placeholders `{{fileFieldsUploadPipeline}}` y
+ * `{{fileFieldsDeleteOldPipeline}}` se generan dinámicamente desde los `:file`
+ * suffix de `--profile-fields` (e.g. `avatar:file` → columna `avatar`,
+ * accessor `getAvatarUrlAttribute`, plugin config `fields: ['avatar' => 'avatar']`).
+ * Si NO hay file fields, los placeholders quedan como string vacío (passthrough).
  */
 class {{ModuleName}}Service
 {
     public function __construct(
         protected {{ModuleName}}RepositoryInterface $repository,
     ) {}
-
-    /**
-     * Hook compartido entre create + update. Procesa el upload de foto
-     * si está presente. Override para lógica custom (e.g. validar dimensiones
-     * de la foto).
-     *
-     * NOTA — R-PKG-027 PKG-NEW-02 fix: el hash de password NO se hace acá.
-     * El modelo base `AuthUser` declara `'password' => 'hashed'` en `$casts`
-     * (vía `Illuminate\Foundation\Auth\User`), así que Eloquent hashea
-     * automáticamente al asignar `$user->password = 'plain'`. Hashear dos
-     * veces (acá + cast) producía `bcrypt(bcrypt(plain))`. El rename
-     * `beforeCreate` → `mutateData` evita la sugerencia de que el método es
-     * solo para create.
-     *
-     * @param  array<string, mixed>  $data
-     * @return array<string, mixed>  Datos mutados (incluye photo_path si hubo upload).
-     */
-    protected function mutateData(array $data): array
-    {
-        // Si hay un UploadedFile en `photo`, guardarlo y setear `photo_path`.
-        if (isset($data['photo']) && $data['photo'] instanceof \Illuminate\Http\UploadedFile) {
-            $path = $data['photo']->store(
-                '{{moduleNamePluralLower}}',
-                config('mk_director.storage.disk', 'public'),
-            );
-            $data['photo_path'] = $path;
-        }
-
-        // Remover `photo` del array (es UploadedFile, no persiste).
-        unset($data['photo']);
-
-        return $data;
-    }
 
     /**
      * Crea un {{ModuleName}} con la pipeline completa (mutateData → Repository).
@@ -68,19 +43,38 @@ class {{ModuleName}}Service
     }
 
     /**
+     * Hook compartido entre create + update. Procesa el upload de los
+     * file fields declarados via `--profile-fields="avatar:file,cover:file"`.
+     *
+     * FEEDBACK10 (R-PKG-050, Mario 2026-07-10): el cuerpo del método se
+     * genera dinámicamente desde `{{fileFieldsUploadPipeline}}` (identity
+     * map: `avatar` no `avatar_path`). Si no hay file fields, el cuerpo
+     * es passthrough.
+     *
+     * NOTA — R-PKG-027 PKG-NEW-02 fix: el hash de password NO se hace acá.
+     * El modelo base `AuthUser` declara `'password' => 'hashed'` en `$casts`
+     * (vía `Illuminate\Foundation\Auth\User`), así que Eloquent hashea
+     * automáticamente al asignar `$user->password = 'plain'`. Hashear dos
+     * veces (acá + cast) producía `bcrypt(bcrypt(plain))`. El rename
+     * `beforeCreate` → `mutateData` evita la sugerencia de que el método es
+     * solo para create.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>  Datos mutados.
+     */
+    protected function mutateData(array $data): array
+    {
+{{fileFieldsUploadPipeline}}
+        return $data;
+    }
+
+    /**
      * Actualiza un {{ModuleName}}. Override `mutateData()` para lógica custom
      * (se ejecuta en create + update).
      */
     public function update({{ModuleName}} ${{moduleNameLower}}, array $data): {{ModuleName}}
     {
-        // Si hay nueva foto, borrar la vieja.
-        if (isset($data['photo']) && $data['photo'] instanceof \Illuminate\Http\UploadedFile) {
-            if (! empty(${{moduleNameLower}}->photo_path)) {
-                Storage::disk(config('mk_director.storage.disk', 'public'))
-                    ->delete(${{moduleNameLower}}->photo_path);
-            }
-        }
-
+{{fileFieldsDeleteOldPipeline}}
         $data = $this->mutateData($data); // Reusa la lógica de upload. Password hash via cast.
 
         return $this->repository->update(${{moduleNameLower}}, $data);
