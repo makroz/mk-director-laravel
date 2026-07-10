@@ -698,6 +698,52 @@ PHP,
             // deprecated sin callers — eliminados en este commit.
         ];
 
+        // F10-B14 (R-PKG-050): cuando se pasa --managed-by=<Scope>, pinear la FK
+        // `{manager}_id` en la tabla del scope (nullable + onDelete set null) +
+        // la relation BelongsTo en el modelo. Pre-fix, el scaffolder pineaba
+        // el endpoint /api/{manager}/{scopePlural} (cross-scope CRUD) pero NO
+        // pineaba la FK — el consumer tenia que agregarla a mano en la
+        // migration + relation. Con este fix, el scaffolder pinea todo el
+        // contrato cross-scope end-to-end.
+        //
+        // Shape:
+        // - FK: `$table->foreignUuid('admin_id')->nullable()->constrained('admins')->nullOnDelete();`
+        // - Relation: `public function admin(): BelongsTo { return $this->belongsTo(Admin::class); }`
+        //
+        // La FK es nullable (member puede existir sin admin) + onDelete set null
+        // (si el admin se borra, members existentes sobreviven con admin_id=NULL).
+        $managedByReplacements = [];
+        if ($managedBy !== null) {
+            $managedByLower = Str::snake($managedBy);
+            $managedByPlural = Str::plural($managedByLower);
+
+            $managedByReplacements = [
+                '{{managedByColumn}}' => "\$table->foreignUuid('{$managedByLower}_id')->nullable()->constrained('{$managedByPlural}')->nullOnDelete();\n            ",
+                '{{managedByRelation}}' => <<<PHP
+
+    /**
+     * Relación BelongsTo al manager scope ({$managedBy}) que creó/administra este {$scope}.
+     *
+     * F10-B14 (R-PKG-050): pineada automáticamente por el scaffolder cuando
+     * se pasa --managed-by={$managedBy}. La FK `{$managedByLower}_id` está en
+     * la migration (nullable + onDelete set null). Útil para queries Eloquent
+     * tipo `\$member->admin->name` o para filtrar `whereHas('admin', ...)`.
+     *
+     * @return \Illuminate\Database\Eloquent\Relations\BelongsTo
+     */
+    public function {$managedByLower}(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return \$this->belongsTo(\\App\\Modules\\{$managedBy}\\Models\\{$managedBy}::class, '{$managedByLower}_id');
+    }
+PHP,
+            ];
+        } else {
+            $managedByReplacements = [
+                '{{managedByColumn}}' => '',
+                '{{managedByRelation}}' => '',
+            ];
+        }
+
         $extraReplacements = array_merge(
             $loginFieldReplacements,
             $rbacReplacements,
@@ -705,6 +751,7 @@ PHP,
             $verifyEmailReplacements,
             $factoryReplacements,
             $statusReplacements,
+            $managedByReplacements,
         );
 
         $this->info("🔐 Generando scope de autenticación MK: {$scope}".($withAuthRbac ? ' (with RBAC)' : ''));

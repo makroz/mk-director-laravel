@@ -677,3 +677,49 @@ test('F10-B12: \$statusStates array pinea Blocked (no Suspended) para factory st
     expect($source)->toMatch("/\\\$statusStates\\s*=\\s*\\\$withStatus\\s*\\?\\s*\\[[^\\]]*'Blocked'[^\\]]*\\]\\s*:\\s*\\[\\s*\\]/");
     expect($source)->not->toMatch("/\\\$statusStates\\s*=\\s*\\\$withStatus\\s*\\?\\s*\\[[^\\]]*'Suspended'[^\\]]*\\]/");
 });
+// ── F10-B14 regression tests (R-PKG-050) ──────────────────────────────────
+//
+// Bug: --managed-by=<Manager> pineaba el endpoint /api/{manager}/{scopePlural}
+// (cross-scope CRUD) pero NO pineaba la FK `{manager}_id` en la tabla del
+// scope ni la relation BelongsTo en el modelo. El consumer tenía que
+// agregar ambos a mano en la migration + el modelo (workaround documentado
+// en feedback-api § 4.2 W2-W4).
+//
+// Fix: agregar 2 placeholders nuevos sincronizados:
+// - `{{managedByColumn}}` en auth-user.migration.stub → FK nullable + onDelete set null.
+// - `{{managedByRelation}}` en auth-user.model.stub → `belongsTo({Manager}::class)`.
+//
+// Emissions en handle() condicionales a `$managedBy !== null`. Si el flag
+// no se pasa, los placeholders son string vacío (no se pinea nada).
+
+test('F10-B14: migration stub pinea {{managedByColumn}} placeholder (cross-scope FK)', function () {
+    $source = stubSource('auth-user.migration.stub');
+
+    // Pin: el placeholder {{managedByColumn}} está en el stub (será
+    // reemplazado por la FK o string vacío según --managed-by).
+    expect($source)->toContain('{{managedByColumn}}');
+});
+
+test('F10-B14: model stub pinea {{managedByRelation}} placeholder (cross-scope BelongsTo)', function () {
+    $source = stubSource('auth-user.model.stub');
+
+    expect($source)->toContain('{{managedByRelation}}');
+});
+
+test('F10-B14: handle() pinea managedByReplacements con FK + BelongsTo cuando $managedBy != null', function () {
+    $source = commandSource();
+
+    // Pin 1: el command source construye un array \$managedByReplacements
+    // con la FK y la relation cuando --managed-by se pasa.
+    expect($source)->toContain('foreignUuid(');
+    expect($source)->toContain('->constrained(');
+
+    // Pin 2: la relation BelongsTo está pineada (el heredoc usa
+    // `{$managedByLower}` como nombre del método + return type BelongsTo).
+    expect($source)->toMatch('/public function \{\$managedByLower\}\(\)[^;]+BelongsTo/');
+
+    // Pin 3: los placeholders {{managedByColumn}} y {{managedByRelation}} están
+    // en el array_merge final (no como strings sueltos, sino como keys).
+    expect($source)->toContain("'{{managedByColumn}}' =>");
+    expect($source)->toContain("'{{managedByRelation}}' =>");
+});

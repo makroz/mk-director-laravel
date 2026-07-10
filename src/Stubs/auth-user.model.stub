@@ -115,6 +115,6 @@ class {{ModuleName}} extends AuthUser
             ? \Illuminate\Support\Facades\Storage::url($this->photo_path)
             : null;
     }
-{{factoryNewFactoryMethod}}
-{{rolesRelationOverride}}{{directAbilitiesRelationOverride}}
+ {{factoryNewFactoryMethod}}
+{{rolesRelationOverride}}{{directAbilitiesRelationOverride}}{{managedByRelation}}
 }
