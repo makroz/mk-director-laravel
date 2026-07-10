@@ -1,0 +1,47 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+
+/**
+ * Validación para GET /api/{{moduleNameLower}}/auth/me.
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}}` post-R-PKG-047 D5.
+ *
+ * Stub vacío pineado por el scaffolder como placeholder de expansión:
+ * si el consumer quiere agregar rules (e.g. `?include=roles,directAbilities`
+ * con validation), override este `rules()` method.
+ *
+ * Por default, /me no requiere body validation porque el user se resuelve
+ * via Sanctum middleware (`mk.auth:{{moduleNameLower}}`) ANTES del FormRequest
+ * resolve. La response siempre retorna el user actual con abilities — no
+ * hay parámetros de input que validar.
+ *
+ * Si querés pinear query params custom (e.g. `?expand=permissions`), agreggá
+ * al `rules()` el siguiente:
+ *
+ *     public function rules(): array
+ *     {
+ *         return [
+ *             'expand' => ['sometimes', 'string', 'in:permissions,roles,directAbilities'],
+ *         ];
+ *     }
+ */
+class MeRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true; // ability check vive en BaseAuthController + middleware mk.ability.
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function rules(): array
+    {
+        return [];
+    }
+}

@@ -44,7 +44,12 @@ class {{ModuleName}}Resource extends JsonResource
         return [
             'id' => $this->id,
             'name' => $this->name,
-            'email' => $this->email,
+            // R-PKG-047 D5 — `loginField` pineado dinámicamente desde el campo
+            // que el scaffolder configuró via `--login-field=<campo>`.
+            // Pre-D5: hardcoded `'email' => $this->email`. Post-D5: cualquier
+            // scope con `--login-field=ci`, `--login-field=phone`, etc.
+            // expone el campo correcto en el Resource.
+            '{{loginField}}' => $this->{{loginField}},
             'photo_path' => $this->photo_path,
             'photo_url' => $this->photo_url,
             'auth_scope' => $this->auth_scope,

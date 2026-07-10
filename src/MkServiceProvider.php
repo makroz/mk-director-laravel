@@ -172,6 +172,9 @@ class MkServiceProvider extends ServiceProvider
                 DiscoverAbilitiesCommand::class,
                 // R-PKG-015 BUG-NEW-09: helper command para parche de Sanctum UUIDs.
                 FixSanctumUuidsCommand::class,
+                // R-PKG-047 D4: helper command para migrar `is_active` boolean
+                // pre-D4 al `status` enum string-backed (4 estados canónicos).
+                \Mk\Director\Console\Commands\MkMigrateIsActiveToStatusCommand::class,
             ]);
         }
 

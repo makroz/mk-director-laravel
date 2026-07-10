@@ -4,52 +4,105 @@ declare(strict_types=1);
 
 namespace App\Modules\{{ModuleName}}\Enums;
 
+use Mk\Director\Auth\Enums\ScopeStatus;
+
 /**
- * {{ModuleName}}Status — enum canónico del estado de un `{{moduleNameLower}}`.
+ * {{ModuleName}}Status — thin wrapper per-scope que extiende el enum canónico
+ * `ScopeStatus` (R-PKG-047 D4).
  *
- * FEEDBACK A8: antes había que crear a mano un enum de `status` + la columna
- * cada vez. Con `--with-status` el scaffolder pinea este enum + la columna
- * `status` (unsignedTinyInteger, default Active) + el cast en el modelo.
+ * ============================================================
+ *  Patrón R-PKG-038 + R-PKG-047 D4
+ * ============================================================
  *
- * Backing NUMÉRICO (int), no string: es la convención de la org (mismo patrón
- * que ReservationStatus/DebtStatus/ApprovedStatus). Guardar un TINYINT es más
- * barato que un varchar y evita drift de literales string sueltos sobre una
- * columna de estado.
+ * Pre-D4, este enum era int-backed configurable (`--status-values` flag,
+ * valores 1..N asignados en orden). Drift entre scopes + flag extra +
+ * hardcoded values 1..4 + fail-fast contra typos = fricción operacional.
  *
- * N8: los valores arrancan en 1 (NUNCA 0). Un `0` es falsy y colisiona con el
- * falsy-check de `<MkSelect>` en el frontend (`value || placeholder`), que
- * trataría el estado `0` como "sin seleccionar". Los estados se declaran con
- * `--status-values` (default: Active,Inactive).
+ * Post-D4 (R-PKG-047), el paquete expone UN enum canónico `ScopeStatus`
+ * (string-backed, 4 estados pineados por la agencia: Active / Inactive /
+ * Suspended / Pending). Este thin wrapper pinea los 4 casos del canónico
+ * con `value = ScopeStatus::{case}->value` para preservar BC de consumers
+ * que pinean `use App\Modules\Admin\Enums\AdminStatus;` directo.
  *
- * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-status`.
+ * Los thin wrappers pineados por el scaffolder pinean SOLO los 4 estados
+ * canónicos — NO se pinean cases custom. Para agregar un estado custom
+ * (e.g. `Guest`, `Archived`), override post-scaffold este archivo agregando
+ * cases manuales y override `canAuthenticate()` si necesitás.
+ *
+ * ============================================================
+ *  Compat / BC
+ * ============================================================
+ *
+ * - **Pre-D4 int-backed**: este wrapper pinea los mismos 4 valores
+ *   como STRING (Active='active', etc.) en vez de INT. Consumers pre-D4
+ *   que pineaban `match($status->value) { 1 => ... }` deben migrar a
+ *   `match($status) { AdminStatus::Active => ... }`. BC break aceptable
+ *   per R-G-033 (RETO regenera + clean rebuild). Para scopes pre-D4 que
+ *   pineaban `is_active` boolean, `php artisan mk:migrate-is-active {Scope}`
+ *   convierte la data en su lugar.
+ *
+ * - **`canAuthenticate()`**: pre-D4 no existía. Post-D4: solo `Active`
+ *   retorna true (gate default del BaseAuthController::userHasValidStatus()).
+ *
+ * - **`values()` y `default()`**: pre-D4 retornaban int[] 1..N. Post-D4:
+ *   string[] (los 4 values canónicos en orden Active/Inactive/Suspended/Pending).
+ *
+ * - **Drop de `--status-values` flag** (R-PKG-047 D2): los 4 estados son
+ *   pineados forzosamente — no hay opción de configurar otros. Override
+ *   post-scaffold si necesitás un set custom.
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}}` post-R-PKG-047
+ * (D2 default ON + D4 ScopeStatus enum). El scaffolder ya no acepta
+ * `--with-status` / `--status-values` — status es siempre pineado.
  */
-enum {{ModuleName}}Status: int
+enum {{ModuleName}}Status: string
 {
-{{statusCases}}
+    case Active    = 'active';
+    case Inactive  = 'inactive';
+    case Suspended = 'suspended';
+    case Pending   = 'pending';
+
     /**
-     * Estado por defecto al crear un `{{moduleNameLower}}` (primer estado declarado).
+     * Estado por default al crear un `{{moduleNameLower}}` nuevo.
+     * Delega a `ScopeStatus::default()` (convención de la agencia: Active).
      */
     public static function default(): self
     {
-        return self::{{statusDefaultCase}};
+        return ScopeStatus::Active;
     }
 
     /**
-     * Todos los valores del enum (orden de declaración).
+     * Lista de values string canónicos del enum (en orden de declaración).
+     * Delega a `ScopeStatus::values()` para mantener UNA source-of-truth.
      *
-     * @return array<int, int>
+     * @return array<int, string>
      */
     public static function values(): array
     {
-        return array_map(static fn (self $status): int => $status->value, self::cases());
+        return ScopeStatus::values();
     }
 
     /**
-     * Label human-readable para UI / responses.
+     * ¿Este status permite al usuario autenticarse?
+     * Solo `Active` retorna true. Override post-scaffold si necesitás
+     * un estado custom que también permita auth (e.g. `Guest` read-only).
+     */
+    public function canAuthenticate(): bool
+    {
+        return $this === self::Active;
+    }
+
+    /**
+     * Label human-readable para UI / responses (español default).
      */
     public function label(): string
     {
         return match ($this) {
-{{statusLabelArms}}        };
+            self::Active    => 'Activo',
+            self::Inactive  => 'Inactivo',
+            self::Suspended => 'Suspendido',
+            self::Pending   => 'Pendiente',
+        };
     }
 }
+

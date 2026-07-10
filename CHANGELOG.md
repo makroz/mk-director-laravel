@@ -5,6 +5,144 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [UNRELEASED] — BaseAuthController refactor + scaffolder defaults (R-PKG-047)
+
+> Sprint consolidado para eliminar la duplicación AuthController (~500 LOC per
+> scope con 90% copy-paste) y consolidar scaffolder CLI a defaults ON + opt-out.
+> Patrón R-PKG-038: BaseAuthController canónico (SSoT) + thin wrappers per-scope
+> (~30 LOC) + helpers heredados con override hook. **RETO fuera de scope** per
+> Mario decisión 2026-07-10 00:00 (RETO regenera desde 0 dev en otra sesión).
+
+### 🔴 BREAKING CHANGES
+
+- **BC BREAK (D2)**: Flags CLI eliminados — `--with-crud`, `--with-auth-rbac`,
+  `--with-status`, `--status-values`. Para opt-out, usar `--no-crud`, `--no-rbac`,
+  `--no-status`. Consumers pre-R-PKG-047 con scripts CI/tutores pineando los flags
+  viejos deben actualizar a los `--no-*` correspondientes. Per R-G-033 "maximo
+  default + minimo custom" (Mario feedback 2026-07-09 22:12).
+- **BC BREAK (D4)**: enum `{Scope}Status` cambia de `int`-backed con 4 estados
+  configurables `--status-values=` a `string`-backed canónico de 4 estados
+  pineados (Active / Inactive / Suspended / Pending). Consumers pre-D4 que
+  pineaban `match($status->value) { 1 => ... }` deben migrar a
+  `match($status) { AdminStatus::Active => ... }`. Helper `mk:migrate-is-active
+  {Scope}` convierte data pre-D4 in-place.
+
+### 🟠 ADDED — BaseAuthController abstract canónico (D1)
+
+- **`Mk\Director\Auth\Controllers\BaseAuthController`** (~600 LOC, abstract class
+  extends `BaseController`).
+  - 4 abstract methods: `authModelClass()`, `authScope()`, `loginField()`,
+    `passwordResetTable()`.
+  - 5 hook methods con default no-op: `beforeLogin`, `afterLogin`,
+    `customizeLoginValidationRules`, `customizeMePayload`,
+    `shouldSendResetNotification`.
+  - 10 public endpoints pineados: `login`, `refresh`, `me`, `logout`,
+    `logoutAll`, `forgotPassword`, `resetPassword`, `changePassword`,
+    `verifyEmail`, `resendVerification`.
+  - `#[Ability('{scope}.auth.{action}')]` attribute en cada método (R-PKG-007 +
+    HALLAZGO-NEW-FASE18-C defense-in-depth pre-bumpear).
+- **`auth-user.auth-controller.stub`** thin wrapper per-scope (~30 LOC
+  executable + docblocks explicativos). Remplaza el anterior AuthController
+  scaffoldeado de ~500 LOC con copy-paste 90%.
+- **Defense-in-depth**: constructor VACÍO per R-PKG-046 F9-B10 (middleware
+  `mk.auth:{scope}` per-route, no leak cross-scope cuando controller es
+  invocado desde managed routes).
+
+### 🟠 ADDED — ScopeStatus enum canónico (D4)
+
+- **`Mk\Director\Auth\Enums\ScopeStatus`** (4 estados `string`-backed).
+  - `Active = 'active'` (default, canAuthenticate() == true)
+  - `Inactive = 'inactive'`, `Suspended = 'suspended'`, `Pending = 'pending'`
+  - `canAuthenticate(): bool` retorna true SOLO para `Active` (gate default).
+  - `default(): self` retorna `Active`.
+  - `values(): string[]` retorna los 4 values canónicos (cross-stack contract).
+  - `label(): string` retorna español default ("Activo", "Inactivo", etc.).
+- **`auth-user/enum-status.stub`** thin wrapper per-scope (delega a
+  `ScopeStatus` canónico). BC: consumers que pineaban
+  `use App\Modules\Admin\Enums\AdminStatus;` siguen funcionando idénticamente.
+- **`mk:migrate-is-active {Scope}`** artisan command (helper):
+  - Agrega columna `enum('status', [...])` con default `'active'`.
+  - UPDATE pre-existing `is_active=true` → `status='active'`,
+    `is_active=false` → `status='inactive'`.
+  - `--drop-is-active` opcional (default false — BC preserva la columna).
+  - `--all` flag pineado para migrar todos los scopes detectados.
+  - `--dry-run` flag pineado para pre-flight sin ejecutar SQL.
+  - Crea índice en `status` automáticamente post-conversión.
+
+### 🟠 ADDED — FileStorage auto-wire via `:file` suffix (D3)
+
+- **`PROFILE_FIELD_TYPES['file']`** agregado. Type `string` column
+  + FileStoragePlugin auto-registered.
+- **`detectFileFields()` + `buildFileFieldsConfig()` + `buildPluginsConfigLiteral()`**
+  helpers pineados en MakeAuthUserCommand.
+- **`admin-controller.stub`** pino `'plugins' => {{pluginsConfig}}` key,
+  con placeholder resuelto automáticamente al map `request => column` pineado
+  en `mkConfig['plugins']['file_storage']`.
+
+### 🟠 ADDED — login-field pineado en 9 artifacts (D5)
+
+- **`auth-user/login-request.stub`** + **`auth-user/me-request.stub`** NUEVOS
+  (FormRequests para `/login` + `/me`).
+- **`auth-user/admin-resource.stub`** + **`store-admin-request.stub`** +
+  **`update-admin-request.stub`** pinean `{{loginField}}` dinámicamente
+  (pre-D5: 'email' hardcoded).
+- **3 placeholders nuevos** en MakeAuthUserCommand:
+  `loginFieldValidationRule{Login,Store,Update}` con formato pineable
+  por scope (email vs string + unique vs sometimes).
+
+### 🟡 CHANGED — Scaffolder reduction (D2)
+
+- Signature CLI: 11 flags → 6 flags (3 obligatorios/opt-in + 3 opt-out
+  + operationals).
+- **Default profile fields** pineados automáticamente sin requerir flag:
+  `name + {loginField} + email (nullable si ≠ login) + phone + status (si
+  status ON)`. `--profile-fields` AGREGA, no pisa.
+- **Fail-fast** si user intenta pisar `name` (defense-in-depth typo).
+- `resolveStatusStates()` y `--status-values` flags ELIMINADOS (D4 reemplaza
+  con 4 estados SSoT pineados).
+
+### Tests
+
+- 25 tests pineados: 5 BaseAuthController source-parsing + 5 ScopeStatus
+  unit + 5 MakeAuthUserCommandDefaults + 6 ProfileFieldsTypeParsing + 4 E2E.
+- Patron HALLAZGO-NEW-03: source-parsing pinea INTENCIÓN estructural + E2E
+  lite pinea EFECTIVIDAD runtime via reflection + Mockery.
+- 4 tests pre-existentes rotos sin relación al sprint (`AuthUserFeedbackAuditTest
+  x2`, `MakeAuthUserBugfixesTest`, `MakeAuthUserLoginFieldTest`,
+  `MakeAuthUserRPkg029FixesTest`). Sugerido: R-PKG-048 cleanup. NO BLOQUEANTE.
+
+### Compat / BC
+
+- **Pre-R-PKG-047 consumers sin loginField change** (email default): BC-safe,
+  defaults pineados idénticamente.
+- **Pre-R-PKG-047 consumers con `is_active` boolean**: `mk:migrate-is-active`
+  convierte a enum en su lugar (BC bridge).
+- **Pre-R-PKG-047 consumers con `--with-crud`**: signature error explicativo
+  pineable inline (consumers deben actualizar a `--no-*`).
+- **Pre-R-PKG-047 AuthController scaffoldeado** (~500 LOC): sigue funcionando
+  idénticamente (métodos heredan via override pre-existente sin reescritura).
+
+### Cross-stack impact
+
+- `@makroz/{core,web,mobile}`: **sin cambios API**. `useMkAuth`, `useApi`,
+  `MkAuthProvider`, `MkAuthenticate` contratos preservados. Login form ya
+  pineaba dinámico post-R-PKG-040.
+- `create-mk-director` CLI: sin cambios.
+- **RETO**: fuera de scope per Mario 2026-07-10 00:00.
+
+### Migration guide
+
+- `--with-crud` → `--no-crud=false` (default, no-op).
+- `--with-auth-rbac` → `--no-rbac=false` (default, no-op).
+- `--with-status` → `--no-status=false` (default, no-op).
+- `--status-values` → ELIMINADO. Para estados custom, override post-scaffold
+  `Mk\Director\Auth\Enums\ScopeStatus` o pine un thin wrapper per-scope con
+  states adicionales.
+- `is_active boolean` → `php artisan mk:migrate-is-active {Scope}` convierte
+  la data sin perder información.
+
+Refs: openspec/changes/2026-07-09-r-pkg-047-base-auth-controller-refactor/
+
 ## [UNRELEASED] — FEEDBACK9 fixes (R-PKG-046 — RETO corrida 9)
 
 > Sprint consolidado con 10 hallazgos del paquete pineados por RETO corrida 9

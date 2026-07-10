@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\{{ModuleName}}\Models;
 
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
-{{factoryHasFactoryUse}}{{mustVerifyEmailUse}}use Mk\Director\Auth\Models\AuthUser;
+{{factoryHasFactoryUse}}{{mustVerifyEmailUse}}{{statusUseImport}}use Mk\Director\Auth\Models\AuthUser;
 
 /**
  * {{ModuleName}} — modelo concreto de un scope de autenticación MK.

@@ -62,6 +62,18 @@ class {{ModuleName}}Controller extends SmartController
             'auto_cache' => true,
             'remember_state' => true,
         ],
+
+        // R-PKG-047 D3 — auto-wire FileStoragePlugin via `:file` suffix en
+        // --profile-fields (e.g. `--profile-fields='avatar:file,phone:string'`).
+        //
+        // Pre-D3: el consumer tenía que pinear `mkConfig['plugins']['file_storage']`
+        // manualmente después de scaffoldear (cross-cutting risk: campos olvidados
+        // → `Call to a member function store() on null` runtime).
+        //
+        // Post-D3: el scaffolder detecta type=file y pinea automáticamente el
+        // config completo (fields map + disk + path + auto_url). Si no hay file
+        // fields en --profile-fields, retorna `[]` (omitir el key plugins del mkConfig).
+        'plugins'         => {{pluginsConfig}},
     ];
 
     /**

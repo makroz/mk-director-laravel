@@ -126,6 +126,18 @@ class MakeAuthUserCommand extends Command
             'cast' => 'array',
             'validation' => ['nullable', 'array'],
         ],
+        // R-PKG-047 D3 — FileStorage auto-wire via suffix :file.
+        //
+        // `column_method` es `'string'` porque el path del archivo
+        // (`uploads/files/abc.jpg`) se guarda como string en la columna
+        // `{field}_path`. El scaffolder pine auto el config del
+        // FileStoragePlugin (ver `detectFileFields()` + `buildFileFieldsConfig()`).
+        'file' => [
+            'column_method' => 'string',
+            'column_args' => [],
+            'cast' => null,
+            'validation' => ['nullable', 'string'],
+        ],
     ];
 
     /**
@@ -134,23 +146,24 @@ class MakeAuthUserCommand extends Command
      * @var string
      */
     protected $signature = 'mk:make:auth-user {scope : Nombre del scope en StudlyCase singular (Ej: Member, Customer, Partner)}
-        {--login-field=email : Campo usado para login (default: email). BC: si no se pasa, idéntico a v1.4.0. Valores comunes: email, ci, phone, username, documento.}
-        {--with-auth-rbac : Habilita RBAC integration (ability checks en /me y /logout), rate limiting en /login, /forgot, /reset, y audit log via AuthEvent (R-PKG-010). Default BC: false. Configurar abilities + rate_limits en config/mk_director.php.}
-        {--with-crud : Genera CRUD completo del scope + RBAC triada (AdminController + RoleController + AbilityController + DTOs + Repository + Service + Factory + Seeder + Requests + Resources + ServiceProvider binding). Default BC: false. Ortogonal con --with-auth-rbac, --login-field, --profile-fields. Spec: R-PKG-014.}
-        {--with-status : (A8/N8) Genera un enum {Scope}Status (int-backed, valores arrancan en 1 — NUNCA 0, para no colisionar con el falsy-check de <MkSelect>), la columna `status` (unsignedTinyInteger, default = primer estado, index) en la migración, el cast en el modelo, y (con --with-crud) lo threadea en Resource/DTO/Factory/Requests. Default BC: false. Ortogonal con --with-crud. Personalizá los estados con --status-values.}
-        {--status-values= : (N8) CSV de estados para --with-status (StudlyCase, ej: Active,Inactive,Suspended). Default: Active,Inactive. Los valores se asignan 1,2,3... en orden; el primero es el default de la columna. Solo aplica con --with-status.}
+        {--login-field=email : Campo usado para login (default: email). El scaffolder pine `protected function loginField(): string { return "{valor}"; }` en el thin-wrapper AuthController. Valores comunes: email, ci, phone, username, documento.}
+        {--profile-fields= : (D2) Campos adicionales para el perfil del scope (CSV con sintaxis key[:type], default: ninguno = BC). Default ON: el scaffolder pine automáticamente `name, email (nullable si login-field≠email), {loginField}, phone, status` como baseline (5 columnas). --profile-fields AGREGA sobre el baseline, NO pisa (fail-fast si intenta pisar `name`). Tipos soportados: string, text, int, decimal, bool, date, datetime, json.}
+        {--no-crud : (D2 opt-out) NO generar el CRUD pack completo del scope. Default: CRUD ON (AdminController + RoleController + AbilityController + DTOs + Repository + Service + Factory + Seeder + Requests + Resources + ServiceProvider). Si el scope no necesita CRUD (login-only flows), pinear este flag.}
+        {--no-rbac : (D2 opt-out) NO integrar RBAC (ability checks en /me y /logout, rate limiting en /login, /forgot, /reset, audit log via AuthEvent). Default: RBAC ON. Pinear solo si tu app no usa roles/abilities (e.g. trivial login-only).}
+        {--no-status : (D2 opt-out) NO generar el enum {Scope}Status ni la columna `status` en la migración. Default: status ON (enum de 4 estados post-D4: Active/Inactive/Suspended/Pending). Pinear solo si tu scope no necesita status (e.g. login-only sin admin gating).}
+        {--verify-email : Habilita verificación por email: columna email_verified_at, endpoints /email/verify/<id>/<hash> y /email/resend, dispatch de Illuminate\Auth\Notifications\VerifyEmail en /register. Default BC: false. Aplican cuando --login-field=email. Se ignora con warning si --login-field≠email.}
         {--with-permissions-endpoint : Genera endpoint opt-in `GET /api/{scope}/auth/me/permissions` (MePermissionsController) que retorna el desglose de abilities (direct + via roles). Opt-in porque pinea un controller extra; pinearlo solo si tu UI tiene pantalla de "Manage permissions". Default BC: false. (R-PKG-042 FASE18-05).}
         {--force-cors : Re-pinear `config/cors.php` aunque ya exista. Default: skip si ya existe (BC). (R-PKG-042 FASE18-07).}
-        {--profile-fields= : Campos adicionales para el perfil del scope (CSV con sintaxis key[:type], default: ninguno = BC). Cada field se agrega como columna del tipo correspondiente en la tabla del scope, en $fillable del modelo, y se expone en /me + PATCH /me + /register. Sin tipo = string (BC con R-PKG-011). Tipos soportados: string, text, int, decimal, bool, date, datetime, json (R-PKG-012). Ortogonal con --login-field, --with-auth-rbac y --verify-email. Ej: --profile-fields=name,birthdate:date,age:int (R-PKG-011 + R-PKG-012).}
         {--profile-fields-required= : Override del validation default a `required` para profile fields específicos (CSV). Default: ninguno (todos nullable). Ej: --profile-fields-required=full_name,email. Solo aplica si el field está en --profile-fields. (R-PKG-014 BUG-03 fix)}
-        {--verify-email : Habilita verificación por email: columna email_verified_at, endpoints /email/verify/<id>/<hash> y /email/resend, dispatch de Illuminate\Auth\Notifications\VerifyEmail en /register. Default BC: false. Aplican cuando --login-field=email (R-PKG-011).}
         {--setup-sanctum : (A9) Publica las migraciones de Sanctum (personal_access_tokens) y las parchea a uuidMorphs (mk:fix:sanctum-uuids) — el scope usa HasUuids. Requiere laravel/sanctum instalado. Idempotente.}
         {--migrate : (A9) Corre `php artisan migrate` al terminar el scaffold.}
-        {--seed : (A9) Corre el {Scope}RolesSeeder al terminar (requiere --with-crud). Siembra super-admin/admin/editor/viewer.}
+        {--seed : (A9) Corre el {Scope}RolesSeeder al terminar (requiere CRUD ON). Siembra super-admin/admin/editor/viewer.}
         {--discover : (A9) Corre `mk:discover-abilities --module={Scope} --force` al terminar.}
         {--skip-auth-wire : (A4) NO editar config/auth.php automáticamente (solo imprime los snippets, comportamiento pre-A4). Por default el scaffolder cablea el guard+provider de forma idempotente con backup .bak.}
-        {--skip-policies : (A1/A3) NO generar las Policies default-deny en el pack --with-crud. Por default, --with-crud genera {Scope}Policy/RolePolicy/AbilityPolicy (default-deny + super-admin bypass) y las registra vía Gate::policy — así mk:make:auth-user --with-crud --with-auth-rbac produce login + RBAC aislado + Policies + CRUD en un solo comando.}
-        {--managed-by= : (ARCH-01/FEEDBACK6) Genera un recurso admin-scoped para que OTRO scope administre users de ESTE scope. Ej: `mk:make:auth-user Member --with-crud --managed-by=Admin` expone `/api/admin/members` gateado con mk.auth:admin + mk.ability:admin.members.* (reusa los controllers del scope, registra las rutas managed en el ServiceProvider y genera el seeder de abilities cross-scope para los roles del manager). Requiere --with-crud. El manager (StudlyCase) debe ser un scope existente. Default BC: sin managed resource.}';
+        {--skip-policies : (A1/A3) NO generar las Policies default-deny en el pack CRUD (default ON). Por default, CRUD ON genera {Scope}Policy/RolePolicy/AbilityPolicy (default-deny + super-admin bypass) y las registra vía Gate::policy.}
+        {--managed-by= : (ARCH-01/FEEDBACK6) Genera un recurso admin-scoped para que OTRO scope administre users de ESTE scope. Ej: `mk:make:auth-user Member --managed-by=Admin` expone `/api/admin/members` gateado con mk.auth:admin + mk.ability:admin.members.* (reusa los controllers del scope, registra las rutas managed en el ServiceProvider y genera el seeder de abilities cross-scope para los roles del manager). Requiere CRUD ON. El manager (StudlyCase) debe ser un scope existente. Default BC: sin managed resource.}
+
+        **BC BREAK (R-PKG-047 D2)**: Flags eliminados — `--with-crud`, `--with-auth-rbac`, `--with-status`, `--status-values`. Estos son ahora defaults ON. Para opt-out, usar `--no-crud`, `--no-rbac`, `--no-status`. Consumers que pinean los flags viejos en scripts CI/tutores deben actualizar a los `--no-*` correspondientes. La simplificación pinea el principio R-G-033 "maximo default + minimo custom" (Mario feedback 2026-07-09 22:12).';
 
     /**
      * The console command description.
@@ -165,21 +178,46 @@ class MakeAuthUserCommand extends Command
         $scopeLower = Str::snake($scope);
         $scopePlural = Str::plural($scopeLower);
         $loginField = $this->resolveLoginField((string) $this->option('login-field'));
-        $withAuthRbac = (bool) $this->option('with-auth-rbac');
-        $withCrud = (bool) $this->option('with-crud');
-        // A8: enum {Scope}Status + columna `status` + cast en el modelo.
-        $withStatus = (bool) $this->option('with-status');
-        // N8: estados del enum (ordenados, valores 1..N). [] si no --with-status.
+
+        // R-PKG-047 D2 — defaults ON + opt-out via --no-* flags.
+        // Antes (v1.x): `--with-crud`/`--with-auth-rbac`/`--with-status` opt-in (default OFF).
+        // Post-D2: defaults ON, opt-out via `--no-crud`/`--no-rbac`/`--no-status`.
+        // El refactor mantiene la misma semántica de control flow: si `$withCrud === false`,
+        // NO se invoca `generateCrudPack()`. El cambio es solo en el input binario.
+        $withAuthRbac = ! (bool) $this->option('no-rbac');
+        $withCrud = ! (bool) $this->option('no-crud');
+        $withStatus = ! (bool) $this->option('no-status');
+
+        // R-PKG-047 D4 — ScopeStatus enum con 4 estados canónicos (string-backed).
+        // Pre-D4: configurable via --status-values= (CSV int 1..N). Post-D4: 4 estados
+        // SSoT pineados por el scaffolder sin requerir flag. Los 4 valores cubren los
+        // casos comunes (login activo, baja, baneado, pendiente de verificación). Para
+        // estados custom, override post-scaffold el thin wrapper {Scope}Status.
+        //
+        // Shape post-D4: `string[]` simple (lista de nombres canónicos) — el stub
+        // `auth-user/enum-status.stub` pinea los cases directamente con `case Active = 'active'`,
+        // eliminando el templating de `{{statusCases}}`/`{{statusDefaultCase}}`/`{{statusLabelArms}}`.
+        // Helpers `buildStatusCases()` y `buildStatusLabelArms()` deprecated (sin callers — eliminados en este commit).
         $statusStates = $withStatus
-            ? $this->resolveStatusStates((string) $this->option('status-values'))
+            ? ['Active', 'Inactive', 'Suspended', 'Pending']
             : [];
+
         // R-PKG-042 FASE18-05: opt-in endpoint para desglose de abilities.
         $withPermissionsEndpoint = (bool) $this->option('with-permissions-endpoint');
         // R-PKG-042 FASE18-07: force re-pinear config/cors.php aunque exista.
         $forceCors = (bool) $this->option('force-cors');
-        $profileFieldsRaw = $this->resolveProfileFields((string) $this->option('profile-fields'), $loginField, $withStatus);
+
+        // R-PKG-047 D2 — resolve profile fields con merge + defaults.
+        // Pre-D2: $profileFieldsRaw = lo que pasó el dev (puede ser []).
+        // Post-D2: $profileFieldsRaw se mergea con defaultProfileFields() (name + loginField +
+        //          email si ≠ + phone + status) ANTES de pasar a buildProfileFieldsReplacements.
+        $userFieldsRaw = $this->resolveProfileFields((string) $this->option('profile-fields'), $loginField, $withStatus);
+        $profileFieldsRaw = $userFieldsRaw === null
+            ? null
+            : $this->resolveProfileFieldsWithDefaults($loginField, $withStatus, $userFieldsRaw);
+
         $verifyEmailRequested = (bool) $this->option('verify-email');
-        $requiredFields = $this->resolveRequiredProfileFields((string) $this->option('profile-fields-required'), $profileFieldsRaw);
+        $requiredFields = $this->resolveRequiredProfileFields((string) $this->option('profile-fields-required'), $userFieldsRaw);
         // A4 + A9 — auto-wire config/auth.php + post-scaffold orchestration.
         $skipAuthWire = (bool) $this->option('skip-auth-wire');
         $setupSanctum = (bool) $this->option('setup-sanctum');
@@ -323,8 +361,20 @@ class MakeAuthUserCommand extends Command
                 ? "use Illuminate\\Contracts\\Auth\\MustVerifyEmail;\n"
                 : '',
             '{{loginFieldValidationRule}}' => $isEmail
-                ? "['required', 'email']"
-                : "['required', 'string']",
+                ? "['required', 'email', 'max:255']"
+                : "['required', 'string', 'max:255']",
+            // R-PKG-047 D5 — loginFieldValidationRuleStore con `unique` scope.
+            // Para POST /api/{scope}/{loginField} (crear user via AdminController).
+            // El `unique:{scopePlural},{loginField}` rule pinea que el consumer NO
+            // pueda pinear dos users con el mismo loginField.
+            '{{loginFieldValidationRuleStore}}' => $loginField === 'email'
+                ? "['required', 'email', 'max:255', 'unique:{$scopePlural},{$loginField}']"
+                : "['required', 'string', 'max:255', 'unique:{$scopePlural},{$loginField}']",
+            // Para PATCH /api/{scope}/{loginField} (update user). El `Rule::unique(...)->ignore($id)`
+            // pinea el mismo string, separado porque se compone inline con el `sometimes`+.
+            '{{loginFieldValidationRuleUpdate}}' => $loginField === 'email'
+                ? "'email', 'max:255'"
+                : "'string', 'max:255'",
             // R-PKG-014 BUG-05: login() response incluye profile fields + roles + abilities.
             // Construido dinámicamente según si hay o no --profile-fields.
             // R-PKG-015 BUG-NEW-01+02: pasar $loginField resuelto (no el placeholder
@@ -601,8 +651,16 @@ PHP,
         // valor por defecto. El enum se genera aparte (ver abajo, tras los stubs base).
         $statusEnumFqcn = "\\App\\Modules\\{$scope}\\Enums\\{$scope}Status";
         $statusReplacements = [
+            // R-PKG-047 D4 — `enum` column string-backed con 4 valores canónicos.
+            // Pre-D4: `unsignedTinyInteger('status')` con valores 1..N. Post-D4:
+            // `enum('status', ['active','inactive','suspended','pending'])`
+            // compatible con `ScopeStatus` enum canónico del paquete.
+            // NOTA: la columna enum requiere MySQL/PostgreSQL/SQLite support;
+            // mysql antiguo (< 5.7) no soporta ENUM type — usar
+            // `mk:migrate-is-active` post-D4 si tu scope pre-D4 pineaba
+            // `is_active` boolean y quiere migrar el type.
             '{{statusColumn}}' => $withStatus
-                ? "\$table->unsignedTinyInteger('status')->default({$statusEnumFqcn}::default()->value)->index();\n            "
+                ? "\$table->enum('status', ['active','inactive','suspended','pending'])->default('active')->index();\n            "
                 : '',
             '{{statusFillableEntry}}' => $withStatus
                 ? "        'status',\n"
@@ -610,10 +668,17 @@ PHP,
             '{{statusCastEntry}}' => $withStatus
                 ? "        'status' => {$statusEnumFqcn}::class,\n"
                 : '',
-            // N8 — cuerpo del enum templatizado desde $statusStates (1..N).
-            '{{statusCases}}' => $withStatus ? $this->buildStatusCases($statusStates) : '',
-            '{{statusDefaultCase}}' => $withStatus ? array_key_first($statusStates) : 'Active',
-            '{{statusLabelArms}}' => $withStatus ? $this->buildStatusLabelArms($statusStates) : '',
+            // R-PKG-047 D4 — `use App\Modules\{Scope}\Enums\{Scope}Status;` pineado
+            // arriba del modelo para que el cast `protected $casts = [
+            // 'status' => {Scope}Status::class]` typehint resolva correctamente.
+            '{{statusUseImport}}' => $withStatus
+                ? "use App\\Modules\\{$scope}\\Enums\\{$scope}Status;\n"
+                : '',
+            // R-PKG-047 D4 — los placeholders `{{statusCases}}`, `{{statusDefaultCase}}`,
+            // `{{statusLabelArms}}` están ELIMINADOS del enum-status.stub porque los
+            // 4 casos canónicos se pinean directamente como literales `case Active = 'active'`.
+            // Los helpers `buildStatusCases()` y `buildStatusLabelArms()` están
+            // deprecated sin callers — eliminados en este commit.
         ];
 
         $extraReplacements = array_merge(
@@ -666,6 +731,25 @@ PHP,
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.auth-controller.stub', 'Http/Controllers', 'AuthController.php', $extraReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.routes.stub', 'Http/Routes', 'api.php', $extraReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.service-provider.stub', 'Providers', "{$scope}ServiceProvider.php");
+
+        // R-PKG-047 D5 — FormRequests pineados por el scaffolder:
+        //
+        // - LoginRequest: validación de `loginField + password` para POST /auth/login.
+        //   El BaseAuthController absorbe la lógica real (beforeLogin hook), pero
+        //   pineamos el FormRequest para consumers que necesitan override de
+        //   validation rules (e.g. regex CI Bolivia custom).
+        // - MeRequest: stub vacío que sirve como placeholder de expansión para
+        //   query params custom (e.g. `?expand=permissions`). Default rules=[].
+        //
+        // Estos FormRequests pinean el campo `{{loginField}}` dinámicamente via
+        // placeholder `{{loginFieldValidationRule}}` (pinea `['required','email','max:255']`
+        // o `['required','string','max:255']` según loginField).
+        //
+        // Post-D5, los controllers per-scope (AuthController thin wrapper) usan
+        // type-hint `LoginRequest $request` en lugar de `Request $request` con
+        // validación inline (BC pre-D5).
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.login-request.stub', 'Http/Requests', 'LoginRequest.php', $extraReplacements);
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.me-request.stub', 'Http/Requests', 'MeRequest.php', $extraReplacements);
 
         // A8 — enum {Scope}Status (int-backed). Ortogonal a --with-crud: si
         // --with-crud está activo el dir `Enums/` lo crea el pack CRUD, pero el
@@ -1424,6 +1508,20 @@ PHP,
             '{{loginFieldValidationRule}}' => $loginField === 'email'
                 ? "['required', 'email', 'max:255', 'unique:{$scopePlural},{$loginField}']"
                 : "['required', 'string', 'max:255', 'unique:{$scopePlural},{$loginField}']",
+
+            // R-PKG-047 D3 — auto-wire FileStoragePlugin via :file suffix.
+            //
+            // Detecta fields con type=file (e.g. `--profile-fields='avatar:file'`)
+            // y pinea automaticamente el map `request => column` en `$mkConfig['plugins']`
+            // del admin-controller scaffoldeado. Pre-D3: el consumer tenia que
+            // pinear manualmente `mkConfig['plugins']['file_storage']['fields']` despues
+            // de scaffoldear (cross-cutting risk: campos olvidados rompen upload).
+            //
+            // Si no hay file fields, retorna `[]` (omitir el key `plugins` del mkConfig).
+            // Si hay file fields, retorna el array PHP literal pineable directo en el stub.
+            '{{pluginsConfig}}' => $this->buildPluginsConfigLiteral(
+                $this->detectFileFields($profileFields),
+            ),
         ], $this->buildStatusCrudReplacements($withStatus, $statusStates, $scope, $scopeLower));
 
         // ── Controllers (3) ──
@@ -1569,6 +1667,224 @@ PHP,
             static fn ($key) => "'{$key}'",
             array_keys($profileFields),
         ));
+    }
+
+    /**
+     * R-PKG-047 D2 — default profile fields pineados automáticamente.
+     *
+     * Pre-D2: si dev no pasaba `--profile-fields`, el scaffolder generaba una
+     * tabla con solo `name` + `email` + `password` + `auth_scope` + `loginField`.
+     * El dev tenía que pinear `--profile-fields` explícitamente para agregar
+     * `phone`, `status`, `birthdate`, etc.
+     *
+     * Post-D2 (defaults ON): el scaffolder pine siempre 5 columnas baseline
+     * para que el scope scaffoldeado sea funcional out-of-the-box sin requerir
+     * flags adicionales. `name` y `status` son no-optables via `--no-status`
+     * (status se omite completo), pero `name`, `{loginField}`, `email`,
+     * `phone` siempre se pinean — son los mínimos para que /login, /me,
+     * y los CRUD genéricos funcionen sin custom config.
+     *
+     * Reglas:
+     *   - `name` siempre pineado (display name, default BC pre-existente).
+     *   - `{loginField}` pineado (e.g. `email`, `ci`, `phone`).
+     *   - `email` pineado SOLO si `$loginField !== 'email'` (UNIQUE alt para
+     *     contacto secundario; nullable). Evita duplicar la columna.
+     *   - `phone` pineado (SMS contact / fallback login pineable).
+     *   - `status` pineado SOLO si `$withStatus` (ScopeStatus enum post-D4).
+     *
+     * @return array<string, array{type: string, unique: bool}>
+     */
+    private function defaultProfileFields(string $loginField, bool $withStatus): array
+    {
+        $defaults = [
+            'name' => ['type' => 'string', 'unique' => false],
+        ];
+
+        // El loginField puede NO ser 'email' — pinearlo como profile field
+        // pineable para queries dinámicas (e.g. `whereLoginField($value)`).
+        $defaults[$loginField] = ['type' => 'string', 'unique' => false];
+
+        // Si loginField ya es 'email', no pinearlo doble. Si es otra cosa
+        // (e.g. 'ci'), pine un `email` nullable como contacto alternativo.
+        if ($loginField !== 'email') {
+            $defaults['email'] = ['type' => 'string', 'unique' => false];
+        }
+
+        $defaults['phone'] = ['type' => 'string', 'unique' => false];
+
+        if ($withStatus) {
+            $defaults['status'] = ['type' => 'string', 'unique' => false];
+        }
+
+        return $defaults;
+    }
+
+    /**
+     * R-PKG-047 D2 — merge user-provided profile fields con defaults.
+     *
+     * Comportamiento:
+     *   - `name` es intocable — si el dev intenta pinearlo via `--profile-fields=name`,
+     *     emit error fail-fast (defense-in-depth contra typos y solapamientos).
+     *   - User fields AGREGAN sobre defaults. Si el dev pine `phone`,
+     *     pisa el default `phone` con su config (type override).
+     *   - Order preserved: defaults primero, luego user fields.
+     *   - Email/phone/`{loginField}` defaults pueden ser sobrescritos por
+     *     user (e.g. `--profile-fields='phone:json'` para postgres jsonb).
+     *
+     * @param  array<string, array{type: string, unique: bool}>  $userFields  Lo que pasó el dev.
+     * @return array<string, array{type: string, unique: bool}>  Defaults + user fields mergeados.
+     *
+     * @throws \InvalidArgumentException Si user intenta pisar `name`.
+     */
+    private function resolveProfileFieldsWithDefaults(
+        string $loginField,
+        bool $withStatus,
+        array $userFields,
+    ): array {
+        $defaults = $this->defaultProfileFields($loginField, $withStatus);
+
+        // Fail-fast: name es siempre default pineado — pinear via --profile-fields
+        // significa error de typo o intención de override (la segunda es BC-breaking
+        // con consumers que pinean `name` por convención).
+        if (array_key_exists('name', $userFields)) {
+            throw new \InvalidArgumentException(
+                "Cannot override default profile field 'name'. Use --profile-fields to ADD fields, not replace the baseline.",
+            );
+        }
+
+        // Merge: defaults primero, user fields sobreescriben si hay conflicto en keys.
+        // Para claves únicas (loginField, email si ≠ loginField, phone, status si withStatus),
+        // user-provided gana.
+        $merged = $defaults;
+        foreach ($userFields as $key => $meta) {
+            $merged[$key] = $meta;
+        }
+
+        return $merged;
+    }
+
+    /**
+     * R-PKG-047 D3 — detecta profile fields con type=file (auto-wire FileStoragePlugin).
+     *
+     * Pre-D3: el consumer tenía que pinear manualmente en
+     * `mkConfig['plugins']['file_storage']['fields']` el mapping `request => column`
+     * después de scaffoldear. Era cross-cutting risk: si olvidaba un campo, el
+     * upload reventaba con `Call to a member function store() on null` o similar.
+     *
+     * Post-D3: el scaffolder detecta type=file automáticamente y pinea el config
+     * en el admin-controller scaffoldeado. Sufijo `:file` en `--profile-fields`
+     * (e.g. `--profile-fields='avatar:file,phone:string'`) es el trigger.
+     *
+     * @param  array<string, array{type: string, unique: bool, is_file?: bool}>  $profileFields
+     * @return array<int, string> Lista de field names (sin suffix, sin tipo) que son `file`.
+     */
+    private function detectFileFields(array $profileFields): array
+    {
+        $fileFields = [];
+        foreach ($profileFields as $key => $meta) {
+            // Soportar tanto is_file=true como type='file' (defense-in-depth
+            // para consumers que pinean el meta manualmente).
+            $isFile = ($meta['is_file'] ?? false) === true || ($meta['type'] ?? '') === 'file';
+            if ($isFile) {
+                $fileFields[] = $key;
+            }
+        }
+
+        return $fileFields;
+    }
+
+    /**
+     * R-PKG-047 D3 — construye el config map `request field => column` para
+     * el FileStoragePlugin de mk-director-laravel.
+     *
+     * Convención: `request field` (e.g. 'avatar') → `column` (e.g. 'avatar_path').
+     * El column lleva sufijo `_path` por convención de la agencia (file storage
+     * siempre se almacena como path string, no como binario).
+     *
+     * El consumer NO necesita override `mutateData()` ni pinear manualmente
+     * `mkConfig['plugins']['file_storage']['fields']` — el scaffolder lo emite
+     * out-of-the-box.
+     *
+     * Shape pineada en `mkConfig['plugins']['file_storage']['fields']`:
+     *   - array plano (BC pre-R-PKG-045): ['photo']  (request === column).
+     *   - array asociativo (R-PKG-045 D1): ['avatar' => 'avatar_path'] (rename).
+     *   - mixto: ['photo', 'avatar' => 'avatar_path'] válido.
+     *
+     * Post-D3 pineamos SIEMPRE formato asociativo (más explícito, mejor para
+     * code review), pero FileStoragePlugin ya soporta ambos formatos.
+     *
+     * @param  array<int, string>  $fileFieldNames  Lista de field names.
+     * @return array<string, string> Mapa `request field => column`.
+     */
+    private function buildFileFieldsConfig(array $fileFieldNames): array
+    {
+        $map = [];
+        foreach ($fileFieldNames as $fieldName) {
+            $map[$fieldName] = $fieldName . '_path';
+        }
+
+        return $map;
+    }
+
+    /**
+     * R-PKG-047 D3 — emite el bloque PHP literal para pinear en `$mkConfig['plugins']`
+     * del admin-controller scaffoldeado.
+     *
+     * Si NO hay file fields, retorna `[]` (omitir el key `plugins` del mkConfig).
+     * Si hay file fields, retorna el array completo de file_storage config con
+     * disk/path/auto_url defaults + fields map.
+     *
+     * Output format: string PHP literal (e.g. `['file_storage' => [...]]`)
+     * pineado directamente en el stub. NO escape — el stub es PHP nativo.
+     *
+     * @param  array<int, string>  $fileFieldNames
+     * @return string PHP literal pineable en stub. `[]` si no hay fields.
+     */
+    private function buildPluginsConfigLiteral(array $fileFieldNames): string
+    {
+        if ($fileFieldNames === []) {
+            return '[]';
+        }
+
+        $fieldsMap = $this->buildFileFieldsConfig($fileFieldNames);
+        $fieldsPhp = $this->arrayLiteral($fieldsMap, 2);
+
+        return <<<PHP
+[
+            'file_storage' => [
+                'fields' => {$fieldsPhp},
+                'disk' => 'public',
+                'path' => 'uploads/{scopeLower}',
+                'auto_url' => true,
+            ],
+        ]
+PHP;
+    }
+
+    /**
+     * R-PKG-047 D3 — helper para serializar un array asociativo a literal PHP.
+     *
+     * Usado por `buildPluginsConfigLiteral()` y posiblemente por otros helpers
+     * de D5/D8 que necesiten emitir arrays PHP complexes desde código.
+     *
+     * @param  array<string, string>  $map
+     * @param  int  $indentLevels  Número de 4-space indents a aplicar.
+     */
+    private function arrayLiteral(array $map, int $indentLevels = 0): string
+    {
+        if ($map === []) {
+            return '[]';
+        }
+
+        $indent = str_repeat('    ', $indentLevels);
+
+        $out = '[' . PHP_EOL;
+        foreach ($map as $key => $value) {
+            $out .= $indent . "    '{$key}' => '{$value}'," . PHP_EOL;
+        }
+        $out .= $indent . ']';
+
+        return $out;
     }
 
     /**
@@ -2578,9 +2894,16 @@ PHP,
                 return null;
             }
 
+            // R-PKG-047 D3 — marcar `is_file` cuando type=file para que el
+            // scaffolder pinea el FileStoragePlugin config automáticamente.
+            // El BC pre-D3 pine fields sin is_file (default false). D3
+            // agrega el flag sin remover los anteriores.
+            $isFile = $type === 'file';
+
             $fields[$key] = [
                 'type' => $type,
                 'unique' => $unique,
+                'is_file' => $isFile,
             ];
         }
 
@@ -2599,64 +2922,13 @@ PHP,
      * @param  array<string, array{type: string, unique: bool}>  $profileFields  Resultado de `resolveProfileFields`.
      * @return array<string, bool>|null Mapa key => true (todos true por diseño), o null si inválido.
      */
-    /**
-     * N8 — resuelve los estados del enum {Scope}Status desde --status-values.
-     *
-     * Reglas:
-     *   - Vacío/ausente → default ['Active' => 1, 'Inactive' => 2].
-     *   - CSV de identificadores StudlyCase válidos (ej: Active,Inactive,Suspended).
-     *   - Valores asignados 1..N en orden de declaración (NUNCA 0 — falsy).
-     *   - El primer estado es el default de la columna.
-     *
-     * @return array<string, int>|null Mapa Case => valor (1..N), o null si inválido.
-     */
-    protected function resolveStatusStates(string $raw): ?array
-    {
-        $raw = trim($raw);
 
-        $names = $raw === ''
-            ? ['Active', 'Inactive']
-            : array_values(array_filter(array_map('trim', explode(',', $raw)), static fn ($n) => $n !== ''));
+    // NOTA: R-PKG-047 D4 ELIMINÓ los helpers `buildStatusCases()`, `buildStatusLabelArms()` y
+    // `statusLabelFor()` porque los 4 estados canónicos (Active/Inactive/Suspended/Pending) se
+    // pinean DIRECTAMENTE como literales en el stub `auth-user/enum-status.stub`. Los cases
+    // son string-backed con values hardcoded ('active','inactive',...). Si un consumer quiere
+    // estados custom, override post-scaffold el stub directamente.
 
-        if ($names === []) {
-            $names = ['Active', 'Inactive'];
-        }
-
-        $states = [];
-        $value = 1; // N8: arranca en 1, nunca 0.
-        foreach ($names as $name) {
-            if (! preg_match('/^[A-Za-z][A-Za-z0-9]*$/', $name)) {
-                $this->error("El estado \"{$name}\" en --status-values no es un case de enum válido (solo letras/números, sin espacios).");
-
-                return null;
-            }
-
-            if (isset($states[$name])) {
-                $this->error("El estado \"{$name}\" está duplicado en --status-values.");
-
-                return null;
-            }
-
-            $states[$name] = $value++;
-        }
-
-        return $states;
-    }
-
-    /**
-     * N8 — genera las líneas `case Name = N;` del enum de status.
-     *
-     * @param  array<string, int>  $statusStates
-     */
-    protected function buildStatusCases(array $statusStates): string
-    {
-        $out = '';
-        foreach ($statusStates as $name => $value) {
-            $out .= "    case {$name} = {$value};\n";
-        }
-
-        return $out;
-    }
 
     /**
      * N8 — genera los brazos del `match` de label() del enum de status.
@@ -2704,7 +2976,10 @@ PHP,
      * legacy (BC). Cuando está activo, threadea el status end-to-end para que la
      * feature funcione out-of-the-box (antes había que cablear 4 archivos a mano).
      *
-     * @param  array<string, int>  $statusStates
+     * R-PKG-047 D4: `string` values (no `int`) post-D4 — la columna enum string-backed
+     * pinea `default('active')` y los Resources exponen `status` como string.
+     *
+     * @param  string[]  $statusStates  Lista de nombres de estados canónicos (post-D4).
      * @return array<string, string>
      */
     protected function buildStatusCrudReplacements(bool $withStatus, array $statusStates, string $scope, string $scopeLower): array
@@ -2725,19 +3000,20 @@ PHP,
             ];
         }
 
-        // Resource: expone status (int) + status_label (string) — contrato con el front.
+        // Resource: expone status (string) + status_label (string) — contrato con el front.
+        // Post-D4: status es STRING (backed enum values), no int.
         $resourceEntry = "            'status' => \$this->status?->value,\n"
             ."            'status_label' => \$this->status?->label(),\n";
 
         // DTO: param + mapeos (el DTO es opt-in, pero debe ser consistente).
-        $dtoParam = "        public ?int \$status = null,\n";
-        $dtoFromRequest = "            status: \$request->input('status') !== null ? (int) \$request->input('status') : null,\n";
-        $dtoFromArray = "            status: isset(\$data['status']) ? (int) \$data['status'] : null,\n";
+        $dtoParam = "        public ?string \$status = null,\n";
+        $dtoFromRequest = "            status: \$request->input('status') !== null ? (string) \$request->input('status') : null,\n";
+        $dtoFromArray = "            status: isset(\$data['status']) ? (string) \$data['status'] : null,\n";
         $dtoToArray = "            'status' => \$this->status,\n";
 
         // Requests: valida contra el enum (Rule::enum). `sometimes`+`nullable`
         // porque la columna tiene default (no es obligatorio en create).
-        $ruleStore = "            'status' => ['sometimes', 'nullable', 'integer', \\Illuminate\\Validation\\Rule::enum({$enumFqcn}::class)],\n";
+        $ruleStore = "            'status' => ['sometimes', 'nullable', 'string', \\Illuminate\\Validation\\Rule::enum({$enumFqcn}::class)],\n";
         $ruleUpdate = $ruleStore;
 
         // Factory: default al primer estado; states por cada estado no-default.
@@ -2760,14 +3036,16 @@ PHP,
      * N10 — genera un factory state method por cada estado NO-default (el
      * primero es el default de definition()). Ej: `suspended()` → status Suspended.
      *
-     * @param  array<string, int>  $statusStates
+     * R-PKG-047 D4: status es STRING (backed enum value), no int.
+     *
+     * @param  string[]  $statusStates  Lista de nombres de estados canónicos.
      */
     protected function buildStatusFactoryStateMethods(array $statusStates, string $scope, string $scopeLower): string
     {
         $enumFqcn = "\\App\\Modules\\{$scope}\\Enums\\{$scope}Status";
         $out = '';
         $first = true;
-        foreach ($statusStates as $name => $value) {
+        foreach ($statusStates as $name) {
             if ($first) {
                 $first = false; // el primer estado es el default de definition().
 
