@@ -1494,9 +1494,14 @@ PHP,
         $fieldRules = $this->buildProfileFieldRules($profileFields, $requiredFields, $scopePlural);
         $crudReplacements = array_merge([
             '{{profileFieldsList}}' => $this->buildProfileFieldsList($profileFields),
-            '{{profileFieldsFillable}}' => $this->buildProfileFieldsFillable($profileFields),
-            '{{profileFieldsFromRequest}}' => $this->buildProfileFieldsFromRequest($profileFields),
-            '{{profileFieldsFromArray}}' => $this->buildProfileFieldsFromArray($profileFields),
+            // F10-B05 (R-PKG-050): pasar `$loginField` a los 3 helpers DTO
+            // para que su dedup de core fields (name, $loginField, password,
+            // status) matchee el valor real (e.g. `email` default, `ci` para
+            // RETO, etc.). Sin esto, el dedup siempre skipeaba `'email'`
+            // aunque el scope usara `ci` como login field.
+            '{{profileFieldsFillable}}' => $this->buildProfileFieldsFillable($profileFields, $loginField),
+            '{{profileFieldsFromRequest}}' => $this->buildProfileFieldsFromRequest($profileFields, $loginField),
+            '{{profileFieldsFromArray}}' => $this->buildProfileFieldsFromArray($profileFields, $loginField),
             '{{profileFieldsToArray}}' => $this->buildProfileFieldsToArray($profileFields),
             // F7-W03: emitir los --profile-fields en {Scope}Resource::toArray().
             // Antes (pre-F7-W03) el Resource scaffoldeado no incluía los
@@ -1925,10 +1930,28 @@ PHP;
      *   - date, datetime → `?\Carbon\Carbon`
      *   - json → `?array`
      */
-    protected function buildProfileFieldsFillable(array $profileFields): string
+    protected function buildProfileFieldsFillable(array $profileFields, string $loginField = 'email'): string
     {
+        // F10-B05 (R-PKG-050): dedup contra los core fields pineados hardcoded
+        // en `admin-data-dto.stub` (constructor: `name`, `{{loginField}}`,
+        // `password`). El helper `{{statusDtoParam}}` pinea `status` por
+        // separado cuando withStatus=true, así que también lo skipeamos para
+        // evitar la doble-pineada `public ?string $status = null,` (una
+        // desde profile fields, otra desde statusDtoParam).
+        //
+        // Pre-fix: con `--profile-fields="phone,avatar:file"`, el DTO
+        // generado tenía `public string $name` (hardcoded) + `public
+        // ?string $name = null,` (de este helper) → PHP fatal
+        // `Redefinition of parameter $name`. Idem para `email`, `password`,
+        // `status`.
+        $coreFields = ['name', $loginField, 'password', 'status'];
+
         $out = '';
         foreach ($profileFields as $key => $meta) {
+            if (in_array($key, $coreFields, true)) {
+                continue;
+            }
+
             $type = $meta['type'];
             $phpType = match ($type) {
                 'string', 'text' => '?string',
@@ -1959,10 +1982,21 @@ PHP;
      *
      * @param  array<string, array{type: string, unique: bool}>  $profileFields
      */
-    protected function buildProfileFieldsFromRequest(array $profileFields): string
+    protected function buildProfileFieldsFromRequest(array $profileFields, string $loginField = 'email'): string
     {
+        // F10-B05 (R-PKG-050): dedup contra los core fields pineados hardcoded
+        // en `admin-data-dto.stub` (fromRequest: `name:`, `{{loginField}}:`,
+        // `password:`). `{{statusDtoFromRequest}}` pinea `status` por separado.
+        // Pre-fix: named arg duplicado `name: ...` (hardcoded + helper) →
+        // `Error: Named parameter $name already exists`.
+        $coreFields = ['name', $loginField, 'password', 'status'];
+
         $out = '';
         foreach ($profileFields as $key => $meta) {
+            if (in_array($key, $coreFields, true)) {
+                continue;
+            }
+
             // N11 fix: el named arg DEBE matchear el nombre del parámetro del
             // constructor, que es camelCase (buildProfileFieldsFillable emite
             // `$fullName`, no `$full_name`). En PHP 8 un named arg snake_case
@@ -1987,10 +2021,20 @@ PHP;
      *
      * @param  array<string, array{type: string, unique: bool}>  $profileFields
      */
-    protected function buildProfileFieldsFromArray(array $profileFields): string
+    protected function buildProfileFieldsFromArray(array $profileFields, string $loginField = 'email'): string
     {
+        // F10-B05 (R-PKG-050): dedup contra los core fields pineados hardcoded
+        // en `admin-data-dto.stub` (fromArray: `name:`, `{{loginField}}:`,
+        // `password:`). `{{statusDtoFromArray}}` pinea `status` por separado.
+        // Mismo rationale que `buildProfileFieldsFromRequest`.
+        $coreFields = ['name', $loginField, 'password', 'status'];
+
         $out = '';
         foreach ($profileFields as $key => $meta) {
+            if (in_array($key, $coreFields, true)) {
+                continue;
+            }
+
             // N11 fix: named arg camelCase (ver buildProfileFieldsFromRequest).
             $paramName = lcfirst(str_replace('_', '', ucwords($key, '_')));
             $out .= "            {$paramName}: \$data['{$key}'] ?? null,\n";

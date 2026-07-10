@@ -440,3 +440,59 @@ test('F10-B17: stubs de CRUD pinean los placeholders Store/Update (sanity check 
     expect($storeStub)->toContain('{{loginFieldValidationRuleStore}}');
     expect($updateStub)->toContain('{{loginFieldValidationRuleUpdate}}');
 });
+
+// ── F10-B05 regression tests (R-PKG-050) ─────────────────────────────────
+//
+// Bug: `buildProfileFieldsFillable()`, `buildProfileFieldsFromRequest()`
+// y `buildProfileFieldsFromArray()` (DTO) pineaban TODOS los profile fields
+// (defaults + user-provided). Los defaults incluyen `name`, `$loginField`
+// (e.g. `email`), `phone`, `status` — pero el stub `admin-data-dto.stub`
+// YA pinea hardcoded `name`, `{{loginField}}`, `password` en su constructor
+// (y `{{statusDtoParam}}` pinea `status`). Resultado: 2x `public string $name`,
+// 2x `public string $email`, 2x `public ?string $status = null,` → PHP fatal
+// `Redefinition of parameter $name`.
+//
+// Fix: dedup contra los core fields pineados en el stub. Los 3 helpers DTO
+// ahora aceptan `$loginField` y skipean las keys `['name', $loginField,
+// 'password', 'status']`. El caller en `$crudReplacements` pasa `$loginField`.
+
+test('F10-B05: buildProfileFieldsFillable() acepta $loginField y dedup core fields (regression guard)', function () {
+    $source = commandSource();
+
+    // Pin 1: la firma acepta $loginField.
+    expect($source)->toMatch('/function buildProfileFieldsFillable\(\s*array\s+\$profileFields\s*,\s*string\s+\$loginField\s*=/');
+
+    // Pin 2: el helper pine $coreFields con las 4 keys pineadas en el stub.
+    expect($source)->toMatch(
+        '/function buildProfileFieldsFillable\([\s\S]*?\$coreFields\s*=\s*\[\s*[\'"]name[\'"]\s*,\s*\$loginField\s*,\s*[\'"]password[\'"]\s*,\s*[\'"]status[\'"]\s*\]/',
+    );
+});
+
+test('F10-B05: buildProfileFieldsFromRequest() acepta $loginField y dedup core fields (regression guard)', function () {
+    $source = commandSource();
+
+    expect($source)->toMatch('/function buildProfileFieldsFromRequest\(\s*array\s+\$profileFields\s*,\s*string\s+\$loginField\s*=/');
+    expect($source)->toMatch(
+        '/function buildProfileFieldsFromRequest\([\s\S]*?\$coreFields\s*=\s*\[\s*[\'"]name[\'"]\s*,\s*\$loginField\s*,\s*[\'"]password[\'"]\s*,\s*[\'"]status[\'"]\s*\]/',
+    );
+});
+
+test('F10-B05: buildProfileFieldsFromArray() acepta $loginField y dedup core fields (regression guard)', function () {
+    $source = commandSource();
+
+    expect($source)->toMatch('/function buildProfileFieldsFromArray\(\s*array\s+\$profileFields\s*,\s*string\s+\$loginField\s*=/');
+    expect($source)->toMatch(
+        '/function buildProfileFieldsFromArray\([\s\S]*?\$coreFields\s*=\s*\[\s*[\'"]name[\'"]\s*,\s*\$loginField\s*,\s*[\'"]password[\'"]\s*,\s*[\'"]status[\'"]\s*\]/',
+    );
+});
+
+test('F10-B05: $crudReplacements pasa $loginField a los 3 helpers DTO (regression guard)', function () {
+    $source = commandSource();
+
+    // El caller en $crudReplacements debe pasar $loginField a los 3 helpers.
+    // Si alguien borra el segundo arg, el dedup skipea 'email' siempre aunque
+    // el scope use 'ci' → bug silencioso.
+    expect($source)->toContain("buildProfileFieldsFillable(\$profileFields, \$loginField)");
+    expect($source)->toContain("buildProfileFieldsFromRequest(\$profileFields, \$loginField)");
+    expect($source)->toContain("buildProfileFieldsFromArray(\$profileFields, \$loginField)");
+});
