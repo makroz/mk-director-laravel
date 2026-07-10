@@ -402,3 +402,41 @@ test('F10-B04: ensureCorsConfig() usa la semántica --no-rbac (post-D2)', functi
     // Pin: el pattern debe aparecer al menos una vez en el source.
     expect($source)->toContain("! (bool) \$this->option('no-rbac')");
 });
+
+// ── F10-B17 regression tests (R-PKG-050) ─────────────────────────────────
+//
+// Bug: los stubs `store-admin-request.stub` y `update-admin-request.stub`
+// pinean los placeholders `{{loginFieldValidationRuleStore}}` y
+// `{{loginFieldValidationRuleUpdate}}` respectivamente. El command
+// source los pineaba como keys en `$loginFieldReplacements` (fase base)
+// pero NO en `$crudReplacements` (CRUD pack). Resultado: el CRUD pack
+// pineaba los placeholders literales en StoreAdminRequest.php:38 y
+// UpdateAdminRequest.php:38, causando `ParseError: syntax error,
+// unexpected token "{"` al primer POST / PATCH.
+//
+// Fix: agregar ambas keys a `$crudReplacements` con la misma lógica
+// que `{{loginFieldValidationRule}}` (línea ~1515). El array CRUD pack
+// ahora pinea los 3 variants: base, Store, Update.
+
+test('F10-B17: $crudReplacements array incluye {{loginFieldValidationRuleStore}} y {{loginFieldValidationRuleUpdate}} (regression guard)', function () {
+    $source = commandSource();
+
+    // F10-B17 fix: las keys `{{loginFieldValidationRuleStore}}` y
+    // `{{loginFieldValidationRuleUpdate}}` deben existir como keys
+    // de algún array de replacements en el command source (probablemente
+    // $crudReplacements). Si se borran, los stubs pinean el placeholder
+    // literal y los endpoints POST/PATCH revientan con ParseError.
+    expect($source)->toContain("'{{loginFieldValidationRuleStore}}' =>");
+    expect($source)->toContain("'{{loginFieldValidationRuleUpdate}}' =>");
+});
+
+test('F10-B17: stubs de CRUD pinean los placeholders Store/Update (sanity check del diseño)', function () {
+    $storeStub = stubSource('auth-user/store-admin-request.stub');
+    $updateStub = stubSource('auth-user/update-admin-request.stub');
+
+    // Sanity: los stubs deben pinear exactamente los placeholders que el
+    // command reemplaza. Si se refactorea el stub para usar otro nombre,
+    // hay que actualizar tanto el stub como el command (y este test).
+    expect($storeStub)->toContain('{{loginFieldValidationRuleStore}}');
+    expect($updateStub)->toContain('{{loginFieldValidationRuleUpdate}}');
+});

@@ -1515,6 +1515,22 @@ PHP,
             '{{loginFieldValidationRule}}' => $loginField === 'email'
                 ? "['required', 'email', 'max:255', 'unique:{$scopePlural},{$loginField}']"
                 : "['required', 'string', 'max:255', 'unique:{$scopePlural},{$loginField}']",
+            // F10-B17 (R-PKG-050): pine las variantes Store/Update que usan
+            // los stubs de CRUD (store-admin-request.stub, update-admin-request.stub).
+            // Pre-fix, estos placeholders solo estaban en $loginFieldReplacements
+            // (fase base) pero el CRUD pack los pineaba literal en los archivos
+            // generados → `ParseError: syntax error, unexpected token "{"` al
+            // primer POST / PATCH (e.g. `StoreMemberRequest::rules()`).
+            //
+            // Side note: la duplicación entre $loginFieldReplacements (fase
+            // base) y $crudReplacements (CRUD pack) es un refactor futuro;
+            // B17 es el fix mínimo (pinear las keys faltantes).
+            '{{loginFieldValidationRuleStore}}' => $loginField === 'email'
+                ? "['required', 'email', 'max:255', 'unique:{$scopePlural},{$loginField}']"
+                : "['required', 'string', 'max:255', 'unique:{$scopePlural},{$loginField}']",
+            '{{loginFieldValidationRuleUpdate}}' => $loginField === 'email'
+                ? "'email', 'max:255'"
+                : "'string', 'max:255'",
 
             // R-PKG-047 D3 — auto-wire FileStoragePlugin via :file suffix.
             //
