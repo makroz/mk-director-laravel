@@ -590,3 +590,46 @@ test('F10-B10: {{statusColumn}} enum pinea blocked (no suspended) — R-PKG-047 
     // que NO está en el `\$table->enum(...)` line).
     expect($source)->not->toContain("['active','inactive','suspended','pending']");
 });
+// ── F10-B01 + F10-B02 regression tests (R-PKG-050) ────────────────────────
+//
+// Bug B01: resolveProfileFields() retorna `null` cuando detecta colisión
+// (campo en `reserved` o duplicado en CSV). Pero el caller en handle()
+// continuaba y llamaba resolveRequiredProfileFields($raw, $userFieldsRaw)
+// con `$userFieldsRaw = null` → TypeError ugly. El check de
+// `$profileFieldsRaw === null` existía más abajo pero llegaba TARDE.
+//
+// Bug B02: resolveRequiredProfileFields() signature era `array $profileFields`
+// (rígida). No aceptaba `null` — TypeError inmediato.
+//
+// Fix combinado:
+// - F10-B01: FAILURE temprano en handle() después de resolveProfileFields()
+//   si retorna null. Mensaje ya impreso por resolveProfileFields().
+// - F10-B02: signature cambia a `?array $profileFields` + early return `[]`.
+//   Defense-in-depth por si el helper se invoca desde otros lugares.
+
+test('F10-B01: handle() hace FAILURE temprano si resolveProfileFields() retorna null (colisión)', function () {
+    $source = commandSource();
+
+    // Pin: el check `if ($userFieldsRaw === null) return self::FAILURE;`
+    // debe existir en handle() y estar ANTES de la llamada REAL a
+    // resolveRequiredProfileFields() (no la mención en el comment).
+    //
+    // Usamos '$this->resolveRequiredProfileFields(' (con $this->) para
+    // skipear las menciones en docstrings/comentarios.
+    $nullCheckPos = strpos($source, 'if ($userFieldsRaw === null)');
+    $resolveReqPos = strpos($source, '$this->resolveRequiredProfileFields(');
+
+    expect($nullCheckPos)->toBeGreaterThan(0)
+        ->and($resolveReqPos)->toBeGreaterThan(0)
+        ->and($nullCheckPos)->toBeLessThan($resolveReqPos);
+});
+
+test('F10-B02: resolveRequiredProfileFields() acepta ?array y retorna [] si null (defense-in-depth)', function () {
+    $source = commandSource();
+
+    // Pin 1: la firma acepta `?array $profileFields` (no `array` rígido).
+    expect($source)->toMatch('/function resolveRequiredProfileFields\(\s*string\s+\$raw\s*,\s*\?array\s+\$profileFields\s*\)/');
+
+    // Pin 2: la función pine early return `[]` si `$profileFields === null`.
+    expect($source)->toMatch('/function resolveRequiredProfileFields\([\s\S]*?if\s*\(\s*\$profileFields\s*===\s*null\s*\)\s*\{\s*return\s*\[\s*\]\s*;\s*\}/');
+});

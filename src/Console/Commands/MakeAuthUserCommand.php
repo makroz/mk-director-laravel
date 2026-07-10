@@ -212,9 +212,21 @@ class MakeAuthUserCommand extends Command
         // Post-D2: $profileFieldsRaw se mergea con defaultProfileFields() (name + loginField +
         //          email si ≠ + phone + status) ANTES de pasar a buildProfileFieldsReplacements.
         $userFieldsRaw = $this->resolveProfileFields((string) $this->option('profile-fields'), $loginField, $withStatus);
-        $profileFieldsRaw = $userFieldsRaw === null
-            ? null
-            : $this->resolveProfileFieldsWithDefaults($loginField, $withStatus, $userFieldsRaw);
+        // F10-B01 (R-PKG-050): si resolveProfileFields() detectó una colisión
+        // (campo X está en `reserved` o duplicado en el CSV), retorna `null`
+        // después de imprimir el error. ANTES de este fix, el código
+        // continuaba y llamaba `resolveRequiredProfileFields($raw, $userFieldsRaw)`
+        // con `$userFieldsRaw = null` → TypeError `Argument #2 ($profileFields)
+        // must be of type array, null given`. El check de `$profileFieldsRaw
+        // === null` existía más abajo (línea ~252) pero llegaba TARDE: el
+        // TypeError se lanzaba antes.
+        //
+        // Post-fix: FAILURE temprano, ANTES de cualquier otra llamada que
+        // reciba `$userFieldsRaw`. Mensaje ya impreso por resolveProfileFields.
+        if ($userFieldsRaw === null) {
+            return self::FAILURE;
+        }
+        $profileFieldsRaw = $this->resolveProfileFieldsWithDefaults($loginField, $withStatus, $userFieldsRaw);
 
         $verifyEmailRequested = (bool) $this->option('verify-email');
         $requiredFields = $this->resolveRequiredProfileFields((string) $this->option('profile-fields-required'), $userFieldsRaw);
@@ -246,11 +258,6 @@ class MakeAuthUserCommand extends Command
         if ($loginField === null) {
             $this->error('El campo de login debe ser un identificador no-vacío (letras, números, guión bajo).');
 
-            return self::FAILURE;
-        }
-
-        if ($profileFieldsRaw === null) {
-            // resolveProfileFields() ya imprimió el error específico.
             return self::FAILURE;
         }
 
@@ -3164,8 +3171,22 @@ PHP,
             ."    }\n";
     }
 
-    protected function resolveRequiredProfileFields(string $raw, array $profileFields): ?array
+    protected function resolveRequiredProfileFields(string $raw, ?array $profileFields): ?array
     {
+        // F10-B02 (R-PKG-050): signature cambia a `?array $profileFields`
+        // (antes era `array`). Pre-fix, si el caller pasaba `null` (e.g.
+        // porque `resolveProfileFields()` detectó colisión y retornó null),
+        // PHP lanzaba `TypeError: Argument #2 ($profileFields) must be of
+        // type array, null given` — fail-fast ugly sin contexto para el dev.
+        //
+        // Post-fix: defense-in-depth. Si llega `null`, retornamos `[]` (sin
+        // required fields) en vez de TypeError. El caller en handle() ya
+        // hace FAILURE temprano por F10-B01, pero este fix evita TypeError
+        // si el helper se invoca desde otros lugares.
+        if ($profileFields === null) {
+            return [];
+        }
+
         $raw = trim($raw);
 
         if ($raw === '') {
