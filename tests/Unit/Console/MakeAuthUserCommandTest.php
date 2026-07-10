@@ -366,3 +366,39 @@ test('F10-B03: fase base pinea Http/Requests/LoginRequest.php y Http/Requests/Me
     expect($source)->toContain("'auth-user.login-request.stub', 'Http/Requests', 'LoginRequest.php'");
     expect($source)->toContain("'auth-user.me-request.stub', 'Http/Requests', 'MeRequest.php'");
 });
+
+// ── F10-B04 regression tests (R-PKG-050) ─────────────────────────────────
+//
+// Bug: ensureCorsConfig() leía `$this->option('with-auth-rbac')` para
+// decidir qué paths CORS pinear en config/cors.php. El flag `--with-auth-rbac`
+// fue ELIMINADO en R-PKG-047 D2 (ahora default ON, opt-out via `--no-rbac`).
+// El read del option eliminado lanzaba
+// `InvalidArgumentException: The option 'with-auth-rbac' does not exist`
+// y abortaba el scaffolder justo después de pinear el ServiceProvider.
+//
+// Audit completa (R-PKG-050): es el ÚNICO zombie runtime. El flag
+// `--with-rbac` en MakeModuleCommand (otro comando) sigue vigente.
+// Las otras menciones de `--with-auth-rbac` son comentarios históricos
+// y BC break notes que deben quedarse como guía de migración.
+
+test('F10-B04: source NO contiene $this->option(\'with-auth-rbac\') (regression guard)', function () {
+    $source = commandSource();
+
+    // El read directo del flag eliminado debe estar pineado. Si alguien
+    // re-introduce `$this->option('with-auth-rbac')` en runtime code, este
+    // test falla. (Los comentarios históricos / BC break notes pueden
+    // mencionar el flag — eso es OK y se queda como guía de migración.)
+    expect($source)->not->toMatch("/\\\$this->option\\(\\s*['\"]with-auth-rbac['\"]\\s*\\)/");
+});
+
+test('F10-B04: ensureCorsConfig() usa la semántica --no-rbac (post-D2)', function () {
+    $source = commandSource();
+
+    // F10-B04 fix: el read del option es `! (bool) $this->option('no-rbac')`
+    // (semántica post-D2: opt-out del RBAC default ON). La lógica es:
+    // si NO se pine --no-rbac → RBAC activo → incluir 'sanctum/csrf-cookie'
+    // en CORS. Si se pine --no-rbac → RBAC off → no incluirlo.
+    //
+    // Pin: el pattern debe aparecer al menos una vez en el source.
+    expect($source)->toContain("! (bool) \$this->option('no-rbac')");
+});

@@ -170,7 +170,7 @@ class MakeAuthUserCommand extends Command
      *
      * @var string
      */
-    protected $description = 'Genera un scope de autenticación MK completo: Model (extends AuthUser), migration con auth_scope, AuthController (login/refresh/logout/me/forgot/reset), routes y ServiceProvider auto-registrado. Use --login-field=<field> para campos no-email (RETO: ci, genéricos: phone, username, etc.). Use --with-auth-rbac para integrar ability checks, rate limit y audit log (R-PKG-010). Use --profile-fields=<csv> para columnas adicionales del scope (e.g. dni, phone, birthdate). Use --verify-email para habilitar flujo completo de verificación por email (R-PKG-011).';
+    protected $description = 'Genera un scope de autenticación MK completo: Model (extends AuthUser), migration con auth_scope, AuthController (login/refresh/logout/me/forgot/reset), routes y ServiceProvider auto-registrado. Use --login-field=<field> para campos no-email (RETO: ci, genéricos: phone, username, etc.). RBAC (ability checks, rate limit, audit log) está integrado por default — usar --no-rbac para opt-out (R-PKG-047 D2). Use --profile-fields=<csv> para columnas adicionales del scope (e.g. dni, phone, birthdate). Use --verify-email para habilitar flujo completo de verificación por email (R-PKG-011).';
 
     public function handle(): int
     {
@@ -3688,7 +3688,13 @@ PHP,
         }
 
         $stubContent = file_get_contents($stubPath);
-        $extraCorsPaths = $this->option('with-auth-rbac')
+        // F10-B04 (R-PKG-050): el flag `with-auth-rbac` (legacy) fue ELIMINADO
+        // en R-PKG-047 D2. La nueva semántica es `no-rbac` (opt-out: RBAC
+        // default ON). Antes de este fix, leer el option eliminado lanzaba
+        // `InvalidArgumentException: The option does not exist` al pinear
+        // config/cors.php, abortando el scaffolder justo después de pinear
+        // el ServiceProvider.
+        $extraCorsPaths = ! (bool) $this->option('no-rbac')
             ? "['sanctum/csrf-cookie']"
             : '[]';
         $rendered = str_replace('{{extraCorsPaths}}', $extraCorsPaths, $stubContent);
