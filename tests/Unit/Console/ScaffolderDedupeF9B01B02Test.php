@@ -41,7 +41,7 @@ function makeAuthUserCommandSource(): string
     return (string) file_get_contents($path);
 }
 
-test('R-PKG-046 F9-B01 — buildProfileFieldRules() SKIP core fields (name, email, password, photo)', function () {
+test('R-PKG-046 F9-B01 — buildProfileFieldRules() SKIP core fields (name, email, password, photo, status)', function () {
     $src = makeAuthUserCommandSource();
 
     $helperPos = strpos($src, 'protected function buildProfileFieldRules(');
@@ -49,8 +49,13 @@ test('R-PKG-046 F9-B01 — buildProfileFieldRules() SKIP core fields (name, emai
 
     $helperBody = substr($src, (int) $helperPos);
 
-    // Helper debe declarar $coreFields array.
-    expect($helperBody)->toContain("\$coreFields = ['name', 'email', 'password', 'photo']");
+    // F10-B18 (R-PKG-050): la dedup ahora incluye 'status' además de los
+    // core fields F9-B01 (name, email, password, photo). Pre-fix, con
+    // --with-status default ON, el helper pineaba 'status' => ['nullable',
+    // 'string'] (rule genérica) Y el helper de status pineaba
+    // 'status' => ['sometimes', 'nullable', 'string', Rule::enum(...)] —
+    // PHP array merge descartaba el primero y el enum check se perdía.
+    expect($helperBody)->toContain("\$coreFields = ['name', 'email', 'password', 'photo', 'status']");
 
     // Y debe skip esos fields con in_array check.
     expect($helperBody)->toContain("if (in_array(\$key, \$coreFields, true))");

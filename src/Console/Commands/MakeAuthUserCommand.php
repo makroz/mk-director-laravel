@@ -2238,7 +2238,20 @@ PHP;
     {
         // R-PKG-046 F9-B01: core fields ya pineados hardcoded en los stubs.
         // Skip para evitar duplicate keys en el array final `rules()`.
-        $coreFields = ['name', 'email', 'password', 'photo'];
+        //
+        // F10-B18 (R-PKG-050): agregar `status` a la dedup. Pre-fix, si
+        // --with-status (default ON) pineaba `status` en los defaults,
+        // el helper emitía `'status' => ['nullable', 'string']` (rule genérica)
+        // Y el helper `buildStatusRequestRuleStore/Update` pineaba
+        // `'status' => ['sometimes', 'nullable', 'string', Rule::enum(...)]`
+        // (rule con enum check). Resultado: PHP array merge con key
+        // duplicada descartaba el primero — el enum check se perdía,
+        // aceptando cualquier string como `status` (e.g. 'foobar').
+        //
+        // Post-fix: skip `status` acá, el rule con enum check (canónico)
+        // queda como única source of truth. Idempotente cuando --no-status
+        // (status no está en profile fields, no se skipea nada).
+        $coreFields = ['name', 'email', 'password', 'photo', 'status'];
 
         $store = '';
         $update = '';

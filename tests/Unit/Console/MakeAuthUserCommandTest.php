@@ -824,3 +824,24 @@ test('F10-B06: setupSanctum() auto-corre composer require si Sanctum no está in
     // requerir input del dev y no contaminar output con progress bars).
     expect($source)->toMatch('/composer\s+require\s+laravel\/sanctum[^\n]*--no-interaction/');
 });
+// ── F10-B18 regression test (R-PKG-050) ───────────────────────────────────
+//
+// Bug: `buildProfileFieldRules()` dedup era `['name', 'email', 'password',
+// 'photo']` (F9-B01). NO incluía `status`. Cuando --with-status pineaba
+// `status` en los defaults, el helper emitía `'status' => ['nullable',
+// 'string']` (rule genérica) Y el helper `buildStatusRequestRuleStore/Update`
+// pineaba `'status' => ['sometimes', 'nullable', 'string', Rule::enum(...)]`
+// (rule con enum check). PHP array merge con key duplicada descartaba
+// el primero — el enum check se perdía, aceptando cualquier string.
+//
+// Fix: agregar `status` al dedup list de `buildProfileFieldRules()`.
+
+test('F10-B18: buildProfileFieldRules() dedup incluye status (no pine rule genérica + enum)', function () {
+    $source = commandSource();
+
+    // Pin: la dedup list de buildProfileFieldRules() incluye 'status'
+    // además de los core fields (name, email, password, photo).
+    expect($source)->toMatch(
+        "/function buildProfileFieldRules\\([\\s\\S]*?\\\$coreFields\\s*=\\s*\\[[^\\]]*'status'[^\\]]*\\]/",
+    );
+});
