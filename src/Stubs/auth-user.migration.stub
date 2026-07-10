@@ -47,14 +47,6 @@ return new class extends Migration
             $table->uuid('id')->primary();
             $table->string('name');
             $table->string('{{loginField}}')->unique();
-            // FEEDBACK A6: el AdminResource emite `photo_path`/`photo_url` y el
-            // AdminService::mutateData() ESCRIBE `photo_path` de forma
-            // incondicional (el pipeline de foto está siempre en los stubs).
-            // Por eso la columna se crea SIEMPRE (nullable) — antes solo existía
-            // con --profile-fields=photo_path, así que subir una foto reventaba
-            // con "column photo_path not found". El accessor `getPhotoUrlAttribute()`
-            // vive en el modelo. Si no usás fotos, la columna nullable no molesta.
-            $table->string('photo_path')->nullable();
             {{profileFieldsColumns}}{{statusColumn}}{{managedByColumn}}$table->timestamp('email_verified_at')->nullable();
             $table->string('password');
             $table->string('auth_scope')->default('{{moduleNameLower}}')->index();
