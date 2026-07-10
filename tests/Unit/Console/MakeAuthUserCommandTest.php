@@ -845,3 +845,20 @@ test('F10-B18: buildProfileFieldRules() dedup incluye status (no pine rule gené
         "/function buildProfileFieldRules\\([\\s\\S]*?\\\$coreFields\\s*=\\s*\\[[^\\]]*'status'[^\\]]*\\]/",
     );
 });
+// ── F10-B16 regression test (R-PKG-050) ───────────────────────────────────
+//
+// Bug: `PluginManager::registerPlugins()` iteraba el array sin checkear
+// tipo. Si un caller pasaba configs (arrays) en vez de class names
+// (strings), `registerPlugin($array)` reventaba con
+// `TypeError: Argument #1 ($class) must be of type string, array given`.
+//
+// Fix: skip non-string values con `continue`. Defense-in-depth.
+
+test('F10-B16: PluginManager::registerPlugins() skip non-string values (defense-in-depth)', function () {
+    $source = file_get_contents(packageRoot().'/src/Managers/PluginManager.php');
+
+    // Pin: el foreach de registerPlugins() tiene un `if (! is_string($class)) continue;`
+    expect($source)->toMatch(
+        '/function registerPlugins\([\s\S]*?foreach\s*\(\s*\$classes\s+as\s+\$class\s*\)\s*\{\s*if\s*\(\s*!\s*is_string\(\s*\$class\s*\)\s*\)\s*\{\s*continue\s*;/',
+    );
+});

@@ -92,10 +92,28 @@ class PluginManager
 
     /**
      * Register an array of plugin classes.
+     *
+     * F10-B16 (R-PKG-050): skip defensivo de valores que NO son string.
+     * Pre-fix, si un caller (e.g. `CRUDSmart::resolveFormRequest()` →
+     * `$manager->registerPlugins($this->mkConfig['plugins'])`) pasaba un
+     * array asociativo con config per-plugin (e.g.
+     * `['file_storage' => ['fields' => ['avatar' => 'avatar_path']]]`),
+     * el foreach llamaba `registerPlugin(['file_storage' => [...]])` con
+     * un array como argumento → `TypeError: registerPlugin(): Argument
+     * #1 ($class) must be of type string, array given`.
+     *
+     * Post-fix: skip non-string values con `continue`. Los configs per-plugin
+     * (que son arrays) NO deberían pinearse via este método — se acceden
+     * via `getConfigValue('plugins_config.<name>', [])` (per
+     * FileStoragePlugin). Pero defense-in-depth por si el controller
+     * scaffoldeado pinea la forma incorrecta.
      */
     public function registerPlugins(array $classes): void
     {
         foreach ($classes as $class) {
+            if (! is_string($class)) {
+                continue;  // skip arrays (configs) u otros non-class values
+            }
             $this->registerPlugin($class);
         }
     }
