@@ -386,7 +386,7 @@ class MakeAuthUserCommand extends Command
 
         // Placeholders condicionales R-PKG-011: profile fields per-scope + email verification opt-in.
         // R-PKG-014: pasa $profileFieldsRaw (con metadata unique) + $requiredFields.
-        $profileFieldsReplacements = $this->buildProfileFieldsReplacements($profileFieldsRaw, $requiredFields);
+        $profileFieldsReplacements = $this->buildProfileFieldsReplacements($profileFieldsRaw, $requiredFields, $loginField);
         $verifyEmailReplacements = $this->buildVerifyEmailReplacements($verifyEmail, $scopeLower);
 
         // R-PKG-014 MEJORA-07: factory DDD helpers cuando --with-crud está activo.
@@ -652,15 +652,20 @@ PHP,
         $statusEnumFqcn = "\\App\\Modules\\{$scope}\\Enums\\{$scope}Status";
         $statusReplacements = [
             // R-PKG-047 D4 — `enum` column string-backed con 4 valores canónicos.
-            // Pre-D4: `unsignedTinyInteger('status')` con valores 1..N. Post-D4:
-            // `enum('status', ['active','inactive','suspended','pending'])`
-            // compatible con `ScopeStatus` enum canónico del paquete.
+            // F10-B10 (R-PKG-050): pine enum canónico post-D4 (4 estados, 'blocked'
+            // en vez del legacy 'suspended'). R-PKG-047 D4 cambió el canon:
+            // {Scope}Status enum ahora es `Blocked` (no `Suspended`) para
+            // matchear con el enum-status.stub actualizado. Pre-D4, este
+            // helper pineaba 'suspended' que NO matcheaba con el enum
+            // generado por el stub → silent mismatch (la columna aceptaba
+            // 'suspended' pero el enum PHP solo definía los otros 3).
+            //
             // NOTA: la columna enum requiere MySQL/PostgreSQL/SQLite support;
             // mysql antiguo (< 5.7) no soporta ENUM type — usar
             // `mk:migrate-is-active` post-D4 si tu scope pre-D4 pineaba
             // `is_active` boolean y quiere migrar el type.
             '{{statusColumn}}' => $withStatus
-                ? "\$table->enum('status', ['active','inactive','suspended','pending'])->default('active')->index();\n            "
+                ? "\$table->enum('status', ['active','inactive','blocked','pending'])->default('active')->index();\n            "
                 : '',
             '{{statusFillableEntry}}' => $withStatus
                 ? "        'status',\n"
@@ -3212,7 +3217,7 @@ PHP,
      * @param  array<string, bool>  $requiredFields  Mapa key => true (override del default nullable).
      * @return array<string, string>
      */
-    protected function buildProfileFieldsReplacements(array $fields, array $requiredFields = []): array
+    protected function buildProfileFieldsReplacements(array $fields, array $requiredFields = [], string $loginField = 'email'): array
     {
         $hasProfile = ! empty($fields);
 
@@ -3229,6 +3234,30 @@ PHP,
             ];
         }
 
+        // F10-B10 + F10-B13 (R-PKG-050): dedup contra los core fields pineados
+        // hardcoded en el migration stub (`name`, `{{loginField}}`, `photo_path`,
+        // `email_verified_at`, `password`, `auth_scope`, `remember_token`) y
+        // en el model stub (`name`, `{{loginField}}`, `photo_path`, `password`,
+        // `auth_scope`, `client_id`).
+        //
+        // Los defaults (`defaultProfileFields()`) incluyen `name`, `$loginField`,
+        // `email` (si ≠ loginField), `phone`, `status` (si withStatus). Los
+        // que colisionan con los hardcoded son `name`, `$loginField`, y `status`
+        // (manejado por `{{statusColumn}}` / `{{statusFillableEntry}}` por
+        // separado). `email`/`phone` no están hardcoded en los stubs — no
+        // hay conflicto.
+        //
+        // Pre-fix: con `--profile-fields="phone,avatar:file"`, el migration
+        // generado tenía `$table->string('name')` (hardcoded) +
+        // `$table->string('name')->nullable()` (de este helper) → SQLSTATE
+        // `column "name" specified more than once`. Idem para Model $fillable.
+        //
+        // Side note: 'photo_path', 'email_verified_at', 'password', 'auth_scope',
+        // 'client_id' están en la dedup list aunque no estén en defaults — es
+        // defense-in-depth por si el consumer pinea alguno via
+        // `--profile-fields=photo_path:file` (raro pero posible).
+        $coreFields = ['name', $loginField, 'photo_path', 'email_verified_at', 'password', 'auth_scope', 'client_id', 'status'];
+
         $fillable = '';
         $columns = '';
         $docblock = '';
@@ -3240,8 +3269,17 @@ PHP,
             $unique = $meta['unique'];
             $config = self::PROFILE_FIELD_TYPES[$type];
 
+            // F10-B10 + F10-B13: dedup contra core fields. Si el field está
+            // en la lista, NO pineamos `$fillable` entry ni `$columns` line
+            // (el stub ya las pineó hardcoded). `$docblock` y `$castEntries`
+            // siguen emitiendo todos los fields (no hay conflicto con hardcoded).
+            $isCore = in_array($key, $coreFields, true);
+
             // $fillable entries: 8 espacios indent + 'name',\n
-            $fillable .= "        '{$key}',\n";
+            // Skip core fields pineados hardcoded en el model stub.
+            if (! $isCore) {
+                $fillable .= "        '{$key}',\n";
+            }
 
             // Migration column: usa column_method + column_args (e.g. decimal('x', 8, 2)).
             //
@@ -3278,7 +3316,14 @@ PHP,
             if ($shouldBeNullable) {
                 $chain .= '->nullable()';
             }
-            $columns .= "        \$table->{$config['column_method']}('{$key}'{$args}){$chain};\n            ";
+            // F10-B10: dedup contra core fields pineados hardcoded en el
+            // migration stub (`name`, `{{loginField}}`, `photo_path`,
+            // `email_verified_at`, `password`, `auth_scope`, `remember_token`).
+            // Sin este skip, la columna se pineaba DOS veces → SQLSTATE
+            // `column "X" specified more than once` al `migrate:fresh`.
+            if (! $isCore) {
+                $columns .= "        \$table->{$config['column_method']}('{$key}'{$args}){$chain};\n            ";
+            }
 
             // Docblock @property typed (phpstan-style hint).
             // R-PKG-014 BUG-02 fix: emite bloque completo /** ... */ cuando hay

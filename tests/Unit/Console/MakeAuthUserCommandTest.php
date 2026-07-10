@@ -516,3 +516,77 @@ test('F10-B07: buildProfileFieldsFillable() mapea type=file a ?string (PHP váli
         "/'file'\s*=>\s*'\\?string'/",
     );
 });
+// ── F10-B10 + F10-B13 regression tests (R-PKG-050) ───────────────────────
+//
+// Bug B10: la migration pineaba columnas duplicadas (name, email, status)
+// porque `buildProfileFieldsReplacements()` emitía todas las profile fields
+// (defaults + user) sin dedup contra las columnas hardcoded en el stub
+// (`name`, `{{loginField}}`, `photo_path`, `email_verified_at`, `password`).
+// Resultado: `migrate:fresh` fallaba con `column "X" specified more than once`.
+//
+// Bug B13: el Model $fillable tenía el mismo bug — pineaba 'name', 'email',
+// 'status' duplicados (hardcoded + helper).
+//
+// Fix: ambos bugs viven en `buildProfileFieldsReplacements()`. El helper
+// ahora acepta `$loginField` y dedup contra los core fields pineados
+// hardcoded en los stubs (`name`, `$loginField`, `photo_path`,
+// `email_verified_at`, `password`, `auth_scope`, `client_id`, `status`).
+//
+// Side fix: el enum en `{{statusColumn}}` ahora pinea 'blocked' (R-PKG-047
+// D4 BC break) en vez del legacy 'suspended'. Idem el enum-status.stub
+// pinea `case Blocked = 'blocked';` (covered separately in F10-B12).
+
+test('F10-B10: buildProfileFieldsReplacements() acepta $loginField y dedup contra core fields', function () {
+    $source = commandSource();
+
+    // Pin 1: la firma acepta $loginField.
+    expect($source)->toMatch('/function buildProfileFieldsReplacements\(\s*array\s+\$fields\s*,\s*array\s+\$requiredFields\s*=\s*\[\]\s*,\s*string\s+\$loginField\s*=/');
+
+    // Pin 2: el helper pine $coreFields con las keys pineadas en los stubs.
+    // Solo chequeo las 3 keys más críticas (name, $loginField, status) que
+    // son los conflictos reales (los otros 5 son defense-in-depth).
+    expect($source)->toMatch(
+        '/function buildProfileFieldsReplacements\([\s\S]*?\$coreFields\s*=\s*\[[^\\]]*[\'"]name[\'"][^\\]]*\$loginField[^\\]]*[\'"]status[\'"]\s*\]/',
+    );
+});
+
+test('F10-B10: caller en handle() pasa $loginField a buildProfileFieldsReplacements()', function () {
+    $source = commandSource();
+
+    // El caller en handle() (línea ~389) debe pasar $loginField para que
+    // el dedup matchee el valor real (e.g. 'email' default, 'ci' para RETO).
+    expect($source)->toContain('buildProfileFieldsReplacements($profileFieldsRaw, $requiredFields, $loginField)');
+});
+
+test('F10-B10: $fillable emission SKIP si key en core fields (no duplicate)', function () {
+    $source = commandSource();
+
+    // Verificar que el skip está pineado en la sección de $fillable
+    // (no en $columns). El pattern es `if (! $isCore) { $fillable .= ... }`.
+    // Pin: dentro del foreach, antes del $fillable, hay un check $isCore.
+    expect($source)->toMatch('/if\s*\(\s*!\s*\$isCore\s*\)\s*\{\s*\$\s*fillable\s*\.\=/');
+});
+
+test('F10-B10: $columns emission SKIP si key en core fields (no duplicate)', function () {
+    $source = commandSource();
+
+    // Idem para $columns — el helper skip columnas pineadas hardcoded
+    // en el migration stub (name, {{loginField}}, photo_path, etc.).
+    expect($source)->toMatch('/if\s*\(\s*!\s*\$isCore\s*\)\s*\{\s*\$\s*columns\s*\.\=/');
+});
+
+test('F10-B10: {{statusColumn}} enum pinea blocked (no suspended) — R-PKG-047 D4', function () {
+    $source = commandSource();
+
+    // R-PKG-047 D4 BC break: el enum canónico post-D4 es `Blocked` (no
+    // `Suspended`). El helper `{{statusColumn}}` en el array de replacements
+    // pinea el enum con los 4 estados canónicos.
+    //
+    // Pin: la string `'blocked'` aparece en el source (pinea `'active','inactive','blocked','pending'`).
+    expect($source)->toContain("'blocked'");
+
+    // Pin: la string legacy `'suspended'` NO aparece en el array de status
+    // (puede aparecer en otros comentarios / BC break notes — verificar solo
+    // que NO está en el `\$table->enum(...)` line).
+    expect($source)->not->toContain("['active','inactive','suspended','pending']");
+});
