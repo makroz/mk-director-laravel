@@ -12,8 +12,36 @@ use Mk\Director\Contracts\MkPluginInterface;
 
 /**
  * Class PluginManager
- * 
+ *
  * Manages the registration and execution of MK-Director plugins.
+ *
+ * **R-PKG-046 F9-B07 fix — Lazy boot (no constructor-time plugin loading)**:
+ *
+ * Pre-fix, `__construct()` llamó a `loadPluginsFromConfig()` que resuelve
+ * `FileStoragePlugin` via container. Como `FileStoragePlugin::__construct(PluginManager)`
+ * requiere `PluginManager`, el container entraba en una **dependencia circular**:
+ *
+ *   MkServiceProvider:50 PluginManager __construct
+ *     PluginManager:29 loadPluginsFromConfig
+ *       PluginManager:38 registerPlugins
+ *         PluginManager:47 registerPlugin
+ *           PluginManager:64 app('Mk\\Director\\Plu...')  ← FileStoragePlugin
+ *             FileStoragePlugin::__construct(PluginManager)  ← loop
+ *
+ * Resultado: la app NO booteaba con `MK_FILE_STORAGE_PLUGIN=true` (auto-register
+ * pineado en R-PKG-045 D2). Consumer tenía que pinear `MK_FILE_STORAGE_PLUGIN=false`
+ * como workaround.
+ *
+ * Post-fix: el constructor solo pinear estado (collection vacía). El método
+ * público `boot()` carga los plugins. `MkServiceProvider::boot()` llama
+ * `$pluginManager->boot()` después de que el singleton YA está construido.
+ *
+ *   1. `MkServiceProvider::register()` registra singleton (no ejecuta).
+ *   2. `MkServiceProvider::boot()` → `$this->app->make(PluginManager::class)`
+ *      ejecuta el closure `new PluginManager` → solo pinear `plugins = collect()`.
+ *   3. `$pluginManager->boot()` carga config y llama `app(FileStoragePlugin::class)`.
+ *   4. Container resuelve FileStoragePlugin buscando PluginManager → encuentra
+ *      el singleton YA CONSTRUIDO. Inyecta OK. No hay loop.
  */
 class PluginManager
 {
@@ -23,10 +51,34 @@ class PluginManager
     /** @var array Controller specific configuration */
     protected array $controllerConfig = [];
 
+    /** @var bool Lazy boot guard — evita doble-load si boot() se llama más de una vez. */
+    protected bool $booted = false;
+
     public function __construct()
     {
         $this->plugins = collect();
+        // R-PKG-046 F9-B07: NO cargar plugins aquí. Ver docblock de la clase.
+    }
+
+    /**
+     * R-PKG-046 F9-B07 — Lazy boot: carga los plugins pineados en config.
+     *
+     * Idempotente: si ya se llamó una vez, retorna sin recargar.
+     *
+     * Llamado por `MkServiceProvider::boot()` después de que el singleton
+     * YA está construido. Tests que instancian `new PluginManager()`
+     * directamente deben llamar `$manager->boot()` después.
+     *
+     * @see PluginManager class docblock para la secuencia completa.
+     */
+    public function boot(): void
+    {
+        if ($this->booted) {
+            return;
+        }
+
         $this->loadPluginsFromConfig();
+        $this->booted = true;
     }
 
     /**

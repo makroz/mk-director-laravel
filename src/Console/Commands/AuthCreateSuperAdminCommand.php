@@ -38,6 +38,23 @@ use Mk\Director\Auth\Models\Role;
  * confirmación). En CI se puede usar con `--no-interaction` y los
  * flags `--email`, `--name`, `--password` para skip los prompts.
  *
+ * **R-PKG-046 F9-B05 fix — login field dinámico**:
+ * Pre-fix, el command pineaba hardcoded `email` en signature, validación y
+ * `where()`. Si el consumer ejecutó `mk:make:auth-user Admin --login-field=ci`,
+ * el modelo `Admin::$loginField = 'ci'`, pero el command pedía `--email` y
+ * buscaba por `where('email', ...)`. Resultado: incompatible con scopes no-email.
+ * Workaround consumer-side (RETO): tinker manual con `firstOrCreate(['ci' => ...])`.
+ *
+ * Post-fix: el command detecta `$admin->getLoginField()` (default `'email'`,
+ * override `'ci'`, etc.) y:
+ *   - signature dinámica `--{loginField}` (e.g. `--ci`, `--email`, `--username`).
+ *   - `--email` se mantiene como BC fallback (cuando `loginField='email'`).
+ *   - Validación dinámica: `FILTER_VALIDATE_EMAIL` solo si `loginField='email'`,
+ *     si no, validar `required|string|min:3`.
+ *   - `where()` dinámico: `where($loginField, $value)`.
+ *   - Tabla final muestra el campo correcto.
+ *   - Output de "Login:" usa `{loginField}`.
+ *
  * @see HasRoles
  * @see HasAbilities
  */
@@ -49,7 +66,7 @@ class AuthCreateSuperAdminCommand extends Command
      * @var string
      */
     protected $signature = 'mk:auth:create-super-admin
-        {--email= : Email del super-admin (omite el prompt)}
+        {--email= : Email del super-admin (omite el prompt; BC para login field=email)}
         {--name= : Nombre (omite el prompt)}
         {--password= : Password en texto plano (omite el prompt; preferir prompt o env en CI)}
         {--roles= : CSV de roles a sembrar en una corrida (omite → solo super-admin). Roles soportados: super-admin, admin, editor, viewer. (R-PKG-014 MEJORA-04)}';
@@ -59,7 +76,60 @@ class AuthCreateSuperAdminCommand extends Command
      *
      * @var string
      */
-    protected $description = 'Crea el primer usuario super-admin (scope=admin, role=super-admin, ability=*). Use --roles=super-admin,admin,editor,viewer para sembrar los 4 roles predefinidos.';
+    protected $description = 'Crea el primer usuario super-admin (scope=admin, role=super-admin, ability=*). Use --roles=super-admin,admin,editor,viewer para sembrar los 4 roles predefinidos. Soporta login field custom (e.g. --ci, --username) pineado por el scaffolder.';
+
+    /**
+     * R-PKG-046 F9-B05 — Login field dinámico.
+     *
+     * Laravel console command signature NO soporta placeholders dinámicos
+     * (los `{}` se parsean estáticamente en el constructor). Usamos
+     * `configure()` para agregar `--{loginField}` dinámicamente después de
+     * detectar el campo del modelo Admin.
+     *
+     * BC: `--email` permanece en la signature hardcoded para scopes con
+     * `loginField='email'` (default). Para `loginField != 'email'`,
+     * `--{loginField}` se agrega via `configure()`.
+     */
+    protected function configure(): void
+    {
+        parent::configure();
+
+        $adminModel = 'App\\Modules\\Admin\\Models\\Admin';
+
+        // BC: si el modelo Admin NO existe todavía, asumimos loginField='email'
+        // (default). El handle() hace la verificación estricta y falla limpio.
+        if (! class_exists($adminModel)) {
+            return;
+        }
+
+        try {
+            $loginField = (new $adminModel)->getLoginField();
+        } catch (\Throwable $e) {
+            // Si getLoginField() falla (model sin la prop, etc.), BC fallback.
+            return;
+        }
+
+        // Solo agregar el flag dinámico si difiere del BC `--email`.
+        if ($loginField !== 'email') {
+            $this->getDefinition()->addOption(
+                new \Symfony\Component\Console\Input\InputOption(
+                    name: $loginField,
+                    shortcut: null,
+                    mode: \Symfony\Component\Console\Input\InputOption::VALUE_OPTIONAL,
+                    description: "Valor del login field `{$loginField}` del super-admin (omite el prompt)",
+                    default: null,
+                ),
+            );
+        }
+    }
+
+    /**
+     * Login field detectado del modelo Admin (R-PKG-046 F9-B05).
+     * Default: 'email'. Se sobrescribe en handle() si el modelo override.
+     *
+     * @var string
+     */
+    protected string $loginField = 'email';
 
     /**
      * Definición de los roles predefinidos (R-PKG-014 MEJORA-04).
@@ -112,6 +182,12 @@ class AuthCreateSuperAdminCommand extends Command
             return self::FAILURE;
         }
 
+        // R-PKG-046 F9-B05 — Detectar login field del modelo (override per scope).
+        // El scaffolder pinea `protected string $loginField = 'ci'` (o 'email', etc.)
+        // en el modelo scaffoldeado. Leemos vía `getLoginField()` que ya existe
+        // en `AuthUser` desde R-PKG-009 D6.
+        $this->loginField = (new $adminModel)->getLoginField();
+
         // ── Resolver roles a sembrar (R-PKG-014 MEJORA-04) ──
         // Default BC: solo super-admin.
         $rolesRaw = trim((string) $this->option('roles'));
@@ -131,14 +207,30 @@ class AuthCreateSuperAdminCommand extends Command
         }
 
         // 1. Recolectar credenciales base.
-        $email = $this->option('email') ?: $this->ask('Email del super-admin');
-        $nameOption = trim((string) $this->option('name'));
+        //
+        // R-PKG-046 F9-B05 — Resolver el valor del login field dinámicamente.
+        // BC: si `loginField='email'` y el consumer pasa `--email`, lo usa.
+        // NEW: si `loginField != 'email'` (e.g. 'ci'), acepta `--ci` flag.
+        // Prompt interactivo pineado con el nombre del login field.
+        $loginFieldValue = $this->resolveLoginFieldValue();
 
-        if (! filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $this->error("Email inválido: {$email}");
+        // Validación dinámica según tipo de login field.
+        if ($this->loginField === 'email') {
+            if (! filter_var($loginFieldValue, FILTER_VALIDATE_EMAIL)) {
+                $this->error("Email inválido: {$loginFieldValue}");
 
-            return self::FAILURE;
+                return self::FAILURE;
+            }
+        } else {
+            // Para ci, username, phone, etc.: required + string + min length.
+            if (strlen($loginFieldValue) < 3) {
+                $this->error("{$this->loginField} inválido (mínimo 3 caracteres): {$loginFieldValue}");
+
+                return self::FAILURE;
+            }
         }
+
+        $nameOption = trim((string) $this->option('name'));
 
         // R-PKG-016 BUG-NEW-15 fix: si `--name` no se pasa Y el modo es
         // `--no-interaction` (CI / seed scripts), `$this->ask()` retorna
@@ -146,10 +238,10 @@ class AuthCreateSuperAdminCommand extends Command
         // on column "name"`. Fallback chain:
         //   1. `--name=` flag (highest priority)
         //   2. prompt interactivo `ask('Nombre')`
-        //   3. autogenerar del email local-part: `mario@retogo.com` → `Mario`
-        //      (capitalize + take before `@`)
-        // Esto permite ejecutar `mk:auth:create-super-admin --email=X --password=Y
-        // --roles=... --no-interaction` sin tener que especificar name.
+        //   3. autogenerar del login field (e.g. `1234567` → `1234567`,
+        //      o `admin@example.com` → `Admin`)
+        // Esto permite ejecutar `mk:auth:create-super-admin --{loginField}=X
+        // --password=Y --roles=... --no-interaction` sin tener que especificar name.
         if ($nameOption !== '') {
             $name = $nameOption;
         } else {
@@ -157,11 +249,20 @@ class AuthCreateSuperAdminCommand extends Command
         }
 
         if ($name === null || $name === '') {
-            $localPart = explode('@', $email, 2)[0] ?? '';
-            $name = $localPart !== ''
-                ? ucfirst(strtolower($localPart))
-                : 'Admin';
-            $this->line("   (autogenerado de email: nombre = \"{$name}\")");
+            // R-PKG-046 F9-B05 — Autogenerar del login field (no solo de email).
+            // Si `loginField='email'`: tomar local-part. Si no: usar el valor entero
+            // como fallback. Si también está vacío: 'Admin'.
+            if ($this->loginField === 'email') {
+                $localPart = explode('@', $loginFieldValue, 2)[0] ?? '';
+                $name = $localPart !== ''
+                    ? ucfirst(strtolower($localPart))
+                    : 'Admin';
+            } else {
+                $name = $loginFieldValue !== ''
+                    ? ucfirst(strtolower($loginFieldValue))
+                    : 'Admin';
+            }
+            $this->line("   (autogenerado de {$this->loginField}: nombre = \"{$name}\")");
         }
 
         $password = $this->option('password') ?: $this->secret('Password (mínimo 8 caracteres)');
@@ -178,22 +279,40 @@ class AuthCreateSuperAdminCommand extends Command
             return self::FAILURE;
         }
 
-        // 2. Idempotencia: si ya existe un admin con ese email, salir limpio.
-        if ($adminModel::where('email', $email)->exists()) {
-            $this->warn("Ya existe un admin con email {$email}. No se creó nada.");
+        // 2. Idempotencia: si ya existe un admin con ese login field value, salir limpio.
+        // R-PKG-046 F9-B05 — where() dinámico según loginField.
+        if ($adminModel::where($this->loginField, $loginFieldValue)->exists()) {
+            $this->warn("Ya existe un admin con {$this->loginField} {$loginFieldValue}. No se creó nada.");
 
             return self::SUCCESS;
         }
 
-        // 3. Crear el admin base. El email es el mismo para todos los roles
-        //    (cada role se vincula al MISMO user). Esto modela el caso real
-        //    donde un admin acumula roles (e.g. super-admin + admin).
-        /** @var AuthUser $admin */
-        $admin = $adminModel::create([
+        // 3. Crear el admin base.
+        //
+        // R-PKG-046 F9-B05 — `create()` solo con los campos que existen
+        // en el fillable del modelo scaffoldeado. Si `loginField='ci'`,
+        // el `email` puede NO estar en `$fillable` (RETO lo omite).
+        //
+        // Strategy: pasar solo `name`, `password`, el login field value, y
+        // `auth_scope` (siempre presente). NO pineamos `email` salvo que
+        // `loginField='email'`.
+        $createAttrs = [
             'name' => $name,
-            'email' => $email,
             'password' => Hash::make($password),
-        ]);
+            $this->loginField => $loginFieldValue,
+        ];
+
+        // R-PKG-016 BUG-NEW-15 fix pineado por BC: pinear `auth_scope` si está en fillable.
+        // Defense-in-depth: `Schema::hasColumn()` check evita SQLSTATE si la
+        // columna no existe (versiones pre-R-PKG-022 del schema).
+        if (Schema::hasColumn((new $adminModel)->getTable(), 'auth_scope')) {
+            $createAttrs['auth_scope'] = $adminModel === 'App\\Modules\\Admin\\Models\\Admin'
+                ? 'admin'
+                : (new $adminModel)->getAuthScope() ?? 'admin';
+        }
+
+        /** @var AuthUser $admin */
+        $admin = $adminModel::create($createAttrs);
 
         // OBS-02 fix (R-PKG-031 pineado 2026-06-28, defense-in-depth): pinear
         // `is_active => true` explícitamente al crear el admin. Sin esto, si
@@ -264,7 +383,7 @@ class AuthCreateSuperAdminCommand extends Command
             [
                 ['id',          (string) $admin->getKey()],
                 ['name',        $admin->name],
-                ['email',       $admin->email],
+                [$this->loginField, $admin->{$this->loginField}],
                 ['auth_scope',  $admin->getAuthScope() ?? 'admin'],
                 ['roles',       $admin->roles->pluck('name')->implode(', ') ?: '—'],
                 ['canMk(*)',    $admin->canMk('*') ? 'yes (super-admin)' : 'no'],
@@ -272,10 +391,40 @@ class AuthCreateSuperAdminCommand extends Command
         );
         $this->newLine();
         $this->line('Login:');
-        $this->line('  POST /api/admin/auth/login');
-        $this->line('  { "email": "'.$email.'", "password": "<el que tipeaste>" }');
+        $this->line("  POST /api/admin/auth/login");
+        $this->line('  { "'.$this->loginField.'": "'.$loginFieldValue.'", "password": "<el que tipeaste>" }');
 
         return self::SUCCESS;
+    }
+
+    /**
+     * R-PKG-046 F9-B05 — Resolver el valor del login field dinámicamente.
+     *
+     * Fallback chain:
+     *   1. `--{loginField}` flag (e.g. `--ci`, `--email`, `--username`).
+     *   2. BC: si `loginField='email'` y `--email` está pineado, usarlo.
+     *   3. Prompt interactivo pineado con el nombre del login field.
+     *
+     * @return string El valor del login field.
+     */
+    protected function resolveLoginFieldValue(): string
+    {
+        // Strategy 1: --{loginField} flag.
+        $dynamicFlag = $this->option($this->loginField);
+        if (! empty($dynamicFlag)) {
+            return (string) $dynamicFlag;
+        }
+
+        // Strategy 2: BC fallback --email (solo si loginField='email').
+        if ($this->loginField === 'email') {
+            $emailOption = $this->option('email');
+            if (! empty($emailOption)) {
+                return (string) $emailOption;
+            }
+        }
+
+        // Strategy 3: prompt interactivo con nombre del login field.
+        return (string) $this->ask("{$this->loginField} del super-admin");
     }
 
     /**

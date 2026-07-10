@@ -1,0 +1,48 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Providers;
+
+use Illuminate\Support\ServiceProvider;
+
+/**
+ * R-PKG-046 F9-B09 fix — ServiceProvider separado para managed routes.
+ *
+ * **Bug pineado** (FEEDBACK9, RETO corrida 9):
+ * Pre-fix, cuando el consumer scaffoldeaba `--managed-by=Admin`, el SP base
+ * (`{{ModuleName}}ServiceProvider`) hacía DOS `loadRoutesFrom` consecutivos
+ * (`api.php` + `managed.php`). Laravel acumula middlewares globales del
+ * Router entre invocaciones de `loadRoutesFrom`. Resultado: las rutas managed
+ * (`POST /api/admin/members` con `mk.auth:admin`) heredaban middlewares de
+ * las rutas self-service (`mk.auth:member`), y un admin token intentando
+ * crear member fallaba con `ERR_SCOPE_MISMATCH` antes de que `mk.auth:admin`
+ * siquiera corriera.
+ *
+ * **Fix**: separar en DOS ServiceProviders:
+ *   - `{{ModuleName}}ServiceProvider` → solo carga `api.php` (rutas self-service).
+ *   - `{{ModuleName}}ManagedRoutesServiceProvider` → solo carga `managed.php`
+ *     (rutas managed-by manager). Se auto-registra DESPUÉS del SP base en
+ *     `bootstrap/providers.php` (orden importa: Laravel procesa SPs en orden
+ *     de declaración).
+ *
+ * Cada SP arranca con el accumulator de middlewares limpio → no hay leak.
+ *
+ * Defense-in-depth trade-off: defense-in-depth PER-ROUTE (rutas pinean su
+ * propio middleware `mk.auth:{scope}` + `mk.ability:...`) sigue siendo el
+ * primary defense. El SP separado es secundario — resuelve el leak entre
+ * loadRoutesFrom consecutivos sin sacrificar la isolación per-route.
+ */
+class {{ModuleName}}ManagedRoutesServiceProvider extends ServiceProvider
+{
+    public function register(): void
+    {
+        //
+    }
+
+    public function boot(): void
+    {
+        // Solo carga managed.php. api.php es responsabilidad del SP base.
+        $this->loadRoutesFrom(__DIR__ . '/../Http/Routes/managed.php');
+    }
+}

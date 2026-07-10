@@ -50,9 +50,51 @@ class MkAuthenticate
     public function handle(Request $request, Closure $next, string $scope = 'admin'): Response
     {
         // Resolve the current user via Sanctum.
-        // If no token, abort 401.
+        //
+        // R-PKG-046 F9-B11 fix — Cross-scope attack detection:
+        //
+        // Pre-fix, el path era:
+        //   1. `$user = Auth::guard($scope)->user();` → null si el token
+        //      pertenece a OTRO scope (e.g. admin token atacando `/api/member/*`).
+        //   2. `return $this->unauthorizedResponse(...)` → `ERR_UNAUTHENTICATED`.
+        //
+        // El problema: el cliente no podía distinguir "no estoy autenticado"
+        // de "estoy autenticado con el scope equivocado". El spec de FEEDBACK7
+        // y `docs/AUTH.md` promete `ERR_SCOPE_MISMATCH` cuando el token pertenece
+        // a otro scope. La razón del bug es que `Auth::guard('member')->user()`
+        // retornaba null (el admin user no existe en la tabla `members`), entonces
+        // el middleware rechazaba con `ERR_UNAUTHENTICATED` ANTES de validar el
+        // scope del token.
+        //
+        // Post-fix: si `Auth::guard($scope)->user()` retorna null, intentar
+        // con `Auth::guard()` (default guard, scope-agnostic). Si el default
+        // retorna un user, comparar su `auth_scope` con el scope pedido:
+        //   - match → `ERR_SCOPE_MISMATCH` con `actual_scope`.
+        //   - mismatch (otro scope) → `ERR_SCOPE_MISMATCH` con `actual_scope`.
+        // Si el default también retorna null → `ERR_UNAUTHENTICATED` (BC:
+        // genuinamente no autenticado).
         $user = Auth::guard($scope)->user();
+
         if ($user === null) {
+            // Defense-in-depth: re-intentar con el guard default scope-agnostic
+            // para detectar tokens de OTRO scope antes de descartar como
+            // "unauthenticated".
+            $defaultUser = Auth::guard()->user();
+            if ($defaultUser !== null && method_exists($defaultUser, 'getAuthScope')) {
+                $actualScope = $defaultUser->getAuthScope();
+
+                // El user existe pero pertenece a OTRO scope → scope mismatch
+                // attack (e.g. admin token atacando `/api/member/*`).
+                return $this->unauthorizedResponse(
+                    $request,
+                    $scope,
+                    message: "Token belongs to scope `{$actualScope}`, but this route requires `{$scope}`.",
+                    code: 'ERR_SCOPE_MISMATCH',
+                    extraData: ['actual_scope' => $actualScope],
+                );
+            }
+
+            // Genuinamente no autenticado (token inválido o no presente).
             return $this->unauthorizedResponse($request, $scope);
         }
 

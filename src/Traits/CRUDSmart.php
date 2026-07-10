@@ -400,11 +400,28 @@ trait CRUDSmart
 
     /**
      * POST /resource - Crear
+     *
+     * R-PKG-046 F9-B08: si `$mkConfig['store_request']` está pineado (típicamente
+     * por el scaffolder `mk:make:auth-user X --with-crud`), el FormRequest se
+     * resuelve, valida y reemplaza `$request` ANTES de `$request->all()`. Esto
+     * cierra el bug donde el scaffolder pineaba `store_request` en `$mkConfig`
+     * pero `CRUDSmart::store()` hacía `$request->all()` directo sin validar —
+     * la validación scaffoldeada era dead code. Post-fix, una validación fallida
+     * produce 422 (ValidationException canónica) en lugar de 500 (SQL constraint
+     * violation).
      */
     public function store(Request $request)
     {
         $modelClass = $this->getModel();
         $service = $this->getService();
+
+        // R-PKG-046 F9-B08 — Resolver FormRequest si está configurado.
+        $request = $this->resolveFormRequest(
+            configKey: 'store_request',
+            request: $request,
+            routeParamName: null,
+            routeParamValue: null,
+        );
 
         // Apply service hook beforeCreate
         $input = $request->all();
@@ -548,11 +565,29 @@ trait CRUDSmart
      * `$modelClass::findOrFail($id)` static call bypassed every
      * `beforeQuery` hook, letting any authenticated tenant write
      * another tenant's row.
+     *
+     * R-PKG-046 F9-B08: si `$mkConfig['update_request']` está pineado,
+     * el FormRequest se resuelve, valida y reemplaza `$request` ANTES de
+     * `$request->all()`. Cierra el mismo bug que `store()` — la validación
+     * scaffoldeada era dead code. Para `update`, también se pinea el route
+     * resolver con `{resource} = $id` para que `Rule::unique(...)->ignore($this->route('admin'))`
+     * funcione correctamente.
      */
     public function update(Request $request, string|int $id)
     {
         $modelClass = $this->getModel();
         $service = $this->getService();
+
+        // R-PKG-046 F9-B08 — Resolver FormRequest si está configurado.
+        // Para update, pineamos route resolver con {resource} = $id para que
+        // `Rule::unique('admins', 'email')->ignore($this->route('admin'))`
+        // funcione correctamente (ignorar el row actual al validar unique).
+        $request = $this->resolveFormRequest(
+            configKey: 'update_request',
+            request: $request,
+            routeParamName: $this->getResourceRouteParam(),
+            routeParamValue: (string) $id,
+        );
 
         // Build query + eager loading (mirrors show() so any beforeQuery
         // plugin sees the same builder shape).
@@ -734,5 +769,108 @@ trait CRUDSmart
         // (HALLAZGO-NEW-FASE15-07). This is the path RETO and all v2.0.0+ consumers
         // should rely on.
         return parent::autoTransform($data);
+    }
+
+    /**
+     * R-PKG-046 F9-B08 — Resolver y validar FormRequest si está pineado en `$mkConfig`.
+     *
+     * Pre-fix, el scaffolder pineaba `'store_request' => StoreXRequest::class` en
+     * `$mkConfig` pero `CRUDSmart::store()` hacía `$request->all()` directo sin
+     * validar. La validación scaffoldeada era dead code — un POST sin email
+     * producía `Integrity constraint violation: NOT NULL constraint failed`
+     * (500 SQL) en vez de `ValidationException` (422 con errores estructurados).
+     *
+     * Post-fix, este helper:
+     *   1. Lee `$mkConfig[$configKey]` (e.g. `store_request`, `update_request`).
+     *   2. Si no está pineado o está vacío → retorna `$request` sin tocar (BC).
+     *   3. Si está pineado:
+     *      a. Resuelve via `app($formRequestClass)` (DI completa).
+     *      b. `setContainer(app())` + `setRedirector(app('redirect'))` para que
+     *         `validateResolved()` route correctamente las failures.
+     *      c. Si `$routeParamName !== null` (caso update) → setRouteResolver
+     *         con un Route pineado que devuelve el `$id` para `{resource}`.
+     *         Esto permite que `Rule::unique('admins', 'email')->ignore($this->route('admin'))`
+     *         funcione.
+     *      d. `validateResolved()` corre las `rules()` del FormRequest. Si falla,
+     *         `ValidationException` se lanza → 422 canónico.
+     *      e. Retorna el FormRequest validado (que ahora tiene `$request->validated()`
+     *         y `$request->all()` filtrados por las reglas).
+     *
+     * @param  string  $configKey  'store_request' o 'update_request'
+     * @param  Request  $request  El request original
+     * @param  string|null  $routeParamName  Nombre del route param (e.g. 'admin', 'member'). Null para store.
+     * @param  string|null  $routeParamValue  Valor del route param (el $id). Null para store.
+     * @return Request  El FormRequest validado (mismo tipo que el original).
+     *
+     * @throws \Illuminate\Validation\ValidationException  Si las rules() fallan.
+     */
+    protected function resolveFormRequest(
+        string $configKey,
+        Request $request,
+        ?string $routeParamName,
+        ?string $routeParamValue,
+    ): Request {
+        $formRequestClass = $this->mkConfig[$configKey] ?? null;
+
+        if (! is_string($formRequestClass) || $formRequestClass === '') {
+            return $request;
+        }
+
+        if (! class_exists($formRequestClass)) {
+            return $request;
+        }
+
+        /** @var \Illuminate\Foundation\Http\FormRequest $formRequest */
+        $formRequest = app($formRequestClass);
+
+        $formRequest->setContainer(app());
+        $formRequest->setRedirector(app('redirect'));
+
+        if ($routeParamName !== null && $routeParamValue !== null) {
+            // R-PKG-046 F9-B08 — Route resolver para FormRequest de update.
+            //
+            // FormRequest usa `$this->route('admin')` para reglas como
+            // `Rule::unique('admins', 'email')->ignore($this->route('admin'))`.
+            // Pineamos un Route mock que devuelve `$routeParamValue` para
+            // `$routeParamName`. Esto es suficiente para que `Rule::ignore`
+            // extraiga el ID correcto y excluya el row actual del unique check.
+            $formRequest->setRouteResolver(function () use ($routeParamName, $routeParamValue) {
+                $route = new \Illuminate\Routing\Route(
+                    ['PUT', 'PATCH'],
+                    '/api/{scope}/{resource}/'.$routeParamValue,
+                    [],
+                );
+                $route->setParameter($routeParamName, $routeParamValue);
+
+                return $route;
+            });
+        }
+
+        // validateResolved() corre las rules() del FormRequest. Si fallan,
+        // ValidationException se lanza → manejado por el framework → 422.
+        $formRequest->validateResolved();
+
+        // Post-validación, el FormRequest tiene `validated()` + `all()` filtrados.
+        // El controller sigue trabajando con `$request->all()` etc. — ahora filtrado.
+        return $formRequest;
+    }
+
+    /**
+     * R-PKG-046 F9-B08 — Helper: nombre del route param para el resource.
+     *
+     * Convention: el scaffolder pine el route como `/api/{scope}/{resources}/{resource}`
+     * (e.g. `/api/admin/admins/{admin}`). El nombre del param es el singular del
+     * resource name (e.g. `admin` para `Admin` scope, `member` para `Member` scope).
+     *
+     * Pineado en `$mkConfig['resource_route_param']` por el scaffolder (auto).
+     * Fallback: derivado de `$mkConfig['resource']` o `null` (en cuyo caso
+     * el route resolver no se pinea y FormRequest asume que no necesita `$this->route(...)`).
+     *
+     * Si el consumer pineó `update_request` con reglas que usan
+     * `$this->route('admin')`, DEBE pinear `resource_route_param` también.
+     */
+    protected function getResourceRouteParam(): ?string
+    {
+        return $this->mkConfig['resource_route_param'] ?? null;
     }
 }

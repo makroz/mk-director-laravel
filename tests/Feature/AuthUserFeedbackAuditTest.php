@@ -399,8 +399,12 @@ test('BUG-NEW-15: AuthCreateSuperAdminCommand autogenera name del email local-pa
     //   2. ask() prompt
     //   3. autogenerar del email local-part (split antes de @)
 
-    // El pattern crítico: explode '@' + ucfirst + strtolower.
-    expect($src)->toMatch("/explode\\(\\s*'@'\\s*,\\s*\\\$email\\s*,\\s*2\\s*\\)/");
+    // R-PKG-046 F9-B05: el split del email local-part ahora aplica solo
+    // cuando loginField='email' (no hardcoded). El patrón sigue ahí pero
+    // dentro del branch condicional.
+    expect($src)->toContain(
+        "explode('@', \$loginFieldValue, 2)",
+    );
 
     // El fallback debe setear un valor NO vacío cuando name es null.
     expect($src)->toContain('ucfirst(strtolower($localPart))');
