@@ -862,3 +862,27 @@ test('F10-B16: PluginManager::registerPlugins() skip non-string values (defense-
         '/function registerPlugins\([\s\S]*?foreach\s*\(\s*\$classes\s+as\s+\$class\s*\)\s*\{\s*if\s*\(\s*!\s*is_string\(\s*\$class\s*\)\s*\)\s*\{\s*continue\s*;/',
     );
 });
+// ── F10-B15 regression test (R-PKG-050) ───────────────────────────────────
+//
+// F10-B15 es un fix de DOC ONLY (R-G-032 sync). El bug (RefreshDatabase
+// trait + SQLite in-memory) está documentado en SKILL.md con el workaround
+// `DatabaseMigrations` trait. Pre-fix, los consumers encontraban el
+// gotcha silencioso en sus tests e2e.
+//
+// Test: verifica que el SKILL.md canónico tiene la sección del gotcha
+// con el workaround explícito. Si alguien borra la sección, este test
+// falla (regression guard contra la knowledge regresión).
+
+test('F10-B15: SKILL.md documenta gotcha de RefreshDatabase + SQLite in-memory', function () {
+    $skillPath = '/Users/marioguzman/Desktop/Makromania/.makromania/agency/skills/mk-director-laravel/SKILL.md';
+    $source = (string) file_get_contents($skillPath);
+
+    // Pin 1: la sección F10-B15 existe.
+    expect($source)->toContain('F10-B15');
+
+    // Pin 2: el workaround `DatabaseMigrations` está pineado.
+    expect($source)->toContain('DatabaseMigrations');
+
+    // Pin 3: el antipatrón `RefreshDatabase` está marcado como NO usar.
+    expect($source)->toContain('NO HACER ESTO');
+});
