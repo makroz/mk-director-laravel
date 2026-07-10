@@ -188,18 +188,18 @@ class MakeAuthUserCommand extends Command
         $withCrud = ! (bool) $this->option('no-crud');
         $withStatus = ! (bool) $this->option('no-status');
 
-        // R-PKG-047 D4 — ScopeStatus enum con 4 estados canónicos (int-backed).
-        // Pre-D4: configurable via --status-values= (CSV). Post-D4: 4 estados SSoT pineados
-        // por el scaffolder sin requerir flag. Los 4 valores cubren los casos comunes
-        // (login activo, baja, baneado, pendiente de verificación). Para estados custom,
-        // override post-scaffold la enum case-by-case.
+        // R-PKG-047 D4 — ScopeStatus enum con 4 estados canónicos (string-backed).
+        // Pre-D4: configurable via --status-values= (CSV int 1..N). Post-D4: 4 estados
+        // SSoT pineados por el scaffolder sin requerir flag. Los 4 valores cubren los
+        // casos comunes (login activo, baja, baneado, pendiente de verificación). Para
+        // estados custom, override post-scaffold el thin wrapper {Scope}Status.
         //
-        // Shape preservado por F2: `array<string, int>` (Case => valor 1..N) — el stub
-        // `auth-user/enum-status.stub` aún usa formato int-backed con --status-values
-        // pineado en línea. La transición a string-backed completo vive en F4 (D4
-        // migration helper ScopeStatus + DB enum column) per R-PKG-047 D4 scope.
+        // Shape post-D4: `string[]` simple (lista de nombres canónicos) — el stub
+        // `auth-user/enum-status.stub` pinea los cases directamente con `case Active = 'active'`,
+        // eliminando el templating de `{{statusCases}}`/`{{statusDefaultCase}}`/`{{statusLabelArms}}`.
+        // Helpers `buildStatusCases()` y `buildStatusLabelArms()` deprecated (sin callers — eliminados en este commit).
         $statusStates = $withStatus
-            ? ['Active' => 1, 'Inactive' => 2, 'Suspended' => 3, 'Pending' => 4]
+            ? ['Active', 'Inactive', 'Suspended', 'Pending']
             : [];
 
         // R-PKG-042 FASE18-05: opt-in endpoint para desglose de abilities.
@@ -639,8 +639,16 @@ PHP,
         // valor por defecto. El enum se genera aparte (ver abajo, tras los stubs base).
         $statusEnumFqcn = "\\App\\Modules\\{$scope}\\Enums\\{$scope}Status";
         $statusReplacements = [
+            // R-PKG-047 D4 — `enum` column string-backed con 4 valores canónicos.
+            // Pre-D4: `unsignedTinyInteger('status')` con valores 1..N. Post-D4:
+            // `enum('status', ['active','inactive','suspended','pending'])`
+            // compatible con `ScopeStatus` enum canónico del paquete.
+            // NOTA: la columna enum requiere MySQL/PostgreSQL/SQLite support;
+            // mysql antiguo (< 5.7) no soporta ENUM type — usar
+            // `mk:migrate-is-active` post-D4 si tu scope pre-D4 pineaba
+            // `is_active` boolean y quiere migrar el type.
             '{{statusColumn}}' => $withStatus
-                ? "\$table->unsignedTinyInteger('status')->default({$statusEnumFqcn}::default()->value)->index();\n            "
+                ? "\$table->enum('status', ['active','inactive','suspended','pending'])->default('active')->index();\n            "
                 : '',
             '{{statusFillableEntry}}' => $withStatus
                 ? "        'status',\n"
@@ -648,10 +656,17 @@ PHP,
             '{{statusCastEntry}}' => $withStatus
                 ? "        'status' => {$statusEnumFqcn}::class,\n"
                 : '',
-            // N8 — cuerpo del enum templatizado desde $statusStates (1..N).
-            '{{statusCases}}' => $withStatus ? $this->buildStatusCases($statusStates) : '',
-            '{{statusDefaultCase}}' => $withStatus ? array_key_first($statusStates) : 'Active',
-            '{{statusLabelArms}}' => $withStatus ? $this->buildStatusLabelArms($statusStates) : '',
+            // R-PKG-047 D4 — `use App\Modules\{Scope}\Enums\{Scope}Status;` pineado
+            // arriba del modelo para que el cast `protected $casts = [
+            // 'status' => {Scope}Status::class]` typehint resolva correctamente.
+            '{{statusUseImport}}' => $withStatus
+                ? "use App\\Modules\\{$scope}\\Enums\\{$scope}Status;\n"
+                : '',
+            // R-PKG-047 D4 — los placeholders `{{statusCases}}`, `{{statusDefaultCase}}`,
+            // `{{statusLabelArms}}` están ELIMINADOS del enum-status.stub porque los
+            // 4 casos canónicos se pinean directamente como literales `case Active = 'active'`.
+            // Los helpers `buildStatusCases()` y `buildStatusLabelArms()` están
+            // deprecated sin callers — eliminados en este commit.
         ];
 
         $extraReplacements = array_merge(
@@ -2876,20 +2891,13 @@ PHP,
      * @param  array<string, array{type: string, unique: bool}>  $profileFields  Resultado de `resolveProfileFields`.
      * @return array<string, bool>|null Mapa key => true (todos true por diseño), o null si inválido.
      */
-    /**
-     * N8 — genera las líneas `case Name = N;` del enum de status.
-     *
-     * @param  array<string, int>  $statusStates
-     */
-    protected function buildStatusCases(array $statusStates): string
-    {
-        $out = '';
-        foreach ($statusStates as $name => $value) {
-            $out .= "    case {$name} = {$value};\n";
-        }
 
-        return $out;
-    }
+    // NOTA: R-PKG-047 D4 ELIMINÓ los helpers `buildStatusCases()`, `buildStatusLabelArms()` y
+    // `statusLabelFor()` porque los 4 estados canónicos (Active/Inactive/Suspended/Pending) se
+    // pinean DIRECTAMENTE como literales en el stub `auth-user/enum-status.stub`. Los cases
+    // son string-backed con values hardcoded ('active','inactive',...). Si un consumer quiere
+    // estados custom, override post-scaffold el stub directamente.
+
 
     /**
      * N8 — genera los brazos del `match` de label() del enum de status.
@@ -2937,7 +2945,10 @@ PHP,
      * legacy (BC). Cuando está activo, threadea el status end-to-end para que la
      * feature funcione out-of-the-box (antes había que cablear 4 archivos a mano).
      *
-     * @param  array<string, int>  $statusStates
+     * R-PKG-047 D4: `string` values (no `int`) post-D4 — la columna enum string-backed
+     * pinea `default('active')` y los Resources exponen `status` como string.
+     *
+     * @param  string[]  $statusStates  Lista de nombres de estados canónicos (post-D4).
      * @return array<string, string>
      */
     protected function buildStatusCrudReplacements(bool $withStatus, array $statusStates, string $scope, string $scopeLower): array
@@ -2958,19 +2969,20 @@ PHP,
             ];
         }
 
-        // Resource: expone status (int) + status_label (string) — contrato con el front.
+        // Resource: expone status (string) + status_label (string) — contrato con el front.
+        // Post-D4: status es STRING (backed enum values), no int.
         $resourceEntry = "            'status' => \$this->status?->value,\n"
             ."            'status_label' => \$this->status?->label(),\n";
 
         // DTO: param + mapeos (el DTO es opt-in, pero debe ser consistente).
-        $dtoParam = "        public ?int \$status = null,\n";
-        $dtoFromRequest = "            status: \$request->input('status') !== null ? (int) \$request->input('status') : null,\n";
-        $dtoFromArray = "            status: isset(\$data['status']) ? (int) \$data['status'] : null,\n";
+        $dtoParam = "        public ?string \$status = null,\n";
+        $dtoFromRequest = "            status: \$request->input('status') !== null ? (string) \$request->input('status') : null,\n";
+        $dtoFromArray = "            status: isset(\$data['status']) ? (string) \$data['status'] : null,\n";
         $dtoToArray = "            'status' => \$this->status,\n";
 
         // Requests: valida contra el enum (Rule::enum). `sometimes`+`nullable`
         // porque la columna tiene default (no es obligatorio en create).
-        $ruleStore = "            'status' => ['sometimes', 'nullable', 'integer', \\Illuminate\\Validation\\Rule::enum({$enumFqcn}::class)],\n";
+        $ruleStore = "            'status' => ['sometimes', 'nullable', 'string', \\Illuminate\\Validation\\Rule::enum({$enumFqcn}::class)],\n";
         $ruleUpdate = $ruleStore;
 
         // Factory: default al primer estado; states por cada estado no-default.
@@ -2993,14 +3005,16 @@ PHP,
      * N10 — genera un factory state method por cada estado NO-default (el
      * primero es el default de definition()). Ej: `suspended()` → status Suspended.
      *
-     * @param  array<string, int>  $statusStates
+     * R-PKG-047 D4: status es STRING (backed enum value), no int.
+     *
+     * @param  string[]  $statusStates  Lista de nombres de estados canónicos.
      */
     protected function buildStatusFactoryStateMethods(array $statusStates, string $scope, string $scopeLower): string
     {
         $enumFqcn = "\\App\\Modules\\{$scope}\\Enums\\{$scope}Status";
         $out = '';
         $first = true;
-        foreach ($statusStates as $name => $value) {
+        foreach ($statusStates as $name) {
             if ($first) {
                 $first = false; // el primer estado es el default de definition().
 
