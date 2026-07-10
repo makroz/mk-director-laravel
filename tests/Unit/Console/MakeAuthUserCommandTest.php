@@ -313,3 +313,56 @@ test('R-PKG-018 BUG-NEW-27: auth-controller stub refresh() sends 401 status', fu
     // Ambos catches (específico y genérico) deben retornar 401.
     expect($source)->toMatch('/sendError\s*\([^,]+,\s*\[\s*\]\s*,\s*401\s*\)/');
 });
+
+// ── F10-B03 regression tests (R-PKG-050) ─────────────────────────────────
+//
+// Bug: la fase base del scaffolder pineaba Http/Requests/LoginRequest.php
+// y Http/Requests/MeRequest.php sin crear la carpeta `Http/Requests/`
+// (el array $directories solo tenía 5 entradas: Models, Http/Controllers,
+// Http/Routes, Database/Migrations, Providers). File::put reventaba con
+// "Failed to open stream: No such file or directory" y el scaffolder
+// abortaba a mitad de camino (7-8 archivos pineados de los 30+ prometidos).
+//
+// Fix: (1) agregar 'Http/Requests' al array $directories, y (2) defense-in-
+// depth en generateStub() con File::ensureDirectoryExists(dirname($targetPath))
+// antes de File::put.
+
+test('F10-B03: $directories array en fase base incluye Http/Requests (regression guard)', function () {
+    $source = commandSource();
+
+    // El array $directories de fase base debe incluir 'Http/Requests'
+    // para que la creación de carpetas sea completa y consistente con el
+    // output "📁 Creando estructura de directorios:".
+    expect($source)->toMatch(
+        '/\$directories\s*=\s*\[[^\]]*\'Http\/Requests\'[^\]]*\]/s',
+    );
+});
+
+test('F10-B03: generateStub() llama File::ensureDirectoryExists ANTES de File::put (defense-in-depth)', function () {
+    $source = commandSource();
+
+    // El helper generateStub() debe asegurar que el directorio destino
+    // existe antes de pinear el archivo. Esto cubre:
+    //   - Stubs nuevos pineados sin actualizar $directories
+    //   - Fases donde se pinea un stub en una carpeta no pre-creada
+    //   - Tests de sandbox que llaman generateStub() directamente
+    expect($source)->toContain('File::ensureDirectoryExists(dirname($targetPath))');
+
+    // Verificar el ORDEN: ensureDirectoryExists debe estar ANTES de File::put
+    // en la función generateStub(). Si alguien los invierte, el bug regresa.
+    $ensurePos = strpos($source, 'File::ensureDirectoryExists(dirname($targetPath))');
+    $putPos = strpos($source, 'File::put($targetPath, $content)');
+    expect($ensurePos)->toBeGreaterThan(0)
+        ->and($putPos)->toBeGreaterThan(0)
+        ->and($ensurePos)->toBeLessThan($putPos);
+});
+
+test('F10-B03: fase base pinea Http/Requests/LoginRequest.php y Http/Requests/MeRequest.php (no se pierde)', function () {
+    $source = commandSource();
+
+    // Sanity check: la fase base debe seguir pineando LoginRequest y MeRequest
+    // en Http/Requests/. Si alguien refactorea y mueve estos stubs, debe
+    // actualizar este test (no el array $directories).
+    expect($source)->toContain("'auth-user.login-request.stub', 'Http/Requests', 'LoginRequest.php'");
+    expect($source)->toContain("'auth-user.me-request.stub', 'Http/Requests', 'MeRequest.php'");
+});

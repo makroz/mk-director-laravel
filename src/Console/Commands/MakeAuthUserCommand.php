@@ -713,6 +713,13 @@ PHP,
         $directories = [
             'Models',
             'Http/Controllers',
+            // F10-B03 (R-PKG-050): 'Http/Requests' faltaba del array. Sin esta
+            // entrada, el scaffolder pineaba Http/Requests/LoginRequest.php y
+            // Http/Requests/MeRequest.php sin crear la carpeta → File::put
+            // reventaba. (El defense-in-depth de generateStub() ahora también
+            // lo cubre, pero lo dejamos acá para que el output de
+            // "📁 Creando estructura de directorios" sea completo).
+            'Http/Requests',
             'Http/Routes',
             'Database/Migrations',
             'Providers',
@@ -2590,6 +2597,15 @@ PHP;
         }
 
         $targetPath = app_path("Modules/{$scope}/{$folder}/{$fileName}");
+        // F10-B03 (R-PKG-050): defense-in-depth. Aunque el scaffolder pre-crea
+        // las carpetas mas usadas en el array $directories (fase base, linea
+        // ~713) y en $crudDirs (generateCrudPack, linea ~1460), asegurar el
+        // directorio lazily evita que un stub nuevo pinee en una carpeta no
+        // creada. Antes de este fix, fase base pineaba Http/Requests/LoginRequest.php
+        // y Http/Requests/MeRequest.php sin crear la carpeta, lo que reventaba
+        // con 'Failed to open stream: No such file or directory' y abortaba
+        // el scaffolder a mitad de camino (7-8 archivos en vez de 30+).
+        File::ensureDirectoryExists(dirname($targetPath));
         File::put($targetPath, $content);
 
         $displayName = ! empty($folder) ? "{$folder}/{$fileName}" : $fileName;
