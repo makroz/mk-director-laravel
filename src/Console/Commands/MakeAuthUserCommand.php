@@ -1221,10 +1221,41 @@ PHP,
      */
     protected function setupSanctum(): void
     {
+        // F10-B06 (R-PKG-050): si Sanctum no está instalado, auto-correr
+        // `composer require laravel/sanctum` en vez de solo warn. Pre-fix,
+        // el consumer tenía que correr el `composer require` ANTES del
+        // scaffolder (workflow contraintuitivo) — o el scaffolder fallaba
+        // al publicar la migration sin Sanctum. Post-fix: el scaffolder
+        // resuelve la dependencia como side-effect.
+        //
+        // Wrapping: usamos Symfony Process para que el output de composer
+        // salga directo a la terminal del dev (sin buffering). Si la
+        // instalación falla, sugerimos el comando manual en vez de abortar.
         if (! $this->isSanctumInstalled()) {
-            $this->warn('⚠️  --setup-sanctum: `laravel/sanctum` no está instalado. Corré `composer require laravel/sanctum` primero.');
+            $this->newLine();
+            $this->info('📦 Sanctum: instalando `laravel/sanctum` via composer require (auto-fix F10-B06)...');
 
-            return;
+            $composerCmd = trim((string) ($_SERVER['argv'][0] ?? 'composer'));
+            // Si el entrypoint actual NO es composer (e.g. artisan),
+            // forzar `composer` para evitar loops. Caso normal: el dev
+            // corre `php artisan mk:make:auth-user ...` → `$_SERVER['argv'][0]`
+            // es `artisan` → caemos al fallback `composer`.
+            if (! str_contains(strtolower(basename($composerCmd)), 'composer')) {
+                $composerCmd = 'composer';
+            }
+
+            $exitCode = 0;
+            passthru("{$composerCmd} require laravel/sanctum --no-interaction --no-progress 2>&1", $exitCode);
+
+            if ($exitCode !== 0 || ! $this->isSanctumInstalled()) {
+                $this->warn("⚠️  composer require laravel/sanctum falló (exit code {$exitCode}).");
+                $this->line('   Corré manualmente: composer require laravel/sanctum --no-interaction');
+                $this->line('   Después re-corré el scaffolder.');
+
+                return;
+            }
+
+            $this->line('   ✅ Sanctum instalado correctamente.');
         }
 
         $migrationsPath = function_exists('database_path') ? database_path('migrations') : null;

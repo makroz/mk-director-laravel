@@ -794,3 +794,33 @@ test('F10-B11: discoverAbilitiesFromAttributesAndDocblocks() reemplaza {scope} p
         '/str_replace\([\'"]\{scope\}[\'"]\s*,\s*\$scope\s*,\s*\$instance->description\)/',
     );
 });
+// ── F10-B06 regression test (R-PKG-050) ───────────────────────────────────
+//
+// Bug: `--setup-sanctum` solo emitia un WARN si `laravel/sanctum` no
+// estaba instalado. El consumer tenía que correr `composer require`
+// ANTES del scaffolder (workflow contraintuitivo), o el scaffolder
+// fallaba al publicar la migration sin Sanctum.
+//
+// Fix: setupSanctum() auto-corre `composer require laravel/sanctum --no-interaction`
+// cuando Sanctum no está. Si la instalación falla, sugiera el comando
+// manual en vez de abortar.
+
+test('F10-B06: setupSanctum() auto-corre composer require si Sanctum no está instalado', function () {
+    $source = commandSource();
+
+    // Pin 1: setupSanctum() tiene un path de auto-install via composer require.
+    // Verificamos que la cadena 'composer require laravel/sanctum' aparece
+    // dentro del cuerpo de la función setupSanctum (no solo en otros lugares).
+    $setupSanctumStart = strpos($source, 'function setupSanctum()');
+    expect($setupSanctumStart)->toBeGreaterThan(0);
+
+    // Encontrar el cierre de la función (primer `}` al mismo nivel de indent).
+    // Simplificado: verificamos que 'composer require laravel/sanctum' aparece
+    // en los siguientes ~3000 chars (la función tiene ~80 líneas, < 3K chars).
+    $slice = substr($source, $setupSanctumStart, 5000);
+    expect($slice)->toContain('composer require laravel/sanctum');
+
+    // Pin 2: el comando usa --no-interaction y --no-progress (para no
+    // requerir input del dev y no contaminar output con progress bars).
+    expect($source)->toMatch('/composer\s+require\s+laravel\/sanctum[^\n]*--no-interaction/');
+});
