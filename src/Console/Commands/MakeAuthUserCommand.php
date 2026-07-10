@@ -1189,7 +1189,13 @@ PHP,
         if ($discover) {
             $this->newLine();
             $this->info('🔍 A9: descubriendo abilities (--discover)...');
-            $this->call('mk:discover-abilities', ['--module' => $scope, '--force' => true]);
+            // F10-B09 (R-PKG-050): pinear `[$scope]` (array de 1) en vez de `$scope`
+            // (string). Symfony auto-parsea CLI `--module=Admin` a array, pero
+            // cuando se llama programáticamente con `$this->call(...)`, envía
+            // el valor literal. Receiver `mk:discover-abilities` ahora tiene
+            // type-coercion defense-in-depth (F10-B08), pero pinear array
+            // desde el caller es la fix de raíz.
+            $this->call('mk:discover-abilities', ['--module' => [$scope], '--force' => true]);
         }
 
         if ($seed) {

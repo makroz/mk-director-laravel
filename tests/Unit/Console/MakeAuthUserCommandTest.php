@@ -723,3 +723,43 @@ test('F10-B14: handle() pinea managedByReplacements con FK + BelongsTo cuando $m
     expect($source)->toContain("'{{managedByColumn}}' =>");
     expect($source)->toContain("'{{managedByRelation}}' =>");
 });
+// ── F10-B08 + F10-B09 regression tests (R-PKG-050) ───────────────────────
+//
+// Bug B08: DiscoverAbilitiesCommand.php:74 pineaba
+// `array_intersect_key($allModules, array_flip($moduleArgs))` donde
+// `$moduleArgs` venía de `$this->option('module')`. Si se llamaba
+// programáticamente con `'--module' => $scope` (string, no array),
+// `array_flip('Admin')` reventaba con TypeError.
+//
+// Bug B09: caller-side en MakeAuthUserCommand pineaba
+// `'--module' => $scope` (string). El mismo bug desde la otra superficie.
+//
+// Fix combinado (defense-in-depth):
+// - B08: type-coerce `$moduleArgs` a array (receiver-side). Idempotente
+//   para callers que ya pasan array.
+// - B09: caller pine `[$scope]` (array de 1) en vez de `$scope` (string).
+
+test('F10-B08: DiscoverAbilitiesCommand type-coerce $moduleArgs a array (defense-in-depth)', function () {
+    $source = file_get_contents(packageRoot().'/src/Console/Commands/DiscoverAbilitiesCommand.php');
+
+    // Pin: el read del option está seguido de un type-coerce a array.
+    // El check: `if (! is_array($moduleArgs)) { ... }` debe existir
+    // inmediatamente después del read del option.
+    expect($source)->toMatch(
+        "/\\\$moduleArgs\\s*=\\s*\\\$this->option\\(['\"]module['\"]\\)\\s*;\\s*if\\s*\\(\\s*!\\s*is_array\\(\\s*\\\$moduleArgs\\s*\\)/",
+    );
+
+    // Pin: la rama del if pinea el array. Aceptamos cualquier shape
+    // (ternary simple o asignación directa).
+    expect($source)->toMatch(
+        '/if\s*\(\s*!\s*is_array\(\s*\$moduleArgs\s*\)\s*\)\s*\{[^}]*\$moduleArgs\s*=\s*[^;]*\[\s*\$moduleArgs\s*\][^;]*;/s',
+    );
+});
+
+test('F10-B09: MakeAuthUserCommand caller pine [$scope] (array) en vez de $scope (string)', function () {
+    $source = commandSource();
+
+    // El caller en runPostScaffoldSteps (línea ~1192) debe pinear
+    // `'--module' => [$scope]` (array de 1) en vez de `$scope` (string).
+    expect($source)->toContain("'--module' => [\$scope]");
+});

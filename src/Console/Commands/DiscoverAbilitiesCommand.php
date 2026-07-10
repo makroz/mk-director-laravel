@@ -66,7 +66,21 @@ class DiscoverAbilitiesCommand extends Command
             return self::FAILURE;
         }
 
+        // F10-B08 (R-PKG-050): type-coerce el option `module` a array.
+        // Symfony auto-parsea `--module=Admin` (CLI) a `['Admin']` (array de 1),
+        // pero cuando se llama programáticamente con
+        // `$this->call('mk:discover-abilities', ['--module' => $scope])`,
+        // Symfony envía string. `array_flip('Admin')` revienta con
+        // `TypeError: array_flip(): Argument #1 must be of type array, string given`.
+        //
+        // Pre-fix, el scaffolder (MakeAuthUserCommand:1192) pineaba
+        // `'--module' => $scope` (string) y el receiver reventaba al primer
+        // `--discover`. Post-fix: normalizamos a array (defense-in-depth,
+        // idempotente para callers que ya pasan array).
         $moduleArgs = $this->option('module');
+        if (! is_array($moduleArgs)) {
+            $moduleArgs = $moduleArgs === null ? [] : [$moduleArgs];
+        }
         $allModules = $this->discoverModules($modulesPath);
 
         $modules = empty($moduleArgs)
