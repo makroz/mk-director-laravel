@@ -55,7 +55,7 @@ test('DiscoverAbilitiesCommand implements hybrid source-of-truth (D1)', function
     expect($src)->toContain("'source' => 'fallback'");
     expect($src)->toMatch('/\$discovery\s*=\s*\$this->discoverAbilitiesFromProvider/');
     expect($src)->toMatch("/\\\$discovery\\['source'\\]\\s*===\\s*'provider'/");
-    expect($src)->toMatch('/discoverAbilitiesFromAttributesAndDocblocks\(\$moduleInfo\)/');
+    expect($src)->toMatch('/discoverAbilitiesFromAttributesAndDocblocks\(\$moduleInfo\s*,\s*\$scope\)/');
 });
 
 test('DiscoverAbilitiesCommand implements interactive prompt with --force/--dry-run skip (D3)', function () {

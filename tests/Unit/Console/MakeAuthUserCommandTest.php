@@ -763,3 +763,34 @@ test('F10-B09: MakeAuthUserCommand caller pine [$scope] (array) en vez de $scope
     // `'--module' => [$scope]` (array de 1) en vez de `$scope` (string).
     expect($source)->toContain("'--module' => [\$scope]");
 });
+// ── F10-B11 regression test (R-PKG-050) ───────────────────────────────────
+//
+// Bug: `discoverAbilitiesFromAttributesAndDocblocks()` leía
+// `#[Ability('{scope}.auth.{action}')]` attributes y pineaba el LITERAL
+// `'{scope}.auth.login'` (string con corchetes) como nombre de ability en
+// la DB. Esto requería un workaround tinker post-scaffold para replace
+// `{scope}` con el scope real.
+//
+// Fix: el helper ahora acepta `$scope` y hace `str_replace('{scope}', $scope, ...)`
+// en el nombre y la description antes de pinear. El caller `processModule()`
+// pasa `$scope = Str::snake(Str::plural($moduleName))` (e.g. `admins` para
+// `Admin` module — matchea el `mk.ability:{scope}.{resource}.{action}`
+// route middleware).
+
+test('F10-B11: discoverAbilitiesFromAttributesAndDocblocks() reemplaza {scope} placeholder con scope real', function () {
+    $source = file_get_contents(packageRoot().'/src/Console/Commands/DiscoverAbilitiesCommand.php');
+
+    // Pin 1: el helper acepta \$scope como parámetro.
+    expect($source)->toMatch(
+        '/function discoverAbilitiesFromAttributesAndDocblocks\([\s\S]*?array\s+\$moduleInfo\s*,\s*string\s+\$scope\s*=/',
+    );
+
+    // Pin 2: dentro del loop de attributes, el name/description se pinea
+    // con str_replace('{scope}', \$scope, ...) en lugar del raw.
+    expect($source)->toMatch(
+        '/str_replace\([\'"]\{scope\}[\'"]\s*,\s*\$scope\s*,\s*\$instance->name\)/',
+    );
+    expect($source)->toMatch(
+        '/str_replace\([\'"]\{scope\}[\'"]\s*,\s*\$scope\s*,\s*\$instance->description\)/',
+    );
+});

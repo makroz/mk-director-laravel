@@ -155,7 +155,14 @@ class DiscoverAbilitiesCommand extends Command
             $abilities = $discovery['abilities'];
         } else {
             // Fallback: atributos PHP + docblock combinados.
-            $abilities = $this->discoverAbilitiesFromAttributesAndDocblocks($moduleInfo);
+            // F10-B11 (R-PKG-050): pasar `$scope` para que el helper reemplace
+            // el placeholder `{scope}` literal en `#[Ability('{scope}.auth.{action}')]`
+            // attributes (pineados en BaseAuthController y demás clases del paquete)
+            // con el scope real (`admin`, `member`, etc.) antes de pinear en la
+            // DB. Pre-fix, el scaffolder pineaba `'{scope}.auth.login'` literal
+            // (string con corchetes) como nombre de ability, requiriendo un
+            // workaround tinker post-scaffold para replace.
+            $abilities = $this->discoverAbilitiesFromAttributesAndDocblocks($moduleInfo, $scope);
 
             // R-PKG-015 OBS-NEW-01: además leer `$mkConfig` de los SmartController
             // del módulo y generar abilities CRUD estándar del estilo
@@ -261,10 +268,19 @@ class DiscoverAbilitiesCommand extends Command
      *
      * Atributos son primary; docblocks son secundarios dentro del fallback.
      *
+     * F10-B11 (R-PKG-050): el parámetro `$scope` se usa para reemplazar el
+     * placeholder `{scope}` en los `#[Ability('{scope}.auth.{action}')]`
+     * attributes (pineados en BaseAuthController del paquete). Pre-fix, el
+     * command leía el attribute literal y pineaba `'{scope}.auth.login'`
+     * (string con corchetes) en la DB. Post-fix: str_replace('{scope}',
+     * $scope, $attr->name) para que el nombre final sea `admin.auth.login`
+     * (o `member.auth.login`, etc.) — matchea el `mk.ability:{scope}.auth.*`
+     * route middleware pineado por el scaffolder.
+     *
      * @param  array{path: string, classes: array<int, string>}  $moduleInfo
      * @return array<int, array{name: string, description: ?string}>
      */
-    private function discoverAbilitiesFromAttributesAndDocblocks(array $moduleInfo): array
+    private function discoverAbilitiesFromAttributesAndDocblocks(array $moduleInfo, string $scope = ''): array
     {
         $abilities = [];
 
@@ -281,9 +297,14 @@ class DiscoverAbilitiesCommand extends Command
                 foreach ($method->getAttributes(Ability::class) as $attr) {
                     try {
                         $instance = $attr->newInstance();
+                        // F10-B11: reemplazar `{scope}` con el scope real.
+                        $name = $scope !== '' ? str_replace('{scope}', $scope, $instance->name) : $instance->name;
+                        $description = $scope !== '' && $instance->description !== null
+                            ? str_replace('{scope}', $scope, $instance->description)
+                            : $instance->description;
                         $abilities[] = [
-                            'name' => $instance->name,
-                            'description' => $instance->description,
+                            'name' => $name,
+                            'description' => $description,
                         ];
                     } catch (Throwable) {
                         continue;
@@ -293,9 +314,12 @@ class DiscoverAbilitiesCommand extends Command
                 // 2. Docblock @mk-ability (secondary within fallback).
                 $doc = $method->getDocComment();
                 if ($doc !== false && preg_match('/@mk-ability\s+([a-z0-9._*-]+)(?:\s+(.+))?/i', $doc, $m)) {
+                    // F10-B11: idem reemplazo en docblock @mk-ability.
+                    $name = $scope !== '' ? str_replace('{scope}', $scope, $m[1]) : $m[1];
+                    $description = $scope !== '' && isset($m[2]) ? str_replace('{scope}', $scope, $m[2]) : ($m[2] ?? null);
                     $abilities[] = [
-                        'name' => $m[1],
-                        'description' => $m[2] ?? null,
+                        'name' => $name,
+                        'description' => $description,
                     ];
                 }
             }
