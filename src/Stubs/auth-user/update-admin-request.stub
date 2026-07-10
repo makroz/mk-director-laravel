@@ -13,7 +13,9 @@ use Illuminate\Validation\Rule;
  * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
  *
  * Todos los campos son `sometimes` — solo se actualiza lo que viene.
- * `email` y profile fields con `unique` validan IGNORANDO el row actual.
+ * `{{loginField}}` y profile fields con `unique` validan IGNORANDO el row actual.
+ *
+ * R-PKG-047 D5 — `{{loginField}}` pineado dinámicamente desde `--login-field=<campo>`.
  */
 class Update{{ModuleName}}Request extends FormRequest
 {
@@ -31,7 +33,7 @@ class Update{{ModuleName}}Request extends FormRequest
 
         return [
             'name' => ['sometimes', 'required', 'string', 'max:255'],
-            'email' => ['sometimes', 'required', 'email', 'max:255', Rule::unique('{{moduleNamePluralLower}}', 'email')->ignore($id)],
+            '{{loginField}}' => ['sometimes', 'required', {{loginFieldValidationRuleUpdate}}, Rule::unique('{{moduleNamePluralLower}}', '{{loginField}}')->ignore($id)],
             'password' => ['sometimes', 'nullable', 'string', 'min:8', 'max:255'],
             'photo' => ['sometimes', 'nullable', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
 {{profileFieldsUniqueRulesUpdate}}{{statusRequestRuleUpdate}}        ];

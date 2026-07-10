@@ -361,8 +361,20 @@ class MakeAuthUserCommand extends Command
                 ? "use Illuminate\\Contracts\\Auth\\MustVerifyEmail;\n"
                 : '',
             '{{loginFieldValidationRule}}' => $isEmail
-                ? "['required', 'email']"
-                : "['required', 'string']",
+                ? "['required', 'email', 'max:255']"
+                : "['required', 'string', 'max:255']",
+            // R-PKG-047 D5 — loginFieldValidationRuleStore con `unique` scope.
+            // Para POST /api/{scope}/{loginField} (crear user via AdminController).
+            // El `unique:{scopePlural},{loginField}` rule pinea que el consumer NO
+            // pueda pinear dos users con el mismo loginField.
+            '{{loginFieldValidationRuleStore}}' => $loginField === 'email'
+                ? "['required', 'email', 'max:255', 'unique:{$scopePlural},{$loginField}']"
+                : "['required', 'string', 'max:255', 'unique:{$scopePlural},{$loginField}']",
+            // Para PATCH /api/{scope}/{loginField} (update user). El `Rule::unique(...)->ignore($id)`
+            // pinea el mismo string, separado porque se compone inline con el `sometimes`+.
+            '{{loginFieldValidationRuleUpdate}}' => $loginField === 'email'
+                ? "'email', 'max:255'"
+                : "'string', 'max:255'",
             // R-PKG-014 BUG-05: login() response incluye profile fields + roles + abilities.
             // Construido dinámicamente según si hay o no --profile-fields.
             // R-PKG-015 BUG-NEW-01+02: pasar $loginField resuelto (no el placeholder
@@ -719,6 +731,25 @@ PHP,
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.auth-controller.stub', 'Http/Controllers', 'AuthController.php', $extraReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.routes.stub', 'Http/Routes', 'api.php', $extraReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.service-provider.stub', 'Providers', "{$scope}ServiceProvider.php");
+
+        // R-PKG-047 D5 — FormRequests pineados por el scaffolder:
+        //
+        // - LoginRequest: validación de `loginField + password` para POST /auth/login.
+        //   El BaseAuthController absorbe la lógica real (beforeLogin hook), pero
+        //   pineamos el FormRequest para consumers que necesitan override de
+        //   validation rules (e.g. regex CI Bolivia custom).
+        // - MeRequest: stub vacío que sirve como placeholder de expansión para
+        //   query params custom (e.g. `?expand=permissions`). Default rules=[].
+        //
+        // Estos FormRequests pinean el campo `{{loginField}}` dinámicamente via
+        // placeholder `{{loginFieldValidationRule}}` (pinea `['required','email','max:255']`
+        // o `['required','string','max:255']` según loginField).
+        //
+        // Post-D5, los controllers per-scope (AuthController thin wrapper) usan
+        // type-hint `LoginRequest $request` en lugar de `Request $request` con
+        // validación inline (BC pre-D5).
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.login-request.stub', 'Http/Requests', 'LoginRequest.php', $extraReplacements);
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.me-request.stub', 'Http/Requests', 'MeRequest.php', $extraReplacements);
 
         // A8 — enum {Scope}Status (int-backed). Ortogonal a --with-crud: si
         // --with-crud está activo el dir `Enums/` lo crea el pack CRUD, pero el

@@ -12,10 +12,13 @@ use Illuminate\Foundation\Http\FormRequest;
  * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
  *
  * Reglas:
- *   - `name`, `email`, `password` son required.
+ *   - `name`, `{{loginField}}`, `password` son required.
  *   - Profile fields (R-PKG-011) son nullable por default (BUG-03 fix v1.6.0-rc4).
  *   - Profile fields con prefijo `!` (R-PKG-014 BUG-09) llevan `unique`.
  *
+ * R-PKG-047 D5 — `{{loginField}}` pineado dinámicamente desde `--login-field=<campo>`.
+ * Si el loginField es 'email' (default), la rule es `['required','email','max:255',unique]`;
+ * para otros campos (`ci`, `phone`, etc.), la rule es `['required','string','max:255',unique]`.
  * Override este método `rules()` para custom validation (regex CI, etc.).
  */
 class Store{{ModuleName}}Request extends FormRequest
@@ -32,7 +35,7 @@ class Store{{ModuleName}}Request extends FormRequest
     {
         return [
             'name' => ['required', 'string', 'max:255'],
-            'email' => ['required', 'email', 'max:255', 'unique:{{moduleNamePluralLower}},email'],
+            '{{loginField}}' => {{loginFieldValidationRuleStore}},
             'password' => ['required', 'string', 'min:8', 'max:255'],
             'photo' => ['nullable', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
 {{profileFieldsUniqueRules}}{{statusRequestRuleStore}}        ];
