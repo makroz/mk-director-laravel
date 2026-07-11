@@ -1713,8 +1713,14 @@ PHP,
             //
             // Si no hay file fields, retorna `[]` (omitir el key `plugins` del mkConfig).
             // Si hay file fields, retorna el array PHP literal pineable directo en el stub.
+            //
+            // R-PKG-052: pasar $scopeLower para que el helper pine el path real
+            // (`'uploads/admin'`) en vez del placeholder literal `{scopeLower}`
+            // que el FileStoragePlugin no sabe interpretar (creaba un directorio
+            // con nombre literal `{scopeLower}` en storage).
             '{{pluginsConfig}}' => $this->buildPluginsConfigLiteral(
                 $this->detectFileFields($profileFields),
+                $scopeLower,
             ),
 
             // FEEDBACK10 (R-PKG-050, Mario 2026-07-10): pine dinámico de los
@@ -2075,7 +2081,7 @@ PHP,
      * @param  array<int, string>  $fileFieldNames
      * @return string PHP literal pineable en stub. `[]` si no hay fields.
      */
-    private function buildPluginsConfigLiteral(array $fileFieldNames): string
+    private function buildPluginsConfigLiteral(array $fileFieldNames, string $scopeLower = 'unknown'): string
     {
         if ($fileFieldNames === []) {
             return '[]';
@@ -2084,12 +2090,28 @@ PHP,
         $fieldsMap = $this->buildFileFieldsConfig($fileFieldNames);
         $fieldsPhp = $this->arrayLiteral($fieldsMap, 2);
 
+        // R-PKG-052 (FEEDBACK11) bug #16 — `path` se pineaba como string
+        // literal `'uploads/{scopeLower}'` con `{scopeLower}` hardcoded.
+        // PHP single-quoted strings NO interpolan `{scopeLower}` (no es
+        // `$scopeLower`), entonces el consumer recibía literalmente la
+        // string `uploads/{scopeLower}` en runtime. FileStoragePlugin
+        // llamaba `Storage::disk('public')->putFile('uploads/{scopeLower}', ...)`
+        // → creaba un directorio con nombre literal `{scopeLower}` en vez
+        // del scope name real (admin/member/etc.).
+        //
+        // Post-fix: construir el path string con interpolación PHP en
+        // DOBLE nivel — primero acá (scopeLower real del scaffolder) y
+        // después pineado en la HEREDOC como string LITERAL (sin
+        // variables). El consumer recibe `'path' => 'uploads/admin'`
+        // (o el scope que sea) en runtime.
+        $pathLiteral = "'path' => 'uploads/{$scopeLower}',";
+
         return <<<PHP
 [
             'file_storage' => [
                 'fields' => {$fieldsPhp},
                 'disk' => 'public',
-                'path' => 'uploads/{scopeLower}',
+                {$pathLiteral}
                 'auto_url' => true,
             ],
         ]
