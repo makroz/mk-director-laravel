@@ -1733,19 +1733,18 @@ PHP,
             //   el modelo se pinea con `$extraReplacements`, no con este array.
             //   Ver bloque `$fileFieldsBaseReplacements` arriba (línea ~770).
             // - `{{fileFieldsResourceEntry}}` (admin-resource)
-            // - `{{fileFieldsUploadPipeline}}` (admin-service: cuerpo de mutateData)
-            // - `{{fileFieldsDeleteOldPipeline}}` (admin-service: cuerpo de update)
             // - `{{fileFieldsValidationStore}}` / `{{fileFieldsValidationUpdate}}` (request stubs)
+            //
+            // R-PKG-052 T9 v2 (FEEDBACK11, Mario 2026-07-11): `{{fileFieldsUploadPipeline}}`
+            // y `{{fileFieldsDeleteOldPipeline}}` se ELIMINARON del scaffolder.
+            // El FileStoragePlugin se invoca automáticamente desde CRUDSmart
+            // vía PluginManager::fireBeforeSave() / fireAfterSave() — pinear
+            // un pipeline manual en el Service era duplicar lógica del plugin
+            // system ("por algo está el plugins", Mario).
             //
             // Si NO hay file fields, todos los helpers retornan string vacío
             // (los placeholders quedan como whitespace, PHP lo tolera sin error).
             '{{fileFieldsResourceEntry}}' => $this->buildFileFieldsResourceEntry(
-                $this->detectFileFields($profileFields),
-            ),
-            '{{fileFieldsUploadPipeline}}' => $this->buildFileFieldsUploadPipeline(
-                $this->detectFileFields($profileFields),
-            ),
-            '{{fileFieldsDeleteOldPipeline}}' => $this->buildFileFieldsDeleteOldPipeline(
                 $this->detectFileFields($profileFields),
             ),
             '{{fileFieldsValidationStore}}' => $this->buildFileFieldsValidationStore(
@@ -2352,101 +2351,26 @@ PHP;
     }
 
     /**
-     * FEEDBACK10 — emite el CUERPO del bloque `mutateData()` con upload pipeline.
+     * R-PKG-052 T9 v2 (FEEDBACK11, Mario 2026-07-11) — `buildFileFieldsUploadPipeline()`
+     * y `buildFileFieldsDeleteOldPipeline()` se ELIMINARON del scaffolder.
      *
-     * Solo se pine el cuerpo (no la signature — esa vive hardcoded en el stub).
-     * Formato pineado en el stub `admin-service.stub`:
+     * Estos helpers pineaban el body de `mutateData()` (upload) y el preámbulo
+     * de `update()` (delete-old) en el `admin-service.stub` — pero pinear un
+     * pipeline manual en el Service era **duplicar la lógica del FileStoragePlugin**
+     * (que ya se invoca automáticamente desde CRUDSmart vía PluginManager::fireBeforeSave
+     * y fireAfterSave).
      *
-     *     {{fileFieldsUploadPipeline}}  // pinea:
-     *         // FEEDBACK10: auto-upload pipeline para file fields declarados via
-     *         // --profile-fields (e.g. `avatar:file`).
-     *         foreach (['avatar'] as $fieldName) {
-     *             if (isset($data[$fieldName]) && $data[$fieldName] instanceof \Illuminate\Http\UploadedFile) {
-     *                 $path = $data[$fieldName]->store(
-     *                     '{{moduleNamePluralLower}}',
-     *                     config('mk_director.storage.disk', 'public'),
-     *                 );
-     *                 $data[$fieldName] = $path;
-     *             }
-     *         }
+     * Mario explícito: "el modulo deberia usar los create y update que tiene
+     * el crudsmart, y sus hoiks, asi tambien se dispara el managed pluguins
+     * y llama a los pluguins que se hayan configurado coo ek de subir los files,
+     * ese pluguins se encarga de proesar las imagenes adecuadamente, no e
+     * snecesario que se haga en el service ni en el controller, por algo esta
+     * el plugins".
      *
-     * Identity map: `$data[$fieldName]` no `$data[$fieldName . '_path']`.
-     *
-     * Si NO hay file fields, retorna string vacío (el stub queda como
-     * passthrough: solo `return $data;`).
-     *
-     * @param  array<int, string>  $fileFieldNames
-     * @return string PHP literal pineable en stub (cuerpo de mutateData).
+     * El Service scaffoldeado ahora implementa los hooks de MkModuleServiceInterface
+     * (beforeCreate/afterCreate/beforeUpdate/afterUpdate/etc.) con bodies
+     * passthrough. El consumer override con lógica específica del módulo.
      */
-    protected function buildFileFieldsUploadPipeline(array $fileFieldNames): string
-    {
-        if ($fileFieldNames === []) {
-            return '';
-        }
-
-        $fieldsList = "['".implode("', '", $fileFieldNames)."']";
-
-        return <<<PHP
-        // FEEDBACK10 (R-PKG-050): auto-upload pipeline para file fields declarados via
-        // --profile-fields (e.g. `avatar:file`). IDENTITY MAP — el column name ES el
-        // request field name (`avatar` no `avatar_path`). El path devuelto por
-        // `UploadedFile::store()` se escribe en \$data[\$fieldName].
-        foreach ({$fieldsList} as \$fieldName) {
-            if (isset(\$data[\$fieldName]) && \$data[\$fieldName] instanceof \\Illuminate\\Http\\UploadedFile) {
-                \$path = \$data[\$fieldName]->store(
-                    '{{moduleNamePluralLower}}',
-                    config('mk_director.storage.disk', 'public'),
-                );
-                \$data[\$fieldName] = \$path;
-            }
-        }
-
-PHP;
-    }
-
-    /**
-     * FEEDBACK10 — emite el CUERPO del inicio de `update()` con delete-old pipeline.
-     *
-     * Solo se pine el cuerpo (no la signature — esa vive hardcoded en el stub).
-     * Formato pineado en el stub `admin-service.stub`:
-     *
-     *     {{fileFieldsDeleteOldPipeline}}  // pinea:
-     *         // FEEDBACK10: si hay nuevo file, borrar el viejo antes de subir.
-     *         foreach (['avatar'] as $fieldName) {
-     *             if (isset($data[$fieldName]) && $data[$fieldName] instanceof \Illuminate\Http\UploadedFile) {
-     *                 if (! empty(${{moduleNameLower}}->$fieldName)) {
-     *                     Storage::disk(...)->delete(${{moduleNameLower}}->$fieldName);
-     *                 }
-     *             }
-     *         }
-     *
-     * Si NO hay file fields, retorna string vacío.
-     *
-     * @param  array<int, string>  $fileFieldNames
-     * @return string PHP literal pineable en stub (cuerpo del preámbulo de update()).
-     */
-    protected function buildFileFieldsDeleteOldPipeline(array $fileFieldNames): string
-    {
-        if ($fileFieldNames === []) {
-            return '';
-        }
-
-        $fieldsList = "['".implode("', '", $fileFieldNames)."']";
-
-        return <<<PHP
-        // FEEDBACK10 (R-PKG-050): si hay nuevo file, borrar el viejo antes de subir.
-        // Iteramos sobre los file fields declarados via --profile-fields.
-        foreach ({$fieldsList} as \$fieldName) {
-            if (isset(\$data[\$fieldName]) && \$data[\$fieldName] instanceof \\Illuminate\\Http\\UploadedFile) {
-                if (! empty(\${{moduleNameLower}}->{\$fieldName})) {
-                    \\Illuminate\\Support\\Facades\\Storage::disk(config('mk_director.storage.disk', 'public'))
-                        ->delete(\${{moduleNameLower}}->{\$fieldName});
-                }
-            }
-        }
-
-PHP;
-    }
 
     /**
      * FEEDBACK10 — emite validation rules para el Store Request de file fields.

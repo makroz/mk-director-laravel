@@ -917,64 +917,20 @@ test('FEEDBACK10: buildFileFieldsValidationUpdate() emite rules de upload con `s
     expect($out)->toContain("'avatar' => ['sometimes', 'nullable', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],");
 });
 
-test('FEEDBACK10: buildFileFieldsUploadPipeline() pinea heredoc sin escapar $data en comentarios (HALLAZGO-NEW-FASE10-01)', function () {
-    // El bug original (R-PKG-050 F10-B18): el helper tenía un comentario
-    // HEREDOC con `$data[$fieldName]` SIN escapar. PHP evaluaba `$data` al
-    // generar el string → "Undefined variable $data" si se invocaba el
-    // helper con file fields. Resultado: el scaffolder reventaba antes de
-    // emitir el admin-service.stub.
+test('R-PKG-052 T9 v2: buildFileFieldsUploadPipeline() / buildFileFieldsDeleteOldPipeline() fueron ELIMINADOS del scaffolder (pipeline de upload vive en FileStoragePlugin, no en el Service)', function () {
+    // Mario 2026-07-11 explícito: "el modulo deberia usar los create y update
+    // que tiene el crudsmart, y sus hoiks, asi tambien se dispara el managed
+    // pluguins y llama a los pluguins que se hayan configurado coo ek de
+    // subir los files, ese pluguins se encarga de proesar las imagenes
+    // adecuadamente, no e snecesario que se haga en el service ni en el
+    // controller, por algo esta el plugins".
     //
-    // Fix: escapar `\$data` en el comentario del HEREDOC.
-    // Pinear: (1) el helper NO revienta al invocarse, (2) el output contiene
-    // `$data[$fieldName]` literal (escapado correctamente), (3) el pipeline
-    // hace `->store()` con el disk configurable, (4) el path es el
-    // placeholder `{{moduleNamePluralLower}}` (resuelto por generateStub
-    // post-injection, NO hardcoded).
-    $out = feedback10Invoke('buildFileFieldsUploadPipeline', [['avatar']]);
+    // Defense-in-depth: los helpers NO existen en el scaffolder. Si alguien
+    // los revive, este test FALLA y avisa que la lógica se está duplicando.
+    $source = commandSource();
 
-    // foreach dinámico con el field name.
-    expect($out)->toContain("foreach (['avatar'] as \$fieldName) {");
-    // $data[$fieldName] presente (escapado) — pinea el fix.
-    expect($out)->toContain('isset($data[$fieldName])');
-    expect($out)->toContain('$data[$fieldName] instanceof \Illuminate\Http\UploadedFile');
-    expect($out)->toContain('$data[$fieldName]->store(');
-    expect($out)->toContain('$data[$fieldName] = $path;');
-    // Disk configurable via mk_director.storage.disk.
-    expect($out)->toContain("config('mk_director.storage.disk', 'public')");
-    // Path pineado como placeholder {{moduleNamePluralLower}} (NO hardcoded).
-    expect($out)->toContain("'{{moduleNamePluralLower}}'");
-    // Identity map: el path guardado ES $data[$fieldName] (no $data[$fieldName . '_path']).
-    expect($out)->not->toContain("._path']");
-});
-
-test('FEEDBACK10: buildFileFieldsUploadPipeline() retorna vacío si no hay file fields', function () {
-    $out = feedback10Invoke('buildFileFieldsUploadPipeline', [[]]);
-
-    expect($out)->toBe('');
-});
-
-test('FEEDBACK10: buildFileFieldsDeleteOldPipeline() pinea delete-old para files reemplazados', function () {
-    $out = feedback10Invoke('buildFileFieldsDeleteOldPipeline', [['avatar']]);
-
-    // foreach dinámico.
-    expect($out)->toContain("foreach (['avatar'] as \$fieldName) {");
-    // Detecta UploadedFile entrante.
-    expect($out)->toContain('isset($data[$fieldName])');
-    expect($out)->toContain('$data[$fieldName] instanceof \Illuminate\Http\UploadedFile');
-    // Storage::disk + ->delete sobre el modelo (placeholder, no hardcoded).
-    expect($out)->toContain('Storage::disk(');
-    expect($out)->toContain("config('mk_director.storage.disk', 'public')");
-    expect($out)->toContain('->delete(');
-    // El modelo es el placeholder {{moduleNameLower}}, no hardcoded 'admin'.
-    expect($out)->toContain('${{moduleNameLower}}->{$fieldName}');
-    // empty() check pineado.
-    expect($out)->toContain('! empty(');
-});
-
-test('FEEDBACK10: buildFileFieldsDeleteOldPipeline() retorna vacío si no hay file fields', function () {
-    $out = feedback10Invoke('buildFileFieldsDeleteOldPipeline', [[]]);
-
-    expect($out)->toBe('');
+    expect($source)->not->toContain('function buildFileFieldsUploadPipeline(');
+    expect($source)->not->toContain('function buildFileFieldsDeleteOldPipeline(');
 });
 
 test('FEEDBACK10: buildPluginsConfigLiteral() pine IDENTITY map en fields (no sufijo _path)', function () {
@@ -987,26 +943,37 @@ test('FEEDBACK10: buildPluginsConfigLiteral() pine IDENTITY map en fields (no su
     expect($out)->not->toContain("'photo' => 'photo_path'");
 });
 
-test('FEEDBACK10: crudReplacements pine los 5 file fields placeholders (R-PKG-051: 2 del modelo se pinean en $extraReplacements)', function () {
+test('FEEDBACK10: crudReplacements pine los 3 file fields placeholders (R-PKG-051: 2 del modelo se pinean en $extraReplacements; R-PKG-052 T9 v2: 2 de upload/delete-old se ELIMINARON del scaffolder)', function () {
     $source = commandSource();
 
     // R-PKG-051 hotfix: 2 de los 7 placeholders nuevos (`{{fileFieldsFillableEntries}}`
     // y `{{fileFieldsAccessors}}`) se pinean en `$extraReplacements` (fase base)
     // porque el stub del modelo los referencia, no en `$crudReplacements` (fase
-    // --with-crud). Los 5 restantes se quedan en `$crudReplacements` (stubs del
-    // CRUD pack: resource, service, requests).
+    // --with-crud). 3 se quedan en `$crudReplacements` (resource, requests).
+    //
+    // R-PKG-052 T9 v2 (Mario 2026-07-11): `{{fileFieldsUploadPipeline}}` y
+    // `{{fileFieldsDeleteOldPipeline}}` se ELIMINARON del scaffolder. El
+    // FileStoragePlugin se invoca automáticamente desde CRUDSmart vía
+    // PluginManager::fireBeforeSave() / fireAfterSave().
     //
     // Pre-R-PKG-051: los 7 vivían en `$crudReplacements` → modelo con
     // placeholders literales → `ParseError: syntax error, unexpected token "{"`
     // al primer `php artisan migrate` con scope scaffoldeado.
     foreach ([
         '{{fileFieldsResourceEntry}}',
-        '{{fileFieldsUploadPipeline}}',
-        '{{fileFieldsDeleteOldPipeline}}',
         '{{fileFieldsValidationStore}}',
         '{{fileFieldsValidationUpdate}}',
     ] as $placeholder) {
         expect($source)->toContain($placeholder);
+    }
+
+    // R-PKG-052 T9 v2: defense-in-depth — los placeholders de pipeline NO
+    // están pineados en ningún lado del scaffolder (helpers eliminados).
+    foreach ([
+        '{{fileFieldsUploadPipeline}}',
+        '{{fileFieldsDeleteOldPipeline}}',
+    ] as $placeholder) {
+        expect($source)->not->toContain("'{$placeholder}'");
     }
 });
 
@@ -1086,7 +1053,9 @@ test('FEEDBACK10: stubs pinean placeholders `{{fileFields*}}` (no photo/photo_pa
     $expectedPlaceholders = [
         'auth-user.model.stub' => ['{{fileFieldsFillableEntries}}', '{{fileFieldsAccessors}}'],
         'auth-user/admin-resource.stub' => ['{{fileFieldsResourceEntry}}'],
-        'auth-user/admin-service.stub' => ['{{fileFieldsUploadPipeline}}', '{{fileFieldsDeleteOldPipeline}}'],
+        // R-PKG-052 T9 v2: admin-service.stub ya NO pinea file fields
+        // pipeline — el FileStoragePlugin se invoca desde CRUDSmart.
+        'auth-user/admin-service.stub' => [],
         'auth-user/store-admin-request.stub' => ['{{fileFieldsValidationStore}}'],
         'auth-user/update-admin-request.stub' => ['{{fileFieldsValidationUpdate}}'],
     ];

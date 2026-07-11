@@ -117,14 +117,26 @@ test('AbilityController stub extends SmartController y opera sobre Ability del p
 
 // ── Service implementa MkModuleServiceInterface-style API ────────────────
 
-test('AdminService stub (R-PKG-052 T9) tiene solo create/update + syncRoleAbilities (syncRoles/syncDirectAbilities delegados al Repository)', function () {
+test('AdminService stub (R-PKG-052 T9 v2) implementa MkModuleServiceInterface con hooks puros (NO create/update/mutateData propios — CRUDSmart los invoca automáticamente)', function () {
     $stub = (string) file_get_contents(packageRootCrud().'/src/Stubs/auth-user/admin-service.stub');
 
     expect($stub)->toContain('class {{ModuleName}}Service');
-    expect($stub)->toContain('public function create(array $data): {{ModuleName}}');
-    expect($stub)->toContain('public function update({{ModuleName}} ${{moduleNameLower}}, array $data): {{ModuleName}}');
-    // R-PKG-052 T9: Service achicado. Solo conserva lo NO trivialmente delegable.
+    expect($stub)->toContain('implements MkModuleServiceInterface');
+    // Hooks puros pineados (CRUDSmart los invoca via method_exists checks).
+    expect($stub)->toContain('public function beforeCreate(Request $request, array $input): array');
+    expect($stub)->toContain('public function afterCreate(Request $request, Model $model, array $input): mixed');
+    expect($stub)->toContain('public function beforeUpdate(Request $request, string|int $id, array $input): array');
+    expect($stub)->toContain('public function afterUpdate(Request $request, Model $model, array $input, string|int $id): mixed');
+    // Mantiene syncRoleAbilities (específico de Admin, no trivialmente delegable).
     expect($stub)->toContain('public function syncRoleAbilities(Role $role, array $abilityNames): Role');
+    // NO pine create()/update()/mutateData() propios — CRUDSmart los invoca.
+    expect($stub)->not->toContain('public function create(array $data): {{ModuleName}}');
+    expect($stub)->not->toContain('public function update({{ModuleName}} ${{moduleNameLower}}, array $data): {{ModuleName}}');
+    expect($stub)->not->toContain('protected function mutateData(array $data): array');
+    // NO pinea file fields pipeline — FileStoragePlugin via PluginManager.
+    expect($stub)->not->toContain('{{fileFieldsUploadPipeline}}');
+    expect($stub)->not->toContain('{{fileFieldsDeleteOldPipeline}}');
+    // NO pinea syncRoles/syncDirectAbilities (delegados al Repository).
     expect($stub)->not->toContain('public function syncRoles(');
     expect($stub)->not->toContain('public function syncDirectAbilities(');
 });
