@@ -2236,7 +2236,7 @@ PHP;
         // FEEDBACK10 (R-PKG-050): auto-upload pipeline para file fields declarados via
         // --profile-fields (e.g. `avatar:file`). IDENTITY MAP — el column name ES el
         // request field name (`avatar` no `avatar_path`). El path devuelto por
-        // `UploadedFile::store()` se escribe en `$data[$fieldName]`.
+        // `UploadedFile::store()` se escribe en \$data[\$fieldName].
         foreach ({$fieldsList} as \$fieldName) {
             if (isset(\$data[\$fieldName]) && \$data[\$fieldName] instanceof \\Illuminate\\Http\\UploadedFile) {
                 \$path = \$data[\$fieldName]->store(

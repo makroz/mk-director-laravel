@@ -971,6 +971,66 @@ test('FEEDBACK10: buildFileFieldsValidationUpdate() emite rules de upload con `s
     expect($out)->toContain("'avatar' => ['sometimes', 'nullable', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],");
 });
 
+test('FEEDBACK10: buildFileFieldsUploadPipeline() pinea heredoc sin escapar $data en comentarios (HALLAZGO-NEW-FASE10-01)', function () {
+    // El bug original (R-PKG-050 F10-B18): el helper tenía un comentario
+    // HEREDOC con `$data[$fieldName]` SIN escapar. PHP evaluaba `$data` al
+    // generar el string → "Undefined variable $data" si se invocaba el
+    // helper con file fields. Resultado: el scaffolder reventaba antes de
+    // emitir el admin-service.stub.
+    //
+    // Fix: escapar `\$data` en el comentario del HEREDOC.
+    // Pinear: (1) el helper NO revienta al invocarse, (2) el output contiene
+    // `$data[$fieldName]` literal (escapado correctamente), (3) el pipeline
+    // hace `->store()` con el disk configurable, (4) el path es el
+    // placeholder `{{moduleNamePluralLower}}` (resuelto por generateStub
+    // post-injection, NO hardcoded).
+    $out = feedback10Invoke('buildFileFieldsUploadPipeline', [['avatar']]);
+
+    // foreach dinámico con el field name.
+    expect($out)->toContain("foreach (['avatar'] as \$fieldName) {");
+    // $data[$fieldName] presente (escapado) — pinea el fix.
+    expect($out)->toContain('isset($data[$fieldName])');
+    expect($out)->toContain('$data[$fieldName] instanceof \Illuminate\Http\UploadedFile');
+    expect($out)->toContain('$data[$fieldName]->store(');
+    expect($out)->toContain("\$data[\$fieldName] = \$path;");
+    // Disk configurable via mk_director.storage.disk.
+    expect($out)->toContain("config('mk_director.storage.disk', 'public')");
+    // Path pineado como placeholder {{moduleNamePluralLower}} (NO hardcoded).
+    expect($out)->toContain("'{{moduleNamePluralLower}}'");
+    // Identity map: el path guardado ES $data[$fieldName] (no $data[$fieldName . '_path']).
+    expect($out)->not->toContain("._path']");
+});
+
+test('FEEDBACK10: buildFileFieldsUploadPipeline() retorna vacío si no hay file fields', function () {
+    $out = feedback10Invoke('buildFileFieldsUploadPipeline', [[]]);
+
+    expect($out)->toBe('');
+});
+
+test('FEEDBACK10: buildFileFieldsDeleteOldPipeline() pinea delete-old para files reemplazados', function () {
+    $out = feedback10Invoke('buildFileFieldsDeleteOldPipeline', [['avatar']]);
+
+    // foreach dinámico.
+    expect($out)->toContain("foreach (['avatar'] as \$fieldName) {");
+    // Detecta UploadedFile entrante.
+    expect($out)->toContain('isset($data[$fieldName])');
+    expect($out)->toContain('$data[$fieldName] instanceof \Illuminate\Http\UploadedFile');
+    // Storage::disk + ->delete sobre el modelo (placeholder, no hardcoded).
+    expect($out)->toContain('Storage::disk(');
+    expect($out)->toContain("config('mk_director.storage.disk', 'public')");
+    expect($out)->toContain('->delete(');
+    // El modelo es el placeholder {{moduleNameLower}}, no hardcoded 'admin'.
+    expect($out)->toContain('${{moduleNameLower}}->{$fieldName}');
+    // empty() check pineado.
+    expect($out)->toContain('! empty(');
+});
+
+test('FEEDBACK10: buildFileFieldsDeleteOldPipeline() retorna vacío si no hay file fields', function () {
+    $out = feedback10Invoke('buildFileFieldsDeleteOldPipeline', [[]]);
+
+    expect($out)->toBe('');
+});
+
 test('FEEDBACK10: buildPluginsConfigLiteral() pine IDENTITY map en fields (no sufijo _path)', function () {
     $out = feedback10Invoke('buildPluginsConfigLiteral', [['avatar']]);
 
