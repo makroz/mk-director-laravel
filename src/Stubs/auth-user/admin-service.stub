@@ -6,102 +6,207 @@ namespace App\Modules\{{ModuleName}}\Services;
 
 use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
 use App\Modules\{{ModuleName}}\Repositories\Contracts\{{ModuleName}}RepositoryInterface;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Http\Request;
 use Mk\Director\Auth\Models\Ability;
 use Mk\Director\Auth\Models\Role;
+use Mk\Director\Contracts\MkModuleServiceInterface;
 
 /**
- * Service de {{ModuleName}} — capa de orquestación.
+ * Service de {{ModuleName}} — hook layer del módulo.
  *
  * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
  *
- * Thin layer: delega al Repository para queries, pero concentra side effects
- * (file upload pipeline via FileStoragePlugin, sync de roles/abilities). Override
- * `mutateData()` para lógica custom (e.g. validar dimensiones de un avatar).
- * Se ejecuta tanto en `create()` como en `update()`.
+ * R-PKG-052 T9 v2 (FEEDBACK11, Mario 2026-07-11) — el Service es un **hook
+ * layer puro** que delega TODO el trabajo de create/update/delete al
+ * CRUDSmart canónico del paquete. NO pine create/update propios,
+ * NO pine mutateData con file fields upload pipeline — el FileStoragePlugin
+ * se invoca automáticamente desde CRUDSmart via PluginManager.
  *
- * FEEDBACK10 (R-PKG-050, Mario 2026-07-10): este stub pinea `mutateData()` y
- * `update()` con signature canónica hardcoded (no más `photo`/`photo_path`
- * hardcoded). Los placeholders `{{fileFieldsUploadPipeline}}` y
- * `{{fileFieldsDeleteOldPipeline}}` se generan dinámicamente desde los `:file`
- * suffix de `--profile-fields` (e.g. `avatar:file` → columna `avatar`,
- * accessor `getAvatarUrlAttribute`, plugin config `fields: ['avatar' => 'avatar']`).
- * Si NO hay file fields, los placeholders quedan como string vacío (passthrough).
+ * ## ¿Por qué NO pineamos create/update?
+ *
+ * El `AdminController extends SmartController` ya hereda
+ * `CRUDSmart::store()`/`update()`/`destroy()` canónicos. Esos métodos
+ * ya hacen TODO el pipeline (R-PKG-016):
+ *
+ *   1. Resolve FormRequest (R-PKG-046 F9-B08)
+ *   2. `fireBeforeSave($request, $input, 'create'|'update')` ← PluginManager
+ *      → `FileStoragePlugin::beforeSave()` procesa uploads (avatar, cover_photo, etc.)
+ *   3. `service->beforeCreate($request, $input)` ← ESTE hook (lógica específica)
+ *   4. DTO validation (type safety + enum validation)
+ *   5. Filter fillable
+ *   6. `$model::create($input)` o `$model->update($input)`
+ *   7. `service->afterCreate($request, $model, $input)` ← ESTE hook
+ *   8. `fireAfterSave($model, $request, 'create'|'update')` ← PluginManager
+ *      → `FileStoragePlugin::afterSave()` cleanup o post-processing
+ *   9. Cache invalidation
+ *  10. `autoTransform` con Resource
+ *  11. `fireAfterResponse($data)` ← PluginManager
+ *      → `FileStoragePlugin::afterResponse()` logging/audit
+ *
+ * El `FileStoragePlugin` se invoca automáticamente vía el PluginManager
+ * (configurable via `$mkConfig['plugins']['file_storage']` en el controller).
+ * Pinear mutateData con file fields upload pipeline en el Service
+ * es **duplicar lógica** — el plugin system existe precisamente para esto.
+ *
+ * ## ¿Qué pineamos entonces?
+ *
+ * Los hooks `beforeCreate`/`afterCreate`/`beforeUpdate`/`afterUpdate`/
+ * `beforeDelete`/`afterDelete` se pinean vacíos (passthrough). El
+ * consumer los override con lógica **específica del módulo** (validar
+ * dimensiones de un avatar custom, emitir domain events, computar
+ * hashes, sincronizar con sistemas externos, etc.).
+ *
+ * Mantenemos `syncRoleAbilities(Role, array)` que es específico de
+ * Admin/Member (query + sync de abilities de un Role, no trivialmente
+ * delegable al Repository porque cruza la tabla de roles).
+ *
+ * ## Trade-offs
+ *
+ * - Si el consumer pine override custom de `create()`/`update()` en
+ *   AdminService (e.g. cross-cutting concern que CRUDSmart no maneja),
+ *   debe usar un ServiceProvider / Observer / Event Listener, no el
+ *   Service del scaffolder.
+ * - El Service se enfoca en **module-specific hooks**, no en orquestación
+ *   de CRUD (eso es responsabilidad del paquete, via CRUDSmart + plugins).
+ *
+ * ## Patrón R-PKG-015 aplicado
+ *
+ * SSoT del CRUD = CRUDSmart (canónico) + PluginManager (canónico).
+ * Service = thin layer de hooks específicos. Repository = thin layer
+ * de queries. Controller = thin wrapper que delega a CRUDSmart.
  */
-class {{ModuleName}}Service
+class {{ModuleName}}Service implements MkModuleServiceInterface
 {
     public function __construct(
         protected {{ModuleName}}RepositoryInterface $repository,
     ) {}
 
+    // ────────────────────────────────────────────────────────────────────
+    // Hooks de CRUDSmart — pine vacíos (passthrough) por default.
+    // Override en subclase o via service container binding con lógica
+    // específica del módulo (e.g. validar dimensiones de un avatar custom,
+    // emitir domain events, computar hashes).
+    // ────────────────────────────────────────────────────────────────────
+
     /**
-     * Crea un {{ModuleName}} con la pipeline completa (mutateData → Repository).
+     * Hook antes de crear. CRUDSmart::store() invoca este método
+     * después de `fireBeforeSave` (FileStoragePlugin upload) y ANTES
+     * del DTO validation + `Model::create()`.
+     *
+     * @param  array<string, mixed>  $input  Datos validados por FormRequest.
+     * @return array<string, mixed>        Datos mutados (o el mismo $input).
      */
-    public function create(array $data): {{ModuleName}}
+    public function beforeCreate(Request $request, array $input): array
     {
-        return $this->repository->create($this->mutateData($data));
+        return $input;
     }
 
     /**
-     * Hook compartido entre create + update. Procesa el upload de los
-     * file fields declarados via `--profile-fields="avatar:file,cover:file"`.
+     * Hook después de crear. CRUDSmart::store() invoca este método
+     * después del `Model::create()` y ANTES de `fireAfterSave`.
      *
-     * FEEDBACK10 (R-PKG-050, Mario 2026-07-10): el cuerpo del método se
-     * genera dinámicamente desde `{{fileFieldsUploadPipeline}}` (identity
-     * map: `avatar` no `avatar_path`). Si no hay file fields, el cuerpo
-     * es passthrough.
-     *
-     * NOTA — R-PKG-027 PKG-NEW-02 fix: el hash de password NO se hace acá.
-     * El modelo base `AuthUser` declara `'password' => 'hashed'` en `$casts`
-     * (vía `Illuminate\Foundation\Auth\User`), así que Eloquent hashea
-     * automáticamente al asignar `$user->password = 'plain'`. Hashear dos
-     * veces (acá + cast) producía `bcrypt(bcrypt(plain))`. El rename
-     * `beforeCreate` → `mutateData` evita la sugerencia de que el método es
-     * solo para create.
-     *
-     * @param  array<string, mixed>  $data
-     * @return array<string, mixed>  Datos mutados.
+     * Útil para: emitir domain events, sincronizar datos derivados,
+     * logging de auditoría, enviar notificaciones.
      */
-    protected function mutateData(array $data): array
+    public function afterCreate(Request $request, Model $model, array $input): mixed
     {
-{{fileFieldsUploadPipeline}}
+        // passthrough — override con lógica específica del módulo.
+    }
+
+    /**
+     * Hook antes de actualizar. CRUDSmart::update() invoca este método
+     * después de `fireBeforeSave` (FileStoragePlugin re-upload) y
+     * ANTES del DTO validation + `$model->update()`.
+     *
+     * @param  string|int  $id
+     * @param  array<string, mixed>  $input
+     * @return array<string, mixed>
+     */
+    public function beforeUpdate(Request $request, string|int $id, array $input): array
+    {
+        return $input;
+    }
+
+    /**
+     * Hook después de actualizar. CRUDSmart::update() invoca este método
+     * después del `$model->update()` y ANTES de `fireAfterSave`.
+     *
+     * @param  string|int  $id
+     */
+    public function afterUpdate(Request $request, Model $model, array $input, string|int $id): mixed
+    {
+        // passthrough — override con lógica específica del módulo.
+    }
+
+    /**
+     * Hook antes de eliminar. Retornar `false` bloquea el delete.
+     */
+    public function beforeDelete(Request $request, Model $model, string|int $id): bool
+    {
+        return true;
+    }
+
+    /**
+     * Hook después de eliminar.
+     */
+    public function afterDelete(Request $request, Model $model, string|int $id): mixed
+    {
+        // passthrough.
+    }
+
+    /**
+     * Hook antes de listar (modificar query).
+     */
+    public function beforeList(Request $request, $query)
+    {
+        return $query;
+    }
+
+    /**
+     * Hook después de listar (transformar filas).
+     */
+    public function afterList(Request $request, $data, int $total)
+    {
         return $data;
     }
 
     /**
-     * Actualiza un {{ModuleName}}. Override `mutateData()` para lógica custom
-     * (se ejecuta en create + update).
+     * Hook de metadata `__extraData` (e.g. roles disponibles para
+     * formularios de creación/edición).
      */
-    public function update({{ModuleName}} ${{moduleNameLower}}, array $data): {{ModuleName}}
+    public function setExtraData(Request $request, $data): array
     {
-{{fileFieldsDeleteOldPipeline}}
-        $data = $this->mutateData($data); // Reusa la lógica de upload. Password hash via cast.
-
-        return $this->repository->update(${{moduleNameLower}}, $data);
+        return [];
     }
 
     /**
-     * Sincroniza roles (delegado al Repository).
+     * Hook antes de buscar (search).
+     */
+    public function beforeSearch(Request $request, $query)
+    {
+        return $query;
+    }
+
+    /**
+     * Hook antes de show (detail view).
+     */
+    public function beforeShow(Request $request, Model $model): Model
+    {
+        return $model;
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // Lógica específica de Admin/Member que NO está en CRUDSmart
+    // ────────────────────────────────────────────────────────────────────
+
+    /**
+     * Sincroniza abilities de un Role (específico de Admin/Member).
      *
-     * @param  array<int, string>  $roleNames
-     */
-    public function syncRoles({{ModuleName}} ${{moduleNameLower}}, array $roleNames): {{ModuleName}}
-    {
-        return $this->repository->syncRoles(${{moduleNameLower}}, $roleNames);
-    }
-
-    /**
-     * Sincroniza abilities directas (delegado al Repository).
-     *
-     * @param  array<int, string>  $abilityNames
-     */
-    public function syncDirectAbilities({{ModuleName}} ${{moduleNameLower}}, array $abilityNames): {{ModuleName}}
-    {
-        return $this->repository->syncDirectAbilities(${{moduleNameLower}}, $abilityNames);
-    }
-
-    /**
-     * Sincroniza abilities de un Role.
+     * Query + sync de abilities vía la pivot. NO está en CRUDSmart
+     * (CRUDSmart solo sincroniza al MODEL, no a un Role cross-cutting).
+     * El controller invoca este método vía
+     * `app({{ModuleName}}Service::class)->syncRoleAbilities($role, $names)`.
      *
      * @param  array<int, string>  $abilityNames
      */

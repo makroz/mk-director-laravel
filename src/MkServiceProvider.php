@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\ServiceProvider;
 use Mk\Director\Auth\AuthServiceProvider;
+use Mk\Director\ModuleLoader\ModuleLoaderServiceProvider;
 use Mk\Director\Console\Commands\AuthCreateSuperAdminCommand;
 use Mk\Director\Console\Commands\DiscoverAbilitiesCommand;
 use Mk\Director\Console\Commands\FixSanctumUuidsCommand;
@@ -64,6 +65,25 @@ class MkServiceProvider extends ServiceProvider
 
         // Auth subsystem (Mk\Director\Auth\AuthServiceProvider)
         $this->app->register(AuthServiceProvider::class);
+
+        // R-PKG-052 T8 — auto-register ModuleLoader para que el consumer
+        // NO tenga que pinear `ModuleLoaderServiceProvider` manualmente
+        // en `bootstrap/providers.php`. Defense-in-depth: si un dev
+        // genera un módulo con `mk:make:auth-user` y olvida pinear
+        // el provider en bootstrap/, igual se registra (via glob con
+        // cache 1h TTL + symlink rejection + canonical path check —
+        // ver ModuleProviderRegistry).
+        //
+        // Pre-fix, RETO tenía que pinear manualmente cada
+        // `App\Modules\<X>\Providers\<X>ServiceProvider::class` en
+        // bootstrap/providers.php. Riesgo de olvidar (módulo sin
+        // registrar → 503 en runtime, debug doloroso).
+        //
+        // Post-fix: MkServiceProvider lo registra automáticamente.
+        // El consumer puede seguir pineando manual si quiere (override
+        // explícito del auto-discovery, e.g. para excluir módulos
+        // específicos via glob custom).
+        $this->app->register(ModuleLoaderServiceProvider::class);
 
         // Tenancy subsystem — opt-in. The TenantContext is a
         // singleton so the same instance is shared by the

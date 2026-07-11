@@ -50,6 +50,7 @@ return new class extends Migration
             {{profileFieldsColumns}}{{statusColumn}}{{managedByColumn}}$table->timestamp('email_verified_at')->nullable();
             $table->string('password');
             $table->string('auth_scope')->default('{{moduleNameLower}}')->index();
+            {{clientIdColumn}}
             $table->rememberToken();
             $table->timestamps();
         });

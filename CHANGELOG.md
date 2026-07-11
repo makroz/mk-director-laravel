@@ -5,6 +5,102 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [UNRELEASED] — Scaffolder bugfixes batch (R-PKG-052 — FEEDBACK11)
+
+> Sprint de cierre de 16 bugs observados en el scaffold del paquete después de
+> R-PKG-050 (file fields identity map). Mario feedback 2026-07-10 23:24 ("armame
+> una paso a paso de tareas de estos bugs, y comienza a arreglarlos en el
+> paquete, ademas en el scalfold de admin, create una rama nueva de dev, del
+> repo del paquete, y ahi ve haciendo tarea por tarea y haxiendo xommit por
+> cada tarea terminada"). Único consumer = RETO (R-G-033). Mario retiene
+> bumpeo + tag + publish per RELEASE_AT_END.
+>
+> **7/9 bugs arreglados** (Clase A + Clase B + T2 defensivo). 3 bugs Clase C
+> (multi-tenancy approach, provider auto-discovery, Service vs CRUDSmart)
+> pendientes decisión Mario.
+>
+> **BC analysis**: BC BREAK menor en 3 capas (dedup de rules con $loginField
+> dinámico, multi-tenant opt-in, plugins path con scopeLower real). RETO
+> debe regenerar su módulo Admin desde 0 post-merge.
+
+### 🔴 BREAKING CHANGES
+
+- **BC BREAK menor — `buildProfileFieldRules()` ahora recibe `$loginField` + `$fileFieldNames`**.
+  Pre-fix, el dedup usaba `'email'` hardcoded. Si el consumer hacía
+  `--login-field=ci --profile-fields=ci,phone`, el scaffolder pineaba DOS
+  `'ci' => [...]` rules en `rules()`: una canónica del stub (con
+  `required`/`max:255`/`unique:...,ci`) + una genérica (`nullable`/`string`).
+  PHP array merge con key duplicada descartaba la canónica — el `required`/
+  `max:255`/`unique` del login se perdía en create (CIs vacíos pasaban
+  validación). Post-fix, el helper dedupia contra `$loginField` real y
+  skipea los file fields (que ya tienen rule canónica vía
+  `{{fileFieldsValidationStore/Update}}`).
+- **BC BREAK menor — `client_id` ya NO pineado en `$fillable` por default**.
+  Pre-fix, el stub pineaba `'client_id'` SIEMPRE. En apps single-tenant como
+  RETO, esto provocaba `column not found: client_id` en el primer INSERT
+  (la migration NO crea `client_id` sin multi-tenancy, pero el `$fillable`
+  sí lo declaraba). Post-fix, requiere opt-in explícito vía flag
+  `--multi-tenant`. Si el consumer tenía multi-tenant pineado, debe
+  agregar el flag al comando de scaffold. RETO es single-tenant, este
+  cambio es BC-safe para RETO.
+- **BC BREAK menor — `'path' => 'uploads/{scopeLower}'` → `'path' => 'uploads/admin'`**.
+  Pre-fix, el helper `buildPluginsConfigLiteral()` pineaba el path como
+  string literal con `{scopeLower}` (PHP single-quoted NO interpola). El
+  FileStoragePlugin creaba un directorio con nombre literal `{scopeLower}`
+  en storage. Post-fix, el path se pinea con concatenación PHP usando
+  `$scopeLower` real del scaffolder.
+
+### Added
+
+- **Option `--multi-tenant`** en `mk:make:auth-user`. Pinea `client_id` en
+  `$fillable` del model + column en migration SOLO si flag activo. Default:
+  single-tenant (RETO compatible). Helper `buildClientIdFillableEntry(bool)`
+  + `buildClientIdColumn(bool)` + stubs usan `{{clientIdFillableEntry}}` y
+  `{{clientIdColumn}}` placeholders.
+- **T8 — `MkServiceProvider::register()` auto-registra `ModuleLoaderServiceProvider`**.
+  El consumer ya NO tiene que pinear `ModuleLoaderServiceProvider`
+  manualmente en `bootstrap/providers.php`. El `ModuleProviderRegistry`
+  hace auto-glob con cache 1h TTL + symlink rejection + canonical path
+  check. Defense-in-depth contra olvidar registrar module providers.
+
+### Changed
+
+- `buildProfileFieldRules()` signature: `(array, array, string)` →
+  `(array, array, string, string $loginField = 'email', array $fileFieldNames = [])`.
+  2 nuevos parámetros con defaults BC (todos los callers existentes siguen
+  funcionando).
+- `buildPluginsConfigLiteral()` signature: `(array)` → `(array, string $scopeLower = 'unknown')`.
+  1 nuevo parámetro con default BC.
+- `buildProfileFieldsToArray()` dedup: ahora SKIP `password` y `status`
+  además de los core fields existentes (`id, name, loginField, auth_scope`).
+- `auth-user.model.stub` y `auth-user.migration.stub`: agregados placeholders
+  `{{clientIdFillableEntry}}` y `{{clientIdColumn}}` (opcionales, opt-in
+  via `--multi-tenant` flag).
+- **T9 v2 — `AdminService` re-escrito como hook layer puro** (post-feedback
+  Mario 2026-07-11, R-PKG-052). El Service ahora implementa
+  `MkModuleServiceInterface` con 12 hooks puros (`beforeCreate`, `afterCreate`,
+  `beforeUpdate`, `afterUpdate`, `beforeDelete`, `afterDelete`, `beforeList`,
+  `afterList`, `setExtraData`, `beforeSearch`, `beforeShow`) con bodies
+  passthrough. NO pine `create()`/`update()`/`mutateData()` propios — el
+  `AdminController extends SmartController` ya hereda `CRUDSmart::store()`/
+  `update()`/`destroy()` que invocan los hooks automáticamente. NO pinea
+  file fields upload pipeline — el `FileStoragePlugin` se invoca vía
+  `PluginManager::fireBeforeSave()`/`fireAfterSave()` que CRUDSmart dispara
+  en cada store/update. Helpers `buildFileFieldsUploadPipeline()` y
+  `buildFileFieldsDeleteOldPipeline()` ELIMINADOS del scaffolder (eran
+  código duplicado del plugin system). Placeholders
+  `{{fileFieldsUploadPipeline}}` y `{{fileFieldsDeleteOldPipeline}}` también
+  eliminados. Mantiene `syncRoleAbilities(Role, array)` que es específico
+  de Admin/Member (no delegable trivialmente al Repository porque cruza
+  la tabla de roles del paquete). R-G-033: RETO es único consumer, regenera
+  desde 0 post-merge per dogfooding-first.
+
+### Tests
+
+- 4 tests pre-existentes actualizados (pineaban string legacy del dedup).
+- 6 tests source-parsing nuevos pineando INTENCIÓN del fix (per HALLAZGO-NEW-03).
+  EFECTIVIDAD se valida en RETO post-merge (e2e re-scaffold).
+
 ## [UNRELEASED] — File fields: identity map dinámico (R-PKG-050 — FEEDBACK10)
 
 > Refactor de cierre de la deuda técnica pineada por Mario en sesión 2026-07-10:

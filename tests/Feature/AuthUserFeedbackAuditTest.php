@@ -616,18 +616,37 @@ test('FEEDBACK10: admin-resource stub NO pinea photo_path/photo_url hardcoded, u
     expect($resource)->not->toContain("'photo_url' => \$this->photo_url");
 });
 
-test('FEEDBACK10: admin-service stub NO pinea photo/photo_path hardcoded, usa {{fileFieldsUploadPipeline}} + {{fileFieldsDeleteOldPipeline}}', function () {
+test('R-PKG-052 T9 v2: admin-service stub implementa MkModuleServiceInterface con hooks puros (NO create/update/mutateData, NO file fields pipeline — eso lo hace el FileStoragePlugin via CRUDSmart)', function () {
     $service = stubContents('auth-user/admin-service.stub');
 
-    // Stub pinea signatures hardcoded (mutateData + update) con placeholders
-    // para los cuerpos dinámicos. Si NO hay file fields, los placeholders
-    // quedan como string vacío (passthrough).
-    expect($service)->toContain('{{fileFieldsUploadPipeline}}');
-    expect($service)->toContain('{{fileFieldsDeleteOldPipeline}}');
-    expect($service)->toContain('protected function mutateData(array $data): array');
-    expect($service)->toContain('public function update({{ModuleName}} ${{moduleNameLower}}, array $data): {{ModuleName}}');
+    // El Service es un hook layer puro. Implementa MkModuleServiceInterface
+    // con los 12 hooks del contrato (CRUDSmart los invoca automáticamente
+    // desde store/update/destroy via `method_exists` checks).
+    expect($service)->toContain('implements MkModuleServiceInterface');
+    expect($service)->toContain('public function beforeCreate(Request $request, array $input): array');
+    expect($service)->toContain('public function afterCreate(Request $request, Model $model, array $input): mixed');
+    expect($service)->toContain('public function beforeUpdate(Request $request, string|int $id, array $input): array');
+    expect($service)->toContain('public function afterUpdate(Request $request, Model $model, array $input, string|int $id): mixed');
+    expect($service)->toContain('public function beforeDelete(Request $request, Model $model, string|int $id): bool');
+    expect($service)->toContain('public function afterDelete(Request $request, Model $model, string|int $id): mixed');
+
+    // El Service NO pinea create()/update() propios — CRUDSmart los invoca.
+    // El Service NO pinea mutateData() — eso era el legacy pre-R-PKG-052 T9 v2.
+    expect($service)->not->toContain('public function create(array $data): {{ModuleName}}');
+    expect($service)->not->toContain('public function update({{ModuleName}} ${{moduleNameLower}}, array $data): {{ModuleName}}');
+    expect($service)->not->toContain('protected function mutateData(array $data): array');
+
+    // Y NO pinea file fields pipeline — eso lo hace el FileStoragePlugin
+    // automáticamente via PluginManager::fireBeforeSave() / fireAfterSave()
+    // (CRUDSmart los dispara en cada store/update).
+    expect($service)->not->toContain('{{fileFieldsUploadPipeline}}');
+    expect($service)->not->toContain('{{fileFieldsDeleteOldPipeline}}');
     expect($service)->not->toContain("\$data['photo_path'] = \$path");
     expect($service)->not->toContain("isset(\$data['photo'])");
+    expect($service)->not->toContain("Storage::disk(config('mk_director.storage.disk'");
+
+    // Mantiene syncRoleAbilities (específico de Admin, no trivialmente delegable).
+    expect($service)->toContain('public function syncRoleAbilities(Role $role, array $abilityNames): Role');
 });
 
 test('FEEDBACK10: store/update-admin-request stubs NO pinean photo hardcoded, usan {{fileFieldsValidation*}}', function () {

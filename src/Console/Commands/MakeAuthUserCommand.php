@@ -163,6 +163,7 @@ class MakeAuthUserCommand extends Command
         {--skip-auth-wire : (A4) NO editar config/auth.php automáticamente (solo imprime los snippets, comportamiento pre-A4). Por default el scaffolder cablea el guard+provider de forma idempotente con backup .bak.}
         {--skip-policies : (A1/A3) NO generar las Policies default-deny en el pack CRUD (default ON). Por default, CRUD ON genera {Scope}Policy/RolePolicy/AbilityPolicy (default-deny + super-admin bypass) y las registra vía Gate::policy.}
         {--managed-by= : (ARCH-01/FEEDBACK6) Genera un recurso admin-scoped para que OTRO scope administre users de ESTE scope. Ej: `mk:make:auth-user Member --managed-by=Admin` expone `/api/admin/members` gateado con mk.auth:admin + mk.ability:admin.members.* (reusa los controllers del scope, registra las rutas managed en el ServiceProvider y genera el seeder de abilities cross-scope para los roles del manager). Requiere CRUD ON. El manager (StudlyCase) debe ser un scope existente. Default BC: sin managed resource.}
+        {--multi-tenant : (R-PKG-052, FEEDBACK11) Genera el scope con soporte multi-tenant: pine `client_id` en \$fillable del modelo + columna `client_id` en la migration. Default: single-tenant (RETO es single-tenant — pinear `client_id` por default provocaba `column not found: client_id` en INSERT). Opt-in explícito: pinearlo solo si el consumer tiene tenant isolation (ver docs/guides/MULTI_TENANT.md).}
 
         **BC BREAK (R-PKG-047 D2)**: Flags eliminados — `--with-crud`, `--with-auth-rbac`, `--with-status`, `--status-values`. Estos son ahora defaults ON. Para opt-out, usar `--no-crud`, `--no-rbac`, `--no-status`. Consumers que pinean los flags viejos en scripts CI/tutores deben actualizar a los `--no-*` correspondientes. La simplificación pinea el principio R-G-033 "maximo default + minimo custom" (Mario feedback 2026-07-09 22:12).';
 
@@ -212,6 +213,12 @@ class MakeAuthUserCommand extends Command
         $withPermissionsEndpoint = (bool) $this->option('with-permissions-endpoint');
         // R-PKG-042 FASE18-07: force re-pinear config/cors.php aunque exista.
         $forceCors = (bool) $this->option('force-cors');
+
+        // R-PKG-052: opt-in multi-tenant. Default single-tenant (RETO es
+        // single-tenant — pinear `client_id` por default provocaba `column
+        // not found: client_id` en el primer INSERT). Pinear este flag solo
+        // si el consumer tiene tenant isolation.
+        $multiTenant = (bool) $this->option('multi-tenant');
 
         // R-PKG-047 D2 — resolve profile fields con merge + defaults.
         // Pre-D2: $profileFieldsRaw = lo que pasó el dev (puede ser []).
@@ -778,6 +785,13 @@ PHP,
             '{{fileFieldsAccessors}}' => $this->buildFileFieldsAccessors($fileFieldNames),
         ];
 
+        // R-PKG-052: pinear `client_id` en el modelo + migration SOLO si
+        // --multi-tenant está activo (opt-in). Default: single-tenant.
+        $clientIdReplacements = [
+            '{{clientIdFillableEntry}}' => $this->buildClientIdFillableEntry($multiTenant),
+            '{{clientIdColumn}}' => $this->buildClientIdColumn($multiTenant),
+        ];
+
         $extraReplacements = array_merge(
             $loginFieldReplacements,
             $rbacReplacements,
@@ -787,6 +801,7 @@ PHP,
             $statusReplacements,
             $managedByReplacements,
             $fileFieldsBaseReplacements,
+            $clientIdReplacements,
         );
 
         $this->info("🔐 Generando scope de autenticación MK: {$scope}".($withAuthRbac ? ' (with RBAC)' : ''));
@@ -1627,7 +1642,22 @@ PHP,
         // N12: buildProfileFieldRules emite reglas para TODOS los profile fields
         // (no solo los unique), si no `validated()` los descartaba y el CRUD
         // nunca persistía full_name/phone/address.
-        $fieldRules = $this->buildProfileFieldRules($profileFields, $requiredFields, $scopePlural);
+        // R-PKG-052: pasar $loginField + fileFieldNames a buildProfileFieldRules
+        // para que el dedup contra core fields use el loginField real
+        // (`ci` para RETO, etc.) en vez de hardcodear `email`, Y skipee los
+        // file fields (que ya tienen su rule canónica via {{fileFieldsValidationStore/Update}}).
+        //
+        // Pre-fix, si el consumer hacía `--login-field=ci --profile-fields=ci,phone`
+        // el scaffolder pineaba DOS rules `'ci' => [...]` (canónica del stub +
+        // genérica del helper) — PHP descartaba la primera (con required/max:255/unique).
+        // Idem para file fields (`avatar:file`): `buildFileFieldsValidationStore` pineaba
+        // `'avatar' => ['nullable', 'file', 'image', 'mimes:...', 'max:2048']` (rule
+        // canónica) y `buildProfileFieldRules` pineaba `'avatar' => ['nullable', 'string']`
+        // (genérica) — PHP descartaba la primera y la validación de archivo se
+        // PERDÍA. El front mandaba un `UploadedFile`, Laravel lo aceptaba como
+        // string (el validation `string` pasaba con el path del temp), pero el
+        // upload real fallaba en runtime porque no había rule de file/image.
+        $fieldRules = $this->buildProfileFieldRules($profileFields, $requiredFields, $scopePlural, $loginField, $fileFieldNames);
         $crudReplacements = array_merge([
             '{{profileFieldsList}}' => $this->buildProfileFieldsList($profileFields),
             // F10-B05 (R-PKG-050): pasar `$loginField` a los 3 helpers DTO
@@ -1683,8 +1713,14 @@ PHP,
             //
             // Si no hay file fields, retorna `[]` (omitir el key `plugins` del mkConfig).
             // Si hay file fields, retorna el array PHP literal pineable directo en el stub.
+            //
+            // R-PKG-052: pasar $scopeLower para que el helper pine el path real
+            // (`'uploads/admin'`) en vez del placeholder literal `{scopeLower}`
+            // que el FileStoragePlugin no sabe interpretar (creaba un directorio
+            // con nombre literal `{scopeLower}` en storage).
             '{{pluginsConfig}}' => $this->buildPluginsConfigLiteral(
                 $this->detectFileFields($profileFields),
+                $scopeLower,
             ),
 
             // FEEDBACK10 (R-PKG-050, Mario 2026-07-10): pine dinámico de los
@@ -1697,19 +1733,18 @@ PHP,
             //   el modelo se pinea con `$extraReplacements`, no con este array.
             //   Ver bloque `$fileFieldsBaseReplacements` arriba (línea ~770).
             // - `{{fileFieldsResourceEntry}}` (admin-resource)
-            // - `{{fileFieldsUploadPipeline}}` (admin-service: cuerpo de mutateData)
-            // - `{{fileFieldsDeleteOldPipeline}}` (admin-service: cuerpo de update)
             // - `{{fileFieldsValidationStore}}` / `{{fileFieldsValidationUpdate}}` (request stubs)
+            //
+            // R-PKG-052 T9 v2 (FEEDBACK11, Mario 2026-07-11): `{{fileFieldsUploadPipeline}}`
+            // y `{{fileFieldsDeleteOldPipeline}}` se ELIMINARON del scaffolder.
+            // El FileStoragePlugin se invoca automáticamente desde CRUDSmart
+            // vía PluginManager::fireBeforeSave() / fireAfterSave() — pinear
+            // un pipeline manual en el Service era duplicar lógica del plugin
+            // system ("por algo está el plugins", Mario).
             //
             // Si NO hay file fields, todos los helpers retornan string vacío
             // (los placeholders quedan como whitespace, PHP lo tolera sin error).
             '{{fileFieldsResourceEntry}}' => $this->buildFileFieldsResourceEntry(
-                $this->detectFileFields($profileFields),
-            ),
-            '{{fileFieldsUploadPipeline}}' => $this->buildFileFieldsUploadPipeline(
-                $this->detectFileFields($profileFields),
-            ),
-            '{{fileFieldsDeleteOldPipeline}}' => $this->buildFileFieldsDeleteOldPipeline(
                 $this->detectFileFields($profileFields),
             ),
             '{{fileFieldsValidationStore}}' => $this->buildFileFieldsValidationStore(
@@ -2045,7 +2080,7 @@ PHP,
      * @param  array<int, string>  $fileFieldNames
      * @return string PHP literal pineable en stub. `[]` si no hay fields.
      */
-    private function buildPluginsConfigLiteral(array $fileFieldNames): string
+    private function buildPluginsConfigLiteral(array $fileFieldNames, string $scopeLower = 'unknown'): string
     {
         if ($fileFieldNames === []) {
             return '[]';
@@ -2054,12 +2089,48 @@ PHP,
         $fieldsMap = $this->buildFileFieldsConfig($fileFieldNames);
         $fieldsPhp = $this->arrayLiteral($fieldsMap, 2);
 
+        // R-PKG-052 (FEEDBACK11) bug #16 — `path` se pineaba como string
+        // literal `'uploads/{scopeLower}'` con `{scopeLower}` hardcoded.
+        // PHP single-quoted strings NO interpolan `{scopeLower}` (no es
+        // `$scopeLower`), entonces el consumer recibía literalmente la
+        // string `uploads/{scopeLower}` en runtime. FileStoragePlugin
+        // llamaba `Storage::disk('public')->putFile('uploads/{scopeLower}', ...)`
+        // → creaba un directorio con nombre literal `{scopeLower}` en vez
+        // del scope name real (admin/member/etc.).
+        //
+        // Post-fix: construir el path string con interpolación PHP en
+        // DOBLE nivel — primero acá (scopeLower real del scaffolder, con
+        // double-quoted string para que PHP interpole `{$scopeLower}`) y
+        // después pineado en la HEREDOC como string LITERAL (sin
+        // variables). El consumer recibe `'path' => 'uploads/admin'`
+        // (o el scope que sea) en runtime.
+        //
+        // OJO: usar DOUBLE-QUOTED string acá. Con single quotes, `{$scopeLower}`
+        // NO se interpola y el path queda con `{$scopeLower}` literal
+        // (mismo bug que estamos fixeando). El comentario previo decía
+        // "construir el path string con interpolación" pero el código
+        // pineaba single-quoted — fix de fix.
+        //
+        // CRITICAL: el string DEBE ser double-quoted para que PHP interpole
+        // `{$scopeLower}`. Con single quotes, `{$scopeLower}` queda como
+        // texto literal y el consumer recibe `uploads/{$scopeLower}` (mismo
+        // bug que estamos fixeando). La interpolación resuelve al scopeLower
+        // real del scaffolder (admin/member/etc.) y pinea el path correcto.
+        //
+        // Implementation: usamos concatenación explícita (`.`) en vez de
+        // interpolación `{...}` porque el string contiene 3 niveles de
+        // quotes anidadas (single-quoted PHP source, single-quoted PHP
+        // string en el output, single-quoted key 'path'). Concatenación
+        // evita el escape hell. El output final es idéntico:
+        // `'path' => 'uploads/admin',`
+        $pathLiteral = "'path' => 'uploads/".$scopeLower."',";
+
         return <<<PHP
 [
             'file_storage' => [
                 'fields' => {$fieldsPhp},
                 'disk' => 'public',
-                'path' => 'uploads/{scopeLower}',
+                {$pathLiteral}
                 'auto_url' => true,
             ],
         ]
@@ -2127,7 +2198,7 @@ PHP;
      *
      * Si no hay file fields, retorna string vacío. Los stubs pinean este helper
      * en `{{fileFieldsFillableEntries}}` que se inserta después de los core fields
-     * (`name`, `{{loginField}}`, `password`, `auth_scope`, `client_id`).
+     * (`name`, `{{loginField}}`, `password`, `auth_scope`, `{{clientIdFillableEntry}}`).
      *
      * @param  array<int, string>  $fileFieldNames  Lista de field names con type=file.
      * @return string PHP literal pineable en stub.
@@ -2200,6 +2271,56 @@ PHP;
     }
 
     /**
+     * R-PKG-052 (FEEDBACK11, RETO corrida 10) — emite entry `'client_id'`
+     * para `$fillable` del Model, SOLO si el scaffolder se invoca con
+     * `--multi-tenant` (opt-in).
+     *
+     * Pre-fix, el stub pineaba `'client_id'` SIEMPRE. En apps single-tenant
+     * como RETO, esto provocaba:
+     *   - `column not found: client_id` en el primer `INSERT` (la migration
+     *     NO crea `client_id` sin multi-tenancy, pero `$fillable` sí lo
+     *     declaraba → Eloquent intentaba persistir `client_id` random).
+     *   - Dead code que engañaba al dev sobre las columnas reales de la tabla.
+     *
+     * Post-fix: default single-tenant (string vacío), opt-in vía flag
+     * `--multi-tenant` que pinea `        'client_id',\n` (8 spaces indent).
+     * Defense-in-depth — el scaffolder NUNCA pinea `client_id` sin flag
+     * explícito, así que un consumer que olvida el flag no se rompe.
+     *
+     * @param  bool  $multiTenant
+     * @return string PHP literal pineable en stub.
+     */
+    protected function buildClientIdFillableEntry(bool $multiTenant): string
+    {
+        return $multiTenant ? "        'client_id',\n" : '';
+    }
+
+    /**
+     * R-PKG-052 (FEEDBACK11, RETO corrida 10) — emite `client_id` column para
+     * la migration, SOLO si el scaffolder se invoca con `--multi-tenant` (opt-in).
+     *
+     * La columna pineada es `uuid nullable + index` — pinear como uuid porque
+     * el resto del scope usa HasUuids (auth_users.id es uuid, R-PKG-011 BC).
+     * Nullable porque un user podría no tener tenant asignado (e.g. super-admin
+     * cross-tenant). Index porque el query `WHERE client_id = ?` es el
+     * hot-path del filter multi-tenant (ver `BaseRepository` de R-PKG-046).
+     *
+     * Pre-fix, la migration NO pineaba `client_id` NUNCA → el `$fillable`
+     * pineado en el modelo (legacy pre-R-PKG-052) apuntaba a una columna
+     * inexistente → `column not found: client_id` en el primer INSERT.
+     * Post-fix, ambos (model + migration) pinean en lockstep vía flag.
+     *
+     * @param  bool  $multiTenant
+     * @return string PHP literal pineable en stub.
+     */
+    protected function buildClientIdColumn(bool $multiTenant): string
+    {
+        return $multiTenant
+            ? "\$table->uuid('client_id')->nullable()->index();\n            "
+            : '';
+    }
+
+    /**
      * FEEDBACK10 — emite entries para `toArray()` del Resource a partir de file fields.
      *
      * Formato: 2 líneas por file field (path + url):
@@ -2230,101 +2351,26 @@ PHP;
     }
 
     /**
-     * FEEDBACK10 — emite el CUERPO del bloque `mutateData()` con upload pipeline.
+     * R-PKG-052 T9 v2 (FEEDBACK11, Mario 2026-07-11) — `buildFileFieldsUploadPipeline()`
+     * y `buildFileFieldsDeleteOldPipeline()` se ELIMINARON del scaffolder.
      *
-     * Solo se pine el cuerpo (no la signature — esa vive hardcoded en el stub).
-     * Formato pineado en el stub `admin-service.stub`:
+     * Estos helpers pineaban el body de `mutateData()` (upload) y el preámbulo
+     * de `update()` (delete-old) en el `admin-service.stub` — pero pinear un
+     * pipeline manual en el Service era **duplicar la lógica del FileStoragePlugin**
+     * (que ya se invoca automáticamente desde CRUDSmart vía PluginManager::fireBeforeSave
+     * y fireAfterSave).
      *
-     *     {{fileFieldsUploadPipeline}}  // pinea:
-     *         // FEEDBACK10: auto-upload pipeline para file fields declarados via
-     *         // --profile-fields (e.g. `avatar:file`).
-     *         foreach (['avatar'] as $fieldName) {
-     *             if (isset($data[$fieldName]) && $data[$fieldName] instanceof \Illuminate\Http\UploadedFile) {
-     *                 $path = $data[$fieldName]->store(
-     *                     '{{moduleNamePluralLower}}',
-     *                     config('mk_director.storage.disk', 'public'),
-     *                 );
-     *                 $data[$fieldName] = $path;
-     *             }
-     *         }
+     * Mario explícito: "el modulo deberia usar los create y update que tiene
+     * el crudsmart, y sus hoiks, asi tambien se dispara el managed pluguins
+     * y llama a los pluguins que se hayan configurado coo ek de subir los files,
+     * ese pluguins se encarga de proesar las imagenes adecuadamente, no e
+     * snecesario que se haga en el service ni en el controller, por algo esta
+     * el plugins".
      *
-     * Identity map: `$data[$fieldName]` no `$data[$fieldName . '_path']`.
-     *
-     * Si NO hay file fields, retorna string vacío (el stub queda como
-     * passthrough: solo `return $data;`).
-     *
-     * @param  array<int, string>  $fileFieldNames
-     * @return string PHP literal pineable en stub (cuerpo de mutateData).
+     * El Service scaffoldeado ahora implementa los hooks de MkModuleServiceInterface
+     * (beforeCreate/afterCreate/beforeUpdate/afterUpdate/etc.) con bodies
+     * passthrough. El consumer override con lógica específica del módulo.
      */
-    protected function buildFileFieldsUploadPipeline(array $fileFieldNames): string
-    {
-        if ($fileFieldNames === []) {
-            return '';
-        }
-
-        $fieldsList = "['".implode("', '", $fileFieldNames)."']";
-
-        return <<<PHP
-        // FEEDBACK10 (R-PKG-050): auto-upload pipeline para file fields declarados via
-        // --profile-fields (e.g. `avatar:file`). IDENTITY MAP — el column name ES el
-        // request field name (`avatar` no `avatar_path`). El path devuelto por
-        // `UploadedFile::store()` se escribe en \$data[\$fieldName].
-        foreach ({$fieldsList} as \$fieldName) {
-            if (isset(\$data[\$fieldName]) && \$data[\$fieldName] instanceof \\Illuminate\\Http\\UploadedFile) {
-                \$path = \$data[\$fieldName]->store(
-                    '{{moduleNamePluralLower}}',
-                    config('mk_director.storage.disk', 'public'),
-                );
-                \$data[\$fieldName] = \$path;
-            }
-        }
-
-PHP;
-    }
-
-    /**
-     * FEEDBACK10 — emite el CUERPO del inicio de `update()` con delete-old pipeline.
-     *
-     * Solo se pine el cuerpo (no la signature — esa vive hardcoded en el stub).
-     * Formato pineado en el stub `admin-service.stub`:
-     *
-     *     {{fileFieldsDeleteOldPipeline}}  // pinea:
-     *         // FEEDBACK10: si hay nuevo file, borrar el viejo antes de subir.
-     *         foreach (['avatar'] as $fieldName) {
-     *             if (isset($data[$fieldName]) && $data[$fieldName] instanceof \Illuminate\Http\UploadedFile) {
-     *                 if (! empty(${{moduleNameLower}}->$fieldName)) {
-     *                     Storage::disk(...)->delete(${{moduleNameLower}}->$fieldName);
-     *                 }
-     *             }
-     *         }
-     *
-     * Si NO hay file fields, retorna string vacío.
-     *
-     * @param  array<int, string>  $fileFieldNames
-     * @return string PHP literal pineable en stub (cuerpo del preámbulo de update()).
-     */
-    protected function buildFileFieldsDeleteOldPipeline(array $fileFieldNames): string
-    {
-        if ($fileFieldNames === []) {
-            return '';
-        }
-
-        $fieldsList = "['".implode("', '", $fileFieldNames)."']";
-
-        return <<<PHP
-        // FEEDBACK10 (R-PKG-050): si hay nuevo file, borrar el viejo antes de subir.
-        // Iteramos sobre los file fields declarados via --profile-fields.
-        foreach ({$fieldsList} as \$fieldName) {
-            if (isset(\$data[\$fieldName]) && \$data[\$fieldName] instanceof \\Illuminate\\Http\\UploadedFile) {
-                if (! empty(\${{moduleNameLower}}->{\$fieldName})) {
-                    \\Illuminate\\Support\\Facades\\Storage::disk(config('mk_director.storage.disk', 'public'))
-                        ->delete(\${{moduleNameLower}}->{\$fieldName});
-                }
-            }
-        }
-
-PHP;
-    }
 
     /**
      * FEEDBACK10 — emite validation rules para el Store Request de file fields.
@@ -2549,7 +2595,21 @@ PHP;
         // `email` se declara via --profile-fields cuando loginField != email,
         // el DTO/resource pinean `'email'` también. Mantenemos el dedup para
         // el caso de `email` (profile field extra) cuando loginField es distinto.
-        $coreFields = ['id', 'name', $loginField, 'auth_scope'];
+        //
+        // R-PKG-052: agregar `'status'` y `'password'` a la dedup. El stub
+        // `admin-data-dto.stub` pinea `'password' => $this->password` hardcoded
+        // en `toArray()` (línea 79), y `{{statusDtoToArray}}` pinea
+        // `'status' => $this->status`. Pre-fix, si `password` o `status` estaban
+        // en `--profile-fields`, este helper pineaba OTRA entry `'password'`
+        // o `'status'` en `toArray()`. PHP array merge con key duplicada
+        // descartaba la primera — el output seguía OK porque los valores
+        // son iguales, pero el código generado era inconsistente (duplicado
+        // explícito pineado 2 veces). Mismo problema en Resource: `{{statusResourceEntry}}`
+        // pinea `'status' => $this->status?->value` canónico, y `{{profileFieldsResourceEntry}}`
+        // pineaba `'status' => $this->status` (enum crudo) — eso PISABA el
+        // canónico con el enum object, rompiendo el contrato cross-stack
+        // con `@makroz/web AdminDto.status: AdminStatusValue` (espera string).
+        $coreFields = ['id', 'name', $loginField, 'auth_scope', 'password', 'status'];
 
         $out = '';
         foreach ($profileFields as $key => $meta) {
@@ -2607,7 +2667,7 @@ PHP;
      * @param  string  $scopePlural  Nombre de la tabla del scope (e.g. `admins`).
      * @return array{store: string, update: string}
      */
-    protected function buildProfileFieldRules(array $profileFields, array $requiredFields, string $scopePlural): array
+    protected function buildProfileFieldRules(array $profileFields, array $requiredFields, string $scopePlural, string $loginField = 'email', array $fileFieldNames = []): array
     {
         // R-PKG-046 F9-B01: core fields ya pineados hardcoded en los stubs.
         // Skip para evitar duplicate keys en el array final `rules()`.
@@ -2633,7 +2693,26 @@ PHP;
         // pinea el rule genérico `['nullable', 'string']` desde
         // `buildProfileFieldRules()` (la regla `file`/`image`/`mimes` se pinea
         // en el stub pineado por `{{fileFieldsValidationStore/Update}}`).
-        $coreFields = ['name', 'email', 'password', 'status'];
+        //
+        // R-PKG-052: usar `$loginField` dinámico en vez de hardcodear `email`.
+        // Pre-fix, si el consumer hacía `--login-field=ci` y `ci` también
+        // estaba en `--profile-fields`, el scaffolder pineaba DOS rules
+        // `'ci' => [...]` en `rules()`: una canónica del stub
+        // (`'required','string','max:255','unique:...,ci'`) + una genérica
+        // (`'nullable','string'`) de este helper. PHP array merge descartaba
+        // la primera — el `required`/`max:255`/`unique` se perdían en create.
+        //
+        // R-PKG-052: agregar `$fileFieldNames` al dedup. Pre-fix, si el consumer
+        // hacía `--profile-fields="avatar:file"`, este helper pineaba
+        // `'avatar' => ['nullable', 'string']` (genérica) Y
+        // `buildFileFieldsValidationStore` pineaba `'avatar' => ['nullable',
+        // 'file', 'image', 'mimes:...', 'max:2048']` (canónica, vía
+        // {{fileFieldsValidationStore}}). PHP array merge descartaba la
+        // primera y la validación de archivo se perdía — el front mandaba
+        // un `UploadedFile`, Laravel lo aceptaba como string (validation
+        // `string` pasaba con el temp path), pero el upload real fallaba
+        // en runtime porque no había rule `file`/`image` para el plugin.
+        $coreFields = array_merge(['name', $loginField, 'password', 'status'], $fileFieldNames);
 
         $store = '';
         $update = '';

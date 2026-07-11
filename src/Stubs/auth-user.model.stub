@@ -70,6 +70,15 @@ class {{ModuleName}} extends AuthUser
      * File fields (`avatar:file`, etc.) se agregan vía `{{fileFieldsFillableEntries}}`
      * pineado por `buildFileFieldsFillableEntries()` (FEEDBACK10, R-PKG-050).
      *
+     * R-PKG-052 (FEEDBACK11, RETO corrida 10): `client_id` se pinea SOLO si
+     * el scaffolder se invoca con `--multi-tenant` (opt-in). Pre-fix, el
+     * stub pineaba `'client_id'` siempre, lo que en apps single-tenant como
+     * RETO provocaba `column not found: client_id` en el `INSERT` (la
+     * migration NO crea `client_id` sin multi-tenancy, pero el fillable sí
+     * lo declaraba → mass assignment con `client_id` random fallaba, o
+     * dead code en `$fillable` que engañaba al dev sobre las columnas
+     * reales de la tabla).
+     *
      * @var array<int, string>
      */
     protected $fillable = [
@@ -77,8 +86,7 @@ class {{ModuleName}} extends AuthUser
         '{{loginField}}',
 {{profileFieldsFillableEntries}}{{fileFieldsFillableEntries}}{{statusFillableEntry}}        'password',
         'auth_scope',
-        'client_id',
-    ];
+{{clientIdFillableEntry}}    ];
 
     /**
      * Casts de atributos. Solo `email_verified_at` se incluye cuando

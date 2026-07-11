@@ -45,7 +45,7 @@ function makeAuthUserCommandSource(): string
     return (string) file_get_contents($path);
 }
 
-test('R-PKG-046 F9-B01 — buildProfileFieldRules() SKIP core fields (name, email, password, status)', function () {
+test('R-PKG-046 F9-B01 — buildProfileFieldRules() SKIP core fields (name, $loginField, password, status)', function () {
     $src = makeAuthUserCommandSource();
 
     $helperPos = strpos($src, 'protected function buildProfileFieldRules(');
@@ -54,7 +54,7 @@ test('R-PKG-046 F9-B01 — buildProfileFieldRules() SKIP core fields (name, emai
     $helperBody = substr($src, (int) $helperPos);
 
     // F10-B18 (R-PKG-050): la dedup incluye 'status' además de los
-    // core fields F9-B01 (name, email, password). Pre-fix, con
+    // core fields F9-B01 (name, email/loginField, password). Pre-fix, con
     // --with-status default ON, el helper pineaba 'status' => ['nullable',
     // 'string'] (rule genérica) Y el helper de status pineaba
     // 'status' => ['sometimes', 'nullable', 'string', Rule::enum(...)] —
@@ -63,14 +63,34 @@ test('R-PKG-046 F9-B01 — buildProfileFieldRules() SKIP core fields (name, emai
     // FEEDBACK10: `photo` ya NO está en la dedup list (los file fields
     // se pinean via {{fileFieldsValidationStore/Update}} con rule
     // `['nullable', 'file', 'image', ...]`).
-    expect($helperBody)->toContain("\$coreFields = ['name', 'email', 'password', 'status']");
+    //
+    // R-PKG-052: la dedup usa `$loginField` dinámico en vez de hardcodear
+    // `'email'`. Pre-fix, con `--login-field=ci --profile-fields=ci,phone`,
+    // el scaffolder pineaba DOS `'ci' => [...]` rules y PHP descartaba
+    // la canónica (con required/max:255/unique) — el login quedaba sin validar.
+    //
+    // R-PKG-052: el dedup también mergea `$fileFieldNames` para skipear los
+    // file fields. Pre-fix, con `--profile-fields="avatar:file"`, este helper
+    // pineaba `'avatar' => ['nullable', 'string']` (genérica) Y
+    // buildFileFieldsValidationStore pineaba `'avatar' => ['nullable', 'file',
+    // 'image', 'mimes:...', 'max:2048']` (canónica). PHP descartaba la primera
+    // y la validación de archivo se perdía (front mandaba UploadedFile, Laravel
+    // lo aceptaba como string, upload real fallaba en runtime).
+    expect($helperBody)->toContain("\$coreFields = array_merge(['name', \$loginField, 'password', 'status'], \$fileFieldNames)");
 
     // Y debe skip esos fields con in_array check.
     expect($helperBody)->toContain("if (in_array(\$key, \$coreFields, true))");
     expect($helperBody)->toContain('continue;');
+
+    // R-PKG-052: pinea que el método RECIBE el `$loginField` + `$fileFieldNames`
+    // como parámetros (pre-fix: solo recibía `$profileFields`, `$requiredFields`,
+    // `$scopePlural` y la dedup usaba `email` hardcoded, rompiendo para
+    // loginField != email y para file fields que quedaban con rule genérica
+    // pisando la rule canónica de file/image/mimes).
+    expect($helperBody)->toMatch('/function buildProfileFieldRules\(\s*array\s+\$profileFields\s*,\s*array\s+\$requiredFields\s*,\s*string\s+\$scopePlural\s*,\s*string\s+\$loginField\s*=\s*\'email\'\s*,\s*array\s+\$fileFieldNames\s*=\s*\[\]\s*\)/');
 });
 
-test('R-PKG-046 F9-B02 — buildProfileFieldsToArray() SKIP core fields (id, name, loginField, auth_scope)', function () {
+test('R-PKG-046 F9-B02 — buildProfileFieldsToArray() SKIP core fields (id, name, loginField, auth_scope, password, status)', function () {
     $src = makeAuthUserCommandSource();
 
     $helperPos = strpos($src, 'protected function buildProfileFieldsToArray(');
@@ -82,7 +102,18 @@ test('R-PKG-046 F9-B02 — buildProfileFieldsToArray() SKIP core fields (id, nam
     // resource stub los genera dinámicamente via {{fileFieldsResourceEntry}}.
     // El nuevo core list es `id, name, loginField, auth_scope` (4 fields
     // pineados hardcoded en el stub).
-    expect($helperBody)->toContain("\$coreFields = ['id', 'name', \$loginField, 'auth_scope']");
+    //
+    // R-PKG-052: agregar `'password'` y `'status'` a la dedup. El stub
+    // `admin-data-dto.stub` pinea `'password' => $this->password` hardcoded
+    // en `toArray()` (línea 79), y `{{statusDtoToArray}}` pinea
+    // `'status' => $this->status`. Pre-fix, si `password` o `status` estaban
+    // en `--profile-fields`, este helper pineaba OTRA entry duplicada.
+    // Mismo problema en Resource: `{{statusResourceEntry}}` pinea
+    // `'status' => $this->status?->value` canónico, y este helper pineaba
+    // `'status' => $this->status` (enum crudo) — eso PISABA el canónico
+    // con el enum object, rompiendo el contrato cross-stack con
+    // `@makroz/web AdminDto.status: AdminStatusValue` (espera string).
+    expect($helperBody)->toContain("\$coreFields = ['id', 'name', \$loginField, 'auth_scope', 'password', 'status']");
 
     // Y debe skip esos fields con in_array check.
     expect($helperBody)->toContain("if (in_array(\$key, \$coreFields, true))");
@@ -148,4 +179,75 @@ test('R-PKG-046 F9-B02 — admin-resource.stub contiene solo 1 línea con key em
     // El stub tiene 1 línea con 'email' hardcoded.
     $emailLines = substr_count($stub, "'email' => \$this->email");
     expect($emailLines)->toBe(1);  // BC pineado hardcoded, sin duplicar.
+});
+
+test('R-PKG-052 — command signature incluye --multi-tenant opt-in flag', function () {
+    $src = makeAuthUserCommandSource();
+
+    // El option debe estar pineado como flag opt-in (sin `=`, con default false).
+    // Sintaxis: `{--multi-tenant : ...}`
+    expect($src)->toMatch('/\{--multi-tenant\s*:/');
+});
+
+test('R-PKG-052 — buildClientIdFillableEntry() pinea client_id solo si multi-tenant', function () {
+    $src = makeAuthUserCommandSource();
+
+    // El helper existe con la firma correcta (bool $multiTenant).
+    expect($src)->toMatch('/protected function buildClientIdFillableEntry\(\s*bool\s+\$multiTenant\s*\):\s*string/');
+
+    // Y retorna 'client_id' solo cuando multiTenant=true.
+    // El default (false) debe ser string vacío (NO pinear la entry).
+    expect($src)->toContain("return \$multiTenant ? \"        'client_id',\\n\" : '';");
+});
+
+test('R-PKG-052 — auth-user.model.stub usa {{clientIdFillableEntry}} placeholder (no hardcoded client_id)', function () {
+    $stubPath = __DIR__.'/../../../src/Stubs/auth-user.model.stub';
+    expect(file_exists($stubPath))->toBeTrue();
+
+    $stub = (string) file_get_contents($stubPath);
+
+    // Post-fix: el stub usa placeholder, no hardcoded 'client_id' en $fillable.
+    expect($stub)->toContain('{{clientIdFillableEntry}}');
+
+    // Y el helper pinea 'client_id' solo con flag opt-in.
+    // Defensa contra regresión: si el stub vuelve a pinear 'client_id' hardcoded,
+    // este test FALLA y avisa que hay que re-pinear el placeholder.
+    $fillableSection = (string) preg_match('/protected \$fillable = \[(.*?)\];/s', $stub, $m) ? $m[1] : '';
+    $hardcodedClientId = substr_count($fillableSection, "'client_id'");
+    expect($hardcodedClientId)->toBe(0);
+});
+
+test('R-PKG-052 — buildPluginsConfigLiteral() pinea path con scopeLower real (no placeholder literal)', function () {
+    $src = makeAuthUserCommandSource();
+
+    // El helper recibe $scopeLower (post-fix).
+    expect($src)->toMatch('/function buildPluginsConfigLiteral\(\s*array\s+\$fileFieldNames\s*,\s*string\s+\$scopeLower\s*=\s*\'unknown\'/');
+
+    // Y el path se construye con concatenación PHP (el string tiene 3
+    // niveles de quotes anidadas, por eso usamos `.` en vez de `{...}`):
+    //   $pathLiteral = "'path' => 'uploads/".$scopeLower."',";
+    // → en runtime el consumer recibe 'uploads/admin' (o el scope que sea).
+    expect($src)->toContain("\$pathLiteral = \"'path' => 'uploads/\".\$scopeLower.\"',\";");
+
+    // Y la HEREDOC ya NO contiene el string literal '{scopeLower}' (defensa
+    // contra regresión — si alguien lo vuelve a pinear, este test FALLA).
+    // Buscamos SOLO dentro de la HEREDOC, no en los comentarios del docblock
+    // (que sí mencionan '{scopeLower}' como referencia al bug pineado).
+    $heredocPos = strpos($src, "return <<<PHP\n");
+    $heredocEnd = strpos($src, "\nPHP;\n", (int) $heredocPos);
+    $heredocBody = substr($src, (int) $heredocPos, (int) $heredocEnd - (int) $heredocPos);
+    expect($heredocBody)->not->toContain("'uploads/{scopeLower}'");
+});
+
+test('R-PKG-052 T8 — MkServiceProvider auto-registra ModuleLoader (no requiere pine manual en bootstrap/providers.php)', function () {
+    $providerPath = __DIR__.'/../../../src/MkServiceProvider.php';
+    expect(file_exists($providerPath))->toBeTrue();
+
+    $src = (string) file_get_contents($providerPath);
+
+    // El método register() pinea ModuleLoaderServiceProvider. El consumer
+    // ya NO tiene que pinearlo en bootstrap/providers.php (auto-glob + cache
+    // toma el control de los module providers via ModuleProviderRegistry).
+    expect($src)->toContain('use Mk\\Director\\ModuleLoader\\ModuleLoaderServiceProvider;');
+    expect($src)->toContain("\$this->app->register(ModuleLoaderServiceProvider::class);");
 });

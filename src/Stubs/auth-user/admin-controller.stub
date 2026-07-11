@@ -9,6 +9,7 @@ use App\Modules\{{ModuleName}}\Http\Requests\AssignDirectAbilitiesRequest;
 use App\Modules\{{ModuleName}}\Http\Requests\Store{{ModuleName}}Request;
 use App\Modules\{{ModuleName}}\Http\Requests\Update{{ModuleName}}Request;
 use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
+use App\Modules\{{ModuleName}}\Repositories\{{ModuleName}}Repository;
 use App\Modules\{{ModuleName}}\Services\{{ModuleName}}Service;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -134,7 +135,11 @@ class {{ModuleName}}Controller extends SmartController
         /** @var {{ModuleName}} ${{moduleNameLower}} */
         ${{moduleNameLower}} = {{ModuleName}}::findOrFail($id);
 
-        app({{ModuleName}}Service::class)->syncRoles(${{moduleNameLower}}, $request->validated('roles'));
+        // R-PKG-052 T9: delega directo al Repository (pre-T9 pineaba
+        // un thin wrapper del Service, que era un delegate trivial).
+        // Achicar el Service para que solo contenga lo NO trivialmente
+        // delegable (mutateData hook + syncRoleAbilities específico).
+        app({{ModuleName}}Repository::class)->syncRoles(${{moduleNameLower}}, $request->validated('roles'));
 
         return $this->sendResponse(
             ${{moduleNameLower}}->fresh()->load('roles'),
@@ -153,7 +158,9 @@ class {{ModuleName}}Controller extends SmartController
         /** @var {{ModuleName}} ${{moduleNameLower}} */
         ${{moduleNameLower}} = {{ModuleName}}::findOrFail($id);
 
-        app({{ModuleName}}Service::class)->syncDirectAbilities(${{moduleNameLower}}, $request->validated('abilities'));
+        // R-PKG-052 T9: idem rationale que assignRoles() — delega al
+        // Repository directo, sin pasar por el Service.
+        app({{ModuleName}}Repository::class)->syncDirectAbilities(${{moduleNameLower}}, $request->validated('abilities'));
 
         return $this->sendResponse(
             ${{moduleNameLower}}->fresh()->load('directAbilities'),
