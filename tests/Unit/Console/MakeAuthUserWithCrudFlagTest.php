@@ -117,14 +117,27 @@ test('AbilityController stub extends SmartController y opera sobre Ability del p
 
 // ── Service implementa MkModuleServiceInterface-style API ────────────────
 
-test('AdminService stub tiene create/update/syncRoles/syncDirectAbilities', function () {
+test('AdminService stub (R-PKG-052 T9) tiene solo create/update + syncRoleAbilities (syncRoles/syncDirectAbilities delegados al Repository)', function () {
     $stub = (string) file_get_contents(packageRootCrud().'/src/Stubs/auth-user/admin-service.stub');
 
     expect($stub)->toContain('class {{ModuleName}}Service');
     expect($stub)->toContain('public function create(array $data): {{ModuleName}}');
     expect($stub)->toContain('public function update({{ModuleName}} ${{moduleNameLower}}, array $data): {{ModuleName}}');
-    expect($stub)->toContain('public function syncRoles({{ModuleName}} ${{moduleNameLower}}, array $roleNames): {{ModuleName}}');
-    expect($stub)->toContain('public function syncDirectAbilities({{ModuleName}} ${{moduleNameLower}}, array $abilityNames): {{ModuleName}}');
+    // R-PKG-052 T9: Service achicado. Solo conserva lo NO trivialmente delegable.
+    expect($stub)->toContain('public function syncRoleAbilities(Role $role, array $abilityNames): Role');
+    expect($stub)->not->toContain('public function syncRoles(');
+    expect($stub)->not->toContain('public function syncDirectAbilities(');
+});
+
+test('AdminController stub (R-PKG-052 T9) llama al Repository directo para syncRoles/syncDirectAbilities', function () {
+    $stub = (string) file_get_contents(packageRootCrud().'/src/Stubs/auth-user/admin-controller.stub');
+
+    // R-PKG-052 T9: el controller ya NO pasa por el Service para sync.
+    // Delega directo al Repository (que sigue siendo el SSoT de esos métodos).
+    expect($stub)->toContain('app({{ModuleName}}Repository::class)->syncRoles(');
+    expect($stub)->toContain('app({{ModuleName}}Repository::class)->syncDirectAbilities(');
+    expect($stub)->not->toContain('app({{ModuleName}}Service::class)->syncRoles(');
+    expect($stub)->not->toContain('app({{ModuleName}}Service::class)->syncDirectAbilities(');
 });
 
 // ── Repository implementa interface ──────────────────────────────────────

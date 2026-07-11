@@ -11,22 +11,40 @@ use Mk\Director\Auth\Models\Ability;
 use Mk\Director\Auth\Models\Role;
 
 /**
- * Service de {{ModuleName}} — capa de orquestación.
+ * Service de {{ModuleName}} — capa de orquestación thin.
  *
  * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
  *
- * Thin layer: delega al Repository para queries, pero concentra side effects
- * (file upload pipeline via FileStoragePlugin, sync de roles/abilities). Override
- * `mutateData()` para lógica custom (e.g. validar dimensiones de un avatar).
- * Se ejecuta tanto en `create()` como en `update()`.
+ * R-PKG-052 T9 (FEEDBACK11) — el Service es ahora **achicado**: solo conserva
+ * los métodos que NO son trivialmente delegables al Repository.
+ *
+ *   - `mutateData()` — hook compartido create+update. Pine file fields upload
+ *     pipeline via `{{fileFieldsUploadPipeline}}` (post-R-PKG-050). Override
+ *     para lógica custom (e.g. validar dimensiones de un avatar). Se ejecuta
+ *     en `create()` y `update()`.
+ *   - `syncRoleAbilities(Role, array)` — query + sync de abilities de un Role.
+ *     Específico de Admin/Member (no está en CRUDSmart). El controller
+ *     lo invoca vía `app({{ModuleName}}Service::class)->syncRoleAbilities($role, ...)`.
+ *
+ * Métodos ELIMINADOS en R-PKG-052 T9 (eran thin wrappers del Repository):
+ *
+ *   - ~~`syncRoles($model, $names)`~~ — el controller ahora delega directo al
+ *     Repository via `app({{ModuleName}}Repository::class)->syncRoles(...)`.
+ *     Sin valor agregado en el Service.
+ *   - ~~`syncDirectAbilities($model, $names)`~~ — idem.
+ *
+ * Trade-off: si el consumer pine override custom de `syncRoles` en
+ * AdminService (e.g. logging, events, validaciones), debe moverlo a un
+ * event listener o al Repository. R-G-033 dogfooding-first: RETO es
+ * único consumer y regenera desde 0 post-merge per R-PKG-051 strategy.
  *
  * FEEDBACK10 (R-PKG-050, Mario 2026-07-10): este stub pinea `mutateData()` y
- * `update()` con signature canónica hardcoded (no más `photo`/`photo_path`
- * hardcoded). Los placeholders `{{fileFieldsUploadPipeline}}` y
- * `{{fileFieldsDeleteOldPipeline}}` se generan dinámicamente desde los `:file`
- * suffix de `--profile-fields` (e.g. `avatar:file` → columna `avatar`,
- * accessor `getAvatarUrlAttribute`, plugin config `fields: ['avatar' => 'avatar']`).
- * Si NO hay file fields, los placeholders quedan como string vacío (passthrough).
+ * `update()` con signature canónica hardcoded. Los placeholders
+ * `{{fileFieldsUploadPipeline}}` y `{{fileFieldsDeleteOldPipeline}}` se
+ * generan dinámicamente desde los `:file` suffix de `--profile-fields`
+ * (e.g. `avatar:file` → columna `avatar`, accessor `getAvatarUrlAttribute`,
+ * plugin config `fields: ['avatar' => 'avatar']`). Si NO hay file fields,
+ * los placeholders quedan como string vacío (passthrough).
  */
 class {{ModuleName}}Service
 {
@@ -81,27 +99,12 @@ class {{ModuleName}}Service
     }
 
     /**
-     * Sincroniza roles (delegado al Repository).
+     * Sincroniza abilities de un Role (específico de Admin/Member, NO está
+     * en CRUDSmart).
      *
-     * @param  array<int, string>  $roleNames
-     */
-    public function syncRoles({{ModuleName}} ${{moduleNameLower}}, array $roleNames): {{ModuleName}}
-    {
-        return $this->repository->syncRoles(${{moduleNameLower}}, $roleNames);
-    }
-
-    /**
-     * Sincroniza abilities directas (delegado al Repository).
-     *
-     * @param  array<int, string>  $abilityNames
-     */
-    public function syncDirectAbilities({{ModuleName}} ${{moduleNameLower}}, array $abilityNames): {{ModuleName}}
-    {
-        return $this->repository->syncDirectAbilities(${{moduleNameLower}}, $abilityNames);
-    }
-
-    /**
-     * Sincroniza abilities de un Role.
+     * El controller invoca este método cuando se quiere asignar abilities
+     * a un role específico (no al user directamente). Pine `Role::query()
+     * ->whereIn('name', $abilityNames)->pluck('id')` + `sync()`.
      *
      * @param  array<int, string>  $abilityNames
      */
