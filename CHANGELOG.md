@@ -57,6 +57,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   single-tenant (RETO compatible). Helper `buildClientIdFillableEntry(bool)`
   + `buildClientIdColumn(bool)` + stubs usan `{{clientIdFillableEntry}}` y
   `{{clientIdColumn}}` placeholders.
+- **T8 — `MkServiceProvider::register()` auto-registra `ModuleLoaderServiceProvider`**.
+  El consumer ya NO tiene que pinear `ModuleLoaderServiceProvider`
+  manualmente en `bootstrap/providers.php`. El `ModuleProviderRegistry`
+  hace auto-glob con cache 1h TTL + symlink rejection + canonical path
+  check. Defense-in-depth contra olvidar registrar module providers.
 
 ### Changed
 
@@ -71,6 +76,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `auth-user.model.stub` y `auth-user.migration.stub`: agregados placeholders
   `{{clientIdFillableEntry}}` y `{{clientIdColumn}}` (opcionales, opt-in
   via `--multi-tenant` flag).
+- **T9 — `AdminService` scaffoldeado queda achicado** (post-R-PKG-052). Pre-T9
+  tenía 4 métodos públicos (`create`, `update`, `syncRoles`, `syncDirectAbilities`,
+  `syncRoleAbilities`). Post-T9: solo `create`, `update` (con `mutateData`
+  hook para file fields upload) y `syncRoleAbilities` (específico, query +
+  sync). `syncRoles` y `syncDirectAbilities` (triviales, thin wrappers del
+  Repository) eliminados del Service. El `AdminController` ahora llama al
+  Repository directo via `app({{ModuleName}}Repository::class)->syncRoles(...)`.
+  Patrón R-PKG-015: SSoT = Repository, Service = thin wrapper de lo NO
+  trivialmente delegable. R-G-033: RETO es único consumer, regenera desde 0
+  post-merge per dogfooding-first.
 
 ### Tests
 
