@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Mk\Director\Console\Commands;
 
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\HasApiTokens;
@@ -295,7 +296,7 @@ class MakeAuthUserCommand extends Command
             }
             if (! File::exists(app_path("Modules/{$managedBy}"))) {
                 // No es fatal: el manager podría scaffoldearse después. Avisamos.
-                $this->warn("⚠️  --managed-by={$managedBy}: el módulo App\\Modules\\{$managedBy} todavía no existe. Genera el scope manager (ej: `mk:make:auth-user {$managedBy} --with-crud`) para que su guard `".Str::snake($managedBy)."` y sus roles existan antes de correr el seeder managed.");
+                $this->warn("⚠️  --managed-by={$managedBy}: el módulo App\\Modules\\{$managedBy} todavía no existe. Genera el scope manager (ej: `mk:make:auth-user {$managedBy} --with-crud`) para que su guard `".Str::snake($managedBy).'` y sus roles existan antes de correr el seeder managed.');
             }
         }
 
@@ -744,6 +745,39 @@ PHP,
             ];
         }
 
+        // R-PKG-051 hotfix (post-R-PKG-050): los 2 placeholders del modelo base
+        // (`{{fileFieldsFillableEntries}}` para `$fillable` y
+        // `{{fileFieldsAccessors}}` para los accessors `get{Name}UrlAttribute`)
+        // se pinean ACÁ, no en `$crudReplacements`.
+        //
+        // Root cause del bug pre-R-PKG-051: R-PKG-050 (T1.6 del tasks.md) pineó
+        // los 7 placeholders nuevos de file fields solo en `$crudReplacements`,
+        // pero `auth-user.model.stub` (línea 78 + 115) los referencia. El modelo
+        // se pinea con `$extraReplacements` (línea 800, `generateStub` fase base),
+        // NO con `$crudReplacements` (fase `--with-crud`). Resultado: 3
+        // placeholders literales en `app/Modules/{Scope}/Models/{Scope}.php`
+        // (líneas ~92, ~103, ~142) → `ParseError: syntax error, unexpected token "{", expecting "]"`
+        // al primer `php artisan migrate` cuando el consumer pinea
+        // `--profile-fields="...,avatar:file"`.
+        //
+        // Reportado por Mario 2026-07-10 22:40 (sesión `mvs_0c369ad1145c4159b87bd95566caab7d`)
+        // al correr `php artisan migrate` en RETO con Admin scaffoldeado.
+        // Reproducible 100%: cualquier scaffoldeado de scope con `:file` suffix
+        // en `--profile-fields` deja el modelo roto.
+        //
+        // Fix: cachear `detectFileFields($profileFields)` una vez acá (DRY para
+        // futuras llamadas) y mergear los 2 placeholders del modelo en
+        // `$extraReplacements`. Los otros 5 placeholders de file fields
+        // (`{{fileFieldsResourceEntry}}`, `{{fileFieldsUploadPipeline}}`,
+        // `{{fileFieldsDeleteOldPipeline}}`, `{{fileFieldsValidationStore}}`,
+        // `{{fileFieldsValidationUpdate}}`) se quedan en `$crudReplacements` —
+        // solo se usan en stubs del CRUD pack.
+        $fileFieldNames = $this->detectFileFields($profileFields);
+        $fileFieldsBaseReplacements = [
+            '{{fileFieldsFillableEntries}}' => $this->buildFileFieldsFillableEntries($fileFieldNames),
+            '{{fileFieldsAccessors}}' => $this->buildFileFieldsAccessors($fileFieldNames),
+        ];
+
         $extraReplacements = array_merge(
             $loginFieldReplacements,
             $rbacReplacements,
@@ -752,6 +786,7 @@ PHP,
             $factoryReplacements,
             $statusReplacements,
             $managedByReplacements,
+            $fileFieldsBaseReplacements,
         );
 
         $this->info("🔐 Generando scope de autenticación MK: {$scope}".($withAuthRbac ? ' (with RBAC)' : ''));
@@ -977,7 +1012,7 @@ PHP,
     {
         try {
             $connection = function_exists('app') && function_exists('config')
-                ? \Illuminate\Support\Facades\DB::connection()
+                ? DB::connection()
                 : null;
             if ($connection === null) {
                 return;
@@ -1658,6 +1693,9 @@ PHP,
             // reusa en 7 placeholders — uno por stub que lo necesita.
             //
             // - `{{fileFieldsFillableEntries}}` → `{{fileFieldsAccessors}}` (model)
+            //   ↑ R-PKG-051: pineados en `$extraReplacements` (fase base) porque
+            //   el modelo se pinea con `$extraReplacements`, no con este array.
+            //   Ver bloque `$fileFieldsBaseReplacements` arriba (línea ~770).
             // - `{{fileFieldsResourceEntry}}` (admin-resource)
             // - `{{fileFieldsUploadPipeline}}` (admin-service: cuerpo de mutateData)
             // - `{{fileFieldsDeleteOldPipeline}}` (admin-service: cuerpo de update)
@@ -1665,12 +1703,6 @@ PHP,
             //
             // Si NO hay file fields, todos los helpers retornan string vacío
             // (los placeholders quedan como whitespace, PHP lo tolera sin error).
-            '{{fileFieldsFillableEntries}}' => $this->buildFileFieldsFillableEntries(
-                $this->detectFileFields($profileFields),
-            ),
-            '{{fileFieldsAccessors}}' => $this->buildFileFieldsAccessors(
-                $this->detectFileFields($profileFields),
-            ),
             '{{fileFieldsResourceEntry}}' => $this->buildFileFieldsResourceEntry(
                 $this->detectFileFields($profileFields),
             ),
@@ -1896,7 +1928,7 @@ PHP,
      *     user (e.g. `--profile-fields='phone:json'` para postgres jsonb).
      *
      * @param  array<string, array{type: string, unique: bool}>  $userFields  Lo que pasó el dev.
-     * @return array<string, array{type: string, unique: bool}>  Defaults + user fields mergeados.
+     * @return array<string, array{type: string, unique: bool}> Defaults + user fields mergeados.
      *
      * @throws \InvalidArgumentException Si user intenta pisar `name`.
      */
@@ -2051,11 +2083,11 @@ PHP;
 
         $indent = str_repeat('    ', $indentLevels);
 
-        $out = '[' . PHP_EOL;
+        $out = '['.PHP_EOL;
         foreach ($map as $key => $value) {
-            $out .= $indent . "    '{$key}' => '{$value}'," . PHP_EOL;
+            $out .= $indent."    '{$key}' => '{$value}',".PHP_EOL;
         }
-        $out .= $indent . ']';
+        $out .= $indent.']';
 
         return $out;
     }
@@ -2146,7 +2178,7 @@ PHP;
         $out = '';
         foreach ($fileFieldNames as $fieldName) {
             $studly = str_replace('_', '', ucwords($fieldName, '_'));
-            $urlKey = $fieldName . '_url';
+            $urlKey = $fieldName.'_url';
             $out .= <<<PHP
 
     /**
@@ -2189,7 +2221,7 @@ PHP;
 
         $out = '';
         foreach ($fileFieldNames as $fieldName) {
-            $urlKey = $fieldName . '_url';
+            $urlKey = $fieldName.'_url';
             $out .= "            '{$fieldName}' => \$this->{$fieldName},\n";
             $out .= "            '{$urlKey}' => \$this->{$urlKey},\n";
         }
@@ -2230,7 +2262,7 @@ PHP;
             return '';
         }
 
-        $fieldsList = "['" . implode("', '", $fileFieldNames) . "']";
+        $fieldsList = "['".implode("', '", $fileFieldNames)."']";
 
         return <<<PHP
         // FEEDBACK10 (R-PKG-050): auto-upload pipeline para file fields declarados via
@@ -2277,7 +2309,7 @@ PHP;
             return '';
         }
 
-        $fieldsList = "['" . implode("', '", $fileFieldNames) . "']";
+        $fieldsList = "['".implode("', '", $fileFieldNames)."']";
 
         return <<<PHP
         // FEEDBACK10 (R-PKG-050): si hay nuevo file, borrar el viejo antes de subir.
@@ -2844,7 +2876,7 @@ PHP;
         $this->warn("📋 Recurso managed habilitado ({$managedBy} → {$scope}). Siguientes pasos:");
         $this->line("   • Endpoint:   /api/{$managerLower}/{$scopePlural} (guard mk.auth:{$managerLower})");
         $this->line("   • Abilities:  {$managerLower}.{$scopePlural}.{viewAny,view,create,update,delete} (afectan al scope {$managerLower})");
-        $this->line("   1. php artisan migrate  (si aún no corriste)");
+        $this->line('   1. php artisan migrate  (si aún no corriste)');
         $this->line("   2. php artisan mk:discover-abilities --module={$scope} --force  (descubre {$managerLower}.{$scopePlural}.*)");
         $this->line("   3. php artisan db:seed --class=\"App\\Modules\\{$scope}\\Database\\Seeders\\{$scope}ManagedBy{$managedBy}Seeder\"");
         $this->line("      (concede esas abilities a los roles admin/viewer del scope {$managerLower}; correr DESPUÉS del {$managedBy}RolesSeeder).");
@@ -2887,7 +2919,7 @@ PHP;
 
         // BC: si el patrón viejo está pineado (dos loadRoutesFrom en el mismo SP),
         // skip. El consumer puede migrar manualmente.
-        if (str_contains($content, "Http/Routes/managed.php")) {
+        if (str_contains($content, 'Http/Routes/managed.php')) {
             $this->line('   ✅ ServiceProvider ya carga Http/Routes/managed.php (patrón BC, sin cambios).');
 
             return;
@@ -2938,8 +2970,8 @@ PHP;
 
         if (! File::exists($bootstrapPath)) {
             // Fallback Laravel 10 / config/app.php.
-            $this->warn("   ⚠️  bootstrap/providers.php no encontrado. Registrá manualmente:");
-            $this->line("        App\\\\Providers\\\\...::class  // agregar a config/app.php");
+            $this->warn('   ⚠️  bootstrap/providers.php no encontrado. Registrá manualmente:');
+            $this->line('        App\\\\Providers\\\\...::class  // agregar a config/app.php');
             $this->line("        {$providerFqcn}::class");
 
             return;
@@ -3484,7 +3516,6 @@ PHP,
     // pinean DIRECTAMENTE como literales en el stub `auth-user/enum-status.stub`. Los cases
     // son string-backed con values hardcoded ('active','inactive',...). Si un consumer quiere
     // estados custom, override post-scaffold el stub directamente.
-
 
     /**
      * N8 — genera los brazos del `match` de label() del enum de status.

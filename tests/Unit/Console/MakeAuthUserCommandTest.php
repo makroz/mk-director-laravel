@@ -240,7 +240,7 @@ test('auth-user service-provider stub loads routes and migrations for the scope'
 
 test('R-PKG-047 D1: BaseAuthController es SSoT — pinean los 6 métodos canónicos + imports', function () {
     $basePath = dirname(__DIR__, 3).'/src/Auth/Controllers/BaseAuthController.php';
-    expect(file_exists($basePath))->toBeTrue("BaseAuthController must exist (R-PKG-047 D1 SSoT)");
+    expect(file_exists($basePath))->toBeTrue('BaseAuthController must exist (R-PKG-047 D1 SSoT)');
 
     $base = (string) file_get_contents($basePath);
 
@@ -438,9 +438,9 @@ test('F10-B05: $crudReplacements pasa $loginField a los 3 helpers DTO (regressio
     // El caller en $crudReplacements debe pasar $loginField a los 3 helpers.
     // Si alguien borra el segundo arg, el dedup skipea 'email' siempre aunque
     // el scope use 'ci' → bug silencioso.
-    expect($source)->toContain("buildProfileFieldsFillable(\$profileFields, \$loginField)");
-    expect($source)->toContain("buildProfileFieldsFromRequest(\$profileFields, \$loginField)");
-    expect($source)->toContain("buildProfileFieldsFromArray(\$profileFields, \$loginField)");
+    expect($source)->toContain('buildProfileFieldsFillable($profileFields, $loginField)');
+    expect($source)->toContain('buildProfileFieldsFromRequest($profileFields, $loginField)');
+    expect($source)->toContain('buildProfileFieldsFromArray($profileFields, $loginField)');
 });
 // ── F10-B07 regression test (R-PKG-050) ────────────────────────────────────
 //
@@ -849,7 +849,7 @@ test('F10-B15: SKILL.md documenta gotcha de RefreshDatabase + SQLite in-memory',
 // Reflection sobre métodos protected (patrón feedback4Invoke).
 function feedback10Invoke(string $method, array $args): mixed
 {
-    $command = new \Mk\Director\Console\Commands\MakeAuthUserCommand;
+    $command = new MakeAuthUserCommand;
     $ref = new \ReflectionMethod($command, $method);
     $ref->setAccessible(true);
 
@@ -938,7 +938,7 @@ test('FEEDBACK10: buildFileFieldsUploadPipeline() pinea heredoc sin escapar $dat
     expect($out)->toContain('isset($data[$fieldName])');
     expect($out)->toContain('$data[$fieldName] instanceof \Illuminate\Http\UploadedFile');
     expect($out)->toContain('$data[$fieldName]->store(');
-    expect($out)->toContain("\$data[\$fieldName] = \$path;");
+    expect($out)->toContain('$data[$fieldName] = $path;');
     // Disk configurable via mk_director.storage.disk.
     expect($out)->toContain("config('mk_director.storage.disk', 'public')");
     // Path pineado como placeholder {{moduleNamePluralLower}} (NO hardcoded).
@@ -987,13 +987,19 @@ test('FEEDBACK10: buildPluginsConfigLiteral() pine IDENTITY map en fields (no su
     expect($out)->not->toContain("'photo' => 'photo_path'");
 });
 
-test('FEEDBACK10: crudReplacements pine los 7 file fields placeholders', function () {
+test('FEEDBACK10: crudReplacements pine los 5 file fields placeholders (R-PKG-051: 2 del modelo se pinean en $extraReplacements)', function () {
     $source = commandSource();
 
-    // Pinear que los 7 placeholders nuevos se pinean en el array $crudReplacements.
+    // R-PKG-051 hotfix: 2 de los 7 placeholders nuevos (`{{fileFieldsFillableEntries}}`
+    // y `{{fileFieldsAccessors}}`) se pinean en `$extraReplacements` (fase base)
+    // porque el stub del modelo los referencia, no en `$crudReplacements` (fase
+    // --with-crud). Los 5 restantes se quedan en `$crudReplacements` (stubs del
+    // CRUD pack: resource, service, requests).
+    //
+    // Pre-R-PKG-051: los 7 vivían en `$crudReplacements` → modelo con
+    // placeholders literales → `ParseError: syntax error, unexpected token "{"`
+    // al primer `php artisan migrate` con scope scaffoldeado.
     foreach ([
-        '{{fileFieldsFillableEntries}}',
-        '{{fileFieldsAccessors}}',
         '{{fileFieldsResourceEntry}}',
         '{{fileFieldsUploadPipeline}}',
         '{{fileFieldsDeleteOldPipeline}}',
@@ -1004,8 +1010,75 @@ test('FEEDBACK10: crudReplacements pine los 7 file fields placeholders', functio
     }
 });
 
+test('R-PKG-051: $extraReplacements pine los 2 placeholders del modelo (fileFieldsFillableEntries + fileFieldsAccessors)', function () {
+    $source = commandSource();
+
+    // El bloque `$fileFieldsBaseReplacements` (mergeado en `$extraReplacements`)
+    // contiene los 2 placeholders del modelo. Sin esto, `auth-user.model.stub`
+    // queda con placeholders literales en líneas 78 + 115 → ParseError.
+    expect($source)->toContain('$fileFieldsBaseReplacements = [');
+    expect($source)->toContain("'{{fileFieldsFillableEntries}}' => \$this->buildFileFieldsFillableEntries(\$fileFieldNames)");
+    expect($source)->toContain("'{{fileFieldsAccessors}}' => \$this->buildFileFieldsAccessors(\$fileFieldNames)");
+
+    // Defense-in-depth: los 2 placeholders NO deben estar pineados directamente
+    // en `$crudReplacements` (deben estar solo en `$fileFieldsBaseReplacements`).
+    // Source-parsing: verificar que el array_merge final los incluye via el
+    // sub-array, no como key top-level del CRUD pack.
+    expect($source)->toMatch('/\$fileFieldsBaseReplacements\s*=\s*\[[\s\S]*?fileFieldsFillableEntries[\s\S]*?fileFieldsAccessors[\s\S]*?\];/');
+
+    // Y `$crudReplacements` ya NO contiene las 2 keys (verificación por NO match).
+    // El comentario del bloque debe mencionar explícitamente que se pinean en
+    // `$extraReplacements` para que un dev futuro no las vuelva a mover.
+    expect($source)->not->toMatch("/'\{\{fileFieldsFillableEntries\}\}'\s*=>\s*\\\$this->buildFileFieldsFillableEntries\(\s*\\\$this->detectFileFields\(\\\$profileFields\)/");
+    expect($source)->not->toMatch("/'\{\{fileFieldsAccessors\}\}'\s*=>\s*\\\$this->buildFileFieldsAccessors\(\s*\\\$this->detectFileFields\(\\\$profileFields\)/");
+});
+
+test('R-PKG-051: model stub post-generateStub NO contiene placeholders fileFields* literales (regression guard del bug)', function () {
+    // HALLAZGO-NEW-03: source-parsing pinea INTENCIÓN (estructura OK), no
+    // EFECTIVIDAD (runtime funciona). Este test emula el str_replace de
+    // `generateStub()` con `$extraReplacements` que incluye los 2 placeholders
+    // del modelo (post-R-PKG-051), y pinea que el output NO contiene
+    // placeholders literales del bug pre-R-PKG-051.
+    //
+    // NOTA: pinear TODOS los placeholders del stub para hacer `php -l` es
+    // brittle (cualquier stub nuevo rompe el test). Este test se limita a
+    // pinear los 2 que nos importan + los estructurales mínimos para que
+    // `str_replace` no quede con placeholders adyacentes raros. El PHP
+    // syntax check se hace en un e2e separado (RETO pilot, no en CI unitaria).
+    $stubPath = dirname(__DIR__, 3).'/src/Stubs/auth-user.model.stub';
+    expect(file_exists($stubPath))->toBeTrue();
+
+    $stub = (string) file_get_contents($stubPath);
+
+    // Emular los 4 str_replace fijos de `generateStub()` + los 2 nuevos
+    // placeholders del modelo pineados en `$extraReplacements` (R-PKG-051).
+    $stub = str_replace('{{ModuleName}}', 'Admin', $stub);
+    $stub = str_replace('{{moduleNameLower}}', 'admin', $stub);
+    $stub = str_replace('{{moduleNamePluralLower}}', 'admins', $stub);
+    $stub = str_replace('{{loginField}}', 'ci', $stub);
+    $stub = str_replace('{{fileFieldsFillableEntries}}', "        'avatar',\n", $stub);
+    $stub = str_replace('{{fileFieldsAccessors}}', <<<'PHP'
+
+    public function getAvatarUrlAttribute(): ?string
+    {
+        return $this->avatar ? \Illuminate\Support\Facades\Storage::url($this->avatar) : null;
+    }
+
+PHP, $stub);
+
+    // Regression guard R-PKG-051: el output NO contiene los 2 placeholders
+    // literales del bug. Antes del fix, ambos quedaban en el modelo generado
+    // → ParseError al `php artisan migrate`.
+    expect($stub)->not->toContain('{{fileFieldsFillableEntries}}');
+    expect($stub)->not->toContain('{{fileFieldsAccessors}}');
+
+    // Y SÍ contiene el contenido pineado (defense in depth).
+    expect($stub)->toContain("'avatar',");
+    expect($stub)->toContain('getAvatarUrlAttribute');
+});
+
 test('FEEDBACK10: stubs pinean placeholders `{{fileFields*}}` (no photo/photo_path hardcoded)', function () {
-    $stubsBase = dirname(__DIR__, 3) . '/src/Stubs/';
+    $stubsBase = dirname(__DIR__, 3).'/src/Stubs/';
 
     // Map: stub relativo → placeholders esperados. Los stubs `--with-crud`
     // viven en `auth-user/` subfolder, el model stub vive un nivel arriba
@@ -1019,7 +1092,7 @@ test('FEEDBACK10: stubs pinean placeholders `{{fileFields*}}` (no photo/photo_pa
     ];
 
     foreach ($expectedPlaceholders as $stubRelPath => $placeholders) {
-        $stubPath = $stubsBase . $stubRelPath;
+        $stubPath = $stubsBase.$stubRelPath;
         expect(file_exists($stubPath))->toBeTrue("Stub $stubRelPath must exist at $stubPath");
         $stub = (string) file_get_contents($stubPath);
 

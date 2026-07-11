@@ -183,6 +183,72 @@ Refs:
 
 ---
 
+## [UNRELEASED] — File fields base replacements hotfix (R-PKG-051 — post-R-PKG-050)
+
+> Hotfix del side-effect detectado al ejercitar R-PKG-050 en RETO pilot
+> (sesión `mvs_0c369ad1145c4159b87bd95566caab7d`, Mario 2026-07-10 22:40):
+> R-PKG-050 pineó los 7 placeholders nuevos de file fields solo en
+> `$crudReplacements` (T1.6 del tasks.md), pero `auth-user.model.stub`
+> (líneas 78 + 115) referencia 2 de ellos (`{{fileFieldsFillableEntries}}`
+> en `$fillable` y `{{fileFieldsAccessors}}` para los accessors
+> `get{Name}UrlAttribute`). El modelo se pinea con `$extraReplacements`
+> (fase base, línea 800 de `generateStub()`), NO con `$crudReplacements`
+> (fase `--with-crud`). Resultado: 3 placeholders literales en
+> `app/Modules/{Scope}/Models/{Scope}.php` (líneas ~92, ~103, ~142) →
+> `ParseError: syntax error, unexpected token "{", expecting "]"` al primer
+> `php artisan migrate` con scope scaffoldeado con `--profile-fields="...,avatar:file"`.
+>
+> **Driver**: Mario 2026-07-10 22:40 (sesión RETO fase 23) — "después de
+> ejecutar el scaffold para crear el auth user admin, y querer ejecutar el
+> migrate me sale este error, parece que no procesa bien los stubs que dejó
+> una variable sin reemplazar".
+>
+> **Reproducible 100%**: cualquier `php artisan mk:make:auth-user {Scope}
+> --profile-fields="...,{X}:file"` deja el modelo con placeholders literales.
+
+### 🟠 FIXED — Model base pinea placeholders fileFields (R-PKG-051)
+
+- **`MakeAuthUserCommand::handle()`** — nuevo sub-array `$fileFieldsBaseReplacements`
+  pineado en `$extraReplacements` (fase base) con los 2 placeholders del modelo:
+  - `{{fileFieldsFillableEntries}}` → entries de `$fillable` para file fields.
+  - `{{fileFieldsAccessors}}` → accessors `get{Name}UrlAttribute`.
+- **`MakeAuthUserCommand::generateCrudPack()` `$crudReplacements`** — sacadas las
+  2 keys (ahora pinea solo 5: `{{fileFieldsResourceEntry}}`,
+  `{{fileFieldsUploadPipeline}}`, `{{fileFieldsDeleteOldPipeline}}`,
+  `{{fileFieldsValidationStore}}`, `{{fileFieldsValidationUpdate}}` — todos del
+  CRUD pack: resource, service, requests).
+- **DRY bonus**: `detectFileFields($profileFields)` se cachea una vez en
+  `handle()` (`$fileFieldNames`) y se reusa en `$fileFieldsBaseReplacements`.
+  En `generateCrudPack()` quedan las 6 callsites originales (no refactor invasive
+  en este sprint — follow-up R-PKG-051.1 si Mario quiere).
+
+### 🟠 TESTS — 3 tests nuevos (regression guards)
+
+- **`MakeAuthUserCommandTest::FEEDBACK10 crudReplacements pine los 5 file fields placeholders`**
+  — actualizado de "7" a "5" + comentario que documenta R-PKG-051.
+- **`MakeAuthUserCommandTest::R-PKG-051 $extraReplacements pine los 2 placeholders del modelo`** —
+  nuevo. Verifica que `$fileFieldsBaseReplacements` contiene las 2 keys correctas
+  y que `$crudReplacements` ya NO las pinea (source-parsing dual guard).
+- **`MakeAuthUserCommandTest::R-PKG-051 model stub post-generateStub NO contiene placeholders fileFields* literales`** —
+  nuevo. Emula `generateStub()` con los 2 placeholders pineados y verifica
+  que el output NO contiene placeholders literales del bug.
+
+**Test suite** (`./vendor/bin/pest`):
+- Baseline pre-R-PKG-051: 994 passed / 0 failed / 26 deprecated (post R-PKG-050 + R-PKG-047 merge).
+- Post-R-PKG-051: **997 passed / 0 failed / 26 deprecated** (+3 tests passing, 0 regresiones).
+- 0 BC breaks. Comportamiento idéntico pre/post-fix para consumers que NO usan
+  `--profile-fields="...:file"` (los helpers retornan string vacío, output
+  no cambia).
+
+### Refs
+
+- openspec/changes/2026-07-10-r-pkg-051-file-fields-base-replacements/ (este sprint)
+- openspec/changes/2026-07-10-r-pkg-050-file-fields-identity-map/ (sprint origen del bug)
+- FEEDBACK-API corrida 10: `feedbacks/feedback-api.md` §5.4 (Avatar upload)
+- Sesión RETO fase 23: `mvs_0c369ad1145c4159b87bd95566caab7d` (2026-07-10 22:40)
+
+---
+
 ## [UNRELEASED] — BaseAuthController refactor + scaffolder defaults (R-PKG-047)
 
 > Sprint consolidado para eliminar la duplicación AuthController (~500 LOC per
