@@ -1642,7 +1642,7 @@ PHP,
         // N12: buildProfileFieldRules emite reglas para TODOS los profile fields
         // (no solo los unique), si no `validated()` los descartaba y el CRUD
         // nunca persistía full_name/phone/address.
-        // R-PKG-052: pasar $loginField + fileFieldNames a buildProfileFieldRules
+        // R-PKG-052: pasar $loginField + $fileFieldNames a buildProfileFieldRules
         // para que el dedup contra core fields use el loginField real
         // (`ci` para RETO, etc.) en vez de hardcodear `email`, Y skipee los
         // file fields (que ya tienen su rule canónica via {{fileFieldsValidationStore/Update}}).
@@ -1657,6 +1657,14 @@ PHP,
         // PERDÍA. El front mandaba un `UploadedFile`, Laravel lo aceptaba como
         // string (el validation `string` pasaba con el path del temp), pero el
         // upload real fallaba en runtime porque no había rule de file/image.
+        //
+        // R-PKG-052 hotfix (post-corrida RETO 11): $fileFieldNames debe
+        // computarse AQUÍ porque no está en el scope de generateCrudPack().
+        // Pre-fix, mi T3 usaba `$fileFieldNames` directamente (variable
+        // inexistente → Undefined variable error en el primer --with-crud).
+        // Post-fix: cachear la detección de file fields al inicio de
+        // generateCrudPack y reusarla en los 5 callsites.
+        $fileFieldNames = $this->detectFileFields($profileFields);
         $fieldRules = $this->buildProfileFieldRules($profileFields, $requiredFields, $scopePlural, $loginField, $fileFieldNames);
         $crudReplacements = array_merge([
             '{{profileFieldsList}}' => $this->buildProfileFieldsList($profileFields),
@@ -1719,7 +1727,7 @@ PHP,
             // que el FileStoragePlugin no sabe interpretar (creaba un directorio
             // con nombre literal `{scopeLower}` en storage).
             '{{pluginsConfig}}' => $this->buildPluginsConfigLiteral(
-                $this->detectFileFields($profileFields),
+                $fileFieldNames,
                 $scopeLower,
             ),
 
@@ -1745,13 +1753,13 @@ PHP,
             // Si NO hay file fields, todos los helpers retornan string vacío
             // (los placeholders quedan como whitespace, PHP lo tolera sin error).
             '{{fileFieldsResourceEntry}}' => $this->buildFileFieldsResourceEntry(
-                $this->detectFileFields($profileFields),
+                $fileFieldNames,
             ),
             '{{fileFieldsValidationStore}}' => $this->buildFileFieldsValidationStore(
-                $this->detectFileFields($profileFields),
+                $fileFieldNames,
             ),
             '{{fileFieldsValidationUpdate}}' => $this->buildFileFieldsValidationUpdate(
-                $this->detectFileFields($profileFields),
+                $fileFieldNames,
             ),
         ], $this->buildStatusCrudReplacements($withStatus, $statusStates, $scope, $scopeLower));
 
