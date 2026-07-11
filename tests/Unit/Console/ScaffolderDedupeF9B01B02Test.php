@@ -238,3 +238,16 @@ test('R-PKG-052 — buildPluginsConfigLiteral() pinea path con scopeLower real (
     $heredocBody = substr($src, (int) $heredocPos, (int) $heredocEnd - (int) $heredocPos);
     expect($heredocBody)->not->toContain("'uploads/{scopeLower}'");
 });
+
+test('R-PKG-052 T8 — MkServiceProvider auto-registra ModuleLoader (no requiere pine manual en bootstrap/providers.php)', function () {
+    $providerPath = __DIR__.'/../../../src/MkServiceProvider.php';
+    expect(file_exists($providerPath))->toBeTrue();
+
+    $src = (string) file_get_contents($providerPath);
+
+    // El método register() pinea ModuleLoaderServiceProvider. El consumer
+    // ya NO tiene que pinearlo en bootstrap/providers.php (auto-glob + cache
+    // toma el control de los module providers via ModuleProviderRegistry).
+    expect($src)->toContain('use Mk\\Director\\ModuleLoader\\ModuleLoaderServiceProvider;');
+    expect($src)->toContain("\$this->app->register(ModuleLoaderServiceProvider::class);");
+});
