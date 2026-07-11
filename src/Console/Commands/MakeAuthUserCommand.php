@@ -1642,16 +1642,22 @@ PHP,
         // N12: buildProfileFieldRules emite reglas para TODOS los profile fields
         // (no solo los unique), si no `validated()` los descartaba y el CRUD
         // nunca persistía full_name/phone/address.
-        // R-PKG-052: pasar $loginField a buildProfileFieldRules para que el
-        // dedup contra core fields use el loginField real (`ci` para RETO, etc.)
-        // en vez de hardcodear `email`. Pre-fix, si el consumer hacía
-        // `--login-field=ci --profile-fields=ci,phone`, el scaffolder pineaba
-        // DOS rules `'ci' => [...]` en `rules()`: una canónica del stub
-        // (`'required','string','max:255','unique:...,ci'`) + una genérica
-        // (`'nullable','string'`) del helper. PHP array merge con key
-        // duplicada descartaba la primera — el `required`/`max:255`/`unique`
-        // se perdían en create (CIs vacíos pasaban validación).
-        $fieldRules = $this->buildProfileFieldRules($profileFields, $requiredFields, $scopePlural, $loginField);
+        // R-PKG-052: pasar $loginField + fileFieldNames a buildProfileFieldRules
+        // para que el dedup contra core fields use el loginField real
+        // (`ci` para RETO, etc.) en vez de hardcodear `email`, Y skipee los
+        // file fields (que ya tienen su rule canónica via {{fileFieldsValidationStore/Update}}).
+        //
+        // Pre-fix, si el consumer hacía `--login-field=ci --profile-fields=ci,phone`
+        // el scaffolder pineaba DOS rules `'ci' => [...]` (canónica del stub +
+        // genérica del helper) — PHP descartaba la primera (con required/max:255/unique).
+        // Idem para file fields (`avatar:file`): `buildFileFieldsValidationStore` pineaba
+        // `'avatar' => ['nullable', 'file', 'image', 'mimes:...', 'max:2048']` (rule
+        // canónica) y `buildProfileFieldRules` pineaba `'avatar' => ['nullable', 'string']`
+        // (genérica) — PHP descartaba la primera y la validación de archivo se
+        // PERDÍA. El front mandaba un `UploadedFile`, Laravel lo aceptaba como
+        // string (el validation `string` pasaba con el path del temp), pero el
+        // upload real fallaba en runtime porque no había rule de file/image.
+        $fieldRules = $this->buildProfileFieldRules($profileFields, $requiredFields, $scopePlural, $loginField, $fileFieldNames);
         $crudReplacements = array_merge([
             '{{profileFieldsList}}' => $this->buildProfileFieldsList($profileFields),
             // F10-B05 (R-PKG-050): pasar `$loginField` a los 3 helpers DTO
@@ -2695,7 +2701,7 @@ PHP;
      * @param  string  $scopePlural  Nombre de la tabla del scope (e.g. `admins`).
      * @return array{store: string, update: string}
      */
-    protected function buildProfileFieldRules(array $profileFields, array $requiredFields, string $scopePlural, string $loginField = 'email'): array
+    protected function buildProfileFieldRules(array $profileFields, array $requiredFields, string $scopePlural, string $loginField = 'email', array $fileFieldNames = []): array
     {
         // R-PKG-046 F9-B01: core fields ya pineados hardcoded en los stubs.
         // Skip para evitar duplicate keys en el array final `rules()`.
@@ -2729,7 +2735,18 @@ PHP;
         // (`'required','string','max:255','unique:...,ci'`) + una genérica
         // (`'nullable','string'`) de este helper. PHP array merge descartaba
         // la primera — el `required`/`max:255`/`unique` se perdían en create.
-        $coreFields = ['name', $loginField, 'password', 'status'];
+        //
+        // R-PKG-052: agregar `$fileFieldNames` al dedup. Pre-fix, si el consumer
+        // hacía `--profile-fields="avatar:file"`, este helper pineaba
+        // `'avatar' => ['nullable', 'string']` (genérica) Y
+        // `buildFileFieldsValidationStore` pineaba `'avatar' => ['nullable',
+        // 'file', 'image', 'mimes:...', 'max:2048']` (canónica, vía
+        // {{fileFieldsValidationStore}}). PHP array merge descartaba la
+        // primera y la validación de archivo se perdía — el front mandaba
+        // un `UploadedFile`, Laravel lo aceptaba como string (validation
+        // `string` pasaba con el temp path), pero el upload real fallaba
+        // en runtime porque no había rule `file`/`image` para el plugin.
+        $coreFields = array_merge(['name', $loginField, 'password', 'status'], $fileFieldNames);
 
         $store = '';
         $update = '';

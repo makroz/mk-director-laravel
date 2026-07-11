@@ -66,18 +66,28 @@ test('R-PKG-046 F9-B01 — buildProfileFieldRules() SKIP core fields (name, $log
     //
     // R-PKG-052: la dedup usa `$loginField` dinámico en vez de hardcodear
     // `'email'`. Pre-fix, con `--login-field=ci --profile-fields=ci,phone`,
-    // el scaffolder pineaba DOS `'ci' => [...]` rules y PHP descartaba la
-    // canónica (con required/max:255/unique) — el login quedaba sin validar.
-    expect($helperBody)->toContain("\$coreFields = ['name', \$loginField, 'password', 'status']");
+    // el scaffolder pineaba DOS `'ci' => [...]` rules y PHP descartaba
+    // la canónica (con required/max:255/unique) — el login quedaba sin validar.
+    //
+    // R-PKG-052: el dedup también mergea `$fileFieldNames` para skipear los
+    // file fields. Pre-fix, con `--profile-fields="avatar:file"`, este helper
+    // pineaba `'avatar' => ['nullable', 'string']` (genérica) Y
+    // buildFileFieldsValidationStore pineaba `'avatar' => ['nullable', 'file',
+    // 'image', 'mimes:...', 'max:2048']` (canónica). PHP descartaba la primera
+    // y la validación de archivo se perdía (front mandaba UploadedFile, Laravel
+    // lo aceptaba como string, upload real fallaba en runtime).
+    expect($helperBody)->toContain("\$coreFields = array_merge(['name', \$loginField, 'password', 'status'], \$fileFieldNames)");
 
     // Y debe skip esos fields con in_array check.
     expect($helperBody)->toContain("if (in_array(\$key, \$coreFields, true))");
     expect($helperBody)->toContain('continue;');
 
-    // R-PKG-052: pinea que el método RECIBE el `$loginField` como parámetro
-    // (pre-fix: solo recibía `$profileFields`, `$requiredFields`, `$scopePlural`
-    // y la dedup usaba `email` hardcoded, rompiendo para loginField != email).
-    expect($helperBody)->toMatch('/function buildProfileFieldRules\(\s*array\s+\$profileFields\s*,\s*array\s+\$requiredFields\s*,\s*string\s+\$scopePlural\s*,\s*string\s+\$loginField\s*=/');
+    // R-PKG-052: pinea que el método RECIBE el `$loginField` + `$fileFieldNames`
+    // como parámetros (pre-fix: solo recibía `$profileFields`, `$requiredFields`,
+    // `$scopePlural` y la dedup usaba `email` hardcoded, rompiendo para
+    // loginField != email y para file fields que quedaban con rule genérica
+    // pisando la rule canónica de file/image/mimes).
+    expect($helperBody)->toMatch('/function buildProfileFieldRules\(\s*array\s+\$profileFields\s*,\s*array\s+\$requiredFields\s*,\s*string\s+\$scopePlural\s*,\s*string\s+\$loginField\s*=\s*\'email\'\s*,\s*array\s+\$fileFieldNames\s*=\s*\[\]\s*\)/');
 });
 
 test('R-PKG-046 F9-B02 — buildProfileFieldsToArray() SKIP core fields (id, name, loginField, auth_scope, password, status)', function () {
