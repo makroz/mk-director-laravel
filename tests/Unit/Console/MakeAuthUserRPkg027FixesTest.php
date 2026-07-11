@@ -71,45 +71,30 @@ describe('PKG-NEW-02 — admin-service stub: mutateData + sin Hash::make manual'
     });
 });
 
-describe('PKG-NEW-04 + PKG-NEW-05 — auth-controller stub: is_active check', function (): void {
-    test('auth-controller stub importa Schema facade', function (): void {
-        $stub = readStubRPkg027('src/Stubs/auth-user.auth-controller.stub');
+describe('PKG-NEW-04 + PKG-NEW-05 — status check (R-PKG-047 D4 ScopeStatus enum)', function (): void {
+    // **ELIMINADOS post-R-PKG-047 D1+D4**: los 4 tests originales pineaban
+    // el `is_active` boolean check en el stub VIEJO (~500 LOC). Post-D1, el
+    // stub es thin wrapper; post-D4, el status check se hace vía enum
+    // `ScopeStatus` (no `is_active` boolean). La lógica vive en
+    // `BaseAuthController::userHasValidStatus()` con BC fallback a
+    // `is_active` para scopes pre-D4.
 
-        expect($stub)->toContain('use Illuminate\\Support\\Facades\\Schema;');
+    test('R-PKG-047 D1+D4: BaseAuthController::userHasValidStatus() SSoT del status check', function (): void {
+        $base = readStubRPkg027('src/Auth/Controllers/BaseAuthController.php');
+
+        // SSoT: el status check vive en BaseAuthController.
+        expect($base)->toContain('protected function userHasValidStatus(');
     });
 
-    test('login() consulta is_active con Schema::hasColumn', function (): void {
+    test('R-PKG-047 D1: auth-controller stub NO contiene Schema::hasColumn (lógica en BaseAuthController)', function (): void {
         $stub = readStubRPkg027('src/Stubs/auth-user.auth-controller.stub');
 
-        expect($stub)->toContain("Schema::hasColumn(");
-        expect($stub)->toContain("'is_active'");
-        expect($stub)->toContain('=== false');
-    });
-
-    test('forgot() también consulta is_active (consistencia)', function (): void {
-        $stub = readStubRPkg027('src/Stubs/auth-user.auth-controller.stub');
-
-        $count = substr_count($stub, "Schema::hasColumn(\$user?->getTable() ?? '{{moduleNamePluralLower}}', 'is_active')");
-        expect($count)->toBeGreaterThanOrEqual(2);
-    });
-
-    test('reset() también consulta is_active (consistencia)', function (): void {
-        $stub = readStubRPkg027('src/Stubs/auth-user.auth-controller.stub');
-
-        // LAR-12 (2026-07-03 audit): the is_active check in reset() is
-        // now null-safe — `$user?->getTable()` and `$user?->is_active`
-        // instead of `$user->getTable()` and `$user->is_active`. The
-        // downstream `if (! $user || ...)` already handles null, but the
-        // inner expression crashed first pre-fix. The shape assertion
-        // reflects the null-safe form (we accept either null-safe or the
-        // legacy non-null-safe; what matters is that the check is present).
-        $hasNullSafeGetTable = str_contains($stub, '$user?->getTable()');
-        $hasLegacyGetTable   = str_contains($stub, '$user->getTable()');
-
-        expect($hasNullSafeGetTable || $hasLegacyGetTable)->toBeTrue(
-            'reset() must consult Schema::hasColumn with $user->getTable() (null-safe or legacy)'
-        );
-        expect($stub)->toContain("'is_active'");
+        // El thin wrapper NO tiene el check de `is_active` inline. Lo
+        // hereda de BaseAuthController::userHasValidStatus() (que SÍ
+        // consulta Schema::hasColumn internamente, con BC fallback).
+        expect($stub)->not->toContain('use Illuminate\\Support\\Facades\\Schema;');
+        expect($stub)->not->toContain("Schema::hasColumn(");
+        expect($stub)->not->toContain("'is_active'");
     });
 });
 

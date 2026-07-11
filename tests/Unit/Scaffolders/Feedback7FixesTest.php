@@ -61,42 +61,49 @@ test('F7-B01 — BC: --setup-sanctum flag still works as opt-in for plain scopes
         ->toContain('{--setup-sanctum :');
 })->group('feedback7', 'scaffolder');
 
-test('F7-B02 — me() pinea `abilities` flat en el response (parity hasAbility cross-stack)', function () use ($authControllerStubPath) {
-    $stub = (string) file_get_contents($authControllerStubPath);
-    expect($stub)->toBeString();
+test('R-PKG-047 D1: BaseAuthController::me() pinea `abilities` flat en el response (SSoT F7-B02)', function () {
+    $basePath = dirname(__DIR__, 3).'/src/Auth/Controllers/BaseAuthController.php';
+    $base = (string) file_get_contents($basePath);
+    expect($base)->toBeString();
 
-    // Extract the `me()` method body.
-    if (! preg_match('/public function me\([^)]*\)[^{]*\{(.*?)\n    \}/s', $stub, $matches)) {
-        test()->fail('Could not locate me() method in stub.');
+    // F7-B02 + R-PKG-047 D1: el método `me()` y la lógica de abilities
+    // viven en BaseAuthController (SSoT). Pinean que el SSoT pinea
+    // `abilities` flat via `getEffectiveAbilities()`.
+    if (! preg_match('/public function me\([^)]*\)[^{]*\{(.*?)\n    \}/s', $base, $matches)) {
+        test()->fail('Could not locate me() method in BaseAuthController.');
     }
     $meBody = $matches[1];
 
-    // The fix: `$payload = $user->toArray(); $payload['abilities'] =
-    // $user->getEffectiveAbilities(); return $this->sendResponse($payload);`
-    // Pre-F7-B02: `return $this->sendResponse($user);` (model crudo, no
-    // incluía `abilities`).
     expect($meBody)
-        ->toContain("\$payload = \$user->toArray();")
-        ->toContain("\$payload['abilities'] = \$user->getEffectiveAbilities();")
-        ->toContain('return $this->sendResponse($payload);');
+        ->toContain("\$payload['abilities']")
+        ->toContain('getEffectiveAbilities');
 })->group('feedback7', 'scaffolder');
 
-test('F7-B02 — login() pinea `abilities` en el user nested dentro de la response', function () use ($authControllerStubPath) {
-    $stub = (string) file_get_contents($authControllerStubPath);
-    expect($stub)->toBeString();
+test('R-PKG-047 D1: BaseAuthController::login() pinea `abilities` en el response (SSoT F7-B02)', function () {
+    $basePath = dirname(__DIR__, 3).'/src/Auth/Controllers/BaseAuthController.php';
+    $base = (string) file_get_contents($basePath);
+    expect($base)->toBeString();
 
-    // Extract the `login()` method body.
-    if (! preg_match('/public function login\([^)]*\)[^{]*\{(.*?)\n    \}/s', $stub, $matches)) {
-        test()->fail('Could not locate login() method in stub.');
+    // F7-B02 + D1: el método `login()` vive en BaseAuthController y pinea
+    // `abilities` en el response. Pinean que el SSoT incluye la ability
+    // mapping.
+    if (! preg_match('/public function login\([^)]*\)[^{]*\{(.*?)\n    \}/s', $base, $matches)) {
+        test()->fail('Could not locate login() method in BaseAuthController.');
     }
     $loginBody = $matches[1];
 
-    // The fix: el `{{moduleNameLower}}` ahora contiene `$userPayload`
-    // (no el modelo crudo), que incluye `abilities` flat pineado ad-hoc.
     expect($loginBody)
-        ->toContain("\$userPayload = \$user->toArray();")
-        ->toContain("\$userPayload['abilities'] = \$user->getEffectiveAbilities();")
-        ->toContain("'{{moduleNameLower}}' => \$userPayload");
+        ->toContain('getEffectiveAbilities');
+})->group('feedback7', 'scaffolder');
+
+test('R-PKG-047 D1: stub AuthController es thin wrapper — NO contiene me() ni login() inline', function () use ($authControllerStubPath) {
+    $stub = (string) file_get_contents($authControllerStubPath);
+    expect($stub)->toBeString();
+
+    // El thin wrapper NO override `me()` ni `login()` — los hereda del SSoT.
+    expect($stub)->not->toMatch('/public function me\(/');
+    expect($stub)->not->toMatch('/public function login\(/');
+    expect($stub)->not->toContain('getEffectiveAbilities');
 })->group('feedback7', 'scaffolder');
 
 test('F7-B03 — MakeAuthUserCommand checkea tabla preexistente del scope antes de scaffoldear', function () use ($commandPath) {

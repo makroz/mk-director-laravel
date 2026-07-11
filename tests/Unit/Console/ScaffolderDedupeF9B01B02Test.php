@@ -121,15 +121,22 @@ test('R-PKG-046 F9-B02 — JSDoc de buildProfileFieldsToArray() explica el bug q
     expect($docblock)->toContain('core fields');
 });
 
-test('R-PKG-046 F9-B01 — store-admin-request.stub contiene solo 1 línea con key email', function () {
+test('R-PKG-046 F9-B01 + R-PKG-047 D5 — store-admin-request.stub usa {{loginField}} placeholder (1 línea, no hardcoded email)', function () {
     $stubPath = __DIR__.'/../../../src/Stubs/auth-user/store-admin-request.stub';
     expect(file_exists($stubPath))->toBeTrue();
 
     $stub = (string) file_get_contents($stubPath);
 
-    // El stub tiene 1 línea con 'email' hardcoded.
-    $emailLines = substr_count($stub, "'email' =>");
-    expect($emailLines)->toBe(1);  // BC pineado hardcoded, sin duplicar.
+    // R-PKG-046 F9-B01: dedup contra core fields pineados hardcoded.
+    // R-PKG-047 D5: el key del login field es `{{loginField}}` placeholder
+    // (no 'email' hardcoded). Esto pinea que --login-field=ci regenera
+    // correctamente el StoreRequest con key 'ci' en vez de 'email'.
+    $loginFieldLines = substr_count($stub, "'{{loginField}}' =>");
+    expect($loginFieldLines)->toBe(1);  // BC pineado, sin duplicar.
+
+    // Y NO tiene 'email' hardcoded como key (sería drift vs el placeholder).
+    $hardcodedEmailLines = substr_count($stub, "'email' =>");
+    expect($hardcodedEmailLines)->toBe(0);
 });
 
 test('R-PKG-046 F9-B02 — admin-resource.stub contiene solo 1 línea con key email', function () {

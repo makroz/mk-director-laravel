@@ -88,52 +88,46 @@ function makeAuthUserCommand(): MakeAuthUserCommand
 //
 // Pineamos el nuevo comportamiento + documentamos el histórico.
 
-test('BUG-NEW-01 (LEGACY) + PKG-NEW-15: buildLoginResponseArray retorna $user literal', function () {
+test('R-PKG-047 D1: buildLoginResponseArray retorna $user literal (helper post-D1)', function () {
     $command = makeAuthUserCommand();
     $reflection = new ReflectionClass($command);
     $method = $reflection->getMethod('buildLoginResponseArray');
 
-    // Sin profile fields.
+    // Post-D1, el helper retorna literal '$user' (shape canónico lo aplica
+    // BaseController::autoTransform() via apiResource del modelo). El stub
+    // es thin wrapper — NO contiene el return literal `$user` (eso vive
+    // en BaseAuthController::login()).
     $resultEmpty = $method->invoke($command, [], 'email');
     expect($resultEmpty)->toBe('$user');
 
-    // Con profile fields.
     $resultWith = $method->invoke($command, ['full_name' => ['type' => 'string', 'unique' => false]], 'email');
     expect($resultWith)->toBe('$user');
 
-    // Y el stub del AuthController usa este retorno directamente:
-    //   '{{moduleNameLower}}' => $user,
+    // El stub NO contiene el array_merge legacy (pineado pre-D1).
     $stub = stubContents('auth-user.auth-controller.stub');
-    expect($stub)->toContain("'{{moduleNameLower}}' => \$user,");
-
-    // El patrón viejo (array_merge ad-hoc) NO debe existir más:
     expect($stub)->not->toMatch("/\\\$user->only\\(\\['id', 'name'/");
     expect($stub)->not->toMatch("/'abilities'\s*=>\s*\\\$user->abilities->pluck/");
 });
 
-// ─── BUG-NEW-02 — LEGACY: loginField resuelto en login response (R-PKG-029 PKG-NEW-15) ──
-// El bug original era que `buildLoginResponseArray()` emitía `{{loginField}}`
-// literal en vez del loginField resuelto. Después del refactor R-PKG-029
-// PKG-NEW-15, la función ya no toca loginField — solo retorna `$user`.
+// ─── R-PKG-047 D1/D5: loginField resuelto en el thin wrapper override ───────
 
-test('BUG-NEW-02 (LEGACY): buildLoginResponseArray ignora loginField (refactor PKG-NEW-15)', function () {
+test('R-PKG-047 D5: thin wrapper override loginField() retorna {{loginField}} (post-D5)', function () {
     $command = makeAuthUserCommand();
     $reflection = new ReflectionClass($command);
 
     $method = $reflection->getMethod('buildLoginResponseArray');
 
-    // Cualquier loginField (email, ci, phone, etc.) → mismo retorno.
+    // Cualquier loginField (email, ci, phone, etc.) → mismo retorno (D1: $user literal).
     $emailResult = $method->invoke($command, [], 'email');
     expect($emailResult)->toBe('$user');
 
     $ciResult = $method->invoke($command, ['full_name' => ['type' => 'string', 'unique' => false]], 'ci');
     expect($ciResult)->toBe('$user');
 
-    // El loginField sigue resolviéndose correctamente en el stub vía el
-    // placeholder `{{loginField}}` que SÍ existe en otras partes del stub
-    // (validation rule, lookup del user). Pineamos eso para asegurar BC.
+    // D5: el loginField se resuelve dinámicamente via `loginField()` override
+    // del thin wrapper. Pineamos que el stub override ese método.
     $stub = stubContents('auth-user.auth-controller.stub');
-    expect($stub)->toContain('{{loginFieldValidationRule}}');
+    expect($stub)->toMatch('/protected function loginField\(\)\s*:\s*string\s*\{[^}]*return\s*\'\{\{loginField\}\}\'/s');
 });
 
 // ─── BUG-NEW-03 — seeder no setea 'module' en abilities ────────────────────

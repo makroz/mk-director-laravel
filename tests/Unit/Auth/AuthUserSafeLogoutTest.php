@@ -60,14 +60,30 @@ describe('PKG-NEW-08 — AuthUser::safeLogoutCurrentToken() helper', function ()
             ->toContain('return true;');
     });
 
-    test('AuthController stub usa el helper (no patrón naive)', function (): void {
+    test('R-PKG-047 D1: BaseAuthController::logout() usa el helper (no patrón naive) — SSoT migrada', function (): void {
+        $basePath = dirname(__DIR__, 3).'/src/Auth/Controllers/BaseAuthController.php';
+        expect(file_exists($basePath))->toBeTrue("BaseAuthController must exist (R-PKG-047 D1 SSoT)");
+
+        $base = (string) file_get_contents($basePath);
+
+        // D1: el patrón logout() se movió al SSoT (BaseAuthController).
+        // El helper `safeLogoutCurrentToken()` se llama desde BaseAuthController::logout()
+        // (no desde el stub scaffoldeado).
+        if (! preg_match('/public function logout\([^)]*\)[^{]*\{(.*?)\n    \}/s', $base, $matches)) {
+            test()->fail('Could not locate logout() method in BaseAuthController.');
+        }
+        $body = $matches[1];
+
+        expect($body)->toContain('safeLogoutCurrentToken()');
+    });
+
+    test('R-PKG-047 D1: stub AuthController es thin wrapper — NO contiene el patrón naive de logout (SSoT migrada)', function (): void {
         $stub = readAuthControllerStub();
 
-        // El stub usa el helper.
+        // El thin wrapper NO override logout() — no contiene el patrón
+        // naive peligroso (SSoT migrada a BaseAuthController).
         expect($stub)
-            ->toContain('$user->safeLogoutCurrentToken();');
-
-        // Y NO contiene el patrón naive peligroso.
+            ->not->toMatch('/public function logout\(/');
         expect($stub)
             ->not->toContain("\$token = \$user->currentAccessToken();\n        \$token->delete();");
     });

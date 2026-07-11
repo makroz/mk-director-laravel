@@ -7,24 +7,30 @@ namespace Mk\Director\Tests\Unit\Console;
 use Mk\Director\Tests\MkLaravelTestCase;
 
 /**
- * Source-parsing tests for R-PKG-010 — `mk:make:auth-user --with-auth-rbac`.
+ * Source-parsing tests for R-PKG-010 — RBAC defaults en `mk:make:auth-user`.
+ *
+ * **R-PKG-047 D2 (2026-07-09 22:12)**: el flag `--with-auth-rbac` se ELIMINÓ.
+ * RBAC es ahora default ON (igual que `--with-crud` y `--with-status`). Para
+ * opt-out, usar `--no-rbac`. La simplificación pinea R-G-033 "maximo default +
+ * minimo custom" (Mario feedback).
+ *
+ * **R-PKG-047 D1**: el AuthController scaffoldeado pasó de ~500 LOC a un
+ * thin wrapper de 148 LOC que solo override 4 abstracts:
+ * `authModelClass()`, `authScope()`, `loginField()`, `passwordResetTable()`.
+ * La lógica RBAC vive en `BaseAuthController` (SSoT canónico).
  *
  * Contrato pineado acá:
- *   - El command acepta option `--with-auth-rbac` (boolean flag).
- *   - El command tiene `buildRbacReplacements()` que popula los placeholders.
- *   - El command pasa el flag a `generateStub()` via `$extraReplacements` (merged
- *     con los placeholders de `--login-field`).
- *   - El stub `auth-user.auth-controller.stub` tiene los placeholders RBAC:
- *     `{{rbacImports}}`, `{{rbacConstructor}}`, `{{rbacAbilityCheckMe}}`,
- *     `{{rbacAbilityCheckLogout}}`, `{{rbacAudit*}}`, `{{rbacAuthorizeAbilityMethod}}`.
- *   - El stub `auth-user.routes.stub` tiene `{{rbac{Login,Forgot,Reset}Throttle}}`
- *     placeholders inline (default = vacío → sin throttle).
- *   - BC: sin flag, los placeholders RBAC son string vacío (comportamiento
- *     idéntico a v1.5.0-rc3).
+ *   - El command NO acepta `--with-auth-rbac` (eliminado en D2).
+ *   - El command acepta `--no-rbac` (D2 opt-out).
+ *   - El command tiene `buildRbacReplacements()` que popula los placeholders
+ *     legacy (mantenidos por compat con stubs viejos que aún pinean
+ *     `{{rbac*}}` — todos resuelven a string vacío post-D1).
+ *   - El stub `auth-user.auth-controller.stub` es thin wrapper que
+ *     `extends BaseAuthController` (NO `BaseController`).
  *   - `mk_director.auth.abilities` y `mk_director.auth.rate_limits` están en
  *     `config/mk_director.php`.
  *
- * Spec: R-PKG-010 ACR-001..004.
+ * Spec: R-PKG-010 ACR-001..004 + R-PKG-047 D1+D2.
  * @see \Mk\Director\Console\Commands\MakeAuthUserCommand
  */
 uses(MkLaravelTestCase::class);
@@ -60,15 +66,23 @@ function configSource010(): string
 
 // ── Command signature ───────────────────────────────────────────────────
 
-test('command signature includes --with-auth-rbac flag', function () {
+test('R-PKG-047 D2: --with-auth-rbac flag está ELIMINADO (default ON, --no-rbac opt-out)', function () {
     $source = commandSource010();
 
-    expect($source)->toMatch('/--with-auth-rbac\s*:/');
+    // R-PKG-047 D2 (2026-07-09 22:12): --with-auth-rbac se eliminó. RBAC es
+    // default ON. Para opt-out, --no-rbac. Esto pinea el nuevo contrato.
+    expect($source)->not->toMatch('/--with-auth-rbac\s*:/');
+
+    // Y el opt-out SÍ existe.
+    expect($source)->toMatch('/--no-rbac\s*:/');
 });
 
-test('command has buildRbacReplacements() method', function () {
+test('command has buildRbacReplacements() method (legacy BC for stub placeholders)', function () {
     $source = commandSource010();
 
+    // El método se mantiene por BC con stubs viejos que aún pinean los
+    // placeholders {{rbac*}}. Post-D1 todos resuelven a string vacío (la
+    // lógica RBAC vive en BaseAuthController ahora).
     expect($source)->toContain('protected function buildRbacReplacements');
 });
 
@@ -159,23 +173,35 @@ test('buildRbacReplacements never logs passwords in audit events', function () {
 });
 
 // ── Stub structure (auth-user.auth-controller.stub) ───────────────────
+// R-PKG-047 D1: el stub es thin wrapper que extends BaseAuthController (SSoT).
+// Los placeholders RBAC legacy se removieron del stub porque la lógica RBAC
+// (ability checks, rate limit, audit events, authorizeAbility helper) vive
+// en BaseAuthController. El test pinea el nuevo contrato: thin wrapper.
 
-test('auth-user.auth-controller.stub has all rbac placeholders', function () {
+test('R-PKG-047 D1: auth-user.auth-controller.stub es thin wrapper (extends BaseAuthController)', function () {
     $stub = stubSource010('auth-user.auth-controller.stub');
 
-    expect($stub)->toContain('{{rbacImports}}');
-    expect($stub)->toContain('{{rbacConstructor}}');
-    expect($stub)->toContain('{{rbacAbilityCheckMe}}');
-    expect($stub)->toContain('{{rbacAbilityCheckLogout}}');
-    expect($stub)->toContain('{{rbacAuditLoginSuccess}}');
-    expect($stub)->toContain('{{rbacAuditLoginFailed}}');
-    expect($stub)->toContain('{{rbacAuditLogout}}');
-    expect($stub)->toContain('{{rbacAuditForgot}}');
-    expect($stub)->toContain('{{rbacAuthorizeAbilityMethod}}');
-    // R-PKG-014 BUG-07 fix: refresh() y reset() tienen implementación completa
-    // con auth.refresh.success y auth.password_reset.success. Ya NO son TODO markers.
-    // Los placeholders rbacAuditRefreshTodo y rbacAuditResetTodo se removieron
-    // porque el código siempre emite el audit event ahora.
+    // Thin wrapper extends BaseAuthController (SSoT canónico).
+    expect($stub)->toContain('use Mk\\Director\\Auth\\Controllers\\BaseAuthController;');
+    expect($stub)->toMatch('/class\s+AuthController\s+extends\s+BaseAuthController/');
+
+    // Override los 4 abstracts requeridos (D1).
+    expect($stub)->toContain('protected function authModelClass(): string');
+    expect($stub)->toContain('protected function authScope(): string');
+    expect($stub)->toContain('protected function loginField(): string');
+    expect($stub)->toContain('protected function passwordResetTable(): string');
+
+    // El class statement NO extiende BaseController genérico del package ni
+    // Laravel stock (esos eran del stub pre-D1 de ~500 LOC). El docblock puede
+    // mencionarlos en notas históricas, pero la class declaration es BaseAuthController.
+    expect($stub)->not->toMatch('/class\s+AuthController\s+extends\s+BaseController\b/');
+    expect($stub)->not->toMatch('/class\s+AuthController\s+extends\s+Controller\b/');
+
+    // NO contiene los placeholders RBAC legacy (la lógica vive en BaseAuthController).
+    expect($stub)->not->toContain('{{rbacImports}}');
+    expect($stub)->not->toContain('{{rbacConstructor}}');
+    expect($stub)->not->toContain('{{rbacAbilityCheckMe}}');
+    expect($stub)->not->toContain('{{rbacAuditLoginSuccess}}');
 });
 
 // ── Stub structure (auth-user.routes.stub) ────────────────────────────
