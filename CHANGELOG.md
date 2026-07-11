@@ -76,16 +76,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `auth-user.model.stub` y `auth-user.migration.stub`: agregados placeholders
   `{{clientIdFillableEntry}}` y `{{clientIdColumn}}` (opcionales, opt-in
   via `--multi-tenant` flag).
-- **T9 — `AdminService` scaffoldeado queda achicado** (post-R-PKG-052). Pre-T9
-  tenía 4 métodos públicos (`create`, `update`, `syncRoles`, `syncDirectAbilities`,
-  `syncRoleAbilities`). Post-T9: solo `create`, `update` (con `mutateData`
-  hook para file fields upload) y `syncRoleAbilities` (específico, query +
-  sync). `syncRoles` y `syncDirectAbilities` (triviales, thin wrappers del
-  Repository) eliminados del Service. El `AdminController` ahora llama al
-  Repository directo via `app({{ModuleName}}Repository::class)->syncRoles(...)`.
-  Patrón R-PKG-015: SSoT = Repository, Service = thin wrapper de lo NO
-  trivialmente delegable. R-G-033: RETO es único consumer, regenera desde 0
-  post-merge per dogfooding-first.
+- **T9 v2 — `AdminService` re-escrito como hook layer puro** (post-feedback
+  Mario 2026-07-11, R-PKG-052). El Service ahora implementa
+  `MkModuleServiceInterface` con 12 hooks puros (`beforeCreate`, `afterCreate`,
+  `beforeUpdate`, `afterUpdate`, `beforeDelete`, `afterDelete`, `beforeList`,
+  `afterList`, `setExtraData`, `beforeSearch`, `beforeShow`) con bodies
+  passthrough. NO pine `create()`/`update()`/`mutateData()` propios — el
+  `AdminController extends SmartController` ya hereda `CRUDSmart::store()`/
+  `update()`/`destroy()` que invocan los hooks automáticamente. NO pinea
+  file fields upload pipeline — el `FileStoragePlugin` se invoca vía
+  `PluginManager::fireBeforeSave()`/`fireAfterSave()` que CRUDSmart dispara
+  en cada store/update. Helpers `buildFileFieldsUploadPipeline()` y
+  `buildFileFieldsDeleteOldPipeline()` ELIMINADOS del scaffolder (eran
+  código duplicado del plugin system). Placeholders
+  `{{fileFieldsUploadPipeline}}` y `{{fileFieldsDeleteOldPipeline}}` también
+  eliminados. Mantiene `syncRoleAbilities(Role, array)` que es específico
+  de Admin/Member (no delegable trivialmente al Repository porque cruza
+  la tabla de roles del paquete). R-G-033: RETO es único consumer, regenera
+  desde 0 post-merge per dogfooding-first.
 
 ### Tests
 
