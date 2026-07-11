@@ -163,6 +163,7 @@ class MakeAuthUserCommand extends Command
         {--skip-auth-wire : (A4) NO editar config/auth.php automáticamente (solo imprime los snippets, comportamiento pre-A4). Por default el scaffolder cablea el guard+provider de forma idempotente con backup .bak.}
         {--skip-policies : (A1/A3) NO generar las Policies default-deny en el pack CRUD (default ON). Por default, CRUD ON genera {Scope}Policy/RolePolicy/AbilityPolicy (default-deny + super-admin bypass) y las registra vía Gate::policy.}
         {--managed-by= : (ARCH-01/FEEDBACK6) Genera un recurso admin-scoped para que OTRO scope administre users de ESTE scope. Ej: `mk:make:auth-user Member --managed-by=Admin` expone `/api/admin/members` gateado con mk.auth:admin + mk.ability:admin.members.* (reusa los controllers del scope, registra las rutas managed en el ServiceProvider y genera el seeder de abilities cross-scope para los roles del manager). Requiere CRUD ON. El manager (StudlyCase) debe ser un scope existente. Default BC: sin managed resource.}
+        {--multi-tenant : (R-PKG-052, FEEDBACK11) Genera el scope con soporte multi-tenant: pine `client_id` en \$fillable del modelo + columna `client_id` en la migration. Default: single-tenant (RETO es single-tenant — pinear `client_id` por default provocaba `column not found: client_id` en INSERT). Opt-in explícito: pinearlo solo si el consumer tiene tenant isolation (ver docs/guides/MULTI_TENANT.md).}
 
         **BC BREAK (R-PKG-047 D2)**: Flags eliminados — `--with-crud`, `--with-auth-rbac`, `--with-status`, `--status-values`. Estos son ahora defaults ON. Para opt-out, usar `--no-crud`, `--no-rbac`, `--no-status`. Consumers que pinean los flags viejos en scripts CI/tutores deben actualizar a los `--no-*` correspondientes. La simplificación pinea el principio R-G-033 "maximo default + minimo custom" (Mario feedback 2026-07-09 22:12).';
 
@@ -212,6 +213,12 @@ class MakeAuthUserCommand extends Command
         $withPermissionsEndpoint = (bool) $this->option('with-permissions-endpoint');
         // R-PKG-042 FASE18-07: force re-pinear config/cors.php aunque exista.
         $forceCors = (bool) $this->option('force-cors');
+
+        // R-PKG-052: opt-in multi-tenant. Default single-tenant (RETO es
+        // single-tenant — pinear `client_id` por default provocaba `column
+        // not found: client_id` en el primer INSERT). Pinear este flag solo
+        // si el consumer tiene tenant isolation.
+        $multiTenant = (bool) $this->option('multi-tenant');
 
         // R-PKG-047 D2 — resolve profile fields con merge + defaults.
         // Pre-D2: $profileFieldsRaw = lo que pasó el dev (puede ser []).
@@ -778,6 +785,13 @@ PHP,
             '{{fileFieldsAccessors}}' => $this->buildFileFieldsAccessors($fileFieldNames),
         ];
 
+        // R-PKG-052: pinear `client_id` en el modelo + migration SOLO si
+        // --multi-tenant está activo (opt-in). Default: single-tenant.
+        $clientIdReplacements = [
+            '{{clientIdFillableEntry}}' => $this->buildClientIdFillableEntry($multiTenant),
+            '{{clientIdColumn}}' => $this->buildClientIdColumn($multiTenant),
+        ];
+
         $extraReplacements = array_merge(
             $loginFieldReplacements,
             $rbacReplacements,
@@ -787,6 +801,7 @@ PHP,
             $statusReplacements,
             $managedByReplacements,
             $fileFieldsBaseReplacements,
+            $clientIdReplacements,
         );
 
         $this->info("🔐 Generando scope de autenticación MK: {$scope}".($withAuthRbac ? ' (with RBAC)' : ''));
@@ -2136,7 +2151,7 @@ PHP;
      *
      * Si no hay file fields, retorna string vacío. Los stubs pinean este helper
      * en `{{fileFieldsFillableEntries}}` que se inserta después de los core fields
-     * (`name`, `{{loginField}}`, `password`, `auth_scope`, `client_id`).
+     * (`name`, `{{loginField}}`, `password`, `auth_scope`, `{{clientIdFillableEntry}}`).
      *
      * @param  array<int, string>  $fileFieldNames  Lista de field names con type=file.
      * @return string PHP literal pineable en stub.
@@ -2206,6 +2221,56 @@ PHP;
         }
 
         return $out;
+    }
+
+    /**
+     * R-PKG-052 (FEEDBACK11, RETO corrida 10) — emite entry `'client_id'`
+     * para `$fillable` del Model, SOLO si el scaffolder se invoca con
+     * `--multi-tenant` (opt-in).
+     *
+     * Pre-fix, el stub pineaba `'client_id'` SIEMPRE. En apps single-tenant
+     * como RETO, esto provocaba:
+     *   - `column not found: client_id` en el primer `INSERT` (la migration
+     *     NO crea `client_id` sin multi-tenancy, pero `$fillable` sí lo
+     *     declaraba → Eloquent intentaba persistir `client_id` random).
+     *   - Dead code que engañaba al dev sobre las columnas reales de la tabla.
+     *
+     * Post-fix: default single-tenant (string vacío), opt-in vía flag
+     * `--multi-tenant` que pinea `        'client_id',\n` (8 spaces indent).
+     * Defense-in-depth — el scaffolder NUNCA pinea `client_id` sin flag
+     * explícito, así que un consumer que olvida el flag no se rompe.
+     *
+     * @param  bool  $multiTenant
+     * @return string PHP literal pineable en stub.
+     */
+    protected function buildClientIdFillableEntry(bool $multiTenant): string
+    {
+        return $multiTenant ? "        'client_id',\n" : '';
+    }
+
+    /**
+     * R-PKG-052 (FEEDBACK11, RETO corrida 10) — emite `client_id` column para
+     * la migration, SOLO si el scaffolder se invoca con `--multi-tenant` (opt-in).
+     *
+     * La columna pineada es `uuid nullable + index` — pinear como uuid porque
+     * el resto del scope usa HasUuids (auth_users.id es uuid, R-PKG-011 BC).
+     * Nullable porque un user podría no tener tenant asignado (e.g. super-admin
+     * cross-tenant). Index porque el query `WHERE client_id = ?` es el
+     * hot-path del filter multi-tenant (ver `BaseRepository` de R-PKG-046).
+     *
+     * Pre-fix, la migration NO pineaba `client_id` NUNCA → el `$fillable`
+     * pineado en el modelo (legacy pre-R-PKG-052) apuntaba a una columna
+     * inexistente → `column not found: client_id` en el primer INSERT.
+     * Post-fix, ambos (model + migration) pinean en lockstep vía flag.
+     *
+     * @param  bool  $multiTenant
+     * @return string PHP literal pineable en stub.
+     */
+    protected function buildClientIdColumn(bool $multiTenant): string
+    {
+        return $multiTenant
+            ? "\$table->uuid('client_id')->nullable()->index();\n            "
+            : '';
     }
 
     /**

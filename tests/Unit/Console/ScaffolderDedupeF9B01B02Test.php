@@ -170,3 +170,39 @@ test('R-PKG-046 F9-B02 — admin-resource.stub contiene solo 1 línea con key em
     $emailLines = substr_count($stub, "'email' => \$this->email");
     expect($emailLines)->toBe(1);  // BC pineado hardcoded, sin duplicar.
 });
+
+test('R-PKG-052 — command signature incluye --multi-tenant opt-in flag', function () {
+    $src = makeAuthUserCommandSource();
+
+    // El option debe estar pineado como flag opt-in (sin `=`, con default false).
+    // Sintaxis: `{--multi-tenant : ...}`
+    expect($src)->toMatch('/\{--multi-tenant\s*:/');
+});
+
+test('R-PKG-052 — buildClientIdFillableEntry() pinea client_id solo si multi-tenant', function () {
+    $src = makeAuthUserCommandSource();
+
+    // El helper existe con la firma correcta (bool $multiTenant).
+    expect($src)->toMatch('/protected function buildClientIdFillableEntry\(\s*bool\s+\$multiTenant\s*\):\s*string/');
+
+    // Y retorna 'client_id' solo cuando multiTenant=true.
+    // El default (false) debe ser string vacío (NO pinear la entry).
+    expect($src)->toContain("return \$multiTenant ? \"        'client_id',\\n\" : '';");
+});
+
+test('R-PKG-052 — auth-user.model.stub usa {{clientIdFillableEntry}} placeholder (no hardcoded client_id)', function () {
+    $stubPath = __DIR__.'/../../../src/Stubs/auth-user.model.stub';
+    expect(file_exists($stubPath))->toBeTrue();
+
+    $stub = (string) file_get_contents($stubPath);
+
+    // Post-fix: el stub usa placeholder, no hardcoded 'client_id' en $fillable.
+    expect($stub)->toContain('{{clientIdFillableEntry}}');
+
+    // Y el helper pinea 'client_id' solo con flag opt-in.
+    // Defensa contra regresión: si el stub vuelve a pinear 'client_id' hardcoded,
+    // este test FALLA y avisa que hay que re-pinear el placeholder.
+    $fillableSection = (string) preg_match('/protected \$fillable = \[(.*?)\];/s', $stub, $m) ? $m[1] : '';
+    $hardcodedClientId = substr_count($fillableSection, "'client_id'");
+    expect($hardcodedClientId)->toBe(0);
+});
