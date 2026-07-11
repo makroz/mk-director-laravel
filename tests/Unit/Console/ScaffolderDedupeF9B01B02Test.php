@@ -45,7 +45,7 @@ function makeAuthUserCommandSource(): string
     return (string) file_get_contents($path);
 }
 
-test('R-PKG-046 F9-B01 — buildProfileFieldRules() SKIP core fields (name, email, password, status)', function () {
+test('R-PKG-046 F9-B01 — buildProfileFieldRules() SKIP core fields (name, $loginField, password, status)', function () {
     $src = makeAuthUserCommandSource();
 
     $helperPos = strpos($src, 'protected function buildProfileFieldRules(');
@@ -54,7 +54,7 @@ test('R-PKG-046 F9-B01 — buildProfileFieldRules() SKIP core fields (name, emai
     $helperBody = substr($src, (int) $helperPos);
 
     // F10-B18 (R-PKG-050): la dedup incluye 'status' además de los
-    // core fields F9-B01 (name, email, password). Pre-fix, con
+    // core fields F9-B01 (name, email/loginField, password). Pre-fix, con
     // --with-status default ON, el helper pineaba 'status' => ['nullable',
     // 'string'] (rule genérica) Y el helper de status pineaba
     // 'status' => ['sometimes', 'nullable', 'string', Rule::enum(...)] —
@@ -63,14 +63,24 @@ test('R-PKG-046 F9-B01 — buildProfileFieldRules() SKIP core fields (name, emai
     // FEEDBACK10: `photo` ya NO está en la dedup list (los file fields
     // se pinean via {{fileFieldsValidationStore/Update}} con rule
     // `['nullable', 'file', 'image', ...]`).
-    expect($helperBody)->toContain("\$coreFields = ['name', 'email', 'password', 'status']");
+    //
+    // R-PKG-052: la dedup usa `$loginField` dinámico en vez de hardcodear
+    // `'email'`. Pre-fix, con `--login-field=ci --profile-fields=ci,phone`,
+    // el scaffolder pineaba DOS `'ci' => [...]` rules y PHP descartaba la
+    // canónica (con required/max:255/unique) — el login quedaba sin validar.
+    expect($helperBody)->toContain("\$coreFields = ['name', \$loginField, 'password', 'status']");
 
     // Y debe skip esos fields con in_array check.
     expect($helperBody)->toContain("if (in_array(\$key, \$coreFields, true))");
     expect($helperBody)->toContain('continue;');
+
+    // R-PKG-052: pinea que el método RECIBE el `$loginField` como parámetro
+    // (pre-fix: solo recibía `$profileFields`, `$requiredFields`, `$scopePlural`
+    // y la dedup usaba `email` hardcoded, rompiendo para loginField != email).
+    expect($helperBody)->toMatch('/function buildProfileFieldRules\(\s*array\s+\$profileFields\s*,\s*array\s+\$requiredFields\s*,\s*string\s+\$scopePlural\s*,\s*string\s+\$loginField\s*=/');
 });
 
-test('R-PKG-046 F9-B02 — buildProfileFieldsToArray() SKIP core fields (id, name, loginField, auth_scope)', function () {
+test('R-PKG-046 F9-B02 — buildProfileFieldsToArray() SKIP core fields (id, name, loginField, auth_scope, password, status)', function () {
     $src = makeAuthUserCommandSource();
 
     $helperPos = strpos($src, 'protected function buildProfileFieldsToArray(');
@@ -82,7 +92,18 @@ test('R-PKG-046 F9-B02 — buildProfileFieldsToArray() SKIP core fields (id, nam
     // resource stub los genera dinámicamente via {{fileFieldsResourceEntry}}.
     // El nuevo core list es `id, name, loginField, auth_scope` (4 fields
     // pineados hardcoded en el stub).
-    expect($helperBody)->toContain("\$coreFields = ['id', 'name', \$loginField, 'auth_scope']");
+    //
+    // R-PKG-052: agregar `'password'` y `'status'` a la dedup. El stub
+    // `admin-data-dto.stub` pinea `'password' => $this->password` hardcoded
+    // en `toArray()` (línea 79), y `{{statusDtoToArray}}` pinea
+    // `'status' => $this->status`. Pre-fix, si `password` o `status` estaban
+    // en `--profile-fields`, este helper pineaba OTRA entry duplicada.
+    // Mismo problema en Resource: `{{statusResourceEntry}}` pinea
+    // `'status' => $this->status?->value` canónico, y este helper pineaba
+    // `'status' => $this->status` (enum crudo) — eso PISABA el canónico
+    // con el enum object, rompiendo el contrato cross-stack con
+    // `@makroz/web AdminDto.status: AdminStatusValue` (espera string).
+    expect($helperBody)->toContain("\$coreFields = ['id', 'name', \$loginField, 'auth_scope', 'password', 'status']");
 
     // Y debe skip esos fields con in_array check.
     expect($helperBody)->toContain("if (in_array(\$key, \$coreFields, true))");

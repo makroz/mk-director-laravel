@@ -1627,7 +1627,16 @@ PHP,
         // N12: buildProfileFieldRules emite reglas para TODOS los profile fields
         // (no solo los unique), si no `validated()` los descartaba y el CRUD
         // nunca persistía full_name/phone/address.
-        $fieldRules = $this->buildProfileFieldRules($profileFields, $requiredFields, $scopePlural);
+        // R-PKG-052: pasar $loginField a buildProfileFieldRules para que el
+        // dedup contra core fields use el loginField real (`ci` para RETO, etc.)
+        // en vez de hardcodear `email`. Pre-fix, si el consumer hacía
+        // `--login-field=ci --profile-fields=ci,phone`, el scaffolder pineaba
+        // DOS rules `'ci' => [...]` en `rules()`: una canónica del stub
+        // (`'required','string','max:255','unique:...,ci'`) + una genérica
+        // (`'nullable','string'`) del helper. PHP array merge con key
+        // duplicada descartaba la primera — el `required`/`max:255`/`unique`
+        // se perdían en create (CIs vacíos pasaban validación).
+        $fieldRules = $this->buildProfileFieldRules($profileFields, $requiredFields, $scopePlural, $loginField);
         $crudReplacements = array_merge([
             '{{profileFieldsList}}' => $this->buildProfileFieldsList($profileFields),
             // F10-B05 (R-PKG-050): pasar `$loginField` a los 3 helpers DTO
@@ -2549,7 +2558,21 @@ PHP;
         // `email` se declara via --profile-fields cuando loginField != email,
         // el DTO/resource pinean `'email'` también. Mantenemos el dedup para
         // el caso de `email` (profile field extra) cuando loginField es distinto.
-        $coreFields = ['id', 'name', $loginField, 'auth_scope'];
+        //
+        // R-PKG-052: agregar `'status'` y `'password'` a la dedup. El stub
+        // `admin-data-dto.stub` pinea `'password' => $this->password` hardcoded
+        // en `toArray()` (línea 79), y `{{statusDtoToArray}}` pinea
+        // `'status' => $this->status`. Pre-fix, si `password` o `status` estaban
+        // en `--profile-fields`, este helper pineaba OTRA entry `'password'`
+        // o `'status'` en `toArray()`. PHP array merge con key duplicada
+        // descartaba la primera — el output seguía OK porque los valores
+        // son iguales, pero el código generado era inconsistente (duplicado
+        // explícito pineado 2 veces). Mismo problema en Resource: `{{statusResourceEntry}}`
+        // pinea `'status' => $this->status?->value` canónico, y `{{profileFieldsResourceEntry}}`
+        // pineaba `'status' => $this->status` (enum crudo) — eso PISABA el
+        // canónico con el enum object, rompiendo el contrato cross-stack
+        // con `@makroz/web AdminDto.status: AdminStatusValue` (espera string).
+        $coreFields = ['id', 'name', $loginField, 'auth_scope', 'password', 'status'];
 
         $out = '';
         foreach ($profileFields as $key => $meta) {
@@ -2607,7 +2630,7 @@ PHP;
      * @param  string  $scopePlural  Nombre de la tabla del scope (e.g. `admins`).
      * @return array{store: string, update: string}
      */
-    protected function buildProfileFieldRules(array $profileFields, array $requiredFields, string $scopePlural): array
+    protected function buildProfileFieldRules(array $profileFields, array $requiredFields, string $scopePlural, string $loginField = 'email'): array
     {
         // R-PKG-046 F9-B01: core fields ya pineados hardcoded en los stubs.
         // Skip para evitar duplicate keys en el array final `rules()`.
@@ -2633,7 +2656,15 @@ PHP;
         // pinea el rule genérico `['nullable', 'string']` desde
         // `buildProfileFieldRules()` (la regla `file`/`image`/`mimes` se pinea
         // en el stub pineado por `{{fileFieldsValidationStore/Update}}`).
-        $coreFields = ['name', 'email', 'password', 'status'];
+        //
+        // R-PKG-052: usar `$loginField` dinámico en vez de hardcodear `email`.
+        // Pre-fix, si el consumer hacía `--login-field=ci` y `ci` también
+        // estaba en `--profile-fields`, el scaffolder pineaba DOS rules
+        // `'ci' => [...]` en `rules()`: una canónica del stub
+        // (`'required','string','max:255','unique:...,ci'`) + una genérica
+        // (`'nullable','string'`) de este helper. PHP array merge descartaba
+        // la primera — el `required`/`max:255`/`unique` se perdían en create.
+        $coreFields = ['name', $loginField, 'password', 'status'];
 
         $store = '';
         $update = '';
