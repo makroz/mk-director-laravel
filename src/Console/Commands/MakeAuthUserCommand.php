@@ -2100,11 +2100,31 @@ PHP,
         // del scope name real (admin/member/etc.).
         //
         // Post-fix: construir el path string con interpolación PHP en
-        // DOBLE nivel — primero acá (scopeLower real del scaffolder) y
+        // DOBLE nivel — primero acá (scopeLower real del scaffolder, con
+        // double-quoted string para que PHP interpole `{$scopeLower}`) y
         // después pineado en la HEREDOC como string LITERAL (sin
         // variables). El consumer recibe `'path' => 'uploads/admin'`
         // (o el scope que sea) en runtime.
-        $pathLiteral = "'path' => 'uploads/{$scopeLower}',";
+        //
+        // OJO: usar DOUBLE-QUOTED string acá. Con single quotes, `{$scopeLower}`
+        // NO se interpola y el path queda con `{$scopeLower}` literal
+        // (mismo bug que estamos fixeando). El comentario previo decía
+        // "construir el path string con interpolación" pero el código
+        // pineaba single-quoted — fix de fix.
+        //
+        // CRITICAL: el string DEBE ser double-quoted para que PHP interpole
+        // `{$scopeLower}`. Con single quotes, `{$scopeLower}` queda como
+        // texto literal y el consumer recibe `uploads/{$scopeLower}` (mismo
+        // bug que estamos fixeando). La interpolación resuelve al scopeLower
+        // real del scaffolder (admin/member/etc.) y pinea el path correcto.
+        //
+        // Implementation: usamos concatenación explícita (`.`) en vez de
+        // interpolación `{...}` porque el string contiene 3 niveles de
+        // quotes anidadas (single-quoted PHP source, single-quoted PHP
+        // string en el output, single-quoted key 'path'). Concatenación
+        // evita el escape hell. El output final es idéntico:
+        // `'path' => 'uploads/admin',`
+        $pathLiteral = "'path' => 'uploads/".$scopeLower."',";
 
         return <<<PHP
 [

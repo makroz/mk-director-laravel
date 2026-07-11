@@ -216,3 +216,25 @@ test('R-PKG-052 — auth-user.model.stub usa {{clientIdFillableEntry}} placehold
     $hardcodedClientId = substr_count($fillableSection, "'client_id'");
     expect($hardcodedClientId)->toBe(0);
 });
+
+test('R-PKG-052 — buildPluginsConfigLiteral() pinea path con scopeLower real (no placeholder literal)', function () {
+    $src = makeAuthUserCommandSource();
+
+    // El helper recibe $scopeLower (post-fix).
+    expect($src)->toMatch('/function buildPluginsConfigLiteral\(\s*array\s+\$fileFieldNames\s*,\s*string\s+\$scopeLower\s*=\s*\'unknown\'/');
+
+    // Y el path se construye con concatenación PHP (el string tiene 3
+    // niveles de quotes anidadas, por eso usamos `.` en vez de `{...}`):
+    //   $pathLiteral = "'path' => 'uploads/".$scopeLower."',";
+    // → en runtime el consumer recibe 'uploads/admin' (o el scope que sea).
+    expect($src)->toContain("\$pathLiteral = \"'path' => 'uploads/\".\$scopeLower.\"',\";");
+
+    // Y la HEREDOC ya NO contiene el string literal '{scopeLower}' (defensa
+    // contra regresión — si alguien lo vuelve a pinear, este test FALLA).
+    // Buscamos SOLO dentro de la HEREDOC, no en los comentarios del docblock
+    // (que sí mencionan '{scopeLower}' como referencia al bug pineado).
+    $heredocPos = strpos($src, "return <<<PHP\n");
+    $heredocEnd = strpos($src, "\nPHP;\n", (int) $heredocPos);
+    $heredocBody = substr($src, (int) $heredocPos, (int) $heredocEnd - (int) $heredocPos);
+    expect($heredocBody)->not->toContain("'uploads/{scopeLower}'");
+});
