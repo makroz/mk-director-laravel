@@ -10,15 +10,27 @@ use Mk\Director\Tests\MkLaravelTestCase;
  * Source-parsing tests for R-PKG-014 — `mk:make:auth-user` feedback fixes (v1.6.0-rc4).
  *
  * Pinea cada bug crítico del feedback RETO v1.1:
- *   - BUG-01: logout() lookup order (user ANTES de authorizeAbility).
  *   - BUG-02: model docblock completo (slash-star-star ... star-slash).
  *   - BUG-03: profile fields default validation nullable + --profile-fields-required.
  *   - BUG-04: register() incluye password en validation.
- *   - BUG-05: login() response incluye profile fields + roles + abilities.
- *   - BUG-06: me() hace loadMissing de roles + directAbilities.
- *   - BUG-07: refresh() + reset() + forgot() implementación completa.
  *   - BUG-09: --profile-fields prefijo bang marca unique.
  *   - BUG-10: storage:link check.
+ *
+ * **R-PKG-047 D1 (2026-07-09)**: el AuthController scaffoldeado pasó de ~500
+ * LOC a un thin wrapper. Los métodos `login()`, `refresh()`, `logout()`,
+ * `me()`, `forgot()`, `reset()` viven en `BaseAuthController` (SSoT canónico).
+ *
+ * **ELIMINADOS post-D1** (estos bugs viven ahora en BaseAuthController, no en
+ * el stub scaffoldeado):
+ *   - BUG-01: logout() lookup order (la lógica vive en `BaseAuthController::logout()`).
+ *   - BUG-05: login() response shape (`BaseAuthController::login()`).
+ *   - BUG-06: me() loadMissing (`BaseAuthController::me()`).
+ *   - BUG-07: refresh() + reset() + forgot() implementación completa (en
+ *     `BaseAuthController::refresh/reset/forgot()`).
+ *
+ * Los tests pinean que el thin wrapper NO contiene esos métodos (SSoT
+ * migrada a BaseAuthController). La EFECTIVIDAD runtime se valida en RETO
+ * e2e + tests de integración del BaseAuthController.
  *
  * Lección R-PKG-012: pinear strings críticos evita que bugs runtime se escapen.
  */
@@ -43,6 +55,15 @@ function authControllerStub014(): string
     return (string) file_get_contents($path);
 }
 
+function baseAuthControllerSource014(): string
+{
+    $path = packageRoot014().'/src/Auth/Controllers/BaseAuthController.php';
+
+    expect(file_exists($path))->toBeTrue("BaseAuthController must exist at $path (R-PKG-047 D1 SSoT)");
+
+    return (string) file_get_contents($path);
+}
+
 function modelStub014(): string
 {
     $path = packageRoot014().'/src/Stubs/auth-user.model.stub';
@@ -57,34 +78,17 @@ function migrationStub014(): string
     return (string) file_get_contents($path);
 }
 
-// ── BUG-01: logout() lookup order ────────────────────────────────────────
-
-test('BUG-01 fix: stub logout() lookup del user ANTES del authorizeAbility placeholder', function () {
-    $stub = authControllerStub014();
-
-    // El stub debe tener el método logout() con lookup ANTES del placeholder RBAC.
-    expect($stub)->toContain('public function logout(Request $request): JsonResponse');
-
-    // Localizar el bloque logout() desde su declaración hasta el cierre.
-    preg_match('/public function logout\(.*?\n    \}/sm', $stub, $matches);
-    expect($matches)->toHaveCount(1, 'logout() method must exist in stub');
-
-    $body = $matches[0];
-
-    // El lookup '$user = $request->user();' debe aparecer ANTES del placeholder
-    // {{rbacAbilityCheckLogout}} que emite el authorizeAbility cuando --with-auth-rbac.
-    $userLookupPos = strpos($body, '$user = $request->user();');
-    $rbacPlaceholderPos = strpos($body, '{{rbacAbilityCheckLogout}}');
-
-    expect($userLookupPos)->toBeInt()->not->toBeFalse('logout() must lookup $user from $request');
-    expect($rbacPlaceholderPos)->toBeInt()->not->toBeFalse('logout() must have rbacAbilityCheckLogout placeholder');
-    expect($userLookupPos)
-        ->toBeLessThan($rbacPlaceholderPos, 'BUG-01 fix: $user lookup must happen BEFORE rbacAbilityCheckLogout placeholder');
-
-    // Verificar también que el command emite el authorizeAbility correctamente.
-    $command = commandSource014();
-    expect($command)->toContain('authorizeAbility(\'logout\', \$user)');
-});
+// ── BUG-01..07 ELIMINADOS post-R-PKG-047 D1 ──────────────────────────────
+//
+// Los 7 tests pre-D1 (BUG-01 logout lookup, BUG-05 login shape, BUG-06 me
+// loadMissing, BUG-07 refresh/reset/forgot) pineaban features del stub
+// VIEJO (~500 LOC). Post-D1, esos métodos viven en `BaseAuthController`
+// (SSoT canónico) y el stub es un thin wrapper. El test pineando el SSoT
+// vive al final de este archivo (`R-PKG-047 D1: BaseAuthController expone
+// los 6 métodos canónicos...`).
+//
+//
+// ── BUG-02 + R-PKG-015 BUG-NEW-11: model docblock completo ─────────────
 
 // ── BUG-02 + R-PKG-015 BUG-NEW-11: model docblock completo ─────────────
 
@@ -153,77 +157,18 @@ test('BUG-04 fix: rulesPhp del register() incluye password => required', functio
     expect($command)->toContain("'password' => ['required', 'string', 'min:8', 'max:255']");
 });
 
-// ── BUG-05 (LEGACY, R-PKG-029 PKG-NEW-15 lo refactoriza) ───────────────────
-// Históricamente el stub construía un array_merge con profile fields + roles +
-// abilities top-level. El R-PKG-029 PKG-NEW-15 refactor (2026-06-28, feedback
-// RETO fase 10b) unifica el shape con `me()`: ahora se retorna `$user` y
-// `autoTransform()` aplica el `apiResource` del modelo. Esto evita drift
-// cross-stack entre `login()` y `me()`.
-
-test('BUG-05 refactorizado por PKG-NEW-15: login() retorna $user (no array_merge)', function () {
-    $stub = authControllerStub014();
-
-    // El stub ahora usa `$user` directamente — autoTransform() se encarga del shape.
-    expect($stub)->toContain("'{{moduleNameLower}}' => \$user,");
-
-    // Y NO contiene el array_merge ad-hoc (legacy).
-    expect($stub)->not->toMatch("/\\\$user->only\\(\\['id', 'name'/");
-    expect($stub)->not->toMatch("/'abilities'\s*=>\s*\\\$user->abilities->pluck/");
-});
-
-test('BUG-05 refactorizado por PKG-NEW-15: buildLoginResponseArray() retorna $user', function () {
-    $command = commandSource014();
-
-    expect($command)->toContain('protected function buildLoginResponseArray');
-
-    // El cuerpo ahora retorna literal `$user` (en vez del array_merge).
-    // Buscamos `return '$user';` en el cuerpo de la función.
-    expect($command)->toMatch("/function buildLoginResponseArray[^{]+\\{\\s*\\/\\/ PKG-NEW-15.*?return '\\\$user';\\s*\\}/s");
-});
-
-// ── BUG-06: me() eager-load ──────────────────────────────────────────────
-
-test('BUG-06 fix: me() stub hace loadMissing ANTES del sendResponse', function () {
-    $stub = authControllerStub014();
-
-    // El stub debe tener el método me() con loadMissing.
-    expect($stub)->toContain('public function me(Request $request): JsonResponse');
-    // Verifica el orden: loadMissing antes de sendResponse.
-    $loadMissingPos = strpos($stub, "loadMissing(['roles', 'directAbilities'])");
-    expect($loadMissingPos)->toBeInt()->not->toBeFalse();
-
-    // El stub NO debe pasar $request->user() directo a sendResponse (BUG-06 regression).
-    // Aceptable: sendResponse($user) donde $user ya tiene loadMissing aplicado.
-    expect($stub)->not->toContain('sendResponse($request->user())');
-});
-
-// ── BUG-07: refresh() + reset() + forgot() implementación completa ────────
-
-test('BUG-07 fix: refresh() stub usa TokenIssuer::rotateRefreshToken()', function () {
-    $stub = authControllerStub014();
-
-    expect($stub)->toContain('rotateRefreshToken');
-    // No debe quedar el TODO de refresh con not_implemented.
-    expect($stub)->not->toContain("'not_implemented',\n            ['hint' => 'Implementar con TokenIssuer + Sanctum v4 id|plaintext token parsing']");
-});
-
-test('BUG-07 fix: reset() stub genera token lookup + password update + tokens invalidation', function () {
-    $stub = authControllerStub014();
-
-    expect($stub)->toContain('public function reset(Request $request): JsonResponse');
-    expect($stub)->toContain('password_reset_tokens');
-    expect($stub)->toContain('Hash::check');
-    expect($stub)->toContain('$user->tokens()->delete()');
-});
-
-test('BUG-07 fix: forgot() stub genera token + persiste en password_reset_tokens', function () {
-    $stub = authControllerStub014();
-
-    expect($stub)->toContain('public function forgot(Request $request): JsonResponse');
-    expect($stub)->toContain('random_bytes');
-    expect($stub)->toContain('updateOrInsert');
-    expect($stub)->toContain('password_reset_tokens');
-});
+// ── BUG-05..07 ELIMINADOS post-R-PKG-047 D1 ──────────────────────────────
+//
+// Ver comment al inicio del archivo. Estos tests pineaban los métodos
+// `login()`, `me()`, `refresh()`, `reset()`, `forgot()` del stub VIEJO.
+// Post-D1, esos métodos viven en `BaseAuthController` (SSoT canónico).
+//
+// `buildLoginResponseArray()` también se removió del command (era helper
+// interno del scaffolder para el stub VIEJO). El shape canónico `$user`
+// vive en `BaseAuthController::login()` ahora.
+//
+//
+// ── BUG-09: --profile-fields prefijo `!` marca unique ─────────────────────
 
 // ── BUG-09: --profile-fields prefijo `!` marca unique ─────────────────────
 
@@ -255,4 +200,34 @@ test('BUG-10 fix: checkStorageLink warn si disk=public y storage no linkeado', f
 
     expect($command)->toMatch("/\\\$disk\s*=\s*config\(\s*'mk_director\.storage\.disk',\s*'public'\s*\)/");
     expect($command)->toContain('php artisan storage:link');
+});
+
+// ── R-PKG-047 D1: BaseAuthController es SSoT para los 6 métodos canónicos ─
+
+test('R-PKG-047 D1: BaseAuthController expone los métodos canónicos de auth', function () {
+    $base = baseAuthControllerSource014();
+
+    // Métodos que el thin wrapper AuthController scaffoldeado hereda
+    // sin override. Pinean el SSoT canónico de la lógica de auth post-D1.
+    // (Nombres canónicos del BaseAuthController: forgotPassword/resetPassword,
+    // no forgot/reset — ver R-PKG-047 D1 naming convention.)
+    expect($base)->toContain('public function login(');
+    expect($base)->toContain('public function refresh(');
+    expect($base)->toContain('public function logout(');
+    expect($base)->toContain('public function me(');
+    expect($base)->toContain('public function forgotPassword(');
+    expect($base)->toContain('public function resetPassword(');
+});
+
+test('R-PKG-047 D1: stub AuthController es thin wrapper — NO contiene los métodos inline', function () {
+    $stub = authControllerStub014();
+
+    // El thin wrapper NO override los métodos de auth (los hereda de
+    // BaseAuthController). Pinea el SSoT migration post-D1.
+    expect($stub)->not->toContain('public function login(');
+    expect($stub)->not->toContain('public function refresh(');
+    expect($stub)->not->toContain('public function logout(');
+    expect($stub)->not->toContain('public function me(');
+    expect($stub)->not->toContain('public function forgotPassword(');
+    expect($stub)->not->toContain('public function resetPassword(');
 });

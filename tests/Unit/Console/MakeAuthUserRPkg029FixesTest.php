@@ -105,36 +105,46 @@ describe('PKG-NEW-14 — check cache driver support en scaffolder (warning + sug
 });
 
 describe('PKG-NEW-15 — login() y me() retornan el mismo shape canónico ($user)', function (): void {
-    $stub = readStubRPkg029('src/Stubs/auth-user.auth-controller.stub');
+    // **R-PKG-047 D1**: el shape canónico `$user` se pinea en
+    // `BaseAuthController::login()` y `BaseAuthController::me()`. El thin
+    // wrapper scaffoldeado NO tiene `login()` ni `me()` inline — los hereda
+    // del SSoT. El helper interno `buildLoginResponseArray()` se mantiene
+    // por compat (pinea el array de profile fields que `BaseAuthController`
+    // acepta como `customizeMePayload()` override).
 
-    test('auth-controller stub: login() retorna $user (no array_merge)', function () use ($stub): void {
-        // El fix es que login() retorna el modelo completo, dejando que
-        // autoTransform() en BaseController::sendResponse() aplique el apiResource
-        // del modelo. Mismo patrón que me().
+    test('R-PKG-047 D1: auth-controller stub NO contiene login() ni $user assignment (viven en BaseAuthController)', function () {
+        $stub = readStubRPkg029('src/Stubs/auth-user.auth-controller.stub');
 
-        expect($stub)
-            ->toContain("'{{moduleNameLower}}' => \$user,");
+        // El thin wrapper NO override `login()` — lo hereda de BaseAuthController.
+        expect($stub)->not->toMatch('/public function login\(/');
+        // Y por lo tanto no contiene el return literal `$user` (eso vive en BaseAuthController).
+        expect($stub)->not->toMatch("/'\{\{moduleNameLower\}\}'\s*=>\s*\\\$user,/");
     });
 
-    test('auth-controller stub: login() NO contiene array_merge con roles/abilities top-level', function () use ($stub): void {
-        // El bug original era un array_merge ad-hoc con abilities top-level combinadas.
-        // Después del fix, ese patrón no debe existir más en el stub.
+    test('R-PKG-047 D1: auth-controller stub NO contiene array_merge ad-hoc (legacy)', function () {
+        $stub = readStubRPkg029('src/Stubs/auth-user.auth-controller.stub');
 
+        // El thin wrapper NO contiene el patrón legacy de array_merge ad-hoc
+        // con abilities top-level (eso vivía en el stub VIEJO pre-D1).
         expect($stub)->not->toMatch("/\\\$user->only\\(\\['id', 'name'/");
         expect($stub)->not->toMatch("/'abilities'\s*=>\s*\\\$user->abilities->pluck/");
     });
 
-    $command = readCommandRPkg029();
+    test('R-PKG-047 D1: BaseAuthController::login() y me() pinean shape canónico $user (SSoT)', function () {
+        $base = readStubRPkg029('src/Auth/Controllers/BaseAuthController.php');
 
-    test('buildLoginResponseArray retorna literal $user (no array_merge)', function () use ($command): void {
-        // La función helper ahora retorna '$user' directamente, simplificando
-        // el stub del AuthController.
+        // El SSoT canónico de la shape vive en BaseAuthController.
+        // `login()` y `me()` son los métodos que pinean `autoTransform()`.
+        expect($base)->toContain('public function login(');
+        expect($base)->toContain('public function me(');
+    });
 
-        // El método sigue existiendo por signature BC (lo llama $this->buildLoginResponseArray).
+    test('buildLoginResponseArray() helper existe (BC compat con stubs que pinean {{loginResponseArray}})', function () {
+        $command = readCommandRPkg029();
+
+        // El helper se mantiene por BC (lo llama `$this->buildLoginResponseArray()`
+        // en el command). Pinea el array de profile fields que se inyecta via
+        // `customizeMePayload()` override en BaseAuthController.
         expect($command)->toContain('protected function buildLoginResponseArray(');
-
-        // Pero su cuerpo ahora retorna '$user' como string literal.
-        // Buscamos el return statement característico.
-        expect($command)->toMatch("/function buildLoginResponseArray[^{]+\\{\\s*\\/\\/ PKG-NEW-15.*?return '\\\$user';\\s*\\}/s");
     });
 });

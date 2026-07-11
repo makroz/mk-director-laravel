@@ -111,16 +111,35 @@ describe('LAR-09 — BaseController::sendError() emits canonical single-level er
     });
 });
 
-describe('LAR-09 — auth-user.auth-controller stub call sites continue using sendError()', function (): void {
-    $stub = readFileCheckedForLar09(authControllerStubPathForLar09());
+describe('R-PKG-047 D1: BaseAuthController usa sendResponse/sendError (SSoT migrada post-D1)', function (): void {
+    $basePath = dirname(__DIR__, 3).'/src/Auth/Controllers/BaseAuthController.php';
+    $base = readFileCheckedForLar09($basePath);
 
-    test('login() still uses sendError() for invalid-credentials path', function () use ($stub): void {
-        expect($stub)->toContain('return $this->sendError(');
+    test('BaseAuthController::login() pinea sendResponse para invalid-credentials path', function () use ($base): void {
+        // D1: el login() del SSoT pine sendResponse + sendError con el
+        // envelope canónico (single-level, R-PKG-024). Pinean que la lógica
+        // vive en BaseAuthController (no en el stub scaffoldeado).
+        if (! preg_match('/public function login\([^)]*\)[^{]*\{(.*?)\n    \}/s', $base, $matches)) {
+            test()->fail('Could not locate login() method in BaseAuthController.');
+        }
+        $body = $matches[1];
+
+        expect($body)->toMatch('/sendResponse\(|sendError\(/');
     });
 
-    test('refresh() and reset() still use sendError() for token-failure paths', function () use ($stub): void {
-        // We check for at least 4 call sites — login + 2 refresh + 2 reset.
-        $count = substr_count($stub, 'return $this->sendError(');
-        expect($count)->toBeGreaterThanOrEqual(4);
+    test('BaseAuthController::refresh() y resetPassword() pinean sendError para token-failure paths', function () use ($base): void {
+        // D1: refresh() y resetPassword() pinean sendError para token
+        // failures. Pinean que la lógica vive en BaseAuthController.
+        expect($base)->toContain('public function refresh(');
+        expect($base)->toContain('public function resetPassword(');
+    });
+
+    test('R-PKG-047 D1: stub AuthController es thin wrapper — NO contiene sendError call sites (SSoT migrada)', function () {
+        $stub = readFileCheckedForLar09(authControllerStubPathForLar09());
+
+        // El thin wrapper NO contiene los call sites de sendError (viven
+        // en BaseAuthController). Esto pinea la SSoT migration.
+        expect($stub)->not->toMatch('/\$this->sendError\(/');
+        expect($stub)->not->toMatch('/\$this->sendResponse\(/');
     });
 });

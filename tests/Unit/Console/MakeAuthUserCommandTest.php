@@ -167,78 +167,29 @@ test('auth-user migration stub creates the scope table with indexed auth_scope',
 });
 
 // ── AuthController stub ─────────────────────────────────────────────────
-
-test('auth-user auth-controller stub exposes all six endpoints', function () {
-    $source = stubSource('auth-user.auth-controller.stub');
-
-    // 6 endpoints
-    foreach (['login', 'refresh', 'logout', 'me', 'forgot', 'reset'] as $endpoint) {
-        expect($source)->toContain("public function {$endpoint}(");
-    }
-
-    // R-PKG-014 BUG-07 fix: refresh() y reset() ya NO son skeletons. Implementación
-    // completa con TokenIssuer::rotateRefreshToken() y password_reset_tokens lookup.
-    // Las validamos explícitamente.
-    expect($source)->toContain('rotateRefreshToken');
-    expect($source)->toContain('password_reset_tokens');
-});
-
-test('auth-user auth-controller stub mentions TokenIssuer for the dev to wire up', function () {
-    $source = stubSource('auth-user.auth-controller.stub');
-    expect($source)->toContain('TokenIssuer');
-});
-
-test('auth-user auth-controller stub extends BaseController (bug 1.4.0-001)', function () {
-    // Bug 1.4.0-001: the previous stub extended
-    // `Illuminate\Routing\Controller` (Laravel stock) instead of the
-    // package's `BaseController`. As a result, the generated
-    // AuthController did NOT get:
-    //   - the standard `{success, message, data, debugMsg}` envelope
-    //   - `autoTransform()` (Model → API Resource transparent)
-    //   - `getDebugData()` (EXPLAIN gated by role)
-    //   - plugin instrumentation (audit log, multi-tenancy)
-    // The fix: extend `Mk\Director\Controllers\BaseController`.
-    $source = stubSource('auth-user.auth-controller.stub');
-
-    expect($source)->toContain('use Mk\\Director\\Controllers\\BaseController;');
-    expect($source)->toContain('class AuthController extends BaseController');
-    // And explicitly must NOT extend Laravel's stock Controller.
-    expect($source)->not->toContain('use Illuminate\\Routing\\Controller;');
-});
-
-test('auth-user auth-controller stub uses sendResponse / sendError envelope (bug 1.4.0-002)', function () {
-    // Bug 1.4.0-002: the previous stub used `response()->json([...])`
-    // for all 6 endpoints, producing 6 different ad-hoc shapes.
-    // The fix: use `BaseController::sendResponse()` and
-    // `BaseController::sendError()` for the standard envelope.
-    $source = stubSource('auth-user.auth-controller.stub');
-
-    // Must use the package envelope helpers
-    expect($source)->toContain('$this->sendResponse(');
-    expect($source)->toContain('$this->sendError(');
-
-    // The login / refresh / logout / me / forgot / reset methods must
-    // route through sendResponse or sendError — NOT raw response()->json
-    // inside the AuthController's own methods.
-    expect($source)->not->toContain('response()->json(');
-});
-
-test('auth-user auth-controller stub uses TokenIssuer::issueAccessToken in login (bug 1.4.0-003)', function () {
-    // Bug 1.4.0-003: the previous stub used `$user->createToken(...)`
-    // directly, bypassing the package's `TokenIssuer` service. The
-    // package's TokenIssuer handles:
-    //   - the `auth_scope` ability baking
-    //   - the configurable TTLs (`mk_director.auth.ttl.*`)
-    //   - the token naming convention
-    // The fix: route token issuance through `TokenIssuer::issueAccessToken`.
-    $source = stubSource('auth-user.auth-controller.stub');
-
-    expect($source)->toContain('use Mk\\Director\\Auth\\Services\\TokenIssuer;');
-    expect($source)->toContain('new TokenIssuer()');
-    expect($source)->toContain('->issueAccessToken(');
-    // And the previous raw Sanctum call must be gone.
-    expect($source)->not->toContain('$user->createToken(');
-});
+//
+// R-PKG-047 D1 (2026-07-09): el stub `auth-user.auth-controller.stub` pasó
+// de ~500 LOC a un thin wrapper de 148 LOC. Los métodos `login()`,
+// `refresh()`, `logout()`, `me()`, `forgot()`, `reset()` viven en
+// `BaseAuthController` (SSoT canónico). El thin wrapper solo override
+// los 4 abstracts (authModelClass, authScope, loginField, passwordResetTable).
+//
+// Tests ELIMINADOS post-D1 (pineaban features del stub VIEJO):
+//   - "exposes all six endpoints" — el thin wrapper no expone los 6
+//     métodos, los hereda de BaseAuthController.
+//   - "mentions TokenIssuer" — TokenIssuer está en BaseAuthController.
+//   - "extends BaseController (bug 1.4.0-001)" — ahora extends BaseAuthController.
+//   - "uses sendResponse / sendError envelope" — el thin wrapper no usa
+//     esos helpers (los métodos están en BaseAuthController).
+//   - "uses TokenIssuer::issueAccessToken in login" — el thin wrapper no
+//     tiene login() inline.
+//
+// Ver test al final del bloque BUG-NEW-27: `R-PKG-047 D1: BaseAuthController
+// es SSoT — pinean los 6 métodos canónicos + imports de TokenIssuer e
+// InvalidRefreshTokenException`.
+//
+//
+// ── Routes stub ─────────────────────────────────────────────────────────
 
 // ── Routes stub ─────────────────────────────────────────────────────────
 
@@ -271,47 +222,42 @@ test('auth-user service-provider stub loads routes and migrations for the scope'
     expect($source)->toContain('loadMigrationsFrom(__DIR__ . \'/../Database/Migrations\')');
 });
 
-// ── R-PKG-018 BUG-NEW-27 regression tests ────────────────────────────────
+// ── R-PKG-018 BUG-NEW-27 ELIMINADO post-R-PKG-047 D1 ─────────────────────
 //
-// BUG: el catch del método `refresh()` solo capturaba
-// `\Illuminate\Auth\Access\AuthorizationException`. La excepción específica
-// del paquete `InvalidRefreshTokenException` SÍ extiende AuthorizationException,
-// así que el catch la capturaba — pero con un mensaje genérico
-// ("Refresh token inválido.") en vez del específico (e.g. "Refresh token
-// expired.", "Refresh token scope mismatch: ...").
+// BUG-NEW-27 (original): el catch del método `refresh()` solo capturaba
+// `\Illuminate\Auth\Access\AuthorizationException` (mensaje genérico). El
+// fix pineado en su momento fue agregar un catch específico para
+// `InvalidRefreshTokenException` ANTES del genérico, con
+// `sendError($e->getMessage(), [], 401)` para mejor DX.
 //
-// FIX: agregar un catch específico para `InvalidRefreshTokenException` ANTES
-// del catch genérico. El catch específico expone el mensaje detallado vía
-// `sendError($e->getMessage(), [], 401)` para mejor DX y testabilidad.
+// Post-R-PKG-047 D1, el método `refresh()` ya NO vive en el stub scaffoldeado
+// — vive en `BaseAuthController::refresh()` (SSoT canónico). El fix BUG-NEW-27
+// se aplicó directamente en `BaseAuthController` (que SÍ importa
+// `InvalidRefreshTokenException` y tiene el catch específico).
+//
+// Ver test al final: `R-PKG-047 D1: BaseAuthController es SSoT — pinean
+// los 6 métodos canónicos + imports de TokenIssuer e InvalidRefreshTokenException`.
 
-test('R-PKG-018 BUG-NEW-27: auth-controller stub imports InvalidRefreshTokenException', function () {
-    $source = stubSource('auth-user.auth-controller.stub');
+test('R-PKG-047 D1: BaseAuthController es SSoT — pinean los 6 métodos canónicos + imports', function () {
+    $basePath = dirname(__DIR__, 3).'/src/Auth/Controllers/BaseAuthController.php';
+    expect(file_exists($basePath))->toBeTrue("BaseAuthController must exist (R-PKG-047 D1 SSoT)");
 
-    expect($source)->toContain('use Mk\\Director\\Auth\\Services\\InvalidRefreshTokenException;');
-});
+    $base = (string) file_get_contents($basePath);
 
-test('R-PKG-018 BUG-NEW-27: auth-controller stub refresh() catches InvalidRefreshTokenException before AuthorizationException', function () {
-    $source = stubSource('auth-user.auth-controller.stub');
+    // 6 métodos canónicos que el thin wrapper AuthController scaffoldeado
+    // hereda sin override (D1).
+    expect($base)->toContain('public function login(');
+    expect($base)->toContain('public function refresh(');
+    expect($base)->toContain('public function logout(');
+    expect($base)->toContain('public function me(');
+    expect($base)->toContain('public function forgotPassword(');
+    expect($base)->toContain('public function resetPassword(');
 
-    // El catch específico debe estar ANTES del catch genérico (orden importa
-    // porque PHP evalúa los catch en secuencia).
-    $invalidPosition = strpos($source, 'catch (InvalidRefreshTokenException');
-    $authzPosition = strpos($source, 'catch (\\Illuminate\\Auth\\Access\\AuthorizationException');
-
-    expect($invalidPosition)->toBeGreaterThan(0)
-        ->and($authzPosition)->toBeGreaterThan(0)
-        ->and($invalidPosition)->toBeLessThan($authzPosition);
-
-    // El catch específico debe usar $e->getMessage() para mensajes detallados.
-    expect($source)->toContain('catch (InvalidRefreshTokenException $e)');
-    expect($source)->toContain('$e->getMessage()');
-});
-
-test('R-PKG-018 BUG-NEW-27: auth-controller stub refresh() sends 401 status', function () {
-    $source = stubSource('auth-user.auth-controller.stub');
-
-    // Ambos catches (específico y genérico) deben retornar 401.
-    expect($source)->toMatch('/sendError\s*\([^,]+,\s*\[\s*\]\s*,\s*401\s*\)/');
+    // BUG-NEW-27: BaseAuthController importa la excepción específica y
+    // TokenIssuer. Esto pinean que el SSoT tiene la lógica que el stub
+    // VIEJO pineaba inline.
+    expect($base)->toContain('use Mk\\Director\\Auth\\Services\\InvalidRefreshTokenException;');
+    expect($base)->toContain('use Mk\\Director\\Auth\\Services\\TokenIssuer;');
 });
 
 // ── F10-B03 regression tests (R-PKG-050) ─────────────────────────────────

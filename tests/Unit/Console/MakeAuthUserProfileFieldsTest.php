@@ -112,12 +112,20 @@ test('auth-user.migration.stub has profile fields columns placeholder', function
     expect($stub)->toContain('{{profileFieldsColumns}}');
 });
 
-test('auth-user.auth-controller.stub has register + updateProfile + verifyEmail placeholders', function () {
+test('R-PKG-047 D1: auth-user.auth-controller.stub NO contiene register/updateProfile/verifyEmail (viven en BaseAuthController)', function () {
     $stub = stubSource011Pf('auth-user.auth-controller.stub');
 
-    expect($stub)->toContain('{{registerMethod}}');
-    expect($stub)->toContain('{{updateProfileMethod}}');
-    expect($stub)->toContain('{{verifyEmailMethods}}');
+    // Post-D1, el thin wrapper NO override los métodos de auth. Los métodos
+    // `register()`, `updateProfile()`, `verifyEmail()`, etc. viven en
+    // BaseAuthController (SSoT canónico). Pinean el SSoT migration.
+    // (El docblock puede mencionarlos como notas históricas; validamos que
+    // no estén como código activo pineado en el thin wrapper.)
+    expect($stub)->not->toMatch('/public function register\(/');
+    expect($stub)->not->toMatch('/public function updateProfile\(/');
+    // verifyEmail sí existe en BaseAuthController; validamos que el stub
+    // no lo override (lo hereda).
+    expect($stub)->not->toMatch('/public function verifyEmail\(/');
+    expect($stub)->not->toMatch('/public function resendVerification\(/');
 });
 
 test('auth-user.routes.stub has register + updateProfile + verify routes placeholders', function () {

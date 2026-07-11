@@ -34,11 +34,16 @@ function crudStubExists(string $name): bool
 }
 
 // ── Flag --with-crud en la signature ─────────────────────────────────────
+//
+// R-PKG-047 D2 (2026-07-09 22:12): el flag `--with-crud` se ELIMINÓ.
+// CRUD es ahora default ON. Para opt-out, usar `--no-crud`. Esto pinea
+// R-G-033 "maximo default + minimo custom" (Mario feedback).
 
-test('command signature incluye --with-crud option', function () {
+test('R-PKG-047 D2: --with-crud flag está ELIMINADO (default ON, --no-crud opt-out)', function () {
     $path = packageRootCrud().'/src/Console/Commands/MakeAuthUserCommand.php';
 
-    expect((string) file_get_contents($path))->toContain('--with-crud :');
+    expect((string) file_get_contents($path))->not->toContain('--with-crud :');
+    expect((string) file_get_contents($path))->toContain('--no-crud :');
 });
 
 // ── 17 stubs existen ─────────────────────────────────────────────────────
@@ -150,12 +155,25 @@ test('AdminRolesSeeder stub siembra super-admin, admin, editor, viewer', functio
 
 // ── FormRequest validación ───────────────────────────────────────────────
 
-test('StoreAdminRequest stub valida email + password + profile fields unique', function () {
+test('StoreAdminRequest stub usa {{loginField}} placeholder (no hardcoded email)', function () {
     $stub = (string) file_get_contents(packageRootCrud().'/src/Stubs/auth-user/store-admin-request.stub');
 
-    expect($stub)->toContain("'email' => ['required', 'email', 'max:255', 'unique:{{moduleNamePluralLower}},email']");
+    // R-PKG-047 D5: el rule del login field es dinámico via placeholder
+    // `{{loginFieldValidationRuleStore}}` (no hardcoded 'email'). Esto pinea
+    // que --login-field=ci regenera correctamente el StoreRequest.
+    expect($stub)->toContain("'{{loginField}}' => {{loginFieldValidationRuleStore}}");
+
+    // Password rule sigue pineado hardcoded.
     expect($stub)->toContain("'password' => ['required', 'string', 'min:8', 'max:255']");
+
+    // Profile fields unique rules (R-PKG-014 BUG-09 prefijo `!`).
     expect($stub)->toContain('{{profileFieldsUniqueRules}}');
+
+    // File fields validation (R-PKG-047 D3 + R-PKG-050).
+    expect($stub)->toContain('{{fileFieldsValidationStore}}');
+
+    // Status enum rule (R-PKG-047 D4 — default ON post-D2).
+    expect($stub)->toContain('{{statusRequestRuleStore}}');
 });
 
 // ── Routes con CRUD extendido ────────────────────────────────────────────

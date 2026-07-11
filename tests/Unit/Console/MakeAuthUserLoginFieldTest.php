@@ -118,23 +118,36 @@ test('auth-user.migration.stub uses {{loginField}} column + conditional email_ve
     expect($stub)->toContain("\$table->string('{{loginField}}')->primary()");
 });
 
-test('auth-user.auth-controller.stub uses {{loginField}} in validation + lookup', function () {
+test('R-PKG-047 D1: auth-user.auth-controller.stub es thin wrapper que override loginField()', function () {
     $stub = stubSource009('auth-user.auth-controller.stub');
 
-    // Validation rule condicional (required|email vs required|string).
-    expect($stub)->toContain("'{{loginField}}' => {{loginFieldValidationRule}}");
-    expect($stub)->toContain('{{loginFieldValidationRule}}');
+    // Post-D1: el thin wrapper override `loginField()` (abstract del
+    // BaseAuthController) retornando el placeholder `{{loginField}}`. El
+    // BaseAuthController usa esto dinámicamente en TODOS los endpoints
+    // (validation, lookup, error response, etc.) — ver docblock del stub.
+    expect($stub)->toMatch('/protected function loginField\(\)\s*:\s*string\s*\{[^}]*return\s*\'\{\{loginField\}\}\'/s');
 
-    // Lookup uses {{loginField}} (no hardcoded 'email').
-    expect($stub)->toContain("->where('{{loginField}}', \$credentials['{{loginField}}'])");
+    // Y pinea el `use AuthUser` que BaseAuthController necesita.
+    expect($stub)->toContain('use Mk\\Director\\Auth\\Models\\AuthUser;');
+});
 
-    // R-PKG-029 PKG-NEW-15 fix: login() ahora retorna `$user` directamente —
-    // autoTransform() en BaseController::sendResponse() aplica el `apiResource`
-    // del modelo (mismo shape canónico que `me()`).
-    expect($stub)->toContain("'{{moduleNameLower}}' => \$user,");
+test('R-PKG-047 D5: BaseAuthController usa $this->loginField() dinámicamente (no hardcoded)', function () {
+    $basePath = packageRoot009().'/src/Auth/Controllers/BaseAuthController.php';
+    expect(file_exists($basePath))->toBeTrue();
 
-    // Error response key parametrizado.
-    expect($stub)->toContain("['{{loginField}}' => ['Credenciales inválidas.']]");
+    $base = (string) file_get_contents($basePath);
+
+    // El BaseAuthController cachea `$loginField = $this->loginField();` al
+    // inicio del método y después usa la variable local. Esto pinea que
+    // cambiar --login-field=ci regenera correctamente todos los 9 artifacts
+    // (D5): la variable se propaga por validation, lookup, error response.
+    // En single-quoted PHP, `\$` se mantiene como 2 chars literales
+    // (`\` + `$`), y PCRE interpreta `\$` como `$` literal.
+    expect($base)->toMatch('/\$loginField\s*=\s*\$this->loginField\(\)/');
+
+    // Y el abstract method está pineado (requerido para que el thin wrapper
+    // scaffoldeado lo override).
+    expect($base)->toContain('abstract protected function loginField(): string;');
 });
 
 // ── BC verification ─────────────────────────────────────────────────────

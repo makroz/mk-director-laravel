@@ -125,35 +125,39 @@ test('N12: field unique conserva la regla unique (store + update ignore)', funct
 
 // ─── N9/N10 — status threadeado end-to-end ────────────────────────────────
 
-test('N9: buildStatusCrudReplacements threadea status cuando está activo', function () {
-    $repl = feedback4Invoke('buildStatusCrudReplacements', [true, ['Active' => 1, 'Inactive' => 2, 'Suspended' => 3], 'Admin', 'admin']);
+test('R-PKG-047 D4: buildStatusCrudReplacements threadea status (string-backed enum, default ON)', function () {
+    // D4: status es string-backed (no int). El command pinea los 4 cases
+    // canónicos como array indexado ['Active', 'Inactive', 'Blocked', 'Pending']
+    // (los 4 que matchean los cases de ScopeStatus canónico).
+    $repl = feedback4Invoke('buildStatusCrudReplacements', [true, ['Active', 'Inactive', 'Blocked', 'Pending'], 'Admin', 'admin']);
 
-    // Resource expone status + status_label.
+    // Resource expone status (string) + status_label.
     expect($repl['{{statusResourceEntry}}'])
         ->toContain("'status' => \$this->status?->value,")
         ->toContain("'status_label' => \$this->status?->label(),");
 
-    // Requests validan status contra el enum.
+    // Requests validan status contra el enum (Rule::enum).
     expect($repl['{{statusRequestRuleStore}}'])->toContain('Rule::enum(');
 
-    // Factory default + N10: state method por estado no-default.
+    // Factory default + state methods por cada estado no-default.
     expect($repl['{{statusFactoryDefault}}'])->toContain('::default()->value');
     expect($repl['{{factoryStateMethods}}'])
         ->toContain('public function inactive(): static')
-        ->toContain('public function suspended(): static')
-        ->not->toContain('is_active'); // N10: ya no usa la columna inexistente.
+        ->toContain('public function blocked(): static')
+        ->toContain('public function pending(): static')
+        ->not->toContain('is_active'); // D4: ya no usa la columna legacy.
 
-    // DTO threadeado.
-    expect($repl['{{statusDtoParam}}'])->toContain('public ?int $status = null,');
+    // DTO threadeado (D4: status es STRING-backed enum, no int).
+    expect($repl['{{statusDtoParam}}'])->toContain('public ?string $status = null,');
 });
 
-test('N9: sin --with-status los placeholders son vacíos (BC) y factory usa inactive() legacy', function () {
+test('R-PKG-047 D2: sin --with-status los placeholders son vacíos (BC) y factory usa inactive() legacy', function () {
     $repl = feedback4Invoke('buildStatusCrudReplacements', [false, [], 'Admin', 'admin']);
 
     expect($repl['{{statusResourceEntry}}'])->toBe('');
     expect($repl['{{statusRequestRuleStore}}'])->toBe('');
     expect($repl['{{statusDtoParam}}'])->toBe('');
-    // BC: sin status, el factory conserva el inactive() legacy.
+    // BC: sin status, el factory conserva el inactive() legacy (escribe is_active=false).
     expect($repl['{{factoryStateMethods}}'])->toContain('public function inactive(): static');
 });
 
