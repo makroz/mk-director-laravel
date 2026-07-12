@@ -1,0 +1,409 @@
+# {{ModuleName}} — API Contract
+
+> **JSON contract de los endpoints del scope `{{moduleNameLower}}`**, generado automáticamente por
+> `php artisan mk:make:auth-user {{ModuleName}}` (R-PKG-052 — `api_contract.md` stub generation).
+>
+> ⚠️ **Single-level envelope OBLIGATORIO** (R-PKG-024 v1.7.0 GA — BC break cross-stack) — `data` es
+> SIEMPRE array directo para colecciones, metadata de paginación en `__extraData.pagination` top-level.
+> PROHIBIDO `data.data`.
+>
+> ⚠️ **Pagination metadata GROUPED bajo `__extraData.pagination`** (R-PKG-032 v1.8.0 MAJOR — BC break
+> cross-stack) — 5 keys snake_case (LengthAwarePaginator) viven agrupadas, custom keys del consumer
+> planas. PROHIBIDO `__extraData.current_page` flat.
+
+---
+
+## 🔐 Convenciones
+
+- **Base URL**: `http://localhost:8000/api`
+- **Content-Type**: `application/json` (excepto multipart para uploads)
+- **Auth header**: `Authorization: Bearer <access_token>`
+- **Token TTL**: 15 min (access), 7 días (refresh)
+- **Token format**: `<id>|<plaintext>` (Sanctum v4)
+- **Pagination**: `?per_page=N&page=M` (max 100)
+- **Errors**: `{ "message": "...", "errors": { "field": ["..."] } }`
+- **Envelope estándar (R-PKG-024 v1.7.0 GA — SINGLE-LEVEL)**: `BaseController::sendResponse()` emite
+  SIEMPRE single-level envelope. Para responses paginadas (e.g. `GET /api/{{moduleNameLower}}/{{moduleNamePluralLower}}`),
+  el paginator Laravel se desarma automáticamente — items van a `data` (array directo) y pagination
+  metadata a `__extraData.pagination` GROUPED (R-PKG-032 v1.8.0 MAJOR):
+  ```json
+  {
+    "success": true,
+    "message": "",
+    "data": [...items...],          // ← array directo (NO paginator anidado)
+    "__extraData": {                // ← top-level (sibling de `data`)
+      "pagination": {               // ← R-PKG-032: GROUPED pagination metadata
+        "current_page": 1,
+        "last_page": 5,
+        "per_page": 20,
+        "total": 100,
+        "has_more_pages": true
+      },
+      "audit_checked": true         // ← custom keys del consumer FLAT
+    },
+    "debugMsg": []
+  }
+  ```
+  Frontend debe parsear `response.data` (array directo) + `response.__extraData.pagination`
+  (pagination metadata agrupada) — **NO** `response.data.data` (PROHIBIDO per R-PKG-024) ni
+  `response.__extraData.current_page` (PROHIBIDO per R-PKG-032). Patrón canónico
+  `MkListResponse<T> = MkResponse<T[]>.__extraData.pagination` en `@makroz/core` (v1.2+).
+  Consumido por `useMkList` + `useMkInfiniteList` en `@makroz/web` + `@makroz/mobile` (v1.3+).
+
+---
+
+## 1. Auth Flow
+
+### 1.1 POST /api/{{moduleNameLower}}/auth/login
+
+**Request**:
+```json
+{
+  "{{loginField}}": "{{moduleNameLower}}@{{moduleNameLower}}.local",
+  "password": "secret"
+}
+```
+
+**Response 200** — single-level envelope (R-PKG-024 v1.7.0 GA). Payload envuelto en `data`:
+```json
+{
+  "success": true,
+  "message": "Login exitoso.",
+  "data": {
+    "access_token": "1|abc123...",
+    "refresh_token": "2|def456...",
+    "token_type": "Bearer",
+    "expires_at": "2026-07-12T19:30:00+00:00",
+    "{{moduleNameLower}}": { /* AuthResource del usuario */ }
+  },
+  "debugMsg": []
+}
+```
+
+> ⚠️ Los tokens (`access_token`, `refresh_token`, `token_type`, `expires_at`) viven en el BODY
+> envueltos en `data`, no en HTTP headers. Consumidores que lean de `response.headers` van a
+> recibir `undefined`. **Frontend debe parsear `response.data.access_token`**.
+
+**Response 422** (credenciales inválidas):
+```json
+{
+  "message": "The {{loginField}} field is required.",
+  "errors": { "{{loginField}}": ["Credenciales inválidas."] }
+}
+```
+
+### 1.2 POST /api/{{moduleNameLower}}/auth/refresh
+
+**Request**:
+```json
+{ "refresh_token": "2|def456..." }
+```
+
+**Response 200** — single-level envelope:
+```json
+{
+  "success": true,
+  "message": "Access token refrescado.",
+  "data": {
+    "access_token": "3|ghi789...",
+    "token_type": "Bearer",
+    "expires_at": "2026-07-12T19:35:00+00:00"
+  },
+  "debugMsg": []
+}
+```
+
+**Response 401** (token inválido o expirado).
+
+### 1.3 GET /api/{{moduleNameLower}}/auth/me
+
+**Headers**: `Authorization: Bearer <access_token>`
+
+**Response 200** — single-level envelope:
+```json
+{
+  "success": true,
+  "message": "",
+  "data": {
+    "id": "uuid",
+    /* + todos los profile fields del scope */
+    "is_active": true,
+    "roles": [
+      { "id": 1, "name": "admin" }
+    ],
+    "abilities": ["Admin.view", "Admin.edit", "roles.view"]
+  },
+  "debugMsg": []
+}
+```
+
+### 1.4 POST /api/{{moduleNameLower}}/auth/logout
+
+**Headers**: `Authorization: Bearer <access_token>`
+
+**Response 200** — single-level envelope:
+```json
+{
+  "success": true,
+  "message": "Sesión cerrada.",
+  "data": null,
+  "debugMsg": []
+}
+```
+
+### 1.5 POST /api/{{moduleNameLower}}/auth/forgot
+
+**Request**:
+```json
+{ "{{loginField}}": "{{moduleNameLower}}@{{moduleNameLower}}.local" }
+```
+
+**Response 200** (siempre, sin revelar si el email existe) — single-level envelope:
+```json
+{
+  "success": true,
+  "message": "Si el {{loginField}} existe, recibirás un enlace para reset.",
+  "data": null,
+  "debugMsg": []
+}
+```
+
+### 1.6 POST /api/{{moduleNameLower}}/auth/reset
+
+**Request**:
+```json
+{
+  "{{loginField}}": "{{moduleNameLower}}@{{moduleNameLower}}.local",
+  "token": "raw-token-from-email",
+  "password": "new-password-123",
+  "password_confirmation": "new-password-123"
+}
+```
+
+**Response 200** — single-level envelope:
+```json
+{
+  "success": true,
+  "message": "Contraseña actualizada. Iniciá sesión nuevamente.",
+  "data": null,
+  "debugMsg": []
+}
+```
+
+**Response 422** (token inválido o expirado > 60min).
+
+> ⚠️ El endpoint `POST /api/{{moduleNameLower}}/auth/register` (R-PKG-027) está pineado con
+> `mk.auth:{{moduleNameLower}}` + `mk.ability:{{moduleNameLower}}.{{moduleNamePluralLower}}.create`
+> (defense-in-depth per HALLAZGO-NEW-FASE18-C). NO es público por default — para invocarlo
+> necesitás un token de admin/{{moduleNameLower}} con ability `{{moduleNamePluralLower}}.create`.
+
+---
+
+## 2. {{ModuleName}} CRUD
+
+### 2.1 GET /api/{{moduleNameLower}}/{{moduleNamePluralLower}}
+
+**Headers**: `Authorization: Bearer ...` + Ability: `{{moduleNamePluralLower}}.viewAny`
+
+**Query params**:
+- `search` (string, optional) — busca en campos de texto del scope
+- `per_page` (int, default 15, max 100)
+- `page` (int, default 1)
+
+**Response 200** — single-level envelope (R-PKG-024) + pagination grouped (R-PKG-032):
+```json
+{
+  "success": true,
+  "message": "",
+  "data": [
+    {
+      "id": "uuid",
+      /* + todos los profile fields del scope */
+      "is_active": true,
+      "created_at": "2026-07-12T15:00:00+00:00",
+      "updated_at": "2026-07-12T15:00:00+00:00"
+    }
+  ],
+  "__extraData": {
+    "pagination": {
+      "current_page": 1,
+      "last_page": 1,
+      "per_page": 15,
+      "total": 5,
+      "has_more_pages": false
+    }
+  },
+  "debugMsg": []
+}
+```
+
+### 2.2 POST /api/{{moduleNameLower}}/{{moduleNamePluralLower}}
+
+**Headers**: `Authorization: Bearer ...` + Ability: `{{moduleNamePluralLower}}.create`
+
+**Request (JSON)**:
+```json
+{
+  /* + todos los profile fields requeridos para crear un {{moduleNameLower}} */
+  "password": "secret123",
+  "is_active": true
+}
+```
+
+**Response 201** — single-level envelope:
+```json
+{
+  "success": true,
+  "message": "{{ModuleName}} creado.",
+  "data": { /* AuthResource del nuevo {{moduleNameLower}} */ },
+  "debugMsg": []
+}
+```
+
+**Response 422** (validación falla):
+```json
+{
+  "message": "The {{loginField}} has already been taken.",
+  "errors": { "{{loginField}}": ["Ya existe un {{moduleNameLower}} con ese {{loginField}}."] }
+}
+```
+
+### 2.3 GET /api/{{moduleNameLower}}/{{moduleNamePluralLower}}/{id}
+
+**Headers**: `Authorization: Bearer ...` + Ability: `{{moduleNamePluralLower}}.view`
+
+**Response 200** — single-level envelope:
+```json
+{
+  "success": true,
+  "message": "",
+  "data": { /* AuthResource del {{moduleNameLower}} */ },
+  "debugMsg": []
+}
+```
+
+**Response 404**: `{"message": "No query results for model [App\\Modules\\{{ModuleName}}\\Models\\{{ModuleName}}] <id>"}`
+
+### 2.4 PUT /api/{{moduleNameLower}}/{{moduleNamePluralLower}}/{id}
+
+**Headers**: `Authorization: Bearer ...` + Ability: `{{moduleNamePluralLower}}.update`
+
+**Request (partial update — solo campos modificados)**:
+```json
+{ /* + campos parciales a actualizar */ }
+```
+
+**Response 200** — single-level envelope:
+```json
+{
+  "success": true,
+  "message": "{{ModuleName}} actualizado.",
+  "data": { /* AuthResource */ },
+  "debugMsg": []
+}
+```
+
+### 2.5 DELETE /api/{{moduleNameLower}}/{{moduleNamePluralLower}}/{id}
+
+**Headers**: `Authorization: Bearer ...` + Ability: `{{moduleNamePluralLower}}.delete`
+
+**Response 200** — single-level envelope:
+```json
+{
+  "success": true,
+  "message": "{{ModuleName}} eliminado.",
+  "data": null,
+  "debugMsg": []
+}
+```
+
+### 2.6 POST /api/{{moduleNameLower}}/{{moduleNamePluralLower}}/{id}/roles
+
+**Headers**: `Authorization: Bearer ...` + Ability: `{{moduleNamePluralLower}}.update`
+
+**Request**:
+```json
+{ "roles": ["{{moduleNameLower}}", "editor"] }
+```
+
+**Response 200** — single-level envelope:
+```json
+{
+  "success": true,
+  "message": "Roles asignados.",
+  "data": { /* AuthResource con roles actualizados */ },
+  "debugMsg": []
+}
+```
+
+### 2.7 POST /api/{{moduleNameLower}}/{{moduleNamePluralLower}}/{id}/abilities
+
+**Headers**: `Authorization: Bearer ...` + Ability: `{{moduleNamePluralLower}}.update`
+
+**Request**:
+```json
+{ "abilities": ["{{ModuleName}}.view", "{{ModuleName}}.edit"] }
+```
+
+**Response 200** — single-level envelope:
+```json
+{
+  "success": true,
+  "message": "Abilities directas asignadas.",
+  "data": { /* AuthResource */ },
+  "debugMsg": []
+}
+```
+
+{{includeRbac}}
+
+---
+
+## 5. Error Codes
+
+| Status | Code | Descripción |
+|--------|------|-------------|
+| 401 | UNAUTHENTICATED | Token ausente o inválido |
+| 401 | TOKEN_EXPIRED | Access token expirado (refresh required) |
+| 401 | SCOPE_MISMATCH | Token pertenece a otro scope (no `{{moduleNameLower}}`) |
+| 403 | FORBIDDEN | Ability faltante para esta operación |
+| 403 | ERR_MIDDLEWARE_MISCONFIGURED | `mk.ability:` sin abilities especificadas |
+| 404 | NOT_FOUND | Resource no existe |
+| 422 | VALIDATION_ERROR | FormRequest validation failed |
+
+---
+
+## 6. Discovery Command
+
+```bash
+php artisan mk:discover:abilities [--dry-run] [--force]
+```
+
+**Output**:
+```
+Módulos descubiertos: N
+ {{ModuleName}}
+  + {{ModuleName}}.viewAny
+  + {{ModuleName}}.view
+  + {{ModuleName}}.create
+  + {{ModuleName}}.update
+  + {{ModuleName}}.delete
+  + {{ModuleName}}.*
+```
+
+Idempotente: corre múltiples veces sin duplicar.
+
+---
+
+## 7. Referencias
+
+- `docs/guides/AUTH.md` (del paquete) — § "Generating a new scope" para ver cómo se scaffoldea este módulo
+- [R-PKG-024 — Single-level envelope](https://github.com/makroz/mk-director/blob/dev/AGENTS.md#the-single-level-envelope-rule-r-pkg-024--non-negotiable)
+- [R-PKG-032 — Pagination envelope grouped](https://github.com/makroz/mk-director/blob/dev/AGENTS.md#the-pagination-envelope-rule-r-pkg-032--non-negotiable)
+- [R-PKG-027 — Auth user login field / scope](https://github.com/makroz/mk-director/blob/dev/packagist/mk-director-laravel/CHANGELOG.md) — defensa contra register público
+- [R-MK-001 — MME (MVC Modular Encapsulado)](https://github.com/makroz/mk-director/blob/dev/AGENTS.md#the-mme-rule-r-mk-001--non-negotiable)
+
+---
+
+*Generado por `php artisan mk:make:auth-user {{ModuleName}}` (R-PKG-052). Para regenerarlo,
+borrá este archivo y volvé a correr el scaffolder — solo se pinea si NO existe.*
