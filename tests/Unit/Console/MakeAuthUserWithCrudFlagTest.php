@@ -141,6 +141,21 @@ test('AdminService stub (R-PKG-052 T9 v2) implementa MkModuleServiceInterface co
     expect($stub)->not->toContain('public function syncDirectAbilities(');
 });
 
+test('FEEDBACK10 F10-B04: AdminService stub afterCreate/afterUpdate/afterDelete tienen return explícito (evita TypeError mixed sin return)', function () {
+    $stub = (string) file_get_contents(packageRootCrud().'/src/Stubs/auth-user/admin-service.stub');
+
+    // Los 3 hooks pinean `: mixed` — PHP exige un `return` explícito en el
+    // cuerpo (a diferencia de `: void`), o dispara
+    // `TypeError: Return value must be of type mixed, none returned`
+    // apenas CRUDSmart invoca el hook (post fix F10-B03, que ahora sí resuelve
+    // el Service del container).
+    foreach (['afterCreate', 'afterUpdate', 'afterDelete'] as $hook) {
+        preg_match('/public function '.$hook.'\([^{]*\{(.*?)\n    \}/s', $stub, $matches);
+        expect($matches)->not->toBeEmpty();
+        expect($matches[1])->toContain('return null;');
+    }
+});
+
 test('AdminController stub (R-PKG-052 T9) llama al Repository directo para syncRoles/syncDirectAbilities', function () {
     $stub = (string) file_get_contents(packageRootCrud().'/src/Stubs/auth-user/admin-controller.stub');
 

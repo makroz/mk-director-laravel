@@ -112,6 +112,11 @@ class {{ModuleName}}Service implements MkModuleServiceInterface
     public function afterCreate(Request $request, Model $model, array $input): mixed
     {
         // passthrough — override con lógica específica del módulo.
+        // FEEDBACK10 (F10-B04): return explícito requerido — el return type
+        // es `mixed` (MkModuleServiceInterface), no `void`; un cuerpo sin
+        // `return` dispara `TypeError: Return value must be of type mixed,
+        // none returned` apenas el hook dispara (post fix F10-B03).
+        return null;
     }
 
     /**
@@ -137,6 +142,8 @@ class {{ModuleName}}Service implements MkModuleServiceInterface
     public function afterUpdate(Request $request, Model $model, array $input, string|int $id): mixed
     {
         // passthrough — override con lógica específica del módulo.
+        // FEEDBACK10 (F10-B04): ver `afterCreate()` — return explícito requerido.
+        return null;
     }
 
     /**
@@ -153,6 +160,8 @@ class {{ModuleName}}Service implements MkModuleServiceInterface
     public function afterDelete(Request $request, Model $model, string|int $id): mixed
     {
         // passthrough.
+        // FEEDBACK10 (F10-B04): ver `afterCreate()` — return explícito requerido.
+        return null;
     }
 
     /**
