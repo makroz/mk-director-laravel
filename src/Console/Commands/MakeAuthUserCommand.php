@@ -1733,6 +1733,13 @@ PHP,
             // (`'uploads/admin'`) en vez del placeholder literal `{scopeLower}`
             // que el FileStoragePlugin no sabe interpretar (creaba un directorio
             // con nombre literal `{scopeLower}` en storage).
+            // FEEDBACK10 (RETO pilot, 2026-07-13) — `plugins` ahora es la LISTA
+            // de clases que CRUDSmart registra per-controller; la config vive en
+            // `plugins_config` (key que FileStoragePlugin realmente lee). Ver el
+            // comentario del stub admin-controller para el root-cause completo.
+            '{{pluginsList}}' => $this->buildPluginsListLiteral(
+                $fileFieldNames,
+            ),
             '{{pluginsConfig}}' => $this->buildPluginsConfigLiteral(
                 $fileFieldNames,
                 $scopeLower,
@@ -2095,6 +2102,31 @@ PHP,
      * @param  array<int, string>  $fileFieldNames
      * @return string PHP literal pineable en stub. `[]` si no hay fields.
      */
+    /**
+     * FEEDBACK10 (RETO pilot) — emite la LISTA de clases de plugins que el
+     * controller scaffoldeado registra per-controller vía
+     * `CRUDSmart::getPluginManager()` → `PluginManager::registerPlugins()`.
+     *
+     * `registerPlugins()` espera strings de clase; por eso `plugins` DEBE ser
+     * una lista de FQCN, y la config por plugin va aparte en `plugins_config`
+     * (que el plugin lee vía `getConfigValue('plugins_config.<name>')`).
+     *
+     * Si hay file fields → registra `FileStoragePlugin` (así la subida funciona
+     * aunque el auto-register global esté off, e.g. `MK_FILE_STORAGE_PLUGIN=false`).
+     * Si NO hay file fields → `[]`.
+     *
+     * @param  array<int, string>  $fileFieldNames
+     * @return string PHP literal pineable en stub.
+     */
+    private function buildPluginsListLiteral(array $fileFieldNames): string
+    {
+        if ($fileFieldNames === []) {
+            return '[]';
+        }
+
+        return '[\Mk\Director\Plugins\FileStoragePlugin::class]';
+    }
+
     private function buildPluginsConfigLiteral(array $fileFieldNames, string $scopeLower = 'unknown'): string
     {
         if ($fileFieldNames === []) {

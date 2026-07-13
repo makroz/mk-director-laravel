@@ -5,6 +5,29 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [UNRELEASED] — FileStoragePlugin scaffold wiring fix (FEEDBACK10, RETO pilot)
+
+> **Fixed**: el `{Scope}Controller` scaffoldeado por `mk:make:auth-user ... --profile-fields="…:file"`
+> emitía la config del file-upload bajo una única key `plugins` con shape
+> `['file_storage' => [...]]`, lo que rompía la subida end-to-end por dos motivos
+> independientes surgidos en el piloto RETO (2026-07-13):
+>   1. **Key equivocada** — `FileStoragePlugin` lee su config vía
+>      `getConfigValue('plugins_config.file_storage')` (key `plugins_config`, no
+>      `plugins`); bajo `plugins` el `data_get` daba `[]` y el tmp path del
+>      `UploadedFile` terminaba persistido en la columna.
+>   2. **Plugin no registrado per-controller** — `CRUDSmart::getPluginManager()`
+>      registra `$mkConfig['plugins']` como LISTA DE CLASES; un array asociativo de
+>      config ahí es skippeado por `PluginManager::registerPlugins()` (F10-B16), así
+>      que el plugin no corría (agravado si el auto-register global está off vía
+>      `MK_FILE_STORAGE_PLUGIN=false`).
+>
+> **Fix**: el stub ahora emite dos keys — `plugins` = lista de clases
+> (`[\Mk\Director\Plugins\FileStoragePlugin::class]` cuando hay file fields, `[]` si
+> no) que CRUDSmart registra per-controller (la subida funciona aunque el
+> auto-register global esté off), y `plugins_config` = config por plugin que el
+> plugin lee. Nuevo helper `MakeAuthUserCommand::buildPluginsListLiteral()` +
+> placeholder `{{pluginsList}}`. Tests source-parsing actualizados.
+
 ## [UNRELEASED] — api_contract.md stub generation (R-PKG-053)
 
 > Sprint de cierre del drift histórico entre `api_contract.md` del consumer y el
