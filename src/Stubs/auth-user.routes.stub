@@ -14,8 +14,8 @@ use Illuminate\Support\Facades\Route;
  * docs/guides/AUTH.md § "The 4 defense layers against cross-scope mix-up").
  *
  * R-PKG-010: cuando el scope se genera con `--with-auth-rbac`, los
- * endpoints públicos (`/login`, `/forgot`, `/reset`) llevan middleware
- * `throttle:{limit},{minutes}` configurable por
+ * endpoints públicos (`/login`, `/password/forgot`, `/password/reset`) llevan
+ * middleware `throttle:{limit},{minutes}` configurable por
  * `mk_director.auth.rate_limits.{endpoint}`. Default mode (sin flag):
  * idéntico a v1.5.0-rc3 (sin rate limit middleware). BC preservada.
  *
@@ -27,6 +27,16 @@ use Illuminate\Support\Facades\Route;
  *   - `POST /email/resend` (re-envía notification, throttled 6,1).
  *   - `PATCH /me` (actualiza profile fields del user autenticado).
  * Default mode (sin flags): idéntico a v1.5.0-rc4 (sin register, sin verify).
+ *
+ * FEEDBACK10 F10-B06 (2026-07-13): pre-fix, este stub apuntaba a métodos
+ * `forgot`/`reset` que NO EXISTEN en `BaseAuthController` (la clase real
+ * expone `forgotPassword`/`resetPassword`) → 500
+ * `Call to undefined method AuthController::forgot()` en cualquier scope
+ * scaffoldeado. Además faltaban las rutas de `logoutAll()` y
+ * `changePassword()` (métodos ya implementados en `BaseAuthController` pero
+ * nunca expuestos por el scaffolder). Fix: nombres de método alineados +
+ * paths bajo `password/*` (consistentes con el docblock canónico de
+ * `BaseAuthController`) + rutas faltantes agregadas.
  */
 
 // Prefix includes `api/` because Laravel 11+ `loadRoutesFrom` from a
@@ -39,13 +49,15 @@ Route::prefix('api/{{moduleNameLower}}/auth')->group(function () {
     // ── Públicas ────────────────────────────────────────────────────
     Route::post('login', [AuthController::class, 'login']){{rbacLoginThrottle}};
     Route::post('refresh', [AuthController::class, 'refresh']);
-    {{registerRoute}}Route::post('forgot', [AuthController::class, 'forgot']){{rbacForgotThrottle}};
-    Route::post('reset', [AuthController::class, 'reset']){{rbacResetThrottle}};
+    {{registerRoute}}Route::post('password/forgot', [AuthController::class, 'forgotPassword']){{rbacForgotThrottle}};
+    Route::post('password/reset', [AuthController::class, 'resetPassword']){{rbacResetThrottle}};
 {{emailVerifyRoutes}}
     // ── Protegidas (auth: scope) ────────────────────────────────────
     Route::middleware('mk.auth:{{moduleNameLower}}'){{verifiedMiddleware}}->group(function () {
         Route::post('logout', [AuthController::class, 'logout']);
+        Route::post('logout-all', [AuthController::class, 'logoutAll']);
         Route::get('me', [AuthController::class, 'me']);
+        Route::post('password/change', [AuthController::class, 'changePassword']);
         {{updateProfileRoute}}
     });
 });

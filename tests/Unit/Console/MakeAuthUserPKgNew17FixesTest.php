@@ -107,14 +107,18 @@ describe('PKG-NEW-17 — auth-user.routes.stub still references {{registerRoute}
         expect($stub)->toContain('{{registerRoute}}');
     });
 
-    test('stub has {{registerRoute}} glued to Route::post(\'forgot\', ...) (scaffolder injects the trailing newline)', function () use ($stub): void {
-        // The stub line 42 is: `{{registerRoute}}Route::post('forgot', ...)`.
+    test('stub has {{registerRoute}} glued to Route::post(\'password/forgot\', ...) (scaffolder injects the trailing newline)', function () use ($stub): void {
+        // The stub line is: `{{registerRoute}}Route::post('password/forgot', ...)`.
         // The scaffolder's $registerRoute now ends with `;\n` so the
-        // concatenation produces: `\n    Route::post('register', ...);\nRoute::post('forgot', ...)`.
+        // concatenation produces: `\n    Route::post('register', ...);\nRoute::post('password/forgot', ...)`.
         // This test pins the stub contract; if it changes, the scaffolder's
         // trailing newline logic must be re-evaluated.
+        //
+        // F10-B06 (2026-07-13): path/method renamed from 'forgot'/forgot()
+        // to 'password/forgot'/forgotPassword() — forgot() doesn't exist on
+        // BaseAuthController (real method is forgotPassword()).
 
         // Use string containment instead of regex (regex with `(` `)` `,` `'` is fragile).
-        expect($stub)->toContain("{{registerRoute}}Route::post('forgot'");
+        expect($stub)->toContain("{{registerRoute}}Route::post('password/forgot'");
     });
 });

@@ -212,9 +212,11 @@ test('auth-user.routes.stub has inline throttle placeholders (preserves BC)', fu
     // Los placeholders están inline (después del `)`), no en líneas separadas.
     // Esto preserva la línea original `Route::post('login', [...]);` cuando
     // el placeholder es string vacío.
+    // F10-B06: los nombres de método reales son forgotPassword/resetPassword
+    // (BaseAuthController), NO forgot/reset — y los paths van bajo password/*.
     expect($stub)->toContain("Route::post('login', [AuthController::class, 'login']){{rbacLoginThrottle}};");
-    expect($stub)->toContain("Route::post('forgot', [AuthController::class, 'forgot']){{rbacForgotThrottle}};");
-    expect($stub)->toContain("Route::post('reset', [AuthController::class, 'reset']){{rbacResetThrottle}};");
+    expect($stub)->toContain("Route::post('password/forgot', [AuthController::class, 'forgotPassword']){{rbacForgotThrottle}};");
+    expect($stub)->toContain("Route::post('password/reset', [AuthController::class, 'resetPassword']){{rbacResetThrottle}};");
 });
 
 // ── Config block ──────────────────────────────────────────────────────

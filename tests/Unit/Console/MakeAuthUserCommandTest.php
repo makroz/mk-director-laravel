@@ -208,8 +208,12 @@ test('auth-user routes stub uses mk.auth:{scope} middleware for protected endpoi
     expect($source)->toContain('Route::post(\'refresh\'');
     expect($source)->toContain('Route::post(\'logout\'');
     expect($source)->toContain('Route::get(\'me\'');
-    expect($source)->toContain('Route::post(\'forgot\'');
-    expect($source)->toContain('Route::post(\'reset\'');
+    // F10-B06: paths bajo password/* + método real forgotPassword/resetPassword
+    // (forgot()/reset() no existen en BaseAuthController).
+    expect($source)->toContain('Route::post(\'password/forgot\'');
+    expect($source)->toContain('Route::post(\'password/reset\'');
+    expect($source)->toContain('forgotPassword');
+    expect($source)->toContain('resetPassword');
 });
 
 // ── ServiceProvider stub ────────────────────────────────────────────────

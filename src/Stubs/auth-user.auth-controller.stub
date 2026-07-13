@@ -145,4 +145,4 @@ class AuthController extends BaseAuthController
     {
         return '{{moduleNameLower}}_password_reset_tokens';
     }
-}
+{{registerMethod}}{{updateProfileMethod}}}
