@@ -62,8 +62,11 @@ test('R-PKG-047 D4: enum-status.stub es thin wrapper string-backed (no templatiz
     // D4: thin wrapper delega a ScopeStatus (SSoT canónico del paquete).
     expect($src)->toContain('use Mk\\Director\\Auth\\Enums\\ScopeStatus;');
 
-    // D4: default() y values() delegan a ScopeStatus.
-    expect($src)->toContain('return ScopeStatus::Active;');
+    // D4: values() delega a ScopeStatus; default() retorna `self::Active`
+    // (F10-B09: NO `ScopeStatus::Active` — clase distinta al return type
+    // `self`, causaba TypeError en factories/seeders).
+    expect($src)->toContain('return self::Active;');
+    expect($src)->not->toContain('return ScopeStatus::Active;');
     expect($src)->toContain('return ScopeStatus::values();');
 
     // D4: canAuthenticate() y label() pineados.
