@@ -949,6 +949,13 @@ PHP,
             $this->generateManagedResource($basePath, $scope, $scopeLower, $scopePlural, $managedBy);
         }
 
+        // ── R-PKG-053: Generar `app/Modules/{Scope}/Docs/api_contract.md` ──
+        // Template pre-pineado con el envelope canónico (R-PKG-024 single-level +
+        // R-PKG-032 pagination grouped). Si el consumer ya lo creó manualmente
+        // (con sections custom), se respeta — no se sobreescribe. Para regenerar,
+        // borrar el archivo y volver a correr el scaffolder.
+        $this->generateApiContractStub($scope, $scopeLower, $scopePlural, $loginField, $withAuthRbac, $extraReplacements);
+
         $this->newLine();
         $this->info("✅ Scope {$scope} generado con el estándar MK-Director:");
         $this->line("   • Model:        app/Modules/{$scope}/Models/{$scope}.php (extends AuthUser, loginField={$loginField})");
@@ -3261,6 +3268,298 @@ PHP;
 
         $displayName = ! empty($folder) ? "{$folder}/{$fileName}" : $fileName;
         $this->line("   ✅ {$displayName}");
+    }
+
+    /**
+     * R-PKG-053 — Genera `app/Modules/{Scope}/Docs/api_contract.md` con el envelope
+     * canónico pre-pineado (R-PKG-024 single-level + R-PKG-032 pagination grouped).
+     *
+     * **Por qué este método existe**: antes de R-PKG-053, los consumers escribían su
+     * `api_contract.md` a mano. El resultado fue drift histórico: RETO (admin module,
+     * 2026-07-12) tenía el `api_contract.md` documentando `access_token` en root y
+     * paginación con `"meta": {...}` (legacy v1.7.x), mientras que el runtime real
+     * del paquete emite los tokens en `body.data` (R-PKG-024) y la paginación
+     * agrupada bajo `__extraData.pagination` (R-PKG-032). El drift causou bugs de
+     * frontend que tomaba horas debuggear (Postman scripts leían `undefined`).
+     *
+     * **Qué pineamos en el stub**:
+     *   - Header con `data` single-level + `__extraData.pagination` grouped.
+     *   - Sección 1 (Auth Flow) — 6 endpoints pineados (login/refresh/me/logout/forgot/reset).
+     *   - Sección 2 (CRUD principal) — 7 endpoints pineados.
+     *   - Secciones 3 (Roles CRUD) + 4 (Abilities) — SOLO si `--with-auth-rbac` (default ON).
+     *   - Sección 5 (Error Codes) — compartida.
+     *   - Sección 6 (Discovery Command) — operativa.
+     *   - Sección 7 (Referencias) — links a R-PKG-024, R-PKG-032, R-PKG-027, R-MK-001.
+     *
+     * **BC**: este método SOLO escribe si el archivo NO existe. Si el dev ya customizó
+     * el contract (secciones adicionales, ejemplos específicos), se respeta su trabajo.
+     * Para regenerar el template, borrar el archivo y volver a correr el scaffolder.
+     *
+     * **Path**: `app/Modules/{$scope}/Docs/api_contract.md`. La convención Makromania
+     * (`.makromania/projects/{key}/modules/{scope}/api_contract.md`) se documenta en el
+     * SKILL.md del paquete — el consumer puede moverlo a esa ubicación si su proyecto
+     * la sigue.
+     *
+     * @param  string  $scope             PascalCase del scope (e.g. "Admin", "Member")
+     * @param  string  $scopeLower        snake_case (e.g. "admin", "member")
+     * @param  string  $scopePlural       snake_case plural (e.g. "admins", "members")
+     * @param  string  $loginField        Campo de login (e.g. "email", "ci")
+     * @param  bool    $withAuthRbac      Si RBAC está habilitado (secciones 3+4)
+     * @param  array   $existingReplacements  Replacements ya computados (se mergean)
+     */
+    protected function generateApiContractStub(
+        string $scope,
+        string $scopeLower,
+        string $scopePlural,
+        string $loginField,
+        bool $withAuthRbac,
+        array $existingReplacements = [],
+    ): void {
+        $targetPath = app_path("Modules/{$scope}/Docs/api_contract.md");
+
+        // BC: si el archivo ya existe (dev lo customizó), respetar.
+        if (File::exists($targetPath)) {
+            $this->line("   ⏭  Docs/api_contract.md (ya existe, skipping — borralo para regenerar el template)");
+
+            return;
+        }
+
+        // Construir la sección RBAC (Roles + Abilities) si corresponde.
+        $rbacSection = $withAuthRbac
+            ? $this->buildRbacSectionContent($scope, $scopeLower, $scopePlural)
+            : '';
+
+        // Merge con replacements existentes (no pisar nada).
+        $replacements = array_merge(
+            $existingReplacements,
+            ['{{includeRbac}}' => $rbacSection],
+        );
+
+        $this->generateStub(
+            $scope,
+            $scopeLower,
+            $scopePlural,
+            $loginField,
+            'auth-user.api-contract.md.stub',
+            'Docs',
+            'api_contract.md',
+            $replacements,
+        );
+    }
+
+    /**
+     * R-PKG-053 — Construye el bloque markdown de las secciones 3 (Roles CRUD) +
+     * 4 (Abilities) del template api_contract.md. Se pinea en `{{includeRbac}}` del
+     * stub solo si RBAC está habilitado.
+     *
+     * El shape está pineado contra el runtime real del paquete (`RoleController` +
+     * `AbilityController` de BaseAuthController-extended scaffolds). Los abilities
+     * del consumer se pinean con auto-discovery post-scaffold
+     * (`php artisan mk:discover-abilities --force`).
+     */
+    protected function buildRbacSectionContent(
+        string $scope,
+        string $scopeLower,
+        string $scopePlural,
+    ): string {
+        return <<<MD
+
+---
+
+## 3. Roles CRUD
+
+> **Namespace**: `/api/{$scopeLower}/roles` — el owner del endpoint es el scope `{$scopeLower}`.
+> Las rutas viven bajo el guard `mk.auth:{$scopeLower}` + abilities `mk.ability:{$scopeLower}.roles.*`.
+> La **tabla** `roles` es global del paquete (compartida, filtrada por `guard`).
+
+### 3.1 GET /api/{$scopeLower}/roles
+
+**Ability**: `roles.viewAny`
+
+**Response 200** — single-level envelope + pagination grouped (R-PKG-032):
+```json
+{
+  "success": true,
+  "message": "",
+  "data": [
+    {
+      "id": 1,
+      "name": "{$scopeLower}",
+      "guard": "{$scopeLower}",
+      "description": null,
+      "abilities": ["{$scope}.*"],
+      "created_at": "...",
+      "updated_at": "..."
+    }
+  ],
+  "__extraData": {
+    "pagination": {
+      "current_page": 1,
+      "last_page": 1,
+      "per_page": 15,
+      "total": 3,
+      "has_more_pages": false
+    }
+  },
+  "debugMsg": []
+}
+```
+
+### 3.2 POST /api/{$scopeLower}/roles
+
+**Ability**: `roles.create`
+
+**Request**:
+```json
+{
+  "name": "editor",
+  "guard": "{$scopeLower}",
+  "description": "Editor con permisos limitados",
+  "abilities": ["{$scope}.view", "{$scope}.edit"]
+}
+```
+
+**Response 201** — single-level envelope:
+```json
+{
+  "success": true,
+  "message": "Role creado.",
+  "data": { /* RoleResource */ },
+  "debugMsg": []
+}
+```
+
+### 3.3 GET /api/{$scopeLower}/roles/{id}
+
+**Ability**: `roles.view`
+
+### 3.4 PUT /api/{$scopeLower}/roles/{id}
+
+**Ability**: `roles.update`
+
+**Request (partial)**:
+```json
+{ "abilities": ["{$scope}.view", "{$scope}.edit", "{$scope}.create"] }
+```
+
+### 3.5 DELETE /api/{$scopeLower}/roles/{id}
+
+**Ability**: `roles.delete`
+
+**Response 200** — single-level envelope:
+```json
+{
+  "success": true,
+  "message": "Role eliminado.",
+  "data": null,
+  "debugMsg": []
+}
+```
+
+### 3.6 PUT /api/{$scopeLower}/roles/{id}/abilities
+
+**Ability**: `roles.update`
+
+**Request**:
+```json
+{ "abilities": ["{$scope}.view", "{$scope}.edit"] }
+```
+
+---
+
+## 4. Abilities
+
+> **Namespace**: `/api/{$scopeLower}/abilities` — mismo namespacing que Roles (R-PKG-027).
+> La **tabla** `abilities` es global del paquete. Los abilities que este módulo
+> declara se pinean con `php artisan mk:discover-abilities --force` post-scaffold.
+
+### 4.1 GET /api/{$scopeLower}/abilities
+
+**Ability**: `abilities.viewAny`
+
+**Query params**:
+- `search` (string, optional) — filtra por nombre
+- `per_page` (int, default 50)
+
+**Response 200** — single-level envelope + pagination grouped (R-PKG-032):
+```json
+{
+  "success": true,
+  "message": "",
+  "data": [
+    {
+      "id": 1,
+      "name": "{$scope}.view",
+      "description": "Permite view en el módulo {$scope}",
+      "module": null,
+      "created_at": "...",
+      "updated_at": "..."
+    }
+  ],
+  "__extraData": {
+    "pagination": {
+      "current_page": 1,
+      "last_page": 1,
+      "per_page": 50,
+      "total": 6,
+      "has_more_pages": false
+    }
+  },
+  "debugMsg": []
+}
+```
+
+> ⚠️ Drift documentado (HALLAZGO-NEW-FASE14-02 pineado a R-PKG-027): el campo `module`
+> siempre retorna `null` — el modelo `Ability` del paquete NO tiene columna `module`.
+> El filtro por module se hace via prefijo del nombre en el backend, no via este campo.
+
+### 4.2 GET /api/{$scopeLower}/abilities/grouped
+
+**Ability**: `abilities.viewAny`
+
+> ⚠️ Este endpoint está documentado pero **NO está pineado por default** en las rutas
+> scaffoldeadas. Si lo necesitás, agregalo manualmente en
+> `app/Modules/{$scope}/Http/Routes/api.php`:
+> ```php
+> Route::get('abilities/grouped', [AbilityController::class, 'grouped'])
+>     ->middleware(['mk.auth:{$scopeLower}', 'mk.ability:{$scopeLower}.abilities.viewAny']);
+> ```
+
+**Response 200** — single-level envelope:
+```json
+{
+  "success": true,
+  "message": "",
+  "data": {
+    "{$scope}": ["{$scope}.view", "{$scope}.create", "{$scope}.edit", "{$scope}.delete", "{$scope}.*"],
+    "Roles": ["roles.view", "roles.create", "..."]
+  },
+  "debugMsg": []
+}
+```
+
+### 4.3 POST /api/{$scopeLower}/abilities
+
+**Ability**: `abilities.create`
+
+**Request**:
+```json
+{
+  "name": "Custom.action",
+  "description": "Custom ability description"
+}
+```
+
+**Response 201** — single-level envelope:
+```json
+{
+  "success": true,
+  "message": "Ability creada.",
+  "data": { /* AbilityResource */ },
+  "debugMsg": []
+}
+```
+MD;
     }
 
     /**

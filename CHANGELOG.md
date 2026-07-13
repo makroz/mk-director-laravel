@@ -5,6 +5,79 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [UNRELEASED] — api_contract.md stub generation (R-PKG-053)
+
+> Sprint de cierre del drift histórico entre `api_contract.md` del consumer y el
+> runtime real del paquete. RETO fase 14 (2026-06-29) pineó el contrato con
+> `access_token` en root y paginación con `"meta": {...}` (legacy v1.7.x), pero
+> el runtime emite tokens en `body.data` (R-PKG-024 v1.7.0 GA single-level) y
+> paginación agrupada bajo `__extraData.pagination` (R-PKG-032 v1.8.0 MAJOR).
+> El drift causó que Postman scripts del consumer leyeran `undefined` y generaran
+> horas de debug. Mario feedback 2026-07-12 ("corrige todo" / "tu recomendación
+> está bien" / "lo arreglarías en el paquete en el scaffolder?"). **Fix de raíz**:
+> scaffolder ahora genera el template automáticamente con el envelope canónico
+> pre-pineado.
+>
+> **BC analysis**: ADDITIVE — no se rompe nada existente. El scaffolder solo
+> escribe el archivo si NO existe (BC guard). Si el dev ya customizó el
+> `api_contract.md`, se respeta su trabajo. Para regenerar el template,
+> borrar el archivo y volver a correr `mk:make:auth-user`.
+
+### ✨ Added
+
+- **`mk:make:auth-user` ahora genera `app/Modules/{Scope}/Docs/api_contract.md`**
+  con el envelope canónico pre-pineado (R-PKG-024 single-level + R-PKG-032
+  pagination grouped). El template incluye:
+  - **Sección 1 (Auth Flow)**: 6 endpoints (login, refresh, me, logout, forgot, reset)
+    con envelope canónico y nota explícita sobre tokens en `body.data` (no en
+    HTTP headers — corrige el drift histórico del comment de `MakeAuthUserCommand.php:3130-3152`
+    que decía "headers" engañoso).
+  - **Sección 2 (CRUD principal)**: 7 endpoints (index, show, store, update,
+    destroy, assignRoles, assignAbilities).
+  - **Secciones 3 (Roles CRUD) + 4 (Abilities)**: pineadas SOLO si
+    `--with-auth-rbac` (default ON). Si el consumer corre con `--no-rbac`,
+    quedan vacías.
+  - **Sección 5 (Error Codes)**: tabla compartida.
+  - **Sección 6 (Discovery Command)**: operativa.
+  - **Sección 7 (Referencias)**: links a R-PKG-024, R-PKG-032, R-PKG-027, R-MK-001.
+- **Helper `generateApiContractStub()` en `MakeAuthUserCommand`**: invocado
+  al final del handle(), antes del info "Scope generated". BC guard: si el
+  archivo ya existe, skip con mensaje informativo (no pisar customización del dev).
+- **Helper `buildRbacSectionContent()` en `MakeAuthUserCommand`**: construye
+  el bloque markdown de las secciones 3+4 condicionalmente.
+- **Stub `src/Stubs/auth-user.api-contract.md.stub`**: template con placeholders
+  `{{ModuleName}}`, `{{moduleNameLower}}`, `{{moduleNamePluralLower}}`, `{{loginField}}`,
+  `{{includeRbac}}`. Single source of truth — si cambia el envelope canónico,
+  se actualiza acá y se regenera en todos los consumers.
+
+### 🐛 Fixed
+
+- **Drift histórico `api_contract.md` ↔ runtime**: el contrato generado por el
+  scaffolder ahora refleja el envelope real (`data` + `__extraData.pagination`),
+  no el legacy v1.7.x shape (`meta` flat o tokens en root). Consumers que
+  regeneren su scope con el scaffolder van a tener un contract que matchea
+  el runtime out-of-the-box.
+
+### ⚠️ Notas para consumers
+
+- Si tu proyecto sigue la convención Makromania (`.makromania/projects/{key}/modules/{scope}/api_contract.md`),
+  mové el archivo generado a esa ubicación post-scaffold. El SKILL.md del
+  paquete documenta el path alternativo.
+- El scaffold **NO** sobreescribe el archivo si ya existe. Para forzar la
+  regeneración, borrá el archivo y volvé a correr el comando.
+- Si tu scope tiene RBAC deshabilitado (`--no-rbac`), las secciones 3 (Roles
+  CRUD) y 4 (Abilities) NO se incluyen en el template.
+
+### 🧪 Tests
+
+- `tests/Unit/Console/MakeAuthUserApiContractStubTest.php` — 14 source-parsing tests
+  pinean: stub existe, envelope R-PKG-024 pineado, paginación R-PKG-032 grouped,
+  PROHIBE `data.data` nesting, PROHIBE flat pagination legacy, placeholders
+  canónicos, `{{includeRbac}}` condicional, command invoca el helper, path
+  correcto, BC guard. **14 passed (36 assertions)**.
+
+---
+
 ## [UNRELEASED] — Scaffolder bugfixes batch (R-PKG-052 — FEEDBACK11)
 
 > Sprint de cierre de 16 bugs observados en el scaffold del paquete después de
