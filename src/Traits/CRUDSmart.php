@@ -41,7 +41,21 @@ trait CRUDSmart
     }
 
     /**
-     * Obtener el service desde configuración
+     * Obtener el service desde configuración.
+     *
+     * FEEDBACK10 (F10-B03): pre-fix, esto solo resolvía cuando
+     * `app()->bound($serviceClass)` era true — pero el scaffolder pinea
+     * `'service' => {Scope}Service::class` en `$mkConfig` SIN bindearlo
+     * nunca en el ServiceProvider (concrete class auto-resolvible, no
+     * necesita bind explícito). Resultado: `bound()` es SIEMPRE false
+     * out-of-the-box → `getService()` retorna `null` SIEMPRE → TODOS los
+     * hooks (`beforeSearch`, `beforeShow`, `beforeCreate`, `setExtraData`,
+     * etc.) quedan muertos silenciosamente, sin error visible.
+     *
+     * Fix: además de un binding explícito (`bound()`), resolver también
+     * clases concretas auto-resolvibles (`class_exists()`) vía
+     * `app()->make()` — el container de Laravel ya sabe instanciar
+     * concrete classes con dependencias resolvibles sin bind explícito.
      */
     protected function getService(): ?MkModuleServiceInterface
     {
@@ -51,9 +65,14 @@ trait CRUDSmart
             return null;
         }
 
-        // Si es un string, resolver del container
-        if (is_string($serviceClass) && app()->bound($serviceClass)) {
-            return app($serviceClass);
+        // Si es un string, resolver del container: bindeado explícito O
+        // clase concreta auto-resolvible.
+        if (is_string($serviceClass) && (app()->bound($serviceClass) || class_exists($serviceClass))) {
+            return app()->make($serviceClass);
+        }
+
+        if ($serviceClass instanceof MkModuleServiceInterface) {
+            return $serviceClass;
         }
 
         return null;
