@@ -1775,6 +1775,19 @@ PHP,
             '{{fileFieldsValidationUpdate}}' => $this->buildFileFieldsValidationUpdate(
                 $fileFieldNames,
             ),
+            // FEEDBACK10 F10-B10: `admin-repository.stub::delete()` limpiaba
+            // un `photo_path` hardcoded (columna legacy, pre-R-PKG-050/052
+            // rename a `avatar`) en vez del/los file field(s) reales del
+            // scope. `FileStoragePlugin::afterDelete()` es un no-op (no
+            // limpia archivos al borrar el modelo) — la limpieza en el
+            // Repository NO duplica al plugin, es la única responsable de
+            // no dejar huérfanos en disco. Dinámico igual que los otros 6
+            // placeholders de file fields — un `Storage::delete()` por
+            // field detectado, string vacío si no hay ninguno.
+            '{{fileFieldsDeleteCleanup}}' => $this->buildFileFieldsDeleteCleanup(
+                $fileFieldNames,
+                $scopeLower,
+            ),
         ], $this->buildStatusCrudReplacements($withStatus, $statusStates, $scope, $scopeLower));
 
         // ── Controllers (3) ──
@@ -2392,6 +2405,69 @@ PHP;
             $urlKey = $fieldName.'_url';
             $out .= "            '{$fieldName}' => \$this->{$fieldName},\n";
             $out .= "            '{$urlKey}' => \$this->{$urlKey},\n";
+        }
+
+        return $out;
+    }
+
+    /**
+     * FEEDBACK10 F10-B10 — emite la limpieza de disco de los file fields
+     * reales del scope en `{ModuleName}Repository::delete()`.
+     *
+     * Pre-fix, `admin-repository.stub::delete()` hardcodeaba
+     * `${{moduleNameLower}}->photo_path` — columna legacy pre-R-PKG-050/052
+     * (el rename canónico usa `avatar` u otro nombre elegido via
+     * `--profile-fields=...:file`). Con 0 file fields en el scope, la
+     * condición `!empty($x->photo_path)` era siempre false (columna
+     * inexistente en el modelo) — silenciosamente inofensivo pero dead
+     * code. Con file fields reales (`avatar`, `cover_photo`, etc.), la
+     * limpieza NUNCA corría (referenciaba una columna que no existe) →
+     * archivos huérfanos en disco tras cada delete.
+     *
+     * `FileStoragePlugin::afterDelete()` es un no-op — el paquete no limpia
+     * archivos al borrar el modelo, así que esta responsabilidad es
+     * genuinamente del Repository (no duplica al plugin, a diferencia del
+     * upload pipeline que sí eliminamos de acá — ver docblock siguiente).
+     *
+     * Formato (una línea Storage::delete() por file field detectado):
+     *
+     *             if (! empty(${{moduleNameLower}}->avatar)) {
+     *                 Storage::disk(config('mk_director.storage.disk', 'public'))
+     *                     ->delete(${{moduleNameLower}}->avatar);
+     *             }
+     *
+     * Si no hay file fields, retorna '' (el stub queda sin bloque de
+     * limpieza — nada que borrar).
+     *
+     * R-PKG-031 PKG-NEW-17 gotcha (aplicado acá defensivamente): usar
+     * interpolación PHP (`{$scopeLower}`) para el nombre de variable, NUNCA
+     * el placeholder literal `{{moduleNameLower}}` — `generateStub()`
+     * reemplaza `{{moduleNameLower}}` ANTES de aplicar `$extraReplacements`
+     * (ver línea ~3343 vs ~3350), así que un placeholder literal DENTRO de
+     * un valor de `$extraReplacements` nunca se resuelve y queda leakeado
+     * tal cual en el archivo generado.
+     *
+     * @param  array<int, string>  $fileFieldNames
+     * @param  string  $scopeLower  Scope en snake_case (nombre de variable
+     *                              usado por el stub, e.g. `$admin`).
+     * @return string PHP literal pineable en stub (indentado a 12 espacios,
+     *                dentro del closure de `DB::transaction()`).
+     */
+    protected function buildFileFieldsDeleteCleanup(array $fileFieldNames, string $scopeLower): string
+    {
+        if ($fileFieldNames === []) {
+            return '';
+        }
+
+        $out = '';
+        foreach ($fileFieldNames as $fieldName) {
+            $out .= <<<"PHP"
+            if (! empty(\${$scopeLower}->{$fieldName})) {
+                Storage::disk(config('mk_director.storage.disk', 'public'))
+                    ->delete(\${$scopeLower}->{$fieldName});
+            }
+
+PHP;
         }
 
         return $out;

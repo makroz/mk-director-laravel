@@ -909,6 +909,36 @@ test('FEEDBACK10: buildFileFieldsResourceEntry() emite resource keys identity + 
     expect($out)->not->toContain("'photo_url'");
 });
 
+test('F10-B10: buildFileFieldsDeleteCleanup() limpia el/los file field(s) reales (no photo_path hardcoded)', function () {
+    $out = feedback10Invoke('buildFileFieldsDeleteCleanup', [['avatar'], 'admin']);
+
+    expect($out)->toContain('! empty($admin->avatar)');
+    expect($out)->toContain('->delete($admin->avatar);');
+    expect($out)->not->toContain('photo_path');
+});
+
+test('F10-B10: buildFileFieldsDeleteCleanup() emite un bloque por cada file field (multi-field)', function () {
+    $out = feedback10Invoke('buildFileFieldsDeleteCleanup', [['avatar', 'cover_photo'], 'member']);
+
+    expect($out)->toContain('! empty($member->avatar)');
+    expect($out)->toContain('! empty($member->cover_photo)');
+});
+
+test('F10-B10: buildFileFieldsDeleteCleanup() retorna vacío si no hay file fields', function () {
+    $out = feedback10Invoke('buildFileFieldsDeleteCleanup', [[], 'admin']);
+
+    expect($out)->toBe('');
+});
+
+test('F10-B10: buildFileFieldsDeleteCleanup() usa interpolación PHP {$scopeLower}, NO el placeholder literal {{moduleNameLower}} (gotcha R-PKG-031 PKG-NEW-17)', function () {
+    // Root cause class: generateStub() reemplaza {{moduleNameLower}} ANTES
+    // de aplicar $extraReplacements — un placeholder literal DENTRO de un
+    // valor de replacement nunca se resuelve y queda leakeado tal cual.
+    $out = feedback10Invoke('buildFileFieldsDeleteCleanup', [['avatar'], 'admin']);
+
+    expect($out)->not->toContain('{{moduleNameLower}}');
+});
+
 test('FEEDBACK10: buildFileFieldsValidationStore() emite rules de upload (nullable + file + image + mimes)', function () {
     $out = feedback10Invoke('buildFileFieldsValidationStore', [['avatar']]);
 
@@ -1062,6 +1092,8 @@ test('FEEDBACK10: stubs pinean placeholders `{{fileFields*}}` (no photo/photo_pa
         'auth-user/admin-service.stub' => [],
         'auth-user/store-admin-request.stub' => ['{{fileFieldsValidationStore}}'],
         'auth-user/update-admin-request.stub' => ['{{fileFieldsValidationUpdate}}'],
+        // F10-B10: delete() limpia el/los file field(s) reales, no photo_path hardcoded.
+        'auth-user/admin-repository.stub' => ['{{fileFieldsDeleteCleanup}}'],
     ];
 
     foreach ($expectedPlaceholders as $stubRelPath => $placeholders) {
