@@ -327,7 +327,7 @@ class MakeAuthUserCommand extends Command
 
                 return self::FAILURE;
             }
-            if (! File::exists(app_path("Modules/{$managedBy}"))) {
+            if (! File::exists($this->modulesPath($managedBy))) {
                 // No es fatal: el manager podría scaffoldearse después. Avisamos.
                 $this->warn("⚠️  --managed-by={$managedBy}: el módulo App\\Modules\\{$managedBy} todavía no existe. Genera el scope manager (ej: `mk:make:auth-user {$managedBy} --with-crud`) para que su guard `".Str::snake($managedBy).'` y sus roles existan antes de correr el seeder managed.');
             }
@@ -840,7 +840,7 @@ PHP,
         // pero avisamos loud + sugerimos `migrate:fresh` para entornos piloto.
         $this->checkScopeTableExists($scopeLower, $scopePlural, $migrate);
 
-        $basePath = app_path("Modules/{$scope}");
+        $basePath = $this->modulesPath($scope);
 
         if (File::exists($basePath)) {
             $this->error("El módulo {$scope} ya existe en {$basePath}.");
@@ -1047,6 +1047,21 @@ PHP,
         $this->runPostScaffoldSteps($scope, $scopeLower, $withCrud, $setupSanctum, $migrate, $seed, $discover);
 
         return self::SUCCESS;
+    }
+
+    /**
+     * F10-B08: punto único de resolución de `app_path("Modules/...")`, para
+     * poder testear el scaffolder end-to-end subclaseando el command y
+     * overrideando este método (mismo patrón que `MakeModuleCommand::modulesPath()`,
+     * ver `MkModuleWithRbacTest.php` § "End-to-end test"). Sin este método,
+     * `app_path()` es una función global no mockeable y el paquete no depende
+     * de `illuminate/foundation` (no la define en test), así que el único
+     * modo de correr `handle()`/`generateCrudPack()`/etc. contra un tempdir
+     * real es interceptar acá.
+     */
+    protected function modulesPath(string $moduleName = ''): string
+    {
+        return app_path('Modules'.($moduleName !== '' ? "/{$moduleName}" : ''));
     }
 
     /**
@@ -1662,7 +1677,7 @@ PHP,
         $this->newLine();
         $this->info("📄 Generando CRUD pack ({$fileCount} archivos)".($isConsumer ? ' [kind=consumer: sin Role/AbilityController ni sus Policies, administrado por el manager]' : '').':');
 
-        $basePath = app_path("Modules/{$scope}");
+        $basePath = $this->modulesPath($scope);
 
         // Crear directorios adicionales.
         $crudDirs = [
@@ -3436,7 +3451,7 @@ PHP;
             $content = str_replace($placeholder, $value, $content);
         }
 
-        $targetPath = app_path("Modules/{$scope}/{$folder}/{$fileName}");
+        $targetPath = "{$this->modulesPath($scope)}/{$folder}/{$fileName}";
         // F10-B03 (R-PKG-050): defense-in-depth. Aunque el scaffolder pre-crea
         // las carpetas mas usadas en el array $directories (fase base, linea
         // ~713) y en $crudDirs (generateCrudPack, linea ~1460), asegurar el
@@ -3497,7 +3512,7 @@ PHP;
         bool $withAuthRbac,
         array $existingReplacements = [],
     ): void {
-        $targetPath = app_path("Modules/{$scope}/Docs/api_contract.md");
+        $targetPath = "{$this->modulesPath($scope)}/Docs/api_contract.md";
 
         // BC: si el archivo ya existe (dev lo customizó), respetar.
         if (File::exists($targetPath)) {
@@ -4928,7 +4943,7 @@ PHP,
      */
     protected function generatePermissionsEndpoint(string $scope, string $scopeLower): void
     {
-        $basePath = app_path("Modules/{$scope}");
+        $basePath = $this->modulesPath($scope);
 
         $this->newLine();
         $this->info('🔐 Pineando MePermissionsController (R-PKG-042 FASE18-05):');
