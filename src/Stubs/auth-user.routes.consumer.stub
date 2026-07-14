@@ -1,0 +1,63 @@
+<?php
+
+declare(strict_types=1);
+
+use App\Modules\{{ModuleName}}\Http\Controllers\AuthController;
+use Illuminate\Support\Facades\Route;
+
+/**
+ * Rutas del scope CONSUMER `{{moduleNameLower}}` — generadas por
+ * `php artisan mk:make:auth-user {{ModuleName}} --kind=consumer --managed-by=<Manager>`
+ * (F10-B08).
+ *
+ * Un scope `consumer` es un scope "lockdown": el user puede loguearse y
+ * editar SU PROPIO perfil, pero NO administra otros users de su propio
+ * scope — eso lo hace el MANAGER (--managed-by) via
+ * `Http/Routes/managed.php` (guard `mk.auth:{manager}`, ver
+ * `generateManagedResource()`).
+ *
+ * Por eso este stub es un subconjunto DELIBERADO de `auth-user.routes.stub`
+ * (el stub `manager`, BC): mismas rutas de auth + self-profile, pero SIN
+ * las rutas CRUD propias (`/api/{{moduleNamePluralLower}}/*`), SIN
+ * `/api/{{moduleNameLower}}/roles`, SIN `/api/{{moduleNameLower}}/abilities`
+ * — esas tres familias de rutas viven SOLO del lado del manager para un
+ * scope consumer (ver `auth-user/managed-routes.stub`).
+ *
+ * Las rutas protegidas usan `mk.auth:{{moduleNameLower}}` (del paquete) que
+ * valida en 3 capas que el token pertenece al scope correcto (ver
+ * docs/guides/AUTH.md § "The 4 defense layers against cross-scope mix-up").
+ *
+ * R-PKG-010: cuando el scope se genera con `--with-auth-rbac`, los
+ * endpoints públicos (`/login`, `/password/forgot`, `/password/reset`) llevan
+ * middleware `throttle:{limit},{minutes}` configurable por
+ * `mk_director.auth.rate_limits.{endpoint}`.
+ *
+ * R-PKG-011: cuando el scope se genera con `--profile-fields` o
+ * `--verify-email`, se agregan endpoints condicionales:
+ *   - `POST /register` (crea user con profile fields, opcionalmente dispatch
+ *     de VerifyEmail notification si `--verify-email` activo).
+ *   - `GET /email/verify/{id}/{hash}` (signed URL, marca email_verified_at).
+ *   - `POST /email/resend` (re-envía notification, throttled 6,1).
+ *   - `PATCH /me` (actualiza profile fields del user autenticado — B06,
+ *     mapeado a `BaseAuthController::updateProfile()`).
+ */
+
+// Prefix includes `api/` because Laravel 11+ `loadRoutesFrom` from a
+// ServiceProvider does NOT inherit the `apiPrefix` configured in
+// `bootstrap/app.php` — that only applies to the central `routes/api.php`.
+Route::prefix('api/{{moduleNameLower}}/auth')->group(function () {
+    // ── Públicas ────────────────────────────────────────────────────
+    Route::post('login', [AuthController::class, 'login']){{rbacLoginThrottle}};
+    Route::post('refresh', [AuthController::class, 'refresh']);
+    {{registerRoute}}Route::post('password/forgot', [AuthController::class, 'forgotPassword']){{rbacForgotThrottle}};
+    Route::post('password/reset', [AuthController::class, 'resetPassword']){{rbacResetThrottle}};
+{{emailVerifyRoutes}}
+    // ── Protegidas (auth: scope) — solo self-profile, SIN CRUD/roles/abilities ──
+    Route::middleware('mk.auth:{{moduleNameLower}}'){{verifiedMiddleware}}->group(function () {
+        Route::post('logout', [AuthController::class, 'logout']);
+        Route::post('logout-all', [AuthController::class, 'logoutAll']);
+        Route::get('me', [AuthController::class, 'me']);
+        Route::post('password/change', [AuthController::class, 'changePassword']);
+        {{updateProfileRoute}}
+    });
+});
