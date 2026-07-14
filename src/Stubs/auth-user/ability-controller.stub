@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace App\Modules\{{ModuleName}}\Http\Controllers;
 
+use App\Modules\{{ModuleName}}\Http\Resources\AbilityResource;
 use App\Modules\{{ModuleName}}\Services\{{ModuleName}}Service;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Mk\Director\Auth\Models\Ability;
 use Mk\Director\Controllers\SmartController;
 
@@ -60,5 +62,65 @@ class AbilityController extends SmartController
     public function __construct()
     {
         $this->middleware('mk.auth:{{moduleNameLower}}');
+    }
+
+    /**
+     * POST /api/{{moduleNameLower}}/abilities
+     *
+     * Crea abilities con naming `{scope}.{recurso}[.{accion}]`. Según la cantidad
+     * de segmentos del `name`:
+     *   - `{{moduleNameLower}}.{recurso}` (2 segmentos, SIN acción) → EXPANDE a
+     *     las 5 abilities CRUD estándar del recurso: `.viewAny`, `.view`,
+     *     `.create`, `.update`, `.delete` (idempotente).
+     *   - `{{moduleNameLower}}.{recurso}.{accion}` (3 segmentos) → crea SOLO esa.
+     *
+     * El UI compone `name` como `{scope}.{recurso}` (el scope se prepende), así
+     * que el usuario solo tipea el recurso (o `recurso.accion`).
+     */
+    public function store(Request $request)
+    {
+        $request->validate([
+            'name' => ['required', 'string', 'regex:/^{{moduleNameLower}}\.[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)?$/'],
+        ]);
+
+        $parts = explode('.', trim((string) $request->input('name')));
+
+        // 2 segmentos = `{scope}.{recurso}` → expandir a las 5 CRUD.
+        if (count($parts) === 2) {
+            return $this->storeCrudSet($parts[0], $parts[1]);
+        }
+
+        // 3 segmentos = `{scope}.{recurso}.{accion}` → single.
+        return parent::store($request);
+    }
+
+    /**
+     * Crea las 5 abilities CRUD estándar de un recurso (`{scope}.{recurso}.{verbo}`)
+     * de forma idempotente y transaccional. Mismo naming + descripciones que
+     * `mk:discover-abilities`.
+     */
+    private function storeCrudSet(string $scope, string $resource): JsonResponse
+    {
+        $verbs = ['viewAny', 'view', 'create', 'update', 'delete'];
+
+        $abilities = DB::transaction(function () use ($scope, $resource, $verbs): array {
+            $created = [];
+            foreach ($verbs as $verb) {
+                $created[] = Ability::firstOrCreate(
+                    ['name' => "{$scope}.{$resource}.{$verb}"],
+                    ['description' => ucfirst($verb).' '.$resource.'.'],
+                );
+            }
+
+            return $created;
+        });
+
+        $new = collect($abilities)->filter->wasRecentlyCreated->count();
+        $existed = count($abilities) - $new;
+        $message = $existed === 0
+            ? "{$new} abilities creadas."
+            : "{$new} creadas, {$existed} ya existían.";
+
+        return $this->sendResponse(AbilityResource::collection($abilities), $message, 201);
     }
 }

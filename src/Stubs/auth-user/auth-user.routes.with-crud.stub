@@ -63,9 +63,15 @@ Route::prefix('api/{{moduleNamePluralLower}}')->group(function () {
     Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.{{moduleNamePluralLower}}.delete'])
         ->delete('/{{{moduleNameLower}}}',  [{{ModuleName}}Controller::class, 'destroy']);
 
-    // Asignar roles / abilities directas a un {{moduleNameLower}} específico.
-    // Ambas son mutations que requieren `update` ability (pueden escalar
-    // privilegios si no se gatean explícitamente).
+    // Asignar accesos (roles + abilities directas) a un {{moduleNameLower}} específico.
+    // Endpoint UNIFICADO: un solo POST sincroniza ambos en una transacción, así
+    // el front no dispara 2 requests ni deja estado parcial. Requiere `update`
+    // ability (puede escalar privilegios si no se gatea explícitamente).
+    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.{{moduleNamePluralLower}}.update'])
+        ->post('/{{{moduleNameLower}}}/access',        [{{ModuleName}}Controller::class, 'assignAccess']);
+
+    // @deprecated — endpoints granulares previos. Se mantienen por BC; el front
+    // canónico usa `/access`. Ambos requieren `update` ability.
     Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.{{moduleNamePluralLower}}.update'])
         ->post('/{{{moduleNameLower}}}/roles',         [{{ModuleName}}Controller::class, 'assignRoles']);
     Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.{{moduleNamePluralLower}}.update'])

@@ -52,7 +52,14 @@ class {{ModuleName}}Resource extends JsonResource
             '{{loginField}}' => $this->{{loginField}},
 {{fileFieldsResourceEntry}}            'auth_scope' => $this->auth_scope,
 {{statusResourceEntry}}{{profileFieldsResourceEntry}}            // HALLAZGO-NEW-FASE15-06: abilities flat top-level — cross-stack contract.
+            // `abilities` es la UNIÓN efectiva (role-derived + directas) que consume
+            // `hasAbility()`. `direct_abilities` expone SOLO los grants directos
+            // (cuando la relación está cargada) para que la UI de gestión de accesos
+            // pueda pre-seleccionar exactamente lo directo — sin esto, un modal que
+            // pre-llena desde `abilities` mezcla lo del rol y no puede quitar/limpiar
+            // grants directos de forma coherente.
             'abilities' => $this->getEffectiveAbilities(),
+            'direct_abilities' => $this->whenLoaded('directAbilities', fn () => $this->directAbilities->pluck('name')->all()),
             'roles' => $this->whenLoaded('roles', fn () => $this->roles->map(fn ($r) => [
                 'id' => $r->id,
                 'name' => $r->name,

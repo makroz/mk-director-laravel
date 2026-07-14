@@ -1,0 +1,60 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Mk\Director\Auth\Models\Ability;
+use Mk\Director\Auth\Models\Role;
+
+/**
+ * Validación para asignar accesos (roles + abilities directas) a un {{ModuleName}}
+ * en UNA sola operación.
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ *
+ * Reemplaza el par de endpoints `POST /{{moduleNamePluralLower}}/{id}/roles` +
+ * `POST /{{moduleNamePluralLower}}/{id}/abilities` (que forzaban 2 requests y
+ * dejaban estado parcial si el 2º fallaba). El front manda un solo POST con
+ * ambos arrays y el controller los sincroniza en una transacción.
+ *
+ * Reglas:
+ *   - `roles`     → REQUERIDO, al menos 1. Un usuario gestionado siempre debe
+ *     tener rol (el rol es la fuente principal de sus abilities).
+ *   - `abilities` → OPCIONAL. Si no llega (o llega `[]`), se sincroniza a vacío
+ *     (no se graba ninguna ability directa). Las abilities directas son un
+ *     complemento fino sobre las del rol, no un requisito.
+ *
+ * Ambos se validan por NOMBRE contra las filas existentes en `mk_director`
+ * (evita typos → 422 en vez de FK silenciosa).
+ */
+class AssignAccessRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function rules(): array
+    {
+        $existingRoleNames = Role::query()->pluck('name')->all();
+        $existingAbilityNames = Ability::query()->pluck('name')->all();
+
+        return [
+            // El rol es obligatorio: `required|array` rechaza `[]` (Laravel trata
+            // el array vacío como "vacío" para `required`), así que exige ≥1 rol.
+            'roles' => ['required', 'array'],
+            'roles.*' => ['string', 'in:'.implode(',', $existingRoleNames)],
+
+            // Abilities directas opcionales: `sometimes|nullable|array` acepta
+            // ausencia, `null` o `[]`. Ausente/null → el controller sincroniza a
+            // vacío (no graba ninguna). `.*` valida solo si hay elementos.
+            'abilities' => ['sometimes', 'nullable', 'array'],
+            'abilities.*' => ['string', 'in:'.implode(',', $existingAbilityNames)],
+        ];
+    }
+}

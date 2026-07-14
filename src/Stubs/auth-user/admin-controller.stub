@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\{{ModuleName}}\Http\Controllers;
 
+use App\Modules\{{ModuleName}}\Http\Requests\AssignAccessRequest;
 use App\Modules\{{ModuleName}}\Http\Requests\AssignRolesRequest;
 use App\Modules\{{ModuleName}}\Http\Requests\AssignDirectAbilitiesRequest;
 use App\Modules\{{ModuleName}}\Http\Requests\Store{{ModuleName}}Request;
@@ -13,6 +14,7 @@ use App\Modules\{{ModuleName}}\Repositories\{{ModuleName}}Repository;
 use App\Modules\{{ModuleName}}\Services\{{ModuleName}}Service;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Mk\Director\Auth\Models\Role;
 use Mk\Director\Controllers\SmartController;
 
@@ -62,6 +64,14 @@ class {{ModuleName}}Controller extends SmartController
         'features'        => [
             'auto_cache' => true,
             'remember_state' => true,
+            // R-PKG whitelist de filtros del list endpoint. `ListManager::applyFilters`
+            // IGNORA en silencio cualquier `filter[campo]` que NO esté acá (security
+            // whitelist), y si el array está vacío descarta TODOS los filtros. Todo
+            // AuthUser scaffoldeado trae la columna `status` (ScopeStatus, D2 ON), así
+            // que el filtro `filter[status]=active|inactive|...` — que el front cablea
+            // por default en la pantalla de lista — nace vivo. Agregá más campos acá
+            // (fillable del scope) si querés exponerlos como filtro.
+            'allowed_filters' => ['status'],
         ],
 
         // R-PKG-047 D3 — auto-wire FileStoragePlugin via `:file` suffix en
@@ -139,7 +149,44 @@ class {{ModuleName}}Controller extends SmartController
     }
 
     /**
+     * POST /api/{{moduleNamePluralLower}}/{id}/access
+     *
+     * Asigna roles + abilities directas en UNA sola operación transaccional.
+     * Body: `{"roles": ["editor"], "abilities": ["admin.dashboard.view"]}`.
+     *
+     * Reemplaza el par `assignRoles` + `assignDirectAbilities` (que forzaba 2
+     * requests desde el front y dejaba estado parcial si el 2º fallaba). Reglas:
+     *   - `roles`     → requerido (≥1); se sincroniza siempre.
+     *   - `abilities` → opcional; si no llega se sincroniza a `[]` (no graba
+     *     ninguna directa). Ver {{ModuleName}}\Http\Requests\AssignAccessRequest.
+     *
+     * Ambos syncs corren dentro de una transacción: si uno falla, ninguno queda
+     * a medias (a diferencia de los 2 endpoints separados).
+     */
+    public function assignAccess(string $id, AssignAccessRequest $request): JsonResponse
+    {
+        /** @var {{ModuleName}} ${{moduleNameLower}} */
+        ${{moduleNameLower}} = {{ModuleName}}::findOrFail($id);
+
+        $repository = app({{ModuleName}}Repository::class);
+
+        DB::transaction(function () use ($repository, ${{moduleNameLower}}, $request): void {
+            $repository->syncRoles(${{moduleNameLower}}, $request->validated('roles'));
+            // Abilities opcionales: ausencia/null → `[]` → sync a vacío.
+            $repository->syncDirectAbilities(${{moduleNameLower}}, $request->validated('abilities') ?? []);
+        });
+
+        return $this->sendResponse(
+            ${{moduleNameLower}}->fresh()->load(['roles', 'directAbilities']),
+            'Accesos actualizados.',
+        );
+    }
+
+    /**
      * POST /api/{{moduleNamePluralLower}}/{id}/roles
+     *
+     * @deprecated Usá `assignAccess` (`POST /{id}/access`) que sincroniza roles
+     * y abilities en una sola transacción. Se mantiene por BC.
      *
      * Asigna roles (por nombre) al {{ModuleName}}. Body: `{"roles": ["admin", "editor"]}`.
      * Sincroniza (reemplaza) los roles existentes.

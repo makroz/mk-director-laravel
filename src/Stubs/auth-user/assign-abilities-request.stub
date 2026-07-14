@@ -30,7 +30,10 @@ class AssignDirectAbilitiesRequest extends FormRequest
         $existingAbilityNames = Ability::query()->pluck('name')->all();
 
         return [
-            'abilities' => ['required', 'array'],
+            // `present` (no `required`) para que `{ "abilities": [] }` sea válido
+            // y se puedan QUITAR todas las abilities directas vía este endpoint.
+            // `required` rechazaba el array vacío (422), imposibilitando limpiar.
+            'abilities' => ['present', 'array'],
             'abilities.*' => ['string', 'in:'.implode(',', $existingAbilityNames)],
         ];
     }
