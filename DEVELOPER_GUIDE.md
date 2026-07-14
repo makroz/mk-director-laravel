@@ -708,11 +708,20 @@ php artisan mk:make:auth-user Admin --login-field=ci --with-auth-rbac
    ```php
    Route::post('login', [AuthController::class, 'login'])
        ->middleware('throttle:' . config('mk_director.auth.rate_limits.login', '5,1'));
-   Route::post('forgot', [AuthController::class, 'forgot'])
+   Route::post('password/forgot', [AuthController::class, 'forgotPassword'])
        ->middleware('throttle:' . config('mk_director.auth.rate_limits.forgot', '3,1'));
-   Route::post('reset', [AuthController::class, 'reset'])
+   Route::post('password/reset', [AuthController::class, 'resetPassword'])
        ->middleware('throttle:' . config('mk_director.auth.rate_limits.reset', '3,1'));
    ```
+
+   > **F10-B06 (RETO corrida 10)**: el stub llegó a apuntar `forgot`/`reset` a métodos
+   > inexistentes en `BaseAuthController` (la clase real expone `forgotPassword()`/
+   > `resetPassword()`) → 500 `Call to undefined method`. Fijo desde entonces: los
+   > paths son `password/forgot`/`password/reset` y los métodos son
+   > `forgotPassword`/`resetPassword` (los config keys `rate_limits.forgot`/`.reset`
+   > NO cambiaron, solo el path/método de la ruta). El stub también expone ahora
+   > `logout-all` (`logoutAll()`) y `password/change` (`changePassword()`), previamente
+   > implementados en la base pero nunca rutados.
 
 3. **Audit events** vía `Mk\Director\Auth\Events\AuthEvent`:
    ```php
@@ -903,7 +912,7 @@ if (! $user
 
 El check usa `Schema::hasColumn()` (cacheado en memoria), así que es zero-cost en runtime para consumers que NO usan la columna.
 
-**Si override `login()`/`forgot()`/`reset()` manualmente** en tu consumer, mantené la misma lógica de `Schema::hasColumn` + `=== false` para no romper el patrón.
+**Si override `login()`/`forgotPassword()`/`resetPassword()` manualmente** en tu consumer, mantené la misma lógica de `Schema::hasColumn` + `=== false` para no romper el patrón.
 
 #### 3.8.3. Ability checks — `canMk()` vs `can()` vs `hasAbility()` (HALLAZGO-NEW-FASE14-06)
 
@@ -2039,6 +2048,62 @@ public function toArray(Request $request): array
 
 ---
 
+### 3.17 FEEDBACK10 — Service hooks, auth routes, RBAC + `--kind=manager|consumer` (RETO corrida 10)
+
+> **Source**: `FEEDBACK10.md` (F10-B02/B03/B04/B06/B07/B08/B09). Todos additive/BC-safe salvo donde se indica.
+
+#### 3.17.1 F10-B03 — `CRUDSmart::getService()` nunca resolvía el Service scaffoldeado
+
+**Síntoma pre-fix**: `getService()` gateaba en `app()->bound($serviceClass)`, siempre `false` para la clase concreta que el scaffolder pinea en `'service' => {Scope}Service::class` (nunca bindeada en el ServiceProvider). Resultado: `beforeSearch`, `beforeShow`, `beforeCreate`, `afterCreate`, `afterUpdate`, `afterDelete`, `setExtraData`, etc. **no disparaban out-of-the-box** — silenciosamente.
+
+**Fix**: `getService()` ahora también resuelve vía `app()->make($serviceClass)` cuando `class_exists($serviceClass)` — igual que Laravel ya auto-resuelve clases concretas sin bind explícito. No hace falta tocar el ServiceProvider para que los hooks disparen.
+
+```php
+// CRUDSmart::getService() post-fix
+if (is_string($serviceClass) && (app()->bound($serviceClass) || class_exists($serviceClass))) {
+    return app()->make($serviceClass);
+}
+```
+
+#### 3.17.2 F10-B04 — hooks `afterCreate/afterUpdate/afterDelete` scaffoldeados sin `return` → 500
+
+Una vez que F10-B03 hace que los hooks disparen, los 3 hooks scaffoldeados (`: mixed`, sin `return` en el cuerpo passthrough) explotaban con `TypeError: Return value must be of type mixed, none returned`. Fix: `admin-service.stub` cierra los 3 hooks con `return null;` explícito.
+
+#### 3.17.3 F10-B06 — rutas auth apuntaban a métodos inexistentes
+
+El stub de rutas apuntaba a `AuthController::forgot`/`reset` — la clase real (`BaseAuthController`) expone `forgotPassword()`/`resetPassword()`. Además faltaban las rutas de `logoutAll()` y `changePassword()` (ya implementados en la base, nunca expuestos). Ver §3.8.1 arriba para el detalle de paths/métodos post-fix. `{{updateProfileRoute}}` (pineado a `PATCH me → updateProfile`, solo con `--profile-fields`) ya existía pero no se estaba insertando en ningún stub — corregido.
+
+#### 3.17.4 F10-B07 — `roles` sin columna `description` pero `RoleResource` la expone
+
+La tabla `roles` del paquete solo tiene `id/name/guard/is_fixed/timestamps` — nunca tuvo `description` — pero el `RoleResource` scaffoldeado la exponía y el `store/update` genérico de `CRUDSmart` la aceptaba por mass-assignment, causando `SQLSTATE[42703] column "description" does not exist` en cualquier create/update de rol con ese campo. Fix: `description` retirada del `RoleResource`/requests scaffoldeados. (`Ability` SÍ tiene `description` real — no confundir.)
+
+#### 3.17.5 F10-B08 — `--kind=manager|consumer` (scopes administrados)
+
+Nuevo flag `mk:make:auth-user {Scope} --kind=manager|consumer` (default `manager`, BC byte-for-byte para el path default). Codifica el patrón "scope consumer self-profile-only, administrado por otro scope" que el piloto RETO tuvo que armar a mano.
+
+```bash
+php artisan mk:make:auth-user Admin --with-crud
+php artisan mk:make:auth-user Member --kind=consumer --managed-by=Admin --with-crud
+```
+
+- `--kind=consumer` **requiere** `--managed-by=<Scope>` — aborta con error claro si se omite, ANTES de generar nada. El manager debe scaffoldearse primero (el comando valida que `App\Modules\{Manager}` ya exista).
+- Con `--kind=consumer`, `Http/Routes/api.php` propio queda reducido a auth + self-profile (`login`, `refresh`, `logout`, `logout-all`, `me`, `PATCH me`, `password/forgot`, `password/reset`, `password/change`) — SIN CRUD propio, SIN `/roles`, SIN `/abilities`. Stub dedicado `auth-user.routes.consumer.stub` (no string-surgery sobre el stub full).
+- NO se generan `RoleController`/`AbilityController` propios ni sus Policies (quedarían sin rutas que los gateen).
+- `{Scope}Controller`, DTOs, Repository, Service, Factory, Seeder y `{Scope}Policy` SÍ se generan igual — los usa el recurso managed (`--managed-by`) para exponer el CRUD bajo el guard del manager (`/api/{manager}/{scopePlural}`).
+- El path `manager` (default, sin `--kind`) es idéntico al comportamiento pre-existente.
+
+Internal: `MakeAuthUserCommand::modulesPath()` (mismo patrón que `MakeModuleCommand::modulesPath()`) como punto único de resolución de `app_path("Modules/...")`, para testear la generación de archivos end-to-end contra un tempdir real.
+
+#### 3.17.6 F10-B09 — `{Scope}Status::default()` retornaba la clase equivocada
+
+El enum `{Scope}Status` scaffoldeado (`--with-status`) tenía `default()` retornando `ScopeStatus::Active` (clase literal, no `self`) → `TypeError` en factories/migrations. Fix: `return self::Active;`.
+
+#### 3.17.7 F10-B02 — `FileStoragePlugin` mal cableado en el controller stub
+
+Ver §5.4 (`plugins`/`plugins_config`) para el detalle completo del fix — el stub ahora emite `plugins` (lista de clases, registrado per-controller por `CRUDSmart::getPluginManager()`) y `plugins_config` (config que el plugin lee vía `getConfigValue('plugins_config.<name>')`) como dos keys separadas.
+
+---
+
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)
 
 Tanto para **Next.js** como para **React Native**, el consumo de listas es estandarizado mediante parámetros URL:
@@ -2228,6 +2293,19 @@ positivo que distraía al dev (FEEDBACK8 F8-B04).
 - **Anti-pattern**: NO pinees `fields` como `[]` y luego hagas el upload a mano
   en un Service (FEEDBACK8 F8-S01 deuda). Post-R-PKG-045, el plugin resuelve
   el rename vía D1 — refactor a 5 LOC declarativas en vez de 50 LOC imperativas.
+- **F10-B02 (RETO corrida 10, fijo)**: `plugins` y `plugins_config` son DOS
+  keys separadas con roles distintos — no las mezcles. `plugins` es SIEMPRE una
+  lista de **nombres de clase** (`CRUDSmart::getPluginManager()` la registra
+  per-controller así); un array asociativo de config ahí es silenciosamente
+  skippeado por `PluginManager::registerPlugins()`. `plugins_config` es donde
+  va la config real, keyed por nombre de plugin (`file_storage`), que cada
+  plugin lee vía `getConfigValue('plugins_config.<name>')`. El scaffolder
+  `mk:make:auth-user --profile-fields="avatar:file"` llegó a emitir la config
+  bajo `plugins` (shape `['file_storage' => [...]]`) en vez de `plugins_config`
+  — la subida se rompía en silencio (el tmp path del `UploadedFile` quedaba
+  persistido tal cual). Fijo: el stub emite `'plugins' =>
+  [\Mk\Director\Plugins\FileStoragePlugin::class]` + `'plugins_config' =>
+  ['file_storage' => [...]]` correctamente.
 
 ---
 
