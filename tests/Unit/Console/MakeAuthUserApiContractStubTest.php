@@ -165,8 +165,11 @@ describe('R-PKG-053 — api_contract.md stub generation', function () {
     it('helper pinea el archivo en app/Modules/{Scope}/Docs/api_contract.md', function () {
         $source = commandSource052();
 
-        // Buscamos el path target pineado en el helper
-        expect($source)->toContain('app_path("Modules/{$scope}/Docs/api_contract.md")');
+        // Buscamos el path target pineado en el helper. F10-B08: refactor a
+        // $this->modulesPath($scope) (punto único de app_path(), testeable
+        // via subclase — ver modulesPath() docblock) en vez de app_path()
+        // directo. Comportamiento idéntico (modulesPath() delega a app_path()).
+        expect($source)->toContain('"{$this->modulesPath($scope)}/Docs/api_contract.md"');
     });
 
     it('helper has BC guard: skip if file already exists (no pisar trabajo del dev)', function () {

@@ -5,6 +5,37 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [UNRELEASED] — `--kind=manager|consumer` scope kind (F10-B08, FEEDBACK10 RETO pilot)
+
+> **Added**: `mk:make:auth-user {Scope} --kind=manager|consumer` (default
+> `manager`, byte-for-byte BC). Codifica lo que el piloto RETO (corrida 10)
+> tuvo que armar a mano: un scope `consumer` que solo loguea + edita su
+> propio perfil, administrado por OTRO scope (el manager) via
+> `--managed-by`.
+>
+> `--kind=consumer` requiere `--managed-by=<Scope>` (error claro + abort
+> ANTES de generar nada si se omite) y reduce el scope generado:
+>   - `Http/Routes/api.php` propio queda solo auth + self-profile
+>     (login/refresh/logout/me/`PATCH me`/forgot/reset) — sin CRUD propio,
+>     sin `/roles`, sin `/abilities`. Stub dedicado
+>     `auth-user.routes.consumer.stub` (no string-surgery sobre el stub
+>     full).
+>   - NO se generan `RoleController`/`AbilityController` propios ni sus
+>     `RolePolicy`/`AbilityPolicy` (quedarían sin rutas que los gateen).
+>   - `{Scope}Controller`, DTOs, Repository, Service, Factory, Seeder,
+>     `{Scope}Policy` y el resto del pack CRUD SÍ se generan igual — los usa
+>     el recurso managed (`--managed-by`) para exponer el CRUD bajo el guard
+>     del manager (`/api/{manager}/{scopePlural}`).
+>
+> El path `manager` (default, omitiendo `--kind`) es idéntico al
+> comportamiento pre-existente — ningún test pre-existente cambió su
+> resultado para el path default.
+>
+> Internal: agregado `MakeAuthUserCommand::modulesPath()` (mismo patrón que
+> `MakeModuleCommand::modulesPath()`) como punto único de resolución de
+> `app_path("Modules/...")`, para poder testear la generación de archivos
+> end-to-end contra un tempdir real (antes solo se podía source-parsing).
+
 ## [UNRELEASED] — FileStoragePlugin scaffold wiring fix (FEEDBACK10, RETO pilot)
 
 > **Fixed**: el `{Scope}Controller` scaffoldeado por `mk:make:auth-user ... --profile-fields="…:file"`
