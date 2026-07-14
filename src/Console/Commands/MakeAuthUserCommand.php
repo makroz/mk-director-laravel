@@ -163,6 +163,7 @@ class MakeAuthUserCommand extends Command
         {--skip-auth-wire : (A4) NO editar config/auth.php automáticamente (solo imprime los snippets, comportamiento pre-A4). Por default el scaffolder cablea el guard+provider de forma idempotente con backup .bak.}
         {--skip-policies : (A1/A3) NO generar las Policies default-deny en el pack CRUD (default ON). Por default, CRUD ON genera {Scope}Policy/RolePolicy/AbilityPolicy (default-deny + super-admin bypass) y las registra vía Gate::policy.}
         {--managed-by= : (ARCH-01/FEEDBACK6) Genera un recurso admin-scoped para que OTRO scope administre users de ESTE scope. Ej: `mk:make:auth-user Member --managed-by=Admin` expone `/api/admin/members` gateado con mk.auth:admin + mk.ability:admin.members.* (reusa los controllers del scope, registra las rutas managed en el ServiceProvider y genera el seeder de abilities cross-scope para los roles del manager). Requiere CRUD ON. El manager (StudlyCase) debe ser un scope existente. Default BC: sin managed resource.}
+        {--kind=manager : (F10-B08) Tipo de scope: `manager` (default, BC) o `consumer`. `manager` es el scope completo de siempre (CRUD propio + Role/AbilityController + rutas propias). `consumer` es un scope administrado: su Http/Routes/api.php queda reducido a solo auth + self-profile (login/refresh/logout/me/PATCH me/forgot/reset) — SIN las rutas CRUD propias, SIN /roles, SIN /abilities — porque es administrado por OTRO scope via --managed-by (el manager expone `/api/{manager}/{consumers}` + gestiona roles/abilities del consumer con SU token). `--kind=consumer` REQUIERE `--managed-by=<Scope>` (falla si se omite) y el manager DEBE scaffoldearse PRIMERO (orden: `mk:make:auth-user Admin` antes de `mk:make:auth-user Member --kind=consumer --managed-by=Admin`).}
         {--multi-tenant : (R-PKG-052, FEEDBACK11) Genera el scope con soporte multi-tenant: pine `client_id` en \$fillable del modelo + columna `client_id` en la migration. Default: single-tenant (RETO es single-tenant — pinear `client_id` por default provocaba `column not found: client_id` en INSERT). Opt-in explícito: pinearlo solo si el consumer tiene tenant isolation (ver docs/guides/MULTI_TENANT.md).}
 
         **BC BREAK (R-PKG-047 D2)**: Flags eliminados — `--with-crud`, `--with-auth-rbac`, `--with-status`, `--status-values`. Estos son ahora defaults ON. Para opt-out, usar `--no-crud`, `--no-rbac`, `--no-status`. Consumers que pinean los flags viejos en scripts CI/tutores deben actualizar a los `--no-*` correspondientes. La simplificación pinea el principio R-G-033 "maximo default + minimo custom" (Mario feedback 2026-07-09 22:12).';
@@ -262,6 +263,20 @@ class MakeAuthUserCommand extends Command
         $managedByRaw = trim((string) $this->option('managed-by'));
         $managedBy = $managedByRaw === '' ? null : Str::studly($managedByRaw);
 
+        // F10-B08: `--kind=manager|consumer`. Default `manager` (BC: idéntico
+        // a v1.x, el flag ni existía). `consumer` reduce el scope a
+        // auth + self-profile (ver docblock del flag arriba) y requiere
+        // --managed-by (validado más abajo, junto a la validación existente
+        // de --managed-by, para no duplicar mensajes de error).
+        $kindRaw = strtolower(trim((string) $this->option('kind')));
+        $kind = $kindRaw === '' ? 'manager' : $kindRaw;
+        if (! in_array($kind, ['manager', 'consumer'], true)) {
+            $this->error("--kind debe ser 'manager' o 'consumer' (recibido: '{$kind}').");
+
+            return self::FAILURE;
+        }
+        $isConsumer = $kind === 'consumer';
+
         if ($scope === '') {
             $this->error('El nombre del scope no puede estar vacío.');
 
@@ -281,6 +296,17 @@ class MakeAuthUserCommand extends Command
 
         if ($statusStates === null) {
             // resolveStatusStates() ya imprimió el error específico.
+            return self::FAILURE;
+        }
+
+        // F10-B08: un scope consumer SIEMPRE debe ser administrado por un
+        // manager — no tiene sentido un consumer sin --managed-by (quedaría
+        // sin CRUD propio Y sin CRUD managed, un scope inutilizable salvo
+        // login). Fail-fast ANTES de generar nada (ninguna carpeta/archivo
+        // se creó todavía en este punto del pipeline).
+        if ($isConsumer && $managedBy === null) {
+            $this->error('--kind=consumer requiere --managed-by=<Scope>: un scope consumer debe ser administrado por un manager (ej: --kind=consumer --managed-by=Admin). El scope manager debe scaffoldearse PRIMERO.');
+
             return self::FAILURE;
         }
 
@@ -850,7 +876,13 @@ PHP,
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.model.stub', 'Models', "{$scope}.php", $extraReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.migration.stub', 'Database/Migrations', $this->migrationFilename($scopePlural), $extraReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.auth-controller.stub', 'Http/Controllers', 'AuthController.php', $extraReplacements);
-        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.routes.stub', 'Http/Routes', 'api.php', $extraReplacements);
+        // F10-B08: un scope `consumer` usa un stub de rutas reducido — solo
+        // auth + self-profile, SIN las rutas CRUD/roles/abilities propias
+        // (esas se administran por el manager, via --managed-by). Stub
+        // dedicado (no string-surgery sobre el stub full) para no acoplar
+        // el path `manager` (BC) con la lógica `consumer`.
+        $ownRoutesStub = $isConsumer ? 'auth-user.routes.consumer.stub' : 'auth-user.routes.stub';
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, $ownRoutesStub, 'Http/Routes', 'api.php', $extraReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.service-provider.stub', 'Providers', "{$scope}ServiceProvider.php");
 
         // R-PKG-047 D5 — FormRequests pineados por el scaffolder:
@@ -941,7 +973,7 @@ PHP,
         if ($withCrud) {
             // A1/A3: policies default-deny por default con --with-crud (skippable).
             $withPolicies = ! (bool) $this->option('skip-policies');
-            $this->generateCrudPack($scope, $scopeLower, $scopePlural, $loginField, $profileFieldsRaw, $requiredFields, $withPolicies, $withStatus, $statusStates);
+            $this->generateCrudPack($scope, $scopeLower, $scopePlural, $loginField, $profileFieldsRaw, $requiredFields, $withPolicies, $withStatus, $statusStates, $isConsumer);
         }
 
         // ── ARCH-01/FEEDBACK6: recurso managed (otro scope administra ESTE) ──
@@ -1613,11 +1645,22 @@ PHP,
         bool $withPolicies = true,
         bool $withStatus = false,
         array $statusStates = [],
+        bool $isConsumer = false,
     ): void {
         // A1/A3/A8: 17 base + 1 enum (A8) + 3 policies (A1/A3, si $withPolicies).
+        // F10-B08: un scope `consumer` NO genera RoleController/AbilityController
+        // (2 archivos) ni RolePolicy/AbilityPolicy (2 archivos, quedarían
+        // orphaned sin rutas propias que gateen) — su Role/Ability CRUD lo
+        // administra el manager via --managed-by.
         $fileCount = 18 + ($withPolicies ? 3 : 0);
+        if ($isConsumer) {
+            $fileCount -= 2; // RoleController + AbilityController
+            if ($withPolicies) {
+                $fileCount -= 2; // RolePolicy + AbilityPolicy (se mantiene {Scope}Policy)
+            }
+        }
         $this->newLine();
-        $this->info("📄 Generando CRUD pack ({$fileCount} archivos):");
+        $this->info("📄 Generando CRUD pack ({$fileCount} archivos)".($isConsumer ? ' [kind=consumer: sin Role/AbilityController ni sus Policies, administrado por el manager]' : '').':');
 
         $basePath = app_path("Modules/{$scope}");
 
@@ -1790,10 +1833,20 @@ PHP,
             ),
         ], $this->buildStatusCrudReplacements($withStatus, $statusStates, $scope, $scopeLower));
 
-        // ── Controllers (3) ──
+        // ── Controllers (3, o 1 si $isConsumer) ──
+        // {Scope}Controller SIEMPRE se genera: lo usan las rutas managed
+        // (Http/Routes/managed.php, ver generateManagedResource()) aunque
+        // el consumer no lo rutee desde su propio api.php.
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/admin-controller.stub', 'Http/Controllers', "{$scope}Controller.php", $crudReplacements);
-        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/role-controller.stub', 'Http/Controllers', 'RoleController.php', $crudReplacements);
-        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/ability-controller.stub', 'Http/Controllers', 'AbilityController.php', $crudReplacements);
+        // F10-B08: RoleController/AbilityController quedarían orphaned en un
+        // scope consumer — su propio Http/Routes/api.php (auth-user.routes.consumer.stub)
+        // no las rutea, y managed-routes.stub tampoco las referencia (solo
+        // usa {Scope}Controller). El Role/Ability CRUD del consumer lo
+        // administra el manager (guard mk.auth:{manager}), no el consumer.
+        if (! $isConsumer) {
+            $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/role-controller.stub', 'Http/Controllers', 'RoleController.php', $crudReplacements);
+            $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/ability-controller.stub', 'Http/Controllers', 'AbilityController.php', $crudReplacements);
+        }
 
         // ── Requests (5) ──
         // R-PKG-027 PKG-NEW-07 fix: agregado `sync-role-abilities-request.stub`
@@ -1850,22 +1903,36 @@ PHP,
         if ($withPolicies) {
             // {Scope}Policy: el stub de module-rbac ya referencia el modelo del
             // scope (App\Modules\{Scope}\Models\{Scope}) — reusable tal cual.
+            // Se genera SIEMPRE (también para consumer): gatea el modelo
+            // propio, independiente de quién rutee el CRUD.
             $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'module-rbac/policy-user.stub', 'Policies', "{$scope}Policy.php", $crudReplacements);
             // Role/Ability: variantes auth-user que apuntan a los modelos CENTRALES
             // del paquete (Mk\Director\Auth\Models\*), no a modelos módulo-locales.
-            $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/policy-role.stub', 'Policies', 'RolePolicy.php', $crudReplacements);
-            $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/policy-ability.stub', 'Policies', 'AbilityPolicy.php', $crudReplacements);
+            // F10-B08: se omiten para consumer — gatearían RoleController/
+            // AbilityController, que tampoco se generan (ver arriba).
+            if (! $isConsumer) {
+                $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/policy-role.stub', 'Policies', 'RolePolicy.php', $crudReplacements);
+                $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/policy-ability.stub', 'Policies', 'AbilityPolicy.php', $crudReplacements);
+            }
         }
 
         // ── Extender routes/api.php con CRUD ──
-        $this->extendRoutesWithCrud($basePath, $scope, $scopeLower, $scopePlural);
+        // F10-B08: un scope consumer NO extiende su propio api.php con CRUD —
+        // su api.php (auth-user.routes.consumer.stub) queda auth-only. El
+        // CRUD del consumer se sirve exclusivamente vía Http/Routes/managed.php
+        // (guard del manager), generado por generateManagedResource().
+        if (! $isConsumer) {
+            $this->extendRoutesWithCrud($basePath, $scope, $scopeLower, $scopePlural);
+        }
 
         // ── Extender ServiceProvider con Repository binding ──
+        // Se mantiene para consumer: el Repository/Service son usados por
+        // {Scope}Controller, que SÍ se genera y se rutea (desde managed.php).
         $this->extendServiceProviderWithBinding($basePath, $scope);
 
         // ── Registrar Policies via Gate::policy en el ServiceProvider (A1/A3) ──
         if ($withPolicies) {
-            $this->extendServiceProviderWithPolicies($basePath, $scope);
+            $this->extendServiceProviderWithPolicies($basePath, $scope, $isConsumer);
         }
     }
 
@@ -1874,7 +1941,7 @@ PHP,
      * vía `Gate::policy()` en `boot()`. Idempotente: si ya están registradas,
      * no re-inyecta. Agrega el import de `Gate` si falta.
      */
-    protected function extendServiceProviderWithPolicies(string $basePath, string $scope): void
+    protected function extendServiceProviderWithPolicies(string $basePath, string $scope, bool $isConsumer = false): void
     {
         $providerPath = "{$basePath}/Providers/{$scope}ServiceProvider.php";
         if (! File::exists($providerPath)) {
@@ -1899,11 +1966,18 @@ PHP,
             );
         }
 
+        // F10-B08: un scope consumer no genera RolePolicy/AbilityPolicy (no
+        // tiene RoleController/AbilityController propios que gatear), así
+        // que tampoco registra sus Gate::policy — solo la del modelo propio.
         $registrations =
             "        // A1/A3: Policies default-deny (super-admin bypass en before()).\n"
-            ."        Gate::policy(\\App\\Modules\\{$scope}\\Models\\{$scope}::class, \\App\\Modules\\{$scope}\\Policies\\{$scope}Policy::class);\n"
-            ."        Gate::policy(\\Mk\\Director\\Auth\\Models\\Role::class, \\App\\Modules\\{$scope}\\Policies\\RolePolicy::class);\n"
-            ."        Gate::policy(\\Mk\\Director\\Auth\\Models\\Ability::class, \\App\\Modules\\{$scope}\\Policies\\AbilityPolicy::class);\n\n";
+            ."        Gate::policy(\\App\\Modules\\{$scope}\\Models\\{$scope}::class, \\App\\Modules\\{$scope}\\Policies\\{$scope}Policy::class);\n";
+        if (! $isConsumer) {
+            $registrations .=
+                "        Gate::policy(\\Mk\\Director\\Auth\\Models\\Role::class, \\App\\Modules\\{$scope}\\Policies\\RolePolicy::class);\n"
+                ."        Gate::policy(\\Mk\\Director\\Auth\\Models\\Ability::class, \\App\\Modules\\{$scope}\\Policies\\AbilityPolicy::class);\n";
+        }
+        $registrations .= "\n";
 
         $content = preg_replace(
             '/(public function boot\(\): void\s*\{\n)/',
