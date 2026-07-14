@@ -5,6 +5,99 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [UNRELEASED] — FileStoragePlugin scaffold wiring fix (FEEDBACK10, RETO pilot)
+
+> **Fixed**: el `{Scope}Controller` scaffoldeado por `mk:make:auth-user ... --profile-fields="…:file"`
+> emitía la config del file-upload bajo una única key `plugins` con shape
+> `['file_storage' => [...]]`, lo que rompía la subida end-to-end por dos motivos
+> independientes surgidos en el piloto RETO (2026-07-13):
+>   1. **Key equivocada** — `FileStoragePlugin` lee su config vía
+>      `getConfigValue('plugins_config.file_storage')` (key `plugins_config`, no
+>      `plugins`); bajo `plugins` el `data_get` daba `[]` y el tmp path del
+>      `UploadedFile` terminaba persistido en la columna.
+>   2. **Plugin no registrado per-controller** — `CRUDSmart::getPluginManager()`
+>      registra `$mkConfig['plugins']` como LISTA DE CLASES; un array asociativo de
+>      config ahí es skippeado por `PluginManager::registerPlugins()` (F10-B16), así
+>      que el plugin no corría (agravado si el auto-register global está off vía
+>      `MK_FILE_STORAGE_PLUGIN=false`).
+>
+> **Fix**: el stub ahora emite dos keys — `plugins` = lista de clases
+> (`[\Mk\Director\Plugins\FileStoragePlugin::class]` cuando hay file fields, `[]` si
+> no) que CRUDSmart registra per-controller (la subida funciona aunque el
+> auto-register global esté off), y `plugins_config` = config por plugin que el
+> plugin lee. Nuevo helper `MakeAuthUserCommand::buildPluginsListLiteral()` +
+> placeholder `{{pluginsList}}`. Tests source-parsing actualizados.
+
+## [UNRELEASED] — FEEDBACK10 batch: Service hooks, auth routes, RBAC + repository stragglers (RETO pilot corrida 10)
+
+> Sprint de cierre de 6 bugs 🔴/🟡 restantes del piloto RETO corrida 10
+> (`FEEDBACK10.md` F10-B03/B04/B06/B07/B09/B10), todos con root-cause +
+> workaround ya documentados por el consumer. F10-B05 (accessor
+> `get{Field}UrlAttribute()` no emitido) resultó YA ARREGLADO en este branch
+> por R-PKG-051 (no requirió cambios). 1054+ tests verdes tras cada fix.
+
+### 🐛 Fixed
+
+- **F10-B03 — `CRUDSmart::getService()` nunca resolvía el Service scaffoldeado.**
+  Gateaba en `app()->bound($serviceClass)`, SIEMPRE false para la clase
+  concreta que el scaffolder pinea en `'service' => X::class` (nunca
+  bindeada en el ServiceProvider) → TODOS los hooks (`beforeSearch`,
+  `beforeShow`, `beforeCreate`, `setExtraData`, etc.) muertos silenciosamente
+  out-of-the-box. Fix: resuelve también vía `app()->make()` cuando
+  `class_exists($serviceClass)` — igual que Laravel ya auto-resuelve
+  concrete classes sin bind explícito. Test runtime nuevo
+  (`tests/Unit/CRUDSmartGetServiceTest.php`) prueba que un controller con
+  `'service' => Foo::class` (sin bind) efectivamente dispara el hook.
+
+- **F10-B04 — hooks `afterCreate/afterUpdate/afterDelete` scaffoldeados
+  (`: mixed`) sin `return` → `TypeError` 500** apenas F10-B03 hace que los
+  hooks disparen. Fix: `admin-service.stub` cierra los 3 hooks con
+  `return null;` explícito.
+
+- **F10-B06 — rutas auth referenciaban métodos inexistentes en
+  `BaseAuthController`.** `auth-user.routes.stub` apuntaba a
+  `AuthController::forgot`/`reset` (la clase real expone
+  `forgotPassword()`/`resetPassword()`) → 500 `Call to undefined method` en
+  cualquier scope scaffoldeado. Además faltaban las rutas de `logoutAll()`
+  y `changePassword()` (ya implementados en `BaseAuthController`, nunca
+  expuestos). Separadamente, `{{registerMethod}}`/`{{updateProfileMethod}}`
+  se computaban (`buildRegisterMethod()`/`buildUpdateProfileMethod()`,
+  condicionados a `--profile-fields`/`--verify-email`) pero NUNCA se
+  insertaban en ningún stub — `auth-user.auth-controller.stub` no
+  referenciaba ninguno de los 2 placeholders, así que `register()`/
+  `updateProfile()` jamás se emitían aunque `{{updateProfileRoute}}` ya
+  pineaba `PATCH me → updateProfile`. Fix: paths renombrados a `password/*`
+  + rutas faltantes agregadas + ambos placeholders wireados al final del
+  controller stub. También corrige el doc drift de
+  `.makromania/agency/skills/mk-director-laravel/SKILL.md` (namespace,
+  nombres de los 4 abstracts/5 hooks, y la lista de "10 endpoints
+  canónicos" no coincidían con el código real).
+
+- **F10-B07 — `roles` sin columna `description` pero `RoleResource` +
+  `Role::$fillable` la exponían/aceptaban** → `SQLSTATE[42703] column
+  "description" does not exist` en cualquier create/update de role.
+  Fix: `description` removido de `Role::$fillable` y de
+  `role-resource.stub` (la tabla solo tiene `id/name/guard/is_fixed/
+  timestamps`). `Ability` SÍ tiene `description` real — sin cambios ahí.
+
+- **F10-B09 — `{Scope}Status::default()` retornaba `ScopeStatus::Active`**
+  (clase distinta al return type `self`) → `TypeError` en cualquier
+  factory/seeder que invoque `{Scope}Status::default()`. Fix:
+  `enum-status.stub` retorna `self::Active`.
+
+- **F10-B10 (parcial) — `{Scope}Repository::delete()` limpiaba un
+  `photo_path` hardcoded** (columna legacy pre-R-PKG-050/052 rename) en vez
+  del file field real del scope (`avatar`, etc.) → archivos huérfanos en
+  disco tras cada delete (`FileStoragePlugin::afterDelete()` es un no-op,
+  así que esta limpieza es responsabilidad genuina del Repository). Fix:
+  nuevo `buildFileFieldsDeleteCleanup()` + placeholder
+  `{{fileFieldsDeleteCleanup}}`, dinámico igual que los otros 6 placeholders
+  de file fields. **SKIPPED** (documentado, no arreglado): columnas de
+  búsqueda hardcoded en `paginate()` (`full_name`/`ci`) y el filtro
+  `is_active` (legacy, `ScopeStatus` es el reemplazo desde R-PKG-047) —
+  genericizarlos toca el contrato del FilterDTO + múltiples call-sites;
+  dejado para un follow-up scoped.
+
 ## [UNRELEASED] — api_contract.md stub generation (R-PKG-053)
 
 > Sprint de cierre del drift histórico entre `api_contract.md` del consumer y el

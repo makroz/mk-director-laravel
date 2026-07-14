@@ -58,15 +58,31 @@ it('D3: buildFileFieldsConfig() helper pineado (map request => column, IDENTITY 
     expect($src)->not->toContain("\$map[\$fieldName] = \$fieldName . '_path'");
 });
 
-// ── F3.3 — admin-controller.stub pino 'plugins' key ───────────────────────
+// ── F3.3 — admin-controller.stub pino 'plugins' + 'plugins_config' keys ────
+// FEEDBACK10 (RETO pilot, 2026-07-13): `plugins` ahora es la LISTA de clases
+// (registrada per-controller por CRUDSmart) y la config vive en `plugins_config`
+// (key que FileStoragePlugin lee vía getConfigValue('plugins_config.<name>')).
 
-it('D3: admin-controller.stub pino \'plugins\' key en $mkConfig', function () {
-    expect(adminControllerStub047D3())->toContain("'plugins'         => {{pluginsConfig}}");
+it('FEEDBACK10: admin-controller.stub pino \'plugins\' (lista) + \'plugins_config\' en $mkConfig', function () {
+    $stub = adminControllerStub047D3();
+    expect($stub)->toContain("'plugins'         => {{pluginsList}}");
+    expect($stub)->toContain("'plugins_config'  => {{pluginsConfig}}");
+    // La forma vieja conflacionada NO debe quedar.
+    expect($stub)->not->toContain("'plugins'         => {{pluginsConfig}}");
 });
 
-it('D3: {{pluginsConfig}} placeholder pineado desde scaffolder con buildPluginsConfigLiteral()', function () {
+it('FEEDBACK10: ambos placeholders pineados desde scaffolder con sus helpers', function () {
     $src = scaffolderSource047D3();
+    expect($src)->toContain("'{{pluginsList}}' => \$this->buildPluginsListLiteral(");
     expect($src)->toContain("'{{pluginsConfig}}' => \$this->buildPluginsConfigLiteral(");
+});
+
+it('FEEDBACK10: buildPluginsListLiteral() registra FileStoragePlugin con file fields, [] sin ellos', function () {
+    $src = scaffolderSource047D3();
+    // Con file fields → lista con la clase del plugin.
+    expect($src)->toContain('\Mk\Director\Plugins\FileStoragePlugin::class');
+    // Firma del helper nuevo.
+    expect($src)->toMatch('/function buildPluginsListLiteral\(\s*array\s+\$fileFieldNames\s*\)/');
 });
 
 // ── F3.4 — :file suffix se auto-detecta en resolveProfileFields() ──────────

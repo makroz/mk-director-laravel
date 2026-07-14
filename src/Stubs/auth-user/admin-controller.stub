@@ -67,14 +67,28 @@ class {{ModuleName}}Controller extends SmartController
         // R-PKG-047 D3 — auto-wire FileStoragePlugin via `:file` suffix en
         // --profile-fields (e.g. `--profile-fields='avatar:file,phone:string'`).
         //
-        // Pre-D3: el consumer tenía que pinear `mkConfig['plugins']['file_storage']`
-        // manualmente después de scaffoldear (cross-cutting risk: campos olvidados
-        // → `Call to a member function store() on null` runtime).
+        // FEEDBACK10 (RETO pilot, 2026-07-13) — el scaffolder pineaba la config
+        // bajo UNA sola key `plugins` con shape `['file_storage' => [...]]`. Eso
+        // rompía la subida end-to-end por DOS motivos:
+        //   1. `FileStoragePlugin` lee su config vía
+        //      `getConfigValue('plugins_config.file_storage')` — key `plugins_config`,
+        //      NO `plugins`. Bajo `plugins` el `data_get` daba `[]` → el plugin
+        //      no procesaba el file y el tmp path del UploadedFile terminaba
+        //      persistido en la columna.
+        //   2. `CRUDSmart::getPluginManager()` registra `$this->mkConfig['plugins']`
+        //      como LISTA DE CLASES (strings). Un array asociativo de config ahí
+        //      es skippeado por `PluginManager::registerPlugins()` (F10-B16) →
+        //      el plugin no quedaba registrado per-controller.
         //
-        // Post-D3: el scaffolder detecta type=file y pinea automáticamente el
-        // config completo (fields map + disk + path + auto_url). Si no hay file
-        // fields en --profile-fields, retorna `[]` (omitir el key plugins del mkConfig).
-        'plugins'         => {{pluginsConfig}},
+        // Post-fix: dos keys separadas.
+        //   - `plugins`        → lista de clases que CRUDSmart registra per-controller
+        //     (así la subida funciona AUNQUE el auto-register global esté off, e.g.
+        //     `MK_FILE_STORAGE_PLUGIN=false`).
+        //   - `plugins_config` → config por plugin que el plugin lee vía
+        //     `getConfigValue('plugins_config.<name>')`.
+        // Sin file fields en --profile-fields, ambas quedan `[]`.
+        'plugins'         => {{pluginsList}},
+        'plugins_config'  => {{pluginsConfig}},
     ];
 
     /**

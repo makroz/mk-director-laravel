@@ -87,12 +87,13 @@ class {{ModuleName}}Repository implements {{ModuleName}}RepositoryInterface
     public function delete({{ModuleName}} ${{moduleNameLower}}): bool
     {
         return DB::transaction(function () use (${{moduleNameLower}}) {
-            // Limpia la foto del storage si existe.
-            if (! empty(${{moduleNameLower}}->photo_path)) {
-                Storage::disk(config('mk_director.storage.disk', 'public'))
-                    ->delete(${{moduleNameLower}}->photo_path);
-            }
-
+            // FEEDBACK10 F10-B10: limpia del storage el/los file field(s)
+            // REALES del scope (dinámico — ya NO `photo_path` hardcoded,
+            // columna legacy pre-R-PKG-050/052). FileStoragePlugin no limpia
+            // archivos al borrar (afterDelete() es no-op), así que esta
+            // responsabilidad es del Repository. Vacío si el scope no tiene
+            // file fields.
+{{fileFieldsDeleteCleanup}}
             // Limpia tokens + pivots.
             ${{moduleNameLower}}->tokens()->delete();
             ${{moduleNameLower}}->roles()->detach();

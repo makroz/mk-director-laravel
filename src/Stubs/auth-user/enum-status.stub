@@ -64,11 +64,14 @@ enum {{ModuleName}}Status: string
 
     /**
      * Estado por default al crear un `{{moduleNameLower}}` nuevo.
-     * Delega a `ScopeStatus::default()` (convención de la agencia: Active).
+     * FEEDBACK10 (F10-B09): retorna `self::Active` (no `ScopeStatus::Active`,
+     * clase distinta — el return type es `self`, retornar el enum canónico
+     * causaba `TypeError: return value must be of type self, ScopeStatus
+     * returned` en cualquier factory/seeder que invoque `{{ModuleName}}Status::default()`).
      */
     public static function default(): self
     {
-        return ScopeStatus::Active;
+        return self::Active;
     }
 
     /**

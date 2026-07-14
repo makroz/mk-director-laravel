@@ -26,7 +26,11 @@ class RoleResource extends JsonResource
             'id' => $this->id,
             'name' => $this->name,
             'guard' => $this->guard,
-            'description' => $this->description,
+            // FEEDBACK10 F10-B07: `description` REMOVIDO — la tabla `roles`
+            // no tiene esa columna (a diferencia de `abilities`, que sí la
+            // tiene). Exponerla acá + aceptarla en mass-assignment producía
+            // `SQLSTATE[42703] column "description" does not exist` en
+            // cualquier create/update de role.
             'is_fixed' => $this->is_fixed instanceof FixedStatus ? $this->is_fixed->value : (int) ($this->is_fixed ?? 0),
             'abilities' => $this->whenLoaded('abilities', fn () => $this->abilities->pluck('name')),
             'created_at' => $this->created_at?->toIso8601String(),
