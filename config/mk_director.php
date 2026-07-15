@@ -175,6 +175,38 @@ return [
             'login' => env('MK_AUTH_RATE_LIMIT_LOGIN', '5,1'),
             'forgot' => env('MK_AUTH_RATE_LIMIT_FORGOT', '3,1'),
             'reset' => env('MK_AUTH_RATE_LIMIT_RESET', '3,1'),
+
+            // 2026-07-15-profile-edit-password-otp (ADR-3): route-level
+            // throttle for the two authenticated OTP password-change
+            // endpoints. `password_code_request` = 3 requests/10min,
+            // `password_code_confirm` = 5 attempts/10min.
+            'password_code_request' => env('MK_AUTH_RATE_LIMIT_PWD_CODE_REQ', '3,10'),
+            'password_code_confirm' => env('MK_AUTH_RATE_LIMIT_PWD_CODE_CONFIRM', '5,10'),
+        ],
+
+        // 2026-07-15-profile-edit-password-otp (ADR-2 + ADR-3): config
+        // surface consumed by `EmailOtpService` for the email-OTP
+        // password-change flow (`purpose=password_change`).
+        //
+        //   `length`       — PIN digits, 4..6. Default 6.
+        //   `ttl_seconds`  — code expiry. Default 600 (~10 min).
+        //   `max_attempts` — confirm attempt cap before the code locks.
+        //   `throttle.*`   — request-side guard read by
+        //                    `EmailOtpService::isRequestThrottled()`,
+        //                    defense-in-depth OVER the route throttle
+        //                    above (the route throttle is IP/session
+        //                    keyed by Laravel; the service throttle is
+        //                    keyed by `(auth_scope, purpose, identifier)`
+        //                    so it survives across IPs/sessions for the
+        //                    same account).
+        'otp' => [
+            'length' => (int) env('MK_AUTH_OTP_LENGTH', 6),
+            'ttl_seconds' => (int) env('MK_AUTH_OTP_TTL_SECONDS', 600),
+            'max_attempts' => (int) env('MK_AUTH_OTP_MAX_ATTEMPTS', 5),
+            'throttle' => [
+                'max' => (int) env('MK_AUTH_OTP_THROTTLE_MAX', 3),
+                'window_seconds' => (int) env('MK_AUTH_OTP_THROTTLE_WINDOW', 600),
+            ],
         ],
 
         // F1.3 (LAR-02 + LAR-08 + XPK-12 HIGH) — Real auth config merge.

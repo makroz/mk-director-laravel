@@ -5,6 +5,47 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [UNRELEASED] — Email-OTP password change + widened profile update (SDD `2026-07-15-profile-edit-password-otp`)
+
+> **Added**: full email-OTP password-change engine.
+>   - New `verification_codes` table (migration, skips if it already exists
+>     per `Schema::hasTable`).
+>   - `Auth\Services\EmailOtpService`: `issue()` (hashed PIN via
+>     `Hash::make`, never persisted/logged in plaintext), `verify()`
+>     (returns `OtpVerifyResult`: Confirmed/Invalid/Expired/Locked/NotFound),
+>     `isRequestThrottled()`, `prune()`.
+>   - `BaseAuthController::requestPasswordCode()` / `confirmPasswordCode()`:
+>     401 unauthenticated, 429 throttled, verdict→422/410/423 mapping,
+>     dispatches `auth.password_change_code.requested` /
+>     `auth.password_changed` events.
+>   - New unconditional routes in `auth-user.routes.stub`:
+>     `password/code/request` + `password/code/confirm`, each with its own
+>     throttle middleware.
+>   - New config block `mk_director.auth.otp.*` + 2 rate-limit keys.
+>
+> **Changed**: `MakeAuthUserCommand::buildUpdateProfileMethod()` widened —
+> `name`(sometimes), `phone`(sometimes/nullable),
+> `email`(sometimes/unique ignoring self), `avatar`(sometimes/file/image,
+> `max:4096`) wired through `FileStoragePlugin`; return standardized via
+> `me()`.
+>
+> **Fixed**: `getAvatarUrlAttribute()` emission gap — `detectFileFields()`
+> at the scaffolder's top-level `handle()` was fed the flat
+> `$profileFields` map instead of `$profileFieldsRaw` (meta arrays) and
+> silently returned `[]`, so `{{fileFieldsAccessors}}` /
+> `{{fileFieldsFillableEntries}}` were always empty for any scope without
+> `--with-crud`. Fixed by computing `$fileFieldNames` once and reusing it
+> everywhere.
+>
+> **Fixed**: `AuthUser::setAuthPassword()` was called by
+> `resetPassword()`/`changePassword()`/`confirmPasswordCode()` but never
+> existed on the model (pre-existing bug, predates this change). Added
+> `setAuthPassword(string $password): void` using `getAuthPasswordName()` +
+> `save()`, relying on the existing `'password' => 'hashed'` cast.
+>
+> **Upgrade note**: run `php artisan migrate` on upgrade to create the
+> `verification_codes` table.
+
 ## [UNRELEASED] — `--kind=manager|consumer` scope kind (F10-B08, FEEDBACK10 RETO pilot)
 
 > **Added**: `mk:make:auth-user {Scope} --kind=manager|consumer` (default

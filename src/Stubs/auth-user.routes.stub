@@ -58,6 +58,14 @@ Route::prefix('api/{{moduleNameLower}}/auth')->group(function () {
         Route::post('logout-all', [AuthController::class, 'logoutAll']);
         Route::get('me', [AuthController::class, 'me']);
         Route::post('password/change', [AuthController::class, 'changePassword']);
+        // 2026-07-15-profile-edit-password-otp (ADR-3): unconditional —
+        // every scaffolded scope gets OTP password-change for free (like
+        // logout/me), not gated behind a flag. Both methods live on
+        // BaseAuthController (inherited, zero new command branches).
+        Route::post('password/code/request', [AuthController::class, 'requestPasswordCode'])
+            ->middleware('throttle:'.config('mk_director.auth.rate_limits.password_code_request', '3,10'));
+        Route::post('password/code/confirm', [AuthController::class, 'confirmPasswordCode'])
+            ->middleware('throttle:'.config('mk_director.auth.rate_limits.password_code_confirm', '5,10'));
         {{updateProfileRoute}}
     });
 });

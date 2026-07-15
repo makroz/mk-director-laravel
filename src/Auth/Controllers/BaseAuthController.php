@@ -17,7 +17,9 @@ use Illuminate\Validation\Rule;
 use Mk\Director\Auth\Attributes\Ability;
 use Mk\Director\Auth\Events\AuthEvent;
 use Mk\Director\Auth\Models\AuthUser;
+use Mk\Director\Auth\Services\EmailOtpService;
 use Mk\Director\Auth\Services\InvalidRefreshTokenException;
+use Mk\Director\Auth\Services\OtpVerifyResult;
 use Mk\Director\Auth\Services\TokenIssuer;
 use Mk\Director\Controllers\BaseController;
 
@@ -734,6 +736,147 @@ abstract class BaseAuthController extends BaseController
     }
 
     /**
+     * POST /api/{scope}/auth/password/code/request
+     *
+     * Auth: `mk.auth:{scope}` (per-route).
+     * Ability: `mk.ability:{scope}.auth.password-code-request` (per-route).
+     *
+     * Spec: 2026-07-15-profile-edit-password-otp, ADR-2 + ADR-3 (design.md).
+     *
+     * Solicita un código OTP por email para cambiar la contraseña del user
+     * autenticado (alternativa a `password/change`, que pide la contraseña
+     * actual). Thin: delega TODA la mecánica de generar/hashear/persistir/
+     * throttle a `EmailOtpService` — este método solo orquesta.
+     *
+     * `identifier` (R1, design.md): se usa `getAuthIdentifier()` (el id del
+     * user), NO el valor de `loginField()`. Decisión pineada en esta tarea:
+     * el endpoint YA está autenticado (no hace falta un lookup por
+     * loginField como en `forgotPassword()`), y el id es estable aunque el
+     * email cambie a mitad de flujo (ADR-5 widened profile permite editar
+     * email) — evita que un cambio de email invalide un código en vuelo o
+     * cause una colisión de identifier entre cuentas.
+     *
+     * Respuesta genérica (no filtra estado interno): 200 con `expires_at`
+     * SIEMPRE que el user esté autenticado y no esté throttled.
+     */
+    #[Ability('{scope}.auth.password-code-request', 'Solicitar código de cambio de contraseña en {scope}')]
+    public function requestPasswordCode(Request $request): JsonResponse
+    {
+        /** @var Authenticatable $user */
+        $user = $request->user();
+        if (! $user instanceof Authenticatable) {
+            return $this->sendError('No autenticado.', [], 401, 'ERR_UNAUTHENTICATED');
+        }
+
+        $scope = $this->authScope();
+        $identifier = (string) $user->getAuthIdentifier();
+
+        if ($this->emailOtpService()->isRequestThrottled($scope, 'password_change', $identifier)) {
+            return $this->sendError(
+                'Demasiadas solicitudes. Esperá antes de volver a intentar.',
+                [],
+                429,
+                'ERR_THROTTLED',
+            );
+        }
+
+        $result = $this->emailOtpService()->issue($scope, 'password_change', $identifier);
+
+        $this->dispatchAuthEventSafe('auth.password_change_code.requested', [
+            'scope' => $scope,
+            'user_id' => (string) $user->getAuthIdentifier(),
+            'code' => $result->plainCode,  // plaintext — SOLO viaja acá, el listener lo envía por email.
+            'expires_at' => $result->expiresAt->toIso8601String(),
+            'ip' => $request->ip(),
+        ]);
+
+        return $this->sendResponse(
+            ['expires_at' => $result->expiresAt->toIso8601String()],
+            'Código enviado.',
+        );
+    }
+
+    /**
+     * POST /api/{scope}/auth/password/code/confirm
+     *
+     * Auth: `mk.auth:{scope}` (per-route).
+     * Ability: `mk.ability:{scope}.auth.password-code-confirm` (per-route).
+     *
+     * Spec: 2026-07-15-profile-edit-password-otp, ADR-2 + ADR-3 (design.md).
+     *
+     * Body: `{code, password, password_confirmation}`. NO pide
+     * `current_password` — el PIN reemplaza esa prueba en este flujo.
+     * `EmailOtpService::verify()` es el único lugar que decide el veredicto;
+     * este método solo mapea el enum a códigos HTTP.
+     */
+    #[Ability('{scope}.auth.password-code-confirm', 'Confirmar código y cambiar contraseña en {scope}')]
+    public function confirmPasswordCode(Request $request): JsonResponse
+    {
+        /** @var Authenticatable $user */
+        $user = $request->user();
+        if (! $user instanceof Authenticatable) {
+            return $this->sendError('No autenticado.', [], 401, 'ERR_UNAUTHENTICATED');
+        }
+
+        $data = $request->validate([
+            'code' => ['required', 'string'],
+            'password' => ['required', 'string', 'min:8', 'max:255', 'confirmed'],
+        ]);
+
+        $scope = $this->authScope();
+        $identifier = (string) $user->getAuthIdentifier();
+
+        $verdict = $this->emailOtpService()->verify($scope, 'password_change', $identifier, $data['code']);
+
+        if ($verdict !== OtpVerifyResult::Confirmed) {
+            return match ($verdict) {
+                OtpVerifyResult::Expired => $this->sendError(
+                    'Código expirado.',
+                    [],
+                    410,
+                    'ERR_CODE_EXPIRED',
+                ),
+                OtpVerifyResult::Locked => $this->sendError(
+                    'Demasiados intentos. Solicitá un nuevo código.',
+                    [],
+                    423,
+                    'ERR_CODE_LOCKED',
+                ),
+                // Invalid | NotFound → mensaje genérico, sin distinguir el motivo
+                // (anti-oracle: no filtrar si el código nunca existió, ya expiró
+                // por otra vía, o fue consumido).
+                default => $this->sendError(
+                    'Código inválido.',
+                    ['code' => ['Código inválido.']],
+                    422,
+                    'ERR_VALIDATION',
+                ),
+            };
+        }
+
+        $revokeOthers = (bool) config('mk_director.auth.password_change.revoke_other_sessions', true);
+
+        DB::transaction(function () use ($user, $data, $revokeOthers) {
+            $user->setAuthPassword((string) $data['password']);
+
+            if ($revokeOthers && method_exists($user, 'tokens')) {
+                $currentToken = method_exists($user, 'currentAccessToken')
+                    ? $user->currentAccessToken()
+                    : null;
+                $user->tokens()->where('id', '!=', $currentToken?->id)->delete();
+            }
+        });
+
+        $this->dispatchAuthEventSafe('auth.password_changed', [
+            'scope' => $scope,
+            'user_id' => (string) $user->getAuthIdentifier(),
+            'ip' => $request->ip(),
+        ]);
+
+        return $this->sendResponse(true, 'Contraseña actualizada.');
+    }
+
+    /**
      * GET /api/{scope}/auth/email/verify/{id}/{hash}
      *
      * Auth: signed URL (sin middleware mk.auth; verificación via `hasValidSignature()`).
@@ -831,6 +974,18 @@ abstract class BaseAuthController extends BaseController
     protected function tokenIssuer(): TokenIssuer
     {
         return app(TokenIssuer::class);
+    }
+
+    /**
+     * Resolve EmailOtpService desde container (singleton, AuthServiceProvider).
+     *
+     * Spec: 2026-07-15-profile-edit-password-otp, ADR-2 (design.md) —
+     * mirrors `tokenIssuer()`. Subclase puede override para inyectar un
+     * service custom (e.g. tests).
+     */
+    protected function emailOtpService(): EmailOtpService
+    {
+        return app(EmailOtpService::class);
     }
 
     /**

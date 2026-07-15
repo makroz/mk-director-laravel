@@ -341,6 +341,30 @@ class MakeAuthUserCommand extends Command
             $profileFields[$key] = $meta['type'];
         }
 
+        // ADR-5/ADR-6 (ph3, 2026-07-15) BUG FIX — `detectFileFields()` expects
+        // meta ARRAYS (`['type' => 'file', ...]`), not the flat `key => 'file'`
+        // string map built above. Pre-fix, the ONLY call site that fed the
+        // model-level placeholders (`{{fileFieldsFillableEntries}}` /
+        // `{{fileFieldsAccessors}}`, see `$fileFieldsBaseReplacements` below)
+        // passed the FLAT `$profileFields` map, so `$meta['is_file']` /
+        // `$meta['type']` always resolved against a plain string (PHP treats
+        // `'file'['type']` as an unset offset), making `detectFileFields()`
+        // return `[]` UNCONDITIONALLY regardless of `--profile-fields=avatar:file`.
+        // Net effect: `getAvatarUrlAttribute()` was NEVER emitted in the
+        // generated model (FEEDBACK10 gap referenced in design ADR-5/ADR-6) —
+        // the CRUD pack path (`generateCrudPack()`) was unaffected because it
+        // receives `$profileFieldsRaw` (meta arrays) under its own local
+        // `$profileFields` parameter name, so `--with-crud` scopes with a
+        // `:file` field DID get correct accessors; scopes WITHOUT `--with-crud`
+        // (the default, e.g. RETO's hand-scaffolded Member) never did — matching
+        // exactly why RETO had to hand-write `getAvatarUrlAttribute()`.
+        //
+        // Fix: compute once from `$profileFieldsRaw` (meta arrays) and reuse
+        // this single value everywhere a file-field list is needed (model
+        // placeholders below AND `buildUpdateProfileMethod()`), removing the
+        // duplicate/buggy `detectFileFields($profileFields)` call further down.
+        $fileFieldNames = $this->detectFileFields($profileFieldsRaw);
+
         // --verify-email solo aplica cuando --login-field=email (no tiene sentido
         // verificar un campo que no es email). Si se pidió con loginField != email,
         // log warning y desactivamos (R-PKG-011 ADR-009 simplificación).
@@ -675,11 +699,22 @@ PHP,
         }
 
         if (! empty($profileFields)) {
+            // ADR-5 (2026-07-15) — buildUpdateProfileMethod() no longer consumes
+            // the pre-exported `$profileRulesPhp` string; it rebuilds the
+            // validation rules itself from the raw field metadata so it can
+            // special-case `email` (format + unique-ignoring-self) and file
+            // fields (real `file`/`image` validation + FileStoragePlugin wiring)
+            // instead of the generic `['nullable', 'string']` rule shared with
+            // register()/CRUD. `$profileRulesPhp` stays untouched/used for
+            // register() (line ~615) — BC preserved there.
             $profileFieldsReplacements['{{updateProfileMethod}}'] = $this->buildUpdateProfileMethod(
                 $scope,
                 $scopeLower,
                 $loginField,
-                $profileRulesPhp,
+                $profileFieldsRaw,
+                $requiredFields,
+                $fileFieldNames,
+                $scopePlural,
             );
             $profileFieldsReplacements['{{updateProfileRoute}}'] = "\n        Route::patch('me', [AuthController::class, 'updateProfile']);";
         } else {
@@ -805,7 +840,14 @@ PHP,
         // `{{fileFieldsDeleteOldPipeline}}`, `{{fileFieldsValidationStore}}`,
         // `{{fileFieldsValidationUpdate}}`) se quedan en `$crudReplacements` —
         // solo se usan en stubs del CRUD pack.
-        $fileFieldNames = $this->detectFileFields($profileFields);
+        //
+        // ADR-5/ADR-6 (ph3, 2026-07-15): `$fileFieldNames` ya se computó arriba
+        // (ver bloque cerca de `$profileFields = []`) desde `$profileFieldsRaw`
+        // (meta arrays) — el bug real era que ESTE call site pasaba la versión
+        // FLAT `$profileFields` (`key => 'file'` string), que `detectFileFields()`
+        // no puede leer (espera `$meta['type']`), así que retornaba `[]` siempre
+        // y `{{fileFieldsAccessors}}` nunca emitía `getAvatarUrlAttribute()`.
+        // No recomputar acá — reusar el valor correcto.
         $fileFieldsBaseReplacements = [
             '{{fileFieldsFillableEntries}}' => $this->buildFileFieldsFillableEntries($fileFieldNames),
             '{{fileFieldsAccessors}}' => $this->buildFileFieldsAccessors($fileFieldNames),
@@ -4598,8 +4640,130 @@ PHP;
      * Solo se genera cuando `--profile-fields` está activo. Valida y actualiza
      * los profile fields del user autenticado.
      */
-    protected function buildUpdateProfileMethod(string $scope, string $scopeLower, string $loginField, string $rulesPhp): string
-    {
+    /**
+     * ADR-5 (design `2026-07-15-profile-edit-password-otp`) — widen the
+     * scaffolded `updateProfile()` so it safely accepts `name`/`phone`/`email`
+     * changes and an `avatar` (or any other `:file` field) upload, without
+     * regressing scopes that don't use those fields.
+     *
+     * Pre-ADR-5, this method received a pre-exported `$rulesPhp` string
+     * (built by `buildProfileFieldsReplacements()`) shared with `register()`.
+     * That string used the generic `PROFILE_FIELD_TYPES` validation per type
+     * (`['nullable', 'string']` for `file` fields — no real upload validation;
+     * no `email` format/uniqueness check at all). Post-ADR-5, this method
+     * rebuilds validation from the raw field metadata so it can special-case:
+     *
+     *   - `name`  → always `required` WHEN present (`sometimes` guards absence,
+     *     but an explicit empty name is still rejected — PATCH semantics).
+     *   - `email` → format + `Rule::unique(...)->ignore($user->getKey())` so a
+     *     duplicate email is a 422 `ValidationException`, not a 500 DB
+     *     integrity violation (mirrors the `register()`/CRUD store contract).
+     *   - file fields (`:file` suffix, e.g. `avatar`) → real `file`/`image`
+     *     validation (`['sometimes', 'file', 'image', 'max:4096']`) PLUS
+     *     `PluginManager::fireBeforeSave()` wiring so `FileStoragePlugin`
+     *     actually uploads the file and writes the stored path into `$data`
+     *     before `$user->update()` — pre-ADR-5 this never ran on `updateProfile`
+     *     (only CRUDSmart's store/update called it), so avatar uploads via
+     *     `PATCH /me` silently persisted the raw `UploadedFile` string cast.
+     *   - any other custom profile field → generic type validation, now
+     *     `sometimes`-guarded (was `nullable`-only — functionally similar for
+     *     an absent key, but `sometimes` is the semantically-correct PATCH
+     *     guard and is what fixes the `email`/file special cases above).
+     *
+     * Every rule is `sometimes`-guarded — a STRICT SUPERSET of the pre-ADR-5
+     * behavior: any request that validated before still validates (no field
+     * became MORE required unless it already was via `--profile-fields-required`,
+     * except `name`, which is now always-required-when-present by design).
+     *
+     * Returns via `$this->me($request)` (BaseAuthController's canonical `/me`
+     * envelope) instead of a bespoke `only([...])` shape — standardizes the
+     * response the same way RETO's hand-written override already did.
+     *
+     * @param  array<string, array{type: string, unique: bool}>  $profileFields  Raw metadata (see `$profileFieldsRaw`).
+     * @param  array<string, bool>  $requiredFields  Keys from `--profile-fields-required`.
+     * @param  array<int, string>  $fileFieldNames  Keys detected as `:file` (see `detectFileFields()`).
+     */
+    protected function buildUpdateProfileMethod(
+        string $scope,
+        string $scopeLower,
+        string $loginField,
+        array $profileFields,
+        array $requiredFields,
+        array $fileFieldNames,
+        string $scopePlural,
+    ): string {
+        $rulesLines = '';
+        foreach ($profileFields as $key => $meta) {
+            if (in_array($key, $fileFieldNames, true)) {
+                // File fields: real upload validation. The generic
+                // `PROFILE_FIELD_TYPES['file']['validation']` (`['nullable','string']`)
+                // stays untouched for register()/CRUD — this is `updateProfile`-only.
+                $rulesLines .= "            '{$key}' => ['sometimes', 'file', 'image', 'max:4096'],\n";
+
+                continue;
+            }
+
+            if ($key === 'name') {
+                // Never allow blanking the name once present in the request.
+                $rulesLines .= "            '{$key}' => ['sometimes', 'required', 'string', 'max:255'],\n";
+
+                continue;
+            }
+
+            if ($key === 'email') {
+                // Covers both cases: `email` as the loginField itself, and the
+                // default contact `email` field when loginField !== 'email'.
+                // Ignoring the current row by primary key is what makes this
+                // safe on update (vs. `register()`'s plain `unique:table,column`).
+                $isRequired = isset($requiredFields[$key]);
+                $requiredRule = $isRequired ? 'required' : 'nullable';
+                $rulesLines .= "            '{$key}' => ['sometimes', '{$requiredRule}', 'email', 'max:255', \\Illuminate\\Validation\\Rule::unique('{$scopePlural}', 'email')->ignore(\$user->getKey())],\n";
+
+                continue;
+            }
+
+            $type = $meta['type'] ?? 'string';
+            $config = self::PROFILE_FIELD_TYPES[$type] ?? self::PROFILE_FIELD_TYPES['string'];
+            $baseRules = $config['validation'];
+            if (isset($requiredFields[$key]) && $baseRules[0] === 'nullable') {
+                $baseRules[0] = 'required';
+            }
+            $rulesExport = "'".implode("', '", $baseRules)."'";
+            $rulesLines .= "            '{$key}' => ['sometimes', {$rulesExport}],\n";
+        }
+
+        $rulesPhp = "[\n{$rulesLines}        ]";
+
+        // FileStoragePlugin wiring — ONLY emitted when the scope actually has
+        // a `:file` profile field. Scopes without one get byte-identical
+        // `updateProfile()` bodies to a version without this block (no dead
+        // `PluginManager` resolution for scopes that never upload files).
+        $fileStorageWiring = '';
+        if ($fileFieldNames !== []) {
+            $fieldsMap = $this->buildFileFieldsConfig($fileFieldNames);
+            $fieldsPhp = $this->arrayLiteral($fieldsMap, 4);
+            $fileStorageWiring = <<<PHP
+
+
+        // ADR-5/ADR-6 — wire FileStoragePlugin so uploaded files land on disk
+        // and \$data[<field>] receives the persisted path BEFORE \$user->update().
+        // Mirrors the CRUDSmart::store()/update() wiring (PluginManager::fireBeforeSave),
+        // which `updateProfile()` never called pre-ADR-5 (AuthController isn't a
+        // CRUDSmart controller — this endpoint needs its own explicit call).
+        \$pluginManager = app(\\Mk\\Director\\Managers\\PluginManager::class);
+        \$pluginManager->setControllerConfig([
+            'plugins_config' => [
+                'file_storage' => [
+                    'fields' => {$fieldsPhp},
+                    'disk' => 'public',
+                    'path' => 'uploads/{$scopeLower}',
+                ],
+            ],
+        ]);
+        \$pluginManager->fireBeforeSave(\$request, \$data, 'update');
+PHP;
+        }
+
         // Render inline (no nowdoc) para que las variables se interpoleen.
         $code = <<<PHP
 
@@ -4609,22 +4773,21 @@ PHP;
      * Actualiza los profile fields del {$scope} autenticado.
      *
      * R-PKG-011: solo existe si el scope fue generado con `--profile-fields`.
+     * ADR-5 (2026-07-15): reglas `sometimes`-guarded — PATCH real, solo lo que
+     * venga en el body se valida/actualiza. `email` valida formato + unicidad
+     * ignorando la fila propia; los file fields (`avatar`, etc.) validan como
+     * archivo real y se suben vía FileStoragePlugin.
      * Para custom validation (regex CI, date format, etc.), override este método
      * en la subclase generada.
-     *
-     * BC: NO existe en v1.5.0-rc4 (este método es opt-in via flag).
      */
     public function updateProfile(\\Illuminate\\Http\\Request \$request): \\Illuminate\\Http\\JsonResponse
     {
         \$user = \$request->user();
         \$data = \$request->validate({$rulesPhp});
-
+{$fileStorageWiring}
         \$user->update(\$data);
 
-        return \$this->sendResponse(
-            \$user->fresh()->only(['id', 'name', '{$loginField}']),
-            'Perfil actualizado.',
-        );
+        return \$this->me(\$request);
     }
 
 PHP;

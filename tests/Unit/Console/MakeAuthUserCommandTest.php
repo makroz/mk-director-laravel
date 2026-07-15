@@ -216,6 +216,34 @@ test('auth-user routes stub uses mk.auth:{scope} middleware for protected endpoi
     expect($source)->toContain('resetPassword');
 });
 
+// 2026-07-15-profile-edit-password-otp Phase 2.4/2.6 — the two OTP
+// password-change routes are UNCONDITIONAL additions to the protected
+// group (like `logout`/`me`), each with its own throttle middleware
+// reading `mk_director.auth.rate_limits.password_code_*`. `password/change`
+// must still be present (additive proof, no regression).
+test('auth-user routes stub pins password/code/request + password/code/confirm inside the protected group, each with its own throttle', function () {
+    $source = stubSource('auth-user.routes.stub');
+
+    expect($source)->toContain('Route::post(\'password/code/request\'');
+    expect($source)->toContain('requestPasswordCode');
+    expect($source)->toContain('Route::post(\'password/code/confirm\'');
+    expect($source)->toContain('confirmPasswordCode');
+
+    expect($source)->toContain("config('mk_director.auth.rate_limits.password_code_request', '3,10')");
+    expect($source)->toContain("config('mk_director.auth.rate_limits.password_code_confirm', '5,10')");
+
+    // Still present — additive, no regression on the existing endpoint.
+    expect($source)->toContain('Route::post(\'password/change\'');
+    expect($source)->toContain('changePassword');
+
+    // Both new routes live INSIDE the protected `mk.auth:{{moduleNameLower}}` group.
+    $protectedGroupStart = strpos($source, "Route::middleware('mk.auth:{{moduleNameLower}}')");
+    expect($protectedGroupStart)->not->toBeFalse();
+    $protectedGroupBody = substr($source, $protectedGroupStart);
+    expect($protectedGroupBody)->toContain('password/code/request');
+    expect($protectedGroupBody)->toContain('password/code/confirm');
+});
+
 // ── ServiceProvider stub ────────────────────────────────────────────────
 
 test('auth-user service-provider stub loads routes and migrations for the scope', function () {
