@@ -183,6 +183,36 @@ abstract class AuthUser extends Authenticatable implements AuthenticatableContra
     ];
 
     /**
+     * Setter explícito para el password del usuario, complemento de
+     * `getAuthPassword()` (contrato `Authenticatable`, solo lectura).
+     *
+     * BUG FIX (2026-07-15-profile-edit-password-otp Phase 5): `resetPassword()`,
+     * `changePassword()` y `confirmPasswordCode()` en `BaseAuthController`
+     * llaman `$user->setAuthPassword($plain)` desde siempre (`resetPassword`/
+     * `changePassword` son pre-existentes, `confirmPasswordCode` es Phase 2 de
+     * este spec) pero el método NUNCA existió en `AuthUser` — cualquier
+     * consumer que ejecutara esos 3 endpoints contra un modelo real explotaba
+     * con `BadMethodCallException`. Descubierto vía el feature test de scope
+     * parity de RETO (`PasswordOtpScopeParityTest`), que fue el primer test
+     * end-to-end del repo en golpear `confirmPasswordCode()` con un modelo
+     * Eloquent real (los tests previos de `EmailOtpService`/`AuthUserCompleteFlowE2ETest`
+     * corren contra fixtures/mocks que no ejercitan este call site, o
+     * cubren solo hasta el veredicto sin llegar al `DB::transaction` que
+     * persiste el nuevo password).
+     *
+     * Asigna el valor CRUDO (sin `Hash::make()` acá) porque `$casts['password']
+     * = 'hashed'` (línea de arriba) ya hashea automáticamente al asignar —
+     * llamar `Hash::make()` acá causaría doble-hash y rompería el login
+     * subsecuente. `save()` persiste inmediatamente (los 3 call sites ya
+     * corren dentro de `DB::transaction`).
+     */
+    public function setAuthPassword(string $password): void
+    {
+        $this->setAttribute($this->getAuthPasswordName(), $password);
+        $this->save();
+    }
+
+    /**
      * Devuelve el scope del usuario. Null significa que el user fue
      * mal creado y el login debe rechazarse (Capa 1 de la spec).
      */
