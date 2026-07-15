@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Mk\Director\Auth\Events;
 
 use Illuminate\Foundation\Events\Dispatchable;
+use Mk\Director\Plugins\Enterprise\MkAuditLoggerPlugin;
 
 /**
  * AuthEvent — evento emitido por el AuthController cuando `--with-auth-rbac`
@@ -23,12 +24,22 @@ use Illuminate\Foundation\Events\Dispatchable;
  * | `auth.refresh.success`        | `{user_id, ip}`                                             |
  * | `auth.password_reset.requested` | `{email, ip}` (login field value, sin importar nombre)    |
  * | `auth.password_reset.success` | `{user_id}`                                                 |
+ * | `auth.password_change_code.requested` | `{scope, user_id, code, expires_at, ip}` ⚠️ ver abajo |
+ * | `auth.password_changed`       | `{user_id, ip}`                                             |
  *
  * ## Privacidad / seguridad
  *
  * **NUNCA** se loggea el password (ni hasheado, ni plano). El payload se
  * sanitiza en el AuthController antes de emitir el evento. Ver
  * `R-PKG-010 ACR-004 anti-patterns`.
+ *
+ * ⚠️ **`auth.password_change_code.requested` transporta el PIN en claro**
+ * (`payload['code']`). Es el ÚNICO punto donde el PIN existe en texto plano:
+ * viaja SOLO para que el listener de email lo despache al usuario. Un listener
+ * que consuma este evento **NUNCA** debe loggearlo, persistirlo, ni reenviarlo
+ * a un canal de auditoría — sería equivalente a loggear una credencial. En DB
+ * el código vive únicamente hasheado (bcrypt) en `verification_codes`.
+ * El `MkAuditLoggerPlugin` solo audita eventos CRUD, no consume este evento.
  *
  * ## Uso
  *
@@ -52,7 +63,7 @@ use Illuminate\Foundation\Events\Dispatchable;
  *
  * Spec: R-PKG-010 § ACR-004 — Audit log automático.
  *
- * @see \Mk\Director\Plugins\Enterprise\MkAuditLoggerPlugin listener opcional.
+ * @see MkAuditLoggerPlugin listener opcional.
  */
 final class AuthEvent
 {
