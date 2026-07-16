@@ -51,6 +51,12 @@ Route::prefix('api/{{moduleNameLower}}/auth')->group(function () {
     Route::post('refresh', [AuthController::class, 'refresh']);
     {{registerRoute}}Route::post('password/forgot', [AuthController::class, 'forgotPassword']){{rbacForgotThrottle}};
     Route::post('password/reset', [AuthController::class, 'resetPassword']){{rbacResetThrottle}};
+    // forgot-vía-OTP: variante por PIN de 6 dígitos del reset (públicas, como
+    // forgot/reset). Reusan EmailOtpService con purpose='password_reset'.
+    Route::post('password/reset/code/request', [AuthController::class, 'requestPasswordResetCode'])
+        ->middleware('throttle:'.config('mk_director.auth.rate_limits.password_reset_code_request', '3,10'));
+    Route::post('password/reset/code/confirm', [AuthController::class, 'confirmPasswordResetCode'])
+        ->middleware('throttle:'.config('mk_director.auth.rate_limits.password_reset_code_confirm', '5,10'));
 {{emailVerifyRoutes}}
     // ── Protegidas (auth: scope) ────────────────────────────────────
     Route::middleware('mk.auth:{{moduleNameLower}}'){{verifiedMiddleware}}->group(function () {

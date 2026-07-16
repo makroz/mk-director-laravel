@@ -2198,6 +2198,48 @@ Todo env-overridable:
 
 `MakeAuthUserCommand::detectFileFields()` recibía el mapa plano `key => 'file'` en vez de los meta-arrays de `$profileFieldsRaw`, así que `getAvatarUrlAttribute` **nunca se emitía** salvo que se pasara `--with-crud` (raíz de que los consumers terminaran escribiendo a mano un accessor de avatar). **Ya está fijo**: el accessor se emite con `--profile-fields` solo. `buildUpdateProfileMethod` se amplió al superset estricto de §3.18.1 (cada regla `sometimes`-guardada, BC-safe).
 
+#### 3.18.8 "Olvidé mi contraseña" por PIN (reset OTP, flujo NO autenticado)
+
+> **Source**: mismo motor de §3.18.1–3.18.2 (`EmailOtpService` + tabla genérica `verification_codes`), esta vez con `purpose='password_reset'`. Es la **variante PIN del flujo clásico de token** `password/forgot` + `password/reset` (ver §3.3): ambos coexisten (aditivo/BC). Aplica cuando el usuario **no está logueado** y no recuerda su contraseña.
+
+A diferencia de §3.18 (usuario autenticado, el PIN es una segunda prueba sobre el guard), acá **no hay sesión**: los dos endpoints son **públicos** y se emiten **incondicionalmente** en la sección PUBLIC del stub de rutas auth-user, al lado de `password/forgot`/`password/reset`. Los métodos viven en `BaseAuthController` y los hereda cada wrapper thin scaffoldeado, igual que el resto de los métodos auth.
+
+| Endpoint | Método base | Body | Éxito | Errores |
+|---|---|---|---|---|
+| `POST password/reset/code/request` | `BaseAuthController::requestPasswordResetCode()` | `{<loginField>}` (ej. `email`) | `200` genérico (ver abajo) | — (nunca 429 por cuenta) |
+| `POST password/reset/code/confirm` | `confirmPasswordResetCode()` | `{<loginField>, code, password, password_confirmation}` | `200` `data: true` | `410` `ERR_CODE_EXPIRED` · `423` `ERR_CODE_LOCKED` · `422` `ERR_VALIDATION` `"Código inválido."` |
+
+**`POST password/reset/code/request`** — recibe el `loginField` (típicamente `email`). Emite un PIN nuevo (`EmailOtpService` con `purpose='password_reset'`) y despacha `auth.password_reset_code.requested` con payload `{scope, user_id, code, expires_at, ip}` (`code` = PIN en plano, ver aviso en §3.18.5).
+
+> **Anti-enumeration**: SIEMPRE devuelve un `200` genérico — `"Si el {loginField} existe, recibirás un código para restablecer tu contraseña."` — exista o no la cuenta, **y también cuando el throttle a nivel cuenta dispararía** (`isRequestThrottled` NO emite `429` acá: el corte de cuenta es **silencioso**, para no filtrar existencia). El abuso por IP lo corta el `throttle:` de ruta (default `3,10`), que es **por IP** y por eso no revela si la cuenta existe.
+
+**`POST password/reset/code/confirm`** — validación: `code` `required|string`; `password` `required|string|min:8|max:255|confirmed`. Resuelve el usuario por `loginField`. `EmailOtpService::verify(purpose='password_reset')` es la **fuente única** del verdict; el controller solo mapea enum → HTTP:
+
+| Verdict | HTTP | Código | Mensaje |
+|---|---|---|---|
+| `Confirmed` | `200` | — | `data: true` |
+| `Expired` | `410` | `ERR_CODE_EXPIRED` | — |
+| `Locked` | `423` | `ERR_CODE_LOCKED` | — |
+| `Invalid` / `NotFound` / usuario desconocido | `422` | `ERR_VALIDATION` | `"Código inválido."` (genérico) |
+
+> **Anti-enumeration + anti-oracle**: un email desconocido colapsa al **MISMO** `422` genérico que un código equivocado — nunca revela si la cuenta existe ni si tenía un código vivo.
+
+En éxito corre dentro de `DB::transaction`: `setAuthPassword()` (ver §3.18.4) y **revoca TODOS los tokens Sanctum** del usuario — un reset lo **desloguea en todos lados** (no hay `currentAccessToken` en el flujo no autenticado). Luego despacha `auth.password_reset.success`. Throttle de ruta default `5,10`.
+
+**Eventos** (email desacoplado, mismo patrón que §3.18.5):
+
+| Evento | Payload | Notas |
+|---|---|---|
+| `auth.password_reset_code.requested` | `{scope, user_id, code, expires_at, ip}` | ⚠️ `code` es el **PIN en PLANO** — el consumer cablea un Mailable + listener; NUNCA loguear/persistir/reenviar. |
+| `auth.password_reset.success` | — | Reset efectivo. |
+
+**Config** (`config/mk_director.php` → `auth.rate_limits`; el bloque `otp.*` es compartido con el flujo autenticado de §3.18.6):
+
+| Clave | Default | Env |
+|---|---|---|
+| `rate_limits.password_reset_code_request` | `'3,10'` | `MK_AUTH_RATE_LIMIT_PWD_RESET_CODE_REQ` |
+| `rate_limits.password_reset_code_confirm` | `'5,10'` | `MK_AUTH_RATE_LIMIT_PWD_RESET_CODE_CONFIRM` |
+
 ---
 
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)

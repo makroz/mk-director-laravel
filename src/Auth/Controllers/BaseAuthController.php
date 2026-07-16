@@ -5,18 +5,14 @@ declare(strict_types=1);
 namespace Mk\Director\Auth\Controllers;
 
 use Illuminate\Contracts\Auth\Authenticatable;
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Foundation\Auth\User as AuthenticatableUser;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
-use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Mk\Director\Auth\Attributes\Ability;
 use Mk\Director\Auth\Events\AuthEvent;
-use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Auth\Services\EmailOtpService;
 use Mk\Director\Auth\Services\InvalidRefreshTokenException;
 use Mk\Director\Auth\Services\OtpVerifyResult;
@@ -877,6 +873,163 @@ abstract class BaseAuthController extends BaseController
     }
 
     /**
+     * POST /api/{scope}/auth/password/reset/code/request
+     *
+     * Auth: público (flujo NO autenticado — "olvidé mi contraseña").
+     * Ability: `mk.ability:{scope}.auth.password-reset-code-request` (per-route).
+     *
+     * Spec: 2026-07-15-profile-edit-password-otp, forgot-vía-OTP.
+     *
+     * Variante OTP del `forgotPassword()` clásico (que manda un token largo).
+     * Reusa `EmailOtpService` con `purpose='password_reset'` para emitir un PIN
+     * de 6 dígitos. A diferencia de `requestPasswordCode()` (autenticado, el
+     * identifier sale del token), acá el user NO está autenticado: se resuelve
+     * por `loginField()` y el `identifier` del OTP es su id estable.
+     *
+     * [SECURITY] Anti-enumeración: SIEMPRE responde 200 con el MISMO mensaje
+     * genérico —exista o no el user, esté o no throttled a nivel servicio— para
+     * no filtrar qué cuentas existen. El abuso por IP lo corta el `throttle:`
+     * de ruta (que devuelve 429 por IP, sin distinguir cuenta).
+     */
+    #[Ability('{scope}.auth.password-reset-code-request', 'Solicitar código de reset de contraseña en {scope}')]
+    public function requestPasswordResetCode(Request $request): JsonResponse
+    {
+        $loginField = $this->loginField();
+        $scope = $this->authScope();
+
+        $credentials = $request->validate([
+            $loginField => $loginField === 'email'
+                ? ['required', 'email', 'max:255']
+                : ['required', 'string', 'max:255'],
+        ]);
+
+        $genericOk = fn (): JsonResponse => $this->sendResponse(
+            null,
+            "Si el {$loginField} existe, recibirás un código para restablecer tu contraseña.",
+        );
+
+        /** @var Authenticatable|null $user */
+        $user = $this->authModelClass()::query()
+            ->where($loginField, $credentials[$loginField])
+            ->first();
+
+        if (! $user
+            || $user->getAuthScope() !== $scope
+            || ! $this->userHasValidStatus($user)
+        ) {
+            return $genericOk();
+        }
+
+        $identifier = (string) $user->getAuthIdentifier();
+
+        // Throttle silencioso: no filtra que la cuenta existe (no 429 acá).
+        if ($this->emailOtpService()->isRequestThrottled($scope, 'password_reset', $identifier)) {
+            return $genericOk();
+        }
+
+        $result = $this->emailOtpService()->issue($scope, 'password_reset', $identifier);
+
+        $this->dispatchAuthEventSafe('auth.password_reset_code.requested', [
+            'scope' => $scope,
+            'user_id' => $identifier,
+            'code' => $result->plainCode,  // plaintext — SOLO viaja acá, el listener lo envía por email.
+            'expires_at' => $result->expiresAt->toIso8601String(),
+            'ip' => $request->ip(),
+        ]);
+
+        return $genericOk();
+    }
+
+    /**
+     * POST /api/{scope}/auth/password/reset/code/confirm
+     *
+     * Auth: público (flujo NO autenticado).
+     * Ability: `mk.ability:{scope}.auth.password-reset-code-confirm` (per-route).
+     *
+     * Body: `{<loginField>, code, password, password_confirmation}`. Verifica el
+     * PIN vía `EmailOtpService::verify(purpose='password_reset')` y, si es
+     * válido, setea el nuevo password y revoca TODOS los tokens del user (es un
+     * reset: cerrar sesión en todos lados). `verify()` es la única fuente del
+     * veredicto; este método solo mapea a HTTP.
+     *
+     * [SECURITY] Anti-enumeración + anti-oracle: un user inexistente/ inválido
+     * colapsa al MISMO 422 genérico que un código incorrecto — no revela si la
+     * cuenta existe ni si tenía un código activo.
+     */
+    #[Ability('{scope}.auth.password-reset-code-confirm', 'Confirmar código de reset y cambiar contraseña en {scope}')]
+    public function confirmPasswordResetCode(Request $request): JsonResponse
+    {
+        $loginField = $this->loginField();
+        $scope = $this->authScope();
+
+        $data = $request->validate([
+            $loginField => $loginField === 'email'
+                ? ['required', 'email', 'max:255']
+                : ['required', 'string', 'max:255'],
+            'code' => ['required', 'string'],
+            'password' => ['required', 'string', 'min:8', 'max:255', 'confirmed'],
+        ]);
+
+        $invalid = fn (): JsonResponse => $this->sendError(
+            'Código inválido.',
+            ['code' => ['Código inválido.']],
+            422,
+            'ERR_VALIDATION',
+        );
+
+        /** @var Authenticatable|null $user */
+        $user = $this->authModelClass()::query()
+            ->where($loginField, $data[$loginField])
+            ->first();
+
+        if (! $user
+            || $user->getAuthScope() !== $scope
+            || ! $this->userHasValidStatus($user)
+        ) {
+            return $invalid();
+        }
+
+        $identifier = (string) $user->getAuthIdentifier();
+        $verdict = $this->emailOtpService()->verify($scope, 'password_reset', $identifier, $data['code']);
+
+        if ($verdict !== OtpVerifyResult::Confirmed) {
+            return match ($verdict) {
+                OtpVerifyResult::Expired => $this->sendError(
+                    'Código expirado.',
+                    [],
+                    410,
+                    'ERR_CODE_EXPIRED',
+                ),
+                OtpVerifyResult::Locked => $this->sendError(
+                    'Demasiados intentos. Solicitá un nuevo código.',
+                    [],
+                    423,
+                    'ERR_CODE_LOCKED',
+                ),
+                default => $invalid(),
+            };
+        }
+
+        DB::transaction(function () use ($user, $data) {
+            $user->setAuthPassword((string) $data['password']);
+
+            // Reset = cerrar sesión en TODOS lados (no hay currentAccessToken
+            // en el flujo no-autenticado).
+            if (method_exists($user, 'tokens')) {
+                $user->tokens()->delete();
+            }
+        });
+
+        $this->dispatchAuthEventSafe('auth.password_reset.success', [
+            'scope' => $scope,
+            'user_id' => $identifier,
+            'ip' => $request->ip(),
+        ]);
+
+        return $this->sendResponse(true, 'Contraseña actualizada.');
+    }
+
+    /**
      * GET /api/{scope}/auth/email/verify/{id}/{hash}
      *
      * Auth: signed URL (sin middleware mk.auth; verificación via `hasValidSignature()`).
@@ -1012,6 +1165,7 @@ abstract class BaseAuthController extends BaseController
             if ($isActive === false || $isActive === 0 || $isActive === '0') {
                 return false;
             }
+
             // null o true = permitido (compat con datos preexistentes).
             return true;
         }
