@@ -857,8 +857,51 @@ test('F10-B16: PluginManager::registerPlugins() skip non-string values (defense-
 // con el workaround explícito. Si alguien borra la sección, este test
 // falla (regression guard contra la knowledge regresión).
 
+/**
+ * Busca el SKILL.md canónico subiendo desde el paquete hasta encontrar el
+ * workspace `.makromania/`. Devuelve null si no está.
+ *
+ * El SKILL.md NO vive en este repo: vive en el workspace Makromania. Antes acá
+ * había la ruta ABSOLUTA de la máquina de Mario hardcodeada
+ * (`/Users/marioguzman/Desktop/...`), así que este test solo podía pasar en su
+ * notebook. En cualquier otro lado `file_get_contents` devolvía '' y el test
+ * fallaba. Nunca se notó porque el paquete no tenía CI.
+ */
+function findMakromaniaSkillMd(): ?string
+{
+    $dir = dirname(__DIR__, 3);
+
+    for ($i = 0; $i < 8; $i++) {
+        $candidate = $dir.'/.makromania/agency/skills/mk-director-laravel/SKILL.md';
+
+        if (file_exists($candidate)) {
+            return $candidate;
+        }
+
+        $parent = dirname($dir);
+
+        if ($parent === $dir) {
+            break;
+        }
+
+        $dir = $parent;
+    }
+
+    return null;
+}
+
 test('F10-B15: SKILL.md documenta gotcha de RefreshDatabase + SQLite in-memory', function () {
-    $skillPath = '/Users/marioguzman/Desktop/Makromania/.makromania/agency/skills/mk-director-laravel/SKILL.md';
+    $skillPath = findMakromaniaSkillMd();
+
+    if ($skillPath === null) {
+        // En CI (y en cualquier clon suelto del paquete) el workspace no está.
+        // Skip explícito en vez de un rojo que no dice nada: el guard tiene
+        // valor donde el archivo existe, y donde no, no hay nada que verificar.
+        test()->markTestSkipped(
+            'SKILL.md no encontrado: requiere el workspace .makromania/, que no forma parte de este repo.',
+        );
+    }
+
     $source = (string) file_get_contents($skillPath);
 
     // Pin 1: la sección F10-B15 existe.
