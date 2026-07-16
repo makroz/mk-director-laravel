@@ -18,3 +18,6 @@
 # corrida de CI resuelve distinto. La primera resolvió `pest 5.x-dev` (una
 # rama de desarrollo) + phpunit 13.2.3 y reventó, mientras local corría
 # 5.0.0-rc.10 + phpunit 13.1.8 en verde.
+
+# Cache de PHPUnit (cacheDirectory en phpunit.xml)
+.phpunit.cache/

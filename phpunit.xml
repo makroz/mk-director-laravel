@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="vendor/autoload.php"
+         colors="true"
+         cacheDirectory=".phpunit.cache">
+    <!--
+        UNA sola testsuite sobre `tests/`, a propósito.
+
+        Lo natural sería partirla en Unit + Feature, pero eso cambia el ORDEN
+        de ejecución y destapa un test order-dependiente:
+        `Tests\Unit\Auth\BugNew31MkBelongsToManyTest` revienta con "Call to a
+        member function connection() on null" — depende de que OTRO test haya
+        booteado antes el resolver de Eloquent (el Capsule de
+        MkLaravelTestCase), en vez de bootearlo él mismo.
+
+        Es deuda real: un test que solo pasa por el orden en que corre no está
+        aislado. Arreglarlo (que el test boote su propia conexión) es un
+        cambio aparte; mientras tanto, una sola suite preserva el orden que ya
+        funcionaba y no mete un rojo nuevo.
+    -->
+    <testsuites>
+        <testsuite name="Tests">
+            <directory>tests</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <directory>src</directory>
+        </include>
+    </source>
+</phpunit>
