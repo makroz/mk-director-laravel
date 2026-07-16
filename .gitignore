@@ -9,4 +9,15 @@
 /.DS_Store
 **/.DS_Store
 *.log
-composer.lock
+# composer.lock SÍ se commitea. Composer lo recomienda incluso para
+# librerías: no afecta a los consumidores (composer ignora el lock de sus
+# dependencias) y es lo único que hace el CI determinista.
+#
+# Sin él: `minimum-stability: dev` + `prefer-stable: true` + `pestphp/pest:
+# ^5.0` (que NO tiene release estable, la última es 5.0.0-rc.10) => cada
+# corrida de CI resuelve distinto. La primera resolvió `pest 5.x-dev` (una
+# rama de desarrollo) + phpunit 13.2.3 y reventó, mientras local corría
+# 5.0.0-rc.10 + phpunit 13.1.8 en verde.
+
+# Cache de PHPUnit (cacheDirectory en phpunit.xml)
+.phpunit.cache/

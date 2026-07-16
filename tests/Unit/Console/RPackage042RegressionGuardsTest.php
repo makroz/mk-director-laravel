@@ -37,52 +37,83 @@ use PHPUnit\Framework\TestCase;
  */
 class RPackage042RegressionGuardsTest extends TestCase
 {
-    private const STUBS_DIR = __DIR__ . '/../../../src/Stubs';
-    private const CONFIG_FILE = __DIR__ . '/../../../config/mk_director.php';
-    private const MIDDLEWARE_FILE = __DIR__ . '/../../../src/Auth/Middleware/MkAuthenticate.php';
+    private const STUBS_DIR = __DIR__.'/../../../src/Stubs';
+
+    private const CONFIG_FILE = __DIR__.'/../../../config/mk_director.php';
+
+    private const MIDDLEWARE_FILE = __DIR__.'/../../../src/Auth/Middleware/MkAuthenticate.php';
 
     // ─────────────────────────────────────────────────────────────────────
-    // FASE18-05 — direct_abilities removal
+    // FASE18-05 — direct_abilities: NUNCA incondicional (solo whenLoaded)
     // ─────────────────────────────────────────────────────────────────────
 
-    public function test_admin_resource_stub_does_NOT_pinear_direct_abilities(): void
+    public function test_admin_resource_stub_only_emits_direct_abilities_when_loaded(): void
     {
-        $stubPath = self::STUBS_DIR . '/auth-user/admin-resource.stub';
+        $stubPath = self::STUBS_DIR.'/auth-user/admin-resource.stub';
         $this->assertFileExists($stubPath, "Stub not found: {$stubPath}");
 
         $content = file_get_contents($stubPath);
 
-        // Regression guard: el campo `'direct_abilities' =>` se pineaba en el
-        // return array del Resource y duplicaba `'abilities' =>` (que ya es
-        // la unión efectiva via getEffectiveAbilities()). Si un refactor
-        // futuro lo agrega de nuevo, este test falla.
+        // HISTORIA — este guard cambió de forma, no de intención:
         //
-        // NOTA: el string "direct_abilities" puede aparecer en COMMENTS del
-        // stub (documentación del HALLAZGO-NEW-FASE18-05) — eso es OK. Lo
-        // que NO debe aparecer es la línea de código `'direct_abilities' =>`
-        // (key de array de retorno) ni `$this->directAbilities->pluck(...)`
-        // (over-emission del side effect de cargar directAbilities en
-        // AdminResource sin haberlo whenLoaded).
-        $this->assertStringNotContainsString(
-            "'direct_abilities' =>",
+        // FASE18-05 sacó `direct_abilities` del Resource default porque se
+        // emitía SIEMPRE: cargaba la relación como side effect y duplicaba
+        // `'abilities' =>` (que ya es la unión efectiva vía
+        // getEffectiveAbilities()). El guard original prohibía el string
+        // `'direct_abilities' =>` entero.
+        //
+        // Después, el endpoint unificado de accesos (4cb7f32) lo volvió a
+        // agregar A PROPÓSITO — pero envuelto en `whenLoaded`. Motivo (está
+        // documentado en el stub): la UI de gestión de accesos necesita
+        // distinguir los grants DIRECTOS de los heredados del rol; si
+        // pre-llena desde `abilities` mezcla ambos y no puede quitar/limpiar
+        // los directos de forma coherente.
+        //
+        // O sea: el guard original era demasiado ancho. Lo que FASE18-05
+        // protegía de verdad no era "el campo no debe existir" — era **"no
+        // se emite incondicionalmente"**. `whenLoaded` satisface eso: sin la
+        // relación cargada el campo ni aparece, no hay side effect y no hay
+        // over-emission. Esa es la invariante que se pinea acá.
+        //
+        // Si un refactor futuro emite `direct_abilities` sin `whenLoaded`,
+        // este test falla — que es exactamente lo que queremos.
+
+        if (! str_contains($content, "'direct_abilities' =>")) {
+            // Volver al default sin el campo también es válido.
+            $this->assertStringNotContainsString(
+                '$this->directAbilities',
+                $content,
+                'Si el stub no expone `direct_abilities`, tampoco debe tocar $this->directAbilities.'
+            );
+
+            return;
+        }
+
+        $this->assertMatchesRegularExpression(
+            "/'direct_abilities'\s*=>\s*\\\$this->whenLoaded\(\s*'directAbilities'/",
             $content,
-            "FASE18-05 regression: `'direct_abilities' =>` no debe pinearse en admin-resource.stub. " .
-            "El campo se removió del default Resource (over-emission cuando un admin tiene " .
-            "grants directos que coinciden con los del role). Si tu UI necesita el desglose, " .
-            "pinear el endpoint opt-in con `mk:make:auth-user --with-permissions-endpoint`."
+            'FASE18-05: si `admin-resource.stub` expone `direct_abilities`, DEBE ser vía '.
+            "`\$this->whenLoaded('directAbilities', ...)`. Emitirlo incondicionalmente carga la ".
+            "relación como side effect y duplica `'abilities' =>` (que ya es la unión efectiva)."
+        );
+
+        // Y `$this->directAbilities` solo puede usarse DENTRO del closure de
+        // whenLoaded — nunca suelto en el array de retorno.
+        $unguarded = preg_replace(
+            "/'direct_abilities'\s*=>\s*\\\$this->whenLoaded\([^\n]*\n/",
+            '',
+            $content
         );
         $this->assertStringNotContainsString(
             '$this->directAbilities',
-            $content,
-            "FASE18-05 regression: \$this->directAbilities no debe pinearse en admin-resource.stub. " .
-            "El Resource default ya no expone direct abilities — esa lógica se movió a " .
-            "MePermissionsController (endpoint opt-in)."
+            (string) $unguarded,
+            'FASE18-05: $this->directAbilities solo puede aparecer dentro del closure de whenLoaded.'
         );
     }
 
     public function test_me_permissions_controller_stub_exists_and_returns_breakdown(): void
     {
-        $stubPath = self::STUBS_DIR . '/auth-user/me-permissions-controller.stub';
+        $stubPath = self::STUBS_DIR.'/auth-user/me-permissions-controller.stub';
         $this->assertFileExists($stubPath, "Stub not found: {$stubPath}");
 
         $content = file_get_contents($stubPath);
@@ -102,7 +133,7 @@ class RPackage042RegressionGuardsTest extends TestCase
 
     public function test_cors_stub_exists_and_has_api_paths(): void
     {
-        $stubPath = self::STUBS_DIR . '/cors.php.stub';
+        $stubPath = self::STUBS_DIR.'/cors.php.stub';
         $this->assertFileExists($stubPath, "Stub not found: {$stubPath}");
 
         $content = file_get_contents($stubPath);
@@ -120,12 +151,12 @@ class RPackage042RegressionGuardsTest extends TestCase
         $this->assertStringContainsString("env('FRONTEND_ORIGINS'", $content,
             "cors.php.stub debe leer 'allowed_origins' desde env('FRONTEND_ORIGINS') DIRECTO (N3: load-order).");
         $this->assertStringNotContainsString("config('mk_director.frontend.frontend_origins'", $content,
-            "cors.php.stub NO debe leer origins vía config() (N3: se evalúa antes que mk_director.php → null → default 3000).");
+            'cors.php.stub NO debe leer origins vía config() (N3: se evalúa antes que mk_director.php → null → default 3000).');
     }
 
     public function test_cors_stub_has_force_cors_path_for_extra_paths(): void
     {
-        $stubPath = self::STUBS_DIR . '/cors.php.stub';
+        $stubPath = self::STUBS_DIR.'/cors.php.stub';
         $this->assertFileExists($stubPath, "Stub not found: {$stubPath}");
         $content = file_get_contents($stubPath);
 
@@ -134,7 +165,7 @@ class RPackage042RegressionGuardsTest extends TestCase
         // este placeholder, el scaffolder pine config/cors.php sin el
         // 'sanctum/csrf-cookie' cuando se usa Sanctum SPA.
         $this->assertStringContainsString('{{extraCorsPaths}}', $content,
-            "cors.php.stub debe tener un placeholder {{extraCorsPaths}} que el scaffolder " .
+            'cors.php.stub debe tener un placeholder {{extraCorsPaths}} que el scaffolder '.
             "reemplaza según --with-auth-rbac (suma 'sanctum/csrf-cookie' cuando aplica).");
     }
 
@@ -148,12 +179,12 @@ class RPackage042RegressionGuardsTest extends TestCase
             "config/mk_director.php debe tener una sección 'frontend' (R-PKG-042 FASE18-07).");
         $this->assertStringContainsString("'frontend_origins'", $content,
             "config/mk_director.php debe tener la key 'frontend.frontend_origins'.");
-        $this->assertStringContainsString("http://localhost:3000", $content,
-            "Default dev-friendly: http://localhost:3000 (Next.js dev server).");
-        $this->assertStringContainsString("http://127.0.0.1:3000", $content,
-            "Default dev-friendly: http://127.0.0.1:3000 (loopback).");
-        $this->assertStringContainsString("FRONTEND_ORIGINS", $content,
-            "config debe leer de env var FRONTEND_ORIGINS (override para prod).");
+        $this->assertStringContainsString('http://localhost:3000', $content,
+            'Default dev-friendly: http://localhost:3000 (Next.js dev server).');
+        $this->assertStringContainsString('http://127.0.0.1:3000', $content,
+            'Default dev-friendly: http://127.0.0.1:3000 (loopback).');
+        $this->assertStringContainsString('FRONTEND_ORIGINS', $content,
+            'config debe leer de env var FRONTEND_ORIGINS (override para prod).');
     }
 
     // ─────────────────────────────────────────────────────────────────────

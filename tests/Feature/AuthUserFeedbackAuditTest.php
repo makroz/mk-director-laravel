@@ -529,13 +529,26 @@ test('BUG-NEW-19: routes with-crud stub emite rutas SIN espacios dentro de {para
     expect($stubResolved)->toContain("'/{role}'")
         ->and($stubResolved)->toContain("'/{ability}'");
 
-    // Conteo de rutas con param scope: 6 (show, update×2, destroy, assignRoles, assignDirectAbilities).
+    // Conteo de rutas con param scope. Las 7:
+    //   1. GET    /{admin}            show
+    //   2. PUT    /{admin}            update
+    //   3. PATCH  /{admin}            update
+    //   4. DELETE /{admin}            destroy
+    //   5. POST   /{admin}/access     assignAccess
+    //   6. POST   /{admin}/roles      assignRoles
+    //   7. POST   /{admin}/abilities  assignDirectAbilities
+    //
     // Filtramos las líneas de rutas que tienen `{admin}` o `{admin}/` (sin espacios).
     //
     // R-PKG-NEW FASE18-C: el pattern ahora matchea ambas formas — lineas con
     // `Route::` (group + middleware) Y lineas con verb calls (`->get`, etc.).
+    //
+    // 2026-07-16: era 6. `POST /{admin}/access` (assignAccess) se agregó con el
+    // endpoint unificado de accesos — antes el modal hacía 2 requests
+    // (roles + abilities) y podía guardar a medias. Si agregás una ruta con
+    // param de scope, actualizá el número Y la lista de arriba.
     $scopeRouteLines = array_filter($routeLines, static fn (string $line): bool => (bool) preg_match("/'\\/\\{admin\\}(['\\/])/", $line));
-    expect(count($scopeRouteLines))->toBe(6);
+    expect(count($scopeRouteLines))->toBe(7);
 });
 
 // ─── BUG-NEW-20 — SmartController::show(int $id) rompe con UUIDs ──────────────
@@ -675,7 +688,7 @@ test('FEEDBACK10: buildFileFieldsConfig() pine IDENTITY map (no sufijo _path)', 
     $helperBody = substr($src, (int) $helperPos);
 
     // Pin: el map pinea el field name como value (identity), no sufijo _path.
-    expect($helperBody)->toContain("\$map[\$fieldName] = \$fieldName;");
+    expect($helperBody)->toContain('$map[$fieldName] = $fieldName;');
     expect($helperBody)->not->toContain("\$map[\$fieldName] = \$fieldName . '_path'");
 });
 

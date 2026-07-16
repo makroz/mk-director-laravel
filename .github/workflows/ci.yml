@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Este paquete NO tenía CI propia. La suite pest se corría desde el monorepo
+  # MK-Director, con un job que apuntaba a `packagist/mk-director-laravel` —
+  # un directorio GITIGNOREADO y repo anidado, o sea inexistente en aquel
+  # checkout. Nunca corrió: fallaba en push y skipeaba en PRs, y encima dejaba
+  # el `build` del monorepo en skipping porque lo tenía en `needs`.
+  #
+  # La suite de un paquete se corre en el repo del paquete. Acá.
+  pest:
+    name: "🐘 Pest"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP 8.4
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+
+      - name: Get composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.json') }}
+          restore-keys: ${{ runner.os }}-composer-
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Run pest suite
+        run: vendor/bin/pest
+
+  # NO hay job de pint todavía, y es a propósito: `composer lint`
+  # (`pint --test`) marca ~200 archivos pre-existentes. Agregarlo hoy sería
+  # un check rojo desde el minuto cero — y un check crónicamente rojo no
+  # comunica nada, es ruido que enseña a ignorar el rojo.
+  #
+  # La convención vigente del repo es `pint --dirty` (solo lo tocado) al
+  # editar PHP. Para cablearlo en CI hay que primero pasar `pint` sobre todo
+  # en un commit mecánico aparte + `.git-blame-ignore-revs` (lo mismo que se
+  # hizo con prettier en el monorepo el 2026-07-16). Recién ahí agregar el
+  # job, ya en verde.
