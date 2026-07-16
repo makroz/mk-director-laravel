@@ -182,6 +182,13 @@ return [
             // `password_code_confirm` = 5 attempts/10min.
             'password_code_request' => env('MK_AUTH_RATE_LIMIT_PWD_CODE_REQ', '3,10'),
             'password_code_confirm' => env('MK_AUTH_RATE_LIMIT_PWD_CODE_CONFIRM', '5,10'),
+
+            // forgot-vía-OTP: throttle de los dos endpoints NO autenticados de
+            // reset por PIN (`password/reset/code/request|confirm`). Mismos
+            // defaults que la variante autenticada. El throttle es por IP
+            // (endpoint público) → protege sin filtrar qué cuentas existen.
+            'password_reset_code_request' => env('MK_AUTH_RATE_LIMIT_PWD_RESET_CODE_REQ', '3,10'),
+            'password_reset_code_confirm' => env('MK_AUTH_RATE_LIMIT_PWD_RESET_CODE_CONFIRM', '5,10'),
         ],
 
         // 2026-07-15-profile-edit-password-otp (ADR-2 + ADR-3): config
