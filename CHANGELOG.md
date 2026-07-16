@@ -5,6 +5,46 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [UNRELEASED] — Unauthenticated email-OTP password reset ("forgot password" via PIN)
+
+> **Added**: PIN variant of the classic `password/forgot` + `password/reset`
+> token flow (both coexist — additive/BC). Reuses the same
+> `Auth\Services\EmailOtpService` + generic `verification_codes` table,
+> now with `purpose='password_reset'`.
+>   - Two new **unauthenticated** `BaseAuthController` methods, inherited by
+>     every scaffolded thin wrapper:
+>     `requestPasswordResetCode()` / `confirmPasswordResetCode()`.
+>   - New **public** routes emitted unconditionally in the auth-user routes
+>     stub (next to `password/forgot`/`password/reset`):
+>     `password/reset/code/request` + `password/reset/code/confirm`, each
+>     with its own IP-keyed `throttle:` middleware.
+>   - `requestPasswordResetCode()`: body `{<loginField>}`. **Anti-enumeration** —
+>     ALWAYS returns a generic `200` whether or not the account exists, and
+>     even when the account-level service throttle would fire (no `429` — the
+>     account throttle is silent; IP abuse is cut by the route `throttle:`,
+>     default `3,10`). Dispatches `auth.password_reset_code.requested`
+>     `{scope, user_id, code, expires_at, ip}` (plaintext PIN).
+>   - `confirmPasswordResetCode()`: body
+>     `{<loginField>, code, password, password_confirmation}` (`code`
+>     required string; `password` required string min:8 max:255 confirmed).
+>     `EmailOtpService::verify(purpose='password_reset')` is the sole verdict
+>     source; controller maps Confirmed→`200`, Expired→`410 ERR_CODE_EXPIRED`,
+>     Locked→`423 ERR_CODE_LOCKED`, Invalid/NotFound/unknown-user→
+>     `422 ERR_VALIDATION` generic "Código inválido." (**anti-enumeration +
+>     anti-oracle**: unknown email collapses to the same generic `422` as a
+>     wrong code). On success: `DB::transaction` → `setAuthPassword()` +
+>     revokes ALL of the user's Sanctum tokens (reset logs out everywhere),
+>     dispatches `auth.password_reset.success`. Route throttle default `5,10`.
+>   - New rate-limit keys `mk_director.auth.rate_limits.password_reset_code_request`
+>     (`'3,10'`, env `MK_AUTH_RATE_LIMIT_PWD_RESET_CODE_REQ`) +
+>     `password_reset_code_confirm` (`'5,10'`, env
+>     `MK_AUTH_RATE_LIMIT_PWD_RESET_CODE_CONFIRM`); the `otp.*` block is
+>     shared with the authenticated password-change flow.
+>
+> **Note**: email stays decoupled — the consumer supplies a Mailable + a
+> listener on `auth.password_reset_code.requested` (⚠️ `code` is the
+> plaintext PIN — never log/persist/forward).
+
 ## [UNRELEASED] — Email-OTP password change + widened profile update (SDD `2026-07-15-profile-edit-password-otp`)
 
 > **Added**: full email-OTP password-change engine.
