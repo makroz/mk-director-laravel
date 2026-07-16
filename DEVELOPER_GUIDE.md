@@ -2104,6 +2104,102 @@ Ver §5.4 (`plugins`/`plugins_config`) para el detalle completo del fix — el s
 
 ---
 
+### 3.18 Cambio de contraseña por PIN de email (OTP) + `PATCH me` ampliado (SDD `2026-07-15-profile-edit-password-otp`)
+
+> **Source**: SDD `2026-07-15-profile-edit-password-otp`. Feature aditivo/BC-safe. Habilita cambio de contraseña vía PIN de un solo uso enviado por email (sin exigir `current_password`) y amplía la edición de perfil a `email` + `avatar`.
+
+El flujo clásico `password/change` exige `current_password` como prueba de identidad. Este flujo alternativo la reemplaza por un **PIN de 6 dígitos** que el paquete emite y despacha por evento para que el consumer lo mande por email. Es el patrón "olvidé mi contraseña estando logueado" / "confirmá con el código que te enviamos".
+
+#### 3.18.1 Nuevos endpoints
+
+Los tres viven bajo `/api/{scope}/auth/` (`{scope}` = `admin` | `member`) y requieren el guard `mk.auth:{scope}` (el usuario ya está autenticado — el PIN es una segunda prueba, no un login).
+
+| Endpoint | Método base | Body | Éxito | Errores |
+|---|---|---|---|---|
+| `POST password/code/request` | `BaseAuthController::requestPasswordCode()` | (sin body) | `200` `{expires_at}` + `"Código enviado."` | `429` `ERR_THROTTLED` si está throttleado |
+| `POST password/code/confirm` | `confirmPasswordCode()` | `{code, password, password_confirmation}` | `200` `data: true` + `"Contraseña actualizada."` | `410` `ERR_CODE_EXPIRED` · `423` `ERR_CODE_LOCKED` · `422` `ERR_VALIDATION` `"Código inválido."` |
+| `PATCH me` (ampliado) | `updateProfile()` | `{name?, phone?, email?, avatar?}` | `200` user model actualizado | `422` validación |
+
+**`POST password/code/request`** — no lleva body; emite un PIN nuevo para el usuario autenticado y despacha `auth.password_change_code.requested`. Throttle de ruta default `3,10` (3 requests / 10 min).
+
+**`POST password/code/confirm`** — validación: `code` `required|string`; `password` `required|string|min:8|max:255|confirmed`. **NO** lleva `current_password` — el PIN es la prueba que lo reemplaza. Mapeo verdict → HTTP (una única fuente, `EmailOtpService::verify()`):
+
+| Verdict | HTTP | Código | Mensaje |
+|---|---|---|---|
+| `Confirmed` | `200` | — | `"Contraseña actualizada."` (`data: true`) |
+| `Expired` | `410` | `ERR_CODE_EXPIRED` | — |
+| `Locked` | `423` | `ERR_CODE_LOCKED` | — |
+| `Invalid` / `NotFound` | `422` | `ERR_VALIDATION` | `"Código inválido."` (genérico) |
+
+> **Anti-oracle**: `Invalid` y `NotFound` colapsan al MISMO `422` genérico — el endpoint **no distingue** "nunca existió" vs "expirado/consumido con código equivocado". Evita filtrar si un identifier tiene o no un código activo.
+
+En éxito, el confirm corre dentro de `DB::transaction`: `setAuthPassword()` (ver §3.18.4) y, si `config('mk_director.auth.password_change.revoke_other_sessions')` (default `true`), revoca los demás tokens Sanctum del usuario. Luego despacha `auth.password_changed`. Throttle de ruta default `5,10`.
+
+**`PATCH me` ampliado** — antes solo validaba `name` + `phone`; ahora es un **superset estricto** BC-safe (cada regla `sometimes`-guardada): `name` (`sometimes`), `phone` (`sometimes|nullable`), `email` (`sometimes|unique` ignorando al propio usuario), `avatar` (`sometimes|file|image|max:4096`, cableado a través de `FileStoragePlugin`). Solo se scaffoldea cuando el scope se genera con `--profile-fields`.
+
+#### 3.18.2 `EmailOtpService` — fuente única del verdict
+
+`Mk\Director\Auth\Services\EmailOtpService`:
+
+| Método | Firma | Qué hace |
+|---|---|---|
+| `issue` | `issue(string $scope, string $purpose, string $identifier): OtpIssueResult` | Emite un PIN nuevo → `{plainCode, expiresAt}`. Hashea el PIN con `Hash::make`; **el plaintext NUNCA se persiste ni se loguea** (la DB guarda solo `code_hash`, bcrypt). |
+| `verify` | `verify($scope, $purpose, $identifier, $code): OtpVerifyResult` | Enum `Confirmed \| Invalid \| Expired \| Locked \| NotFound`. **Fuente única** del verdict — el controller solo mapea a HTTP. |
+| `isRequestThrottled` | `isRequestThrottled($scope, $purpose, $identifier): bool` | Guard del lado request, keyeado por `(auth_scope, purpose, identifier)`. Sobrevive entre IPs/sesiones para la misma cuenta — **defense-in-depth POR ENCIMA** del throttle de ruta (que es por IP/sesión). |
+| `prune` | `prune()` | Housekeeping (limpieza de códigos vencidos/consumidos). |
+
+#### 3.18.3 Store: tabla genérica `verification_codes`
+
+Nueva tabla `verification_codes` (la migration hace no-op si ya existe vía `Schema::hasTable`). Es **genérica y reusable** — la columna `purpose` la hace apta para futuros 2FA / verificación de email, NO es password-change-specific. Columnas relevantes: `purpose`, `attempts`, `consumed_at`, `code_hash` (bcrypt). El servicio garantiza **single-use + expiry + attempt-lock**.
+
+#### 3.18.4 `AuthUser::setAuthPassword()` — fix del `BadMethodCallException`
+
+Se agregó al modelo base `Mk\Director\Auth\Models\AuthUser`:
+
+```php
+public function setAuthPassword(string $password): void
+{
+    $this->setAttribute($this->getAuthPasswordName(), $password);
+    $this->save();
+}
+```
+
+Depende del cast `'password' => 'hashed'` (sin doble-hash). Esto **arregla un `BadMethodCallException` preexistente**: `BaseAuthController` ya llamaba `setAuthPassword()` en `changePassword()` y `resetPassword()`, pero el método **no existía** en `AuthUser` → ambos flujos (más el nuevo confirm) rompían. Ahora los tres funcionan.
+
+#### 3.18.5 Dos nuevos tipos de `AuthEvent` (email desacoplado)
+
+El paquete no manda emails: despacha eventos y el consumer cablea un Mailable + listener.
+
+| Evento | Payload | Notas |
+|---|---|---|
+| `auth.password_change_code.requested` | `{scope, user_id, code, expires_at, ip}` | ⚠️ `code` es el **PIN en PLANO** — el ÚNICO lugar donde existe en cleartext, viaja solo para que el listener del consumer lo mande por email. |
+| `auth.password_changed` | `{scope, user_id, ip}` | Confirmación de cambio efectivo. |
+
+> ⚠️ **`code` es una credencial**: un listener **NUNCA** debe loguearlo, persistirlo ni reenviarlo a terceros. Úsalo exclusivamente para renderizar el email y descártalo.
+
+Este flujo además **desbloquea** el previamente-muerto `auth.password_reset.requested` — el consumer solo necesita cablear un listener. Ver §3.8 (`Cómo registrar un listener para AuthEvent`) para el patrón de suscripción.
+
+#### 3.18.6 Config (`config/mk_director.php` → `auth.*`)
+
+Todo env-overridable:
+
+| Clave | Default | Env |
+|---|---|---|
+| `rate_limits.password_code_request` | `'3,10'` | `MK_AUTH_RATE_LIMIT_PWD_CODE_REQ` |
+| `rate_limits.password_code_confirm` | `'5,10'` | `MK_AUTH_RATE_LIMIT_PWD_CODE_CONFIRM` |
+| `otp.length` | `6` (rango `4..6`) | `MK_AUTH_OTP_LENGTH` |
+| `otp.ttl_seconds` | `600` (~10 min) | `MK_AUTH_OTP_TTL_SECONDS` |
+| `otp.max_attempts` | `5` | `MK_AUTH_OTP_MAX_ATTEMPTS` |
+| `otp.throttle.max` | `3` | `MK_AUTH_OTP_THROTTLE_MAX` |
+| `otp.throttle.window_seconds` | `600` | `MK_AUTH_OTP_THROTTLE_WINDOW` |
+| `password_change.revoke_other_sessions` | `true` | — |
+
+#### 3.18.7 Fix del scaffolder: accessor de avatar emitido desde `--profile-fields`
+
+`MakeAuthUserCommand::detectFileFields()` recibía el mapa plano `key => 'file'` en vez de los meta-arrays de `$profileFieldsRaw`, así que `getAvatarUrlAttribute` **nunca se emitía** salvo que se pasara `--with-crud` (raíz de que los consumers terminaran escribiendo a mano un accessor de avatar). **Ya está fijo**: el accessor se emite con `--profile-fields` solo. `buildUpdateProfileMethod` se amplió al superset estricto de §3.18.1 (cada regla `sometimes`-guardada, BC-safe).
+
+---
+
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)
 
 Tanto para **Next.js** como para **React Native**, el consumo de listas es estandarizado mediante parámetros URL:
