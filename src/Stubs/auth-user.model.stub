@@ -98,7 +98,7 @@ class {{ModuleName}} extends AuthUser
     protected $casts = [
 {{emailVerifiedAtCastEntry}}{{profileFieldsCastEntries}}{{statusCastEntry}}        'password' => 'hashed',
     ];
-
+{{fileFieldsAppends}}
     /**
      * El scope se ata al instanciar el modelo. Esto garantiza que
      * `getAuthScope()` nunca devuelva null (Capa 1: auth_scope indexado).
