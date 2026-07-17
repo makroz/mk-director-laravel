@@ -969,6 +969,24 @@ test('FEEDBACK10: buildFileFieldsAccessors() retorna vacío si no hay file field
     expect($out)->toBe('');
 });
 
+test('RETO 2026-07-17: buildFileFieldsAppends() emite $appends con <field>_url por cada file field', function () {
+    $out = feedback10Invoke('buildFileFieldsAppends', [['avatar', 'cover_photo']]);
+
+    // Propiedad $appends con las url-keys derivadas (identity + `_url`).
+    expect($out)->toMatch("/protected\s+\\\$appends\s*=\s*\[/");
+    expect($out)->toContain("'avatar_url'");
+    expect($out)->toContain("'cover_photo_url'");
+    // Sin sufijo `_path` ni columnas crudas (solo las accessor url-keys).
+    expect($out)->not->toContain("'avatar_path'");
+    expect($out)->not->toContain("'avatar',");
+});
+
+test('RETO 2026-07-17: buildFileFieldsAppends() retorna vacío si no hay file fields', function () {
+    $out = feedback10Invoke('buildFileFieldsAppends', [[]]);
+
+    expect($out)->toBe('');
+});
+
 test('FEEDBACK10: buildFileFieldsResourceEntry() emite resource keys identity + _url', function () {
     $out = feedback10Invoke('buildFileFieldsResourceEntry', [['avatar']]);
 

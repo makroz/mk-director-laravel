@@ -217,6 +217,22 @@ test('ADR-5/ADR-6: end-to-end wiring — correctly-detected file field feeds bui
     expect($accessors)->toContain('Storage::url($this->avatar)');
 });
 
+test('RETO 2026-07-17: end-to-end wiring — detected file field feeds buildFileFieldsAppends() and emits $appends so /me + /login serialize avatar_url', function () {
+    $rawMap = ['avatar' => ['type' => 'file', 'unique' => false]];
+
+    $fileFieldNames = wideInvoke('detectFileFields', [$rawMap]);
+    $appends = wideInvoke('buildFileFieldsAppends', [$fileFieldNames]);
+
+    expect($fileFieldNames)->toBe(['avatar']);
+    expect($appends)->toContain("protected \$appends = ['avatar_url']");
+});
+
+test('RETO 2026-07-17: the model stub declares the {{fileFieldsAppends}} placeholder', function () {
+    $stub = (string) file_get_contents(widePackageRoot().'/src/Stubs/auth-user.model.stub');
+
+    expect($stub)->toContain('{{fileFieldsAppends}}');
+});
+
 // ── (d) Phase 2 OTP routes remain intact (no regression from this phase) ───
 
 test('Phase 2 regression guard: OTP password/code routes + password/change remain pinned in the routes stub after Phase 3 changes', function () {

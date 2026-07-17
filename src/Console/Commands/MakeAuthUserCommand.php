@@ -851,6 +851,7 @@ PHP,
         $fileFieldsBaseReplacements = [
             '{{fileFieldsFillableEntries}}' => $this->buildFileFieldsFillableEntries($fileFieldNames),
             '{{fileFieldsAccessors}}' => $this->buildFileFieldsAccessors($fileFieldNames),
+            '{{fileFieldsAppends}}' => $this->buildFileFieldsAppends($fileFieldNames),
         ];
 
         // R-PKG-052: pinear `client_id` en el modelo + migration SOLO si
@@ -2462,6 +2463,47 @@ PHP;
     }
 
     /**
+     * Emite `protected $appends = ['<field>_url', ...]` para cada file field.
+     *
+     * Sin esto, los accessors `*_url` de `buildFileFieldsAccessors()` existen
+     * pero NUNCA se serializan en `toArray()` — y `/me` + `/login` serializan
+     * vía `toArray()` (no vía el Resource). Resultado: `avatar_url` aparecía
+     * en la LISTA (Resource, explícito) pero caía a `null` en el payload del
+     * usuario logueado, así que perfil y sidemenu mostraban iniciales pese a
+     * tener foto cargada. Gemelo del gap FEEDBACK10 (accessor emitido pero no
+     * serializado); RETO 2026-07-17.
+     *
+     * Devuelve string vacío si no hay file fields (el stub tolera whitespace).
+     *
+     * @param  array<int, string>  $fileFieldNames
+     */
+    protected function buildFileFieldsAppends(array $fileFieldNames): string
+    {
+        if ($fileFieldNames === []) {
+            return '';
+        }
+
+        $entries = implode(', ', array_map(
+            static fn (string $fieldName): string => "'{$fieldName}_url'",
+            $fileFieldNames,
+        ));
+
+        return <<<PHP
+
+    /**
+     * Accessors serializados en cada `toArray()` — y por ende en los payloads
+     * de `/me` y `/login` que hidratan `useMkAuth().user`. Sin este `\$appends`,
+     * los `*_url` solo aparecían cuando el Resource los referenciaba a mano (la
+     * LISTA), pero NO en perfil ni sidemenu → el avatar caía a iniciales.
+     *
+     * @var array<int, string>
+     */
+    protected \$appends = [{$entries}];
+
+PHP;
+    }
+
+    /**
      * R-PKG-052 (FEEDBACK11, RETO corrida 10) — emite entry `'client_id'`
      * para `$fillable` del Model, SOLO si el scaffolder se invoca con
      * `--multi-tenant` (opt-in).
@@ -2478,7 +2520,6 @@ PHP;
      * Defense-in-depth — el scaffolder NUNCA pinea `client_id` sin flag
      * explícito, así que un consumer que olvida el flag no se rompe.
      *
-     * @param  bool  $multiTenant
      * @return string PHP literal pineable en stub.
      */
     protected function buildClientIdFillableEntry(bool $multiTenant): string
@@ -2501,7 +2542,6 @@ PHP;
      * inexistente → `column not found: client_id` en el primer INSERT.
      * Post-fix, ambos (model + migration) pinean en lockstep vía flag.
      *
-     * @param  bool  $multiTenant
      * @return string PHP literal pineable en stub.
      */
     protected function buildClientIdColumn(bool $multiTenant): string
@@ -3539,12 +3579,12 @@ PHP;
      * SKILL.md del paquete — el consumer puede moverlo a esa ubicación si su proyecto
      * la sigue.
      *
-     * @param  string  $scope             PascalCase del scope (e.g. "Admin", "Member")
-     * @param  string  $scopeLower        snake_case (e.g. "admin", "member")
-     * @param  string  $scopePlural       snake_case plural (e.g. "admins", "members")
-     * @param  string  $loginField        Campo de login (e.g. "email", "ci")
-     * @param  bool    $withAuthRbac      Si RBAC está habilitado (secciones 3+4)
-     * @param  array   $existingReplacements  Replacements ya computados (se mergean)
+     * @param  string  $scope  PascalCase del scope (e.g. "Admin", "Member")
+     * @param  string  $scopeLower  snake_case (e.g. "admin", "member")
+     * @param  string  $scopePlural  snake_case plural (e.g. "admins", "members")
+     * @param  string  $loginField  Campo de login (e.g. "email", "ci")
+     * @param  bool  $withAuthRbac  Si RBAC está habilitado (secciones 3+4)
+     * @param  array  $existingReplacements  Replacements ya computados (se mergean)
      */
     protected function generateApiContractStub(
         string $scope,
@@ -3558,7 +3598,7 @@ PHP;
 
         // BC: si el archivo ya existe (dev lo customizó), respetar.
         if (File::exists($targetPath)) {
-            $this->line("   ⏭  Docs/api_contract.md (ya existe, skipping — borralo para regenerar el template)");
+            $this->line('   ⏭  Docs/api_contract.md (ya existe, skipping — borralo para regenerar el template)');
 
             return;
         }
