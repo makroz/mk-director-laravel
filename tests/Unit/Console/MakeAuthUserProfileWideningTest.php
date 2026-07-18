@@ -81,6 +81,21 @@ test('ADR-5: buildUpdateProfileMethod() widens avatar (file field) to real file/
     expect($out)->toContain('->fireBeforeSave($request, $data, \'update\')');
     expect($out)->toContain("'avatar' => 'avatar'"); // identity map (post-R-PKG-050 convention)
     expect($out)->toContain("'path' => 'uploads/admin'");
+
+    // F11-P03: sin el context model el plugin no sabe qué archivo reemplaza, y
+    // sin fireAfterSave() el borrado nunca corre — cada upload dejaría el
+    // anterior huérfano en disco.
+    expect($out)->toContain('->setContextModel($user)');
+    expect($out)->toContain('->fireAfterSave($user, $request, \'update\')');
+
+    // El borrado va DESPUÉS del update: si la mutación falla, el archivo viejo
+    // sigue siendo el vigente. Este orden es el invariante del fix.
+    expect(strpos($out, '$user->update($data)'))
+        ->toBeLessThan(strpos($out, '->fireAfterSave('));
+
+    // Guard-rail nowdoc: si alguien reconvierte el heredoc del generador y las
+    // barras de escape quedan literales, el código emitido sale roto.
+    expect($out)->not->toContain('\$pluginManager');
 });
 
 test('ADR-5: buildUpdateProfileMethod() widens email to sometimes/required/email + unique-ignoring-self', function () {

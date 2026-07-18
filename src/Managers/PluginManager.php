@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Log;
 use Mk\Director\Contracts\MkPluginInterface;
 
 /**
@@ -53,6 +54,22 @@ class PluginManager
 
     /** @var bool Lazy boot guard — evita doble-load si boot() se llama más de una vez. */
     protected bool $booted = false;
+
+    /**
+     * Modelo persistido que está por mutarse (solo `update`).
+     *
+     * `beforeSave()` recibe el payload entrante pero NO el modelo, así que un
+     * plugin no puede ver el estado previo — y sin estado previo no puede, por
+     * ejemplo, borrar el archivo que está reemplazando. Extender la firma de
+     * `MkPluginInterface::beforeSave()` sería BC-breaking para todo plugin
+     * custom del consumer, así que el contexto viaja por el manager y los
+     * plugins lo leen solo si les interesa.
+     *
+     * Lo pinea el caller (`CRUDSmart::update()` y los auth controllers
+     * scaffoldeados) ANTES de `fireBeforeSave()`, y se limpia en
+     * `fireAfterSave()`.
+     */
+    protected mixed $contextModel = null;
 
     public function __construct()
     {
@@ -123,14 +140,14 @@ class PluginManager
      */
     public function registerPlugin(string $class): void
     {
-        if (!class_exists($class)) {
+        if (! class_exists($class)) {
             return;
         }
 
         // Check if already registered (by class name)
-        $exists = $this->plugins->contains(fn($plugin) => is_a($plugin, $class));
+        $exists = $this->plugins->contains(fn ($plugin) => is_a($plugin, $class));
 
-        if (!$exists) {
+        if (! $exists) {
             $plugin = app($class);
             if ($plugin instanceof MkPluginInterface) {
                 $plugin->boot();
@@ -144,7 +161,27 @@ class PluginManager
      */
     public function fireBeforeQuery(Builder $query, Request $request): void
     {
-        $this->plugins->each(fn(MkPluginInterface $plugin) => $plugin->beforeQuery($query, $request));
+        $this->plugins->each(fn (MkPluginInterface $plugin) => $plugin->beforeQuery($query, $request));
+    }
+
+    /**
+     * Pinea el modelo persistido que está por mutarse, para que los plugins
+     * puedan consultar el estado previo durante `beforeSave()`.
+     *
+     * @see PluginManager::$contextModel
+     */
+    public function setContextModel(mixed $model): void
+    {
+        $this->contextModel = $model;
+    }
+
+    /**
+     * Modelo previo a la mutación, o `null` en `create` (o si el caller no lo
+     * pineó). Los plugins DEBEN tolerar el `null`.
+     */
+    public function getContextModel(): mixed
+    {
+        return $this->contextModel;
     }
 
     /**
@@ -159,10 +196,15 @@ class PluginManager
 
     /**
      * Trigger afterSave hook for all registered plugins.
+     *
+     * Limpia el context model al terminar: el manager es singleton, así que
+     * dejarlo pineado filtraría el modelo de una request a la siguiente.
      */
     public function fireAfterSave($model, Request $request, string $mode = 'create'): void
     {
-        $this->plugins->each(fn(MkPluginInterface $plugin) => $plugin->afterSave($model, $request, $mode));
+        $this->plugins->each(fn (MkPluginInterface $plugin) => $plugin->afterSave($model, $request, $mode));
+
+        $this->contextModel = null;
     }
 
     /**
@@ -170,7 +212,7 @@ class PluginManager
      */
     public function fireBeforeDelete($model, Request $request): void
     {
-        $this->plugins->each(fn(MkPluginInterface $plugin) => $plugin->beforeDelete($model, $request));
+        $this->plugins->each(fn (MkPluginInterface $plugin) => $plugin->beforeDelete($model, $request));
     }
 
     /**
@@ -178,7 +220,7 @@ class PluginManager
      */
     public function fireAfterDelete($model, Request $request): void
     {
-        $this->plugins->each(fn(MkPluginInterface $plugin) => $plugin->afterDelete($model, $request));
+        $this->plugins->each(fn (MkPluginInterface $plugin) => $plugin->afterDelete($model, $request));
     }
 
     /**
@@ -221,15 +263,15 @@ class PluginManager
 
         foreach ($this->plugins as $plugin) {
             $requirements = $plugin->getRequirements();
-            
+
             // Check required fields
             $addedFields = $requirements['fields_added'] ?? [];
             foreach ($addedFields as $field) {
-                if (!in_array($field, $fillable)) {
+                if (! in_array($field, $fillable)) {
                     $findings[] = [
                         'plugin' => get_class($plugin),
                         'type' => 'error',
-                        'message' => "Requiere el campo '{$field}' en el modelo, pero no es fillable."
+                        'message' => "Requiere el campo '{$field}' en el modelo, pero no es fillable.",
                     ];
                 }
             }
@@ -248,17 +290,17 @@ class PluginManager
             //   - otherwise → no finding.
             $requiredConfig = $requirements['required_config'] ?? [];
             foreach ($requiredConfig as $key) {
-                if (!Arr::has($mkConfig, $key)) {
+                if (! Arr::has($mkConfig, $key)) {
                     $findings[] = [
                         'plugin' => get_class($plugin),
                         'type' => 'error',
-                        'message' => "Falta la llave de configuración '{$key}' en \$mkConfig."
+                        'message' => "Falta la llave de configuración '{$key}' en \$mkConfig.",
                     ];
                 } elseif (empty(data_get($mkConfig, $key))) {
                     $findings[] = [
                         'plugin' => get_class($plugin),
                         'type' => 'info',
-                        'message' => "La llave '{$key}' existe pero está vacía — el plugin está registrado sin fields configurados."
+                        'message' => "La llave '{$key}' existe pero está vacía — el plugin está registrado sin fields configurados.",
                     ];
                 }
             }
@@ -269,7 +311,7 @@ class PluginManager
 
     public function validateRequirements(array $fillable): void
     {
-        if (!config('mk_director.debug', false)) {
+        if (! config('mk_director.debug', false)) {
             return;
         }
 
@@ -284,7 +326,7 @@ class PluginManager
                 'info' => 'info',
                 default => 'warning',
             };
-            \Illuminate\Support\Facades\Log::$level("Plugin Diagnosis: [{$finding['plugin']}] {$finding['message']}");
+            Log::$level("Plugin Diagnosis: [{$finding['plugin']}] {$finding['message']}");
         }
     }
 }

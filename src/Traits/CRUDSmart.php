@@ -7,7 +7,9 @@ namespace Mk\Director\Traits;
 use Illuminate\Contracts\Pagination\CursorPaginator;
 use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Http\Request;
+use Illuminate\Routing\Route;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -623,7 +625,10 @@ trait CRUDSmart
         // Get input
         $input = $request->all();
 
-        // Plugin Hook: beforeSave
+        // Plugin Hook: beforeSave — el modelo persistido va como contexto para
+        // que los plugins puedan ver el estado previo (e.g. FileStoragePlugin
+        // borrando el archivo que reemplaza). Se limpia en fireAfterSave().
+        $this->getPluginManager()->setContextModel($model);
         $this->getPluginManager()->fireBeforeSave($request, $input, 'update');
 
         // Apply service hook beforeUpdate
@@ -819,9 +824,9 @@ trait CRUDSmart
      * @param  Request  $request  El request original
      * @param  string|null  $routeParamName  Nombre del route param (e.g. 'admin', 'member'). Null para store.
      * @param  string|null  $routeParamValue  Valor del route param (el $id). Null para store.
-     * @return Request  El FormRequest validado (mismo tipo que el original).
+     * @return Request El FormRequest validado (mismo tipo que el original).
      *
-     * @throws \Illuminate\Validation\ValidationException  Si las rules() fallan.
+     * @throws ValidationException Si las rules() fallan.
      */
     protected function resolveFormRequest(
         string $configKey,
@@ -839,7 +844,7 @@ trait CRUDSmart
             return $request;
         }
 
-        /** @var \Illuminate\Foundation\Http\FormRequest $formRequest */
+        /** @var FormRequest $formRequest */
         $formRequest = app($formRequestClass);
 
         $formRequest->setContainer(app());
@@ -854,7 +859,7 @@ trait CRUDSmart
             // `$routeParamName`. Esto es suficiente para que `Rule::ignore`
             // extraiga el ID correcto y excluya el row actual del unique check.
             $formRequest->setRouteResolver(function () use ($routeParamName, $routeParamValue) {
-                $route = new \Illuminate\Routing\Route(
+                $route = new Route(
                     ['PUT', 'PATCH'],
                     '/api/{scope}/{resource}/'.$routeParamValue,
                     [],
