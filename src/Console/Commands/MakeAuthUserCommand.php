@@ -4779,6 +4779,7 @@ PHP;
         // `updateProfile()` bodies to a version without this block (no dead
         // `PluginManager` resolution for scopes that never upload files).
         $fileStorageWiring = '';
+        $fileStorageAfterWiring = '';
         if ($fileFieldNames !== []) {
             $fieldsMap = $this->buildFileFieldsConfig($fileFieldNames);
             $fieldsPhp = $this->arrayLiteral($fieldsMap, 4);
@@ -4800,7 +4801,19 @@ PHP;
                 ],
             ],
         ]);
+        // F11-P03: el modelo actual va como contexto para que FileStoragePlugin
+        // vea el path anterior y pueda borrarlo. Sin esto, cada upload deja el
+        // archivo previo huérfano en disco.
+        \$pluginManager->setContextModel(\$user);
         \$pluginManager->fireBeforeSave(\$request, \$data, 'update');
+PHP;
+
+            $fileStorageAfterWiring = <<<'PHP'
+
+        // F11-P03: recién acá (update ya persistido) el plugin borra el archivo
+        // reemplazado. También limpia el context model del manager singleton.
+        $pluginManager->fireAfterSave($user, $request, 'update');
+
 PHP;
         }
 
@@ -4826,7 +4839,7 @@ PHP;
         \$data = \$request->validate({$rulesPhp});
 {$fileStorageWiring}
         \$user->update(\$data);
-
+{$fileStorageAfterWiring}
         return \$this->me(\$request);
     }
 

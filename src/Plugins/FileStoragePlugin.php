@@ -45,6 +45,13 @@ class FileStoragePlugin implements MkPluginInterface
 {
     protected PluginManager $manager;
 
+    /**
+     * Archivos reemplazados en `beforeSave()` que se borran en `afterSave()`.
+     *
+     * @var array<int, array{0: string, 1: string}> pares `[disk, path]`
+     */
+    protected array $pendingDeletions = [];
+
     public function __construct(PluginManager $manager)
     {
         $this->manager = $manager;
@@ -58,6 +65,7 @@ class FileStoragePlugin implements MkPluginInterface
     public function getRequirements(): array
     {
         $config = $this->manager->getConfigValue('plugins_config.file_storage', []);
+
         return [
             'required_config' => ['plugins_config.file_storage.fields'],
             'fields_added' => $config['fields'] ?? [],
@@ -108,13 +116,63 @@ class FileStoragePlugin implements MkPluginInterface
 
                 // D1: escribir al column name (post-rename), no al request field name.
                 $data[$columnName] = $storedPath;
+
+                // F11-P03: `store()` genera un nombre aleatorio en cada upload,
+                // así que un update deja el archivo anterior huérfano en disco.
+                // Lo encolamos y recién lo borramos en `afterSave()`, cuando el
+                // update ya está persistido: si la mutación falla, el archivo
+                // viejo sigue siendo el vigente y borrarlo acá dejaría al
+                // registro apuntando a la nada.
+                if ($mode === 'update') {
+                    $previousPath = $this->resolvePreviousPath($columnName);
+
+                    if ($previousPath !== null && $previousPath !== $storedPath) {
+                        $this->pendingDeletions[] = [$disk, $previousPath];
+                    }
+                }
             }
         }
     }
 
+    /**
+     * Path previo del campo, leído del modelo en contexto.
+     *
+     * Devuelve `null` si el caller no pineó el modelo (BC: callers viejos que
+     * no llaman `setContextModel()` simplemente no borran nada) o si el campo
+     * venía vacío.
+     */
+    protected function resolvePreviousPath(string $columnName): ?string
+    {
+        $model = $this->manager->getContextModel();
+
+        if ($model === null) {
+            return null;
+        }
+
+        $previous = data_get($model, $columnName);
+
+        return is_string($previous) && $previous !== '' ? $previous : null;
+    }
+
+    /**
+     * Borra los archivos reemplazados, ya con el update confirmado.
+     *
+     * Best-effort: si el archivo ya no está (borrado a mano, disco rotado,
+     * dos updates concurrentes), `delete()` devuelve false y seguimos. Un
+     * archivo huérfano es basura; una excepción acá tiraría abajo un update
+     * que en los hechos salió bien.
+     */
     public function afterSave($model, Request $request, string $mode): void
     {
-        // Cleaning temporary files if needed
+        foreach ($this->pendingDeletions as [$disk, $path]) {
+            try {
+                Storage::disk($disk)->delete($path);
+            } catch (\Throwable) {
+                // no-op — ver docblock
+            }
+        }
+
+        $this->pendingDeletions = [];
     }
 
     public function beforeDelete($model, Request $request): void
@@ -131,8 +189,8 @@ class FileStoragePlugin implements MkPluginInterface
     {
         // Convert internal paths to full URLs if config says so
         $config = $this->manager->getConfigValue('plugins_config.file_storage', []);
-        
-        if (!($config['auto_url'] ?? true)) {
+
+        if (! ($config['auto_url'] ?? true)) {
             return;
         }
 
@@ -150,10 +208,10 @@ class FileStoragePlugin implements MkPluginInterface
     {
         if (is_array($data) || is_object($data)) {
             foreach ($data as $key => &$value) {
-                if (in_array($key, $fields) && is_string($value) && !empty($value)) {
+                if (in_array($key, $fields) && is_string($value) && ! empty($value)) {
                     // Prepend storage URL
                     $value = Storage::disk($disk)->url($value);
-                } else if (is_array($value) || is_object($value)) {
+                } elseif (is_array($value) || is_object($value)) {
                     $this->convertPathsToUrls($value, $fields, $disk);
                 }
             }

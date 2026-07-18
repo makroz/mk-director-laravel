@@ -4,14 +4,15 @@ declare(strict_types=1);
 
 namespace Mk\Director\Tests\Feature;
 
+use Illuminate\Contracts\Filesystem\Factory;
 use Illuminate\Filesystem\FilesystemManager;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
-use Mockery;
 use Mk\Director\Managers\PluginManager;
 use Mk\Director\Plugins\FileStoragePlugin;
 use Mk\Director\Tests\MkLaravelTestCase;
+use Mockery;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 
@@ -38,7 +39,7 @@ uses(MkLaravelTestCase::class);
  * Setup per-test: temp dir + filesystem config + cleanup after.
  */
 beforeEach(function () {
-    $tempDir = sys_get_temp_dir() . '/mk-director-test-' . uniqid('', true);
+    $tempDir = sys_get_temp_dir().'/mk-director-test-'.uniqid('', true);
     mkdir($tempDir, 0777, true);
     $this->tempDir = $tempDir;
 
@@ -59,7 +60,7 @@ beforeEach(function () {
         });
         // UploadedFile::store() typehints Illuminate\Contracts\Filesystem\Factory.
         // FilesystemManager implements it — alias el contract al binding.
-        app()->alias('filesystems', \Illuminate\Contracts\Filesystem\Factory::class);
+        app()->alias('filesystems', Factory::class);
         // UploadedFile::getDisk() hace `app('filesystem')` (singular). Laravel's
         // Application lo bindea automáticamente; minimal container no.
         app()->alias('filesystems', 'filesystem');
@@ -227,4 +228,125 @@ test('e2e: flow completo beforeSave → afterResponse encadena file store + URL 
     // 3. The stored path should now be a full URL.
     expect($response['data']['photo_path'])->toStartWith('http');
     expect($response['data']['photo_path'])->not->toBe($storedPath);  // se convirtió
+});
+
+/**
+ * F11-P03 — reemplazo de archivo en `update`.
+ *
+ * `store()` genera un nombre aleatorio por upload, así que sin limpieza cada
+ * update deja el archivo anterior huérfano en disco (QA RETO: la carpeta
+ * `uploads/admin` crecía un archivo por cada cambio de foto de perfil).
+ */
+function buildFileStoragePluginWithContext(array $config, mixed $contextModel): FileStoragePlugin
+{
+    $manager = Mockery::mock(PluginManager::class);
+    $manager->shouldReceive('getConfigValue')
+        ->with('plugins_config.file_storage', [])
+        ->andReturn($config);
+    $manager->shouldReceive('getContextModel')->andReturn($contextModel);
+
+    return new FileStoragePlugin($manager);
+}
+
+test('F11-P03: update borra el archivo anterior una vez confirmado el save', function () {
+    $config = [
+        'fields' => ['avatar' => 'avatar'],
+        'disk' => 'public',
+        'path' => 'uploads/admin',
+        'auto_url' => true,
+    ];
+
+    // Archivo previo ya persistido, tal como lo tendría el modelo en DB.
+    $previousPath = 'uploads/admin/previous-avatar.jpg';
+    Storage::disk('public')->put($previousPath, 'contenido viejo');
+    Storage::disk('public')->assertExists($previousPath);
+
+    $model = (object) ['avatar' => $previousPath];
+    $plugin = buildFileStoragePluginWithContext($config, $model);
+
+    $request = Request::create('/api/admin/auth/me', 'PATCH');
+    $request->files->set('avatar', UploadedFile::fake()->image('nuevo.jpg', 100, 100));
+
+    $data = [];
+    $plugin->beforeSave($request, $data, 'update');
+
+    // El viejo sigue vivo: si el update explota, la foto vigente no se pierde.
+    Storage::disk('public')->assertExists($previousPath);
+    expect($data['avatar'])->not->toBe($previousPath);
+
+    $plugin->afterSave($model, $request, 'update');
+
+    // Confirmado el save, el reemplazado se va y queda solo el nuevo.
+    Storage::disk('public')->assertMissing($previousPath);
+    Storage::disk('public')->assertExists($data['avatar']);
+});
+
+test('F11-P03: sin context model no borra nada (BC con callers que no lo pinean)', function () {
+    $config = [
+        'fields' => ['avatar' => 'avatar'],
+        'disk' => 'public',
+        'path' => 'uploads/admin',
+        'auto_url' => true,
+    ];
+
+    $previousPath = 'uploads/admin/huerfano.jpg';
+    Storage::disk('public')->put($previousPath, 'contenido viejo');
+
+    $plugin = buildFileStoragePluginWithContext($config, null);
+
+    $request = Request::create('/api/admin/auth/me', 'PATCH');
+    $request->files->set('avatar', UploadedFile::fake()->image('nuevo.jpg', 100, 100));
+
+    $data = [];
+    $plugin->beforeSave($request, $data, 'update');
+    $plugin->afterSave(null, $request, 'update');
+
+    Storage::disk('public')->assertExists($previousPath);
+});
+
+test('F11-P03: create nunca borra, aunque el modelo en contexto traiga un path', function () {
+    $config = [
+        'fields' => ['avatar' => 'avatar'],
+        'disk' => 'public',
+        'path' => 'uploads/admin',
+        'auto_url' => true,
+    ];
+
+    $otherPath = 'uploads/admin/de-otro-registro.jpg';
+    Storage::disk('public')->put($otherPath, 'contenido ajeno');
+
+    $model = (object) ['avatar' => $otherPath];
+    $plugin = buildFileStoragePluginWithContext($config, $model);
+
+    $request = Request::create('/api/admin', 'POST');
+    $request->files->set('avatar', UploadedFile::fake()->image('nuevo.jpg', 100, 100));
+
+    $data = [];
+    $plugin->beforeSave($request, $data, 'create');
+    $plugin->afterSave($model, $request, 'create');
+
+    Storage::disk('public')->assertExists($otherPath);
+});
+
+test('F11-P03: un archivo ya ausente no rompe el update', function () {
+    $config = [
+        'fields' => ['avatar' => 'avatar'],
+        'disk' => 'public',
+        'path' => 'uploads/admin',
+        'auto_url' => true,
+    ];
+
+    // El modelo apunta a un path que ya no existe (borrado a mano, disco
+    // rotado, update concurrente). Borrar debe ser best-effort.
+    $model = (object) ['avatar' => 'uploads/admin/ya-no-esta.jpg'];
+    $plugin = buildFileStoragePluginWithContext($config, $model);
+
+    $request = Request::create('/api/admin/auth/me', 'PATCH');
+    $request->files->set('avatar', UploadedFile::fake()->image('nuevo.jpg', 100, 100));
+
+    $data = [];
+    $plugin->beforeSave($request, $data, 'update');
+    $plugin->afterSave($model, $request, 'update');
+
+    Storage::disk('public')->assertExists($data['avatar']);
 });
