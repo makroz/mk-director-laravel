@@ -92,6 +92,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Reacciones (tabla polimórfica `mk_reactions`)
+    |--------------------------------------------------------------------------
+    | Usada por el trait `HasMkReactions`. Contenido y autor son ambos
+    | polimórficos: en un consumer con varios guards (RETO tiene admin y
+    | member) puede reaccionar cualquiera de los dos.
+    |
+    | El UNIQUE de esa tabla es lo que hace que el contador no se pueda
+    | desincronizar; ver el docblock de la migración.
+    */
+    'reactions' => [
+        'table' => env('MK_REACTIONS_TABLE', 'mk_reactions'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | URL del storage según el host de la request (DESARROLLO)
     |--------------------------------------------------------------------------
     | `config/filesystems.php` arma la url del disk `public` desde `APP_URL`,
