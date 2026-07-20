@@ -6,6 +6,7 @@ namespace Mk\Director\DTOs;
 
 use Illuminate\Http\Request;
 use InvalidArgumentException;
+use Mk\Director\Utils\MkEnumCoercion;
 
 /**
  * MkDTO - Base class for Data Transfer Objects
@@ -222,6 +223,11 @@ abstract class MkDTO
         if ($value instanceof \BackedEnum) {
             return $value;
         }
+
+        // Adaptar el valor crudo al backing type del enum ANTES del from():
+        // en multipart/form-data todo llega como string. Ver
+        // Mk\Director\Utils\MkEnumCoercion.
+        $value = MkEnumCoercion::coerce($value, $enumClass);
 
         // Si es un string o int, intentar crear el enum
         try {

@@ -8,6 +8,7 @@ use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use InvalidArgumentException;
+use Mk\Director\Utils\MkEnumCoercion;
 
 /**
  * DTO Factory - Crea DTOs automáticamente desde configuración
@@ -102,6 +103,12 @@ class DTOFactory
         if ($value instanceof \BackedEnum) {
             return $value->value;
         }
+
+        // Adaptar el valor crudo al backing type del enum ANTES del from():
+        // en multipart/form-data todo llega como string, así que un enum
+        // int-backed recibe '1' en vez de 1 y explota SOLO cuando el usuario
+        // adjunta un archivo. Ver Mk\Director\Utils\MkEnumCoercion.
+        $value = MkEnumCoercion::coerce($value, $enumClass);
 
         // Intentar crear el enum
         try {
