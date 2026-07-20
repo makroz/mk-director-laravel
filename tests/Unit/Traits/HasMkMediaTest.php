@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Model as EloquentModel;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Mk\Director\Enums\MkEmbedProvider;
 use Mk\Director\Enums\MkMediaKind;
 use Mk\Director\Models\MkMedia;

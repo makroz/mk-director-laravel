@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace Mk\Director\Traits;
 
 use Illuminate\Database\Eloquent\Relations\MorphMany;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
+use InvalidArgumentException;
 use Mk\Director\Enums\MkMediaKind;
 use Mk\Director\Models\MkMedia;
+use RuntimeException;
 
 /**
  * HasMkMedia — adjunta N piezas de media a cualquier modelo del consumer.
@@ -79,6 +82,131 @@ trait HasMkMedia
         $media = $this->media()->create($attributes);
 
         return $media;
+    }
+
+    /**
+     * Adjunta un archivo SUBIDO: lo guarda en el disk y crea la fila.
+     *
+     * Es el complemento de {@see attachMedia()}, que recibe atributos ya
+     * resueltos. Sin este método, cada consumer tiene que escribir el mismo
+     * pipeline —guardar, deducir el `kind`, leer mime, tamaño y dimensiones—
+     * y cada copia se equivoca distinto. El piloto de RETO lo escribió una vez
+     * y quedó claro que no tenía nada de RETO adentro.
+     *
+     * 🔴 EL `kind` SE DEDUCE DEL MIME REAL, NO DE LA EXTENSIÓN.
+     * `getMimeType()` de Symfony lo infiere del CONTENIDO del archivo, no del
+     * nombre. Confiar en la extensión significa que un `.jpg` renombrado entra
+     * como imagen y después no se puede mostrar — y, peor, que la validación
+     * de tamaño que el consumer aplicó "a las imágenes" no fue la que
+     * correspondía.
+     *
+     * 🔴 `duration` QUEDA EN NULL PARA VIDEO, A PROPÓSITO.
+     * Leer la duración exige ffprobe o una librería de parsing de contenedores,
+     * y el paquete no va a arrastrar esa dependencia para un dato accesorio.
+     * La columna existe para que el consumer que lo necesite la llene; devolver
+     * un cero fingido sería peor que un null honesto.
+     *
+     * @param  string|null  $disk  null = el disk default de la app.
+     *
+     * @throws InvalidArgumentException si el mime no es imagen ni video. Un
+     *                                  embed NO se sube: no tiene archivo propio.
+     */
+    public function attachUploadedFile(
+        UploadedFile $file,
+        string $collection = 'default',
+        ?string $disk = null,
+        ?int $position = null,
+    ): MkMedia {
+        $disk ??= config('filesystems.default');
+
+        // 🔴 UN DISK NULL NO SE GUARDA NUNCA. La columna `disk` es lo que usa
+        // `MkMedia::getUrlAttribute()` para resolver la URL: una fila con disk
+        // null apunta a un archivo que existe pero que nadie puede pedir, y el
+        // síntoma aparece recién en pantalla, como una imagen rota. Mejor
+        // explotar acá, con el motivo escrito.
+        if (! is_string($disk) || $disk === '') {
+            throw new InvalidArgumentException(
+                'No hay disk donde guardar: pasá uno explícito o configurá '
+                .'`filesystems.default`. Guardar la fila con `disk` null produce media '
+                .'cuya URL no resuelve, y el error recién se ve como una imagen rota.'
+            );
+        }
+
+        $mime = $file->getMimeType() ?? 'application/octet-stream';
+
+        $kind = match (true) {
+            str_starts_with($mime, 'image/') => MkMediaKind::Image,
+            str_starts_with($mime, 'video/') => MkMediaKind::Video,
+            default => throw new InvalidArgumentException(
+                "No se puede adjuntar un archivo de tipo '{$mime}': `mk_media` sólo guarda "
+                .'imágenes y videos. Un enlace externo se adjunta como embed, sin archivo.'
+            ),
+        };
+
+        $path = $file->store($collection, ['disk' => $disk]);
+
+        if ($path === false) {
+            throw new RuntimeException(
+                "No se pudo guardar el archivo en el disk '{$disk}'. La fila de `mk_media` NO "
+                .'se creó: una fila que apunta a un archivo inexistente es peor que no tenerla.'
+            );
+        }
+
+        $attributes = [
+            'kind' => $kind,
+            'disk' => $disk,
+            'path' => $path,
+            'mime_type' => $mime,
+            'size' => $file->getSize(),
+            'collection' => $collection,
+        ];
+
+        if ($position !== null) {
+            $attributes['position'] = $position;
+        }
+
+        // Las dimensiones se leen del archivo YA GUARDADO y no del temporal:
+        // después de `store()` el temporal puede haberse movido, y en ese caso
+        // `getimagesize()` sobre la ruta vieja falla en silencio devolviendo
+        // false — dejando ancho y alto en null sin que nadie se entere.
+        if ($kind === MkMediaKind::Image) {
+            $attributes += $this->readImageDimensions($disk, $path);
+        }
+
+        return $this->attachMedia($attributes);
+    }
+
+    /**
+     * Ancho y alto de una imagen guardada, o array vacío si no se pudieron leer.
+     *
+     * Devolver vacío en vez de null-por-clave es deliberado: así las columnas
+     * ni se tocan y conservan su default, en lugar de escribir null explícito
+     * y sugerir que se midió y dio nada.
+     *
+     * @return array<string, int>
+     */
+    protected function readImageDimensions(string $disk, string $path): array
+    {
+        try {
+            $contents = Storage::disk($disk)->get($path);
+
+            if ($contents === null) {
+                return [];
+            }
+
+            $size = @getimagesizefromstring($contents);
+        } catch (\Throwable) {
+            // Un SVG, un disk remoto que no responde o un archivo corrupto no
+            // pueden tumbar la subida: las dimensiones son un dato accesorio y
+            // la fila vale igual sin ellas.
+            return [];
+        }
+
+        if ($size === false) {
+            return [];
+        }
+
+        return ['width' => (int) $size[0], 'height' => (int) $size[1]];
     }
 
     /**

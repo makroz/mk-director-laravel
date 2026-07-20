@@ -8,8 +8,10 @@ use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository as CacheRepository;
 use Illuminate\Config\Repository as ConfigRepository;
 use Illuminate\Container\Container;
+use Illuminate\Contracts\Filesystem\Factory as FilesystemFactory;
 use Illuminate\Database\Capsule\Manager as Capsule;
 use Illuminate\Filesystem\Filesystem;
+use Illuminate\Filesystem\FilesystemManager;
 use Illuminate\Support\Facades\Facade;
 use PHPUnit\Framework\TestCase as BaseTestCase;
 
@@ -67,7 +69,7 @@ abstract class MkLaravelTestCase extends BaseTestCase
      */
     public static function bootContainer(): Container
     {
-        $container = new Container();
+        $container = new Container;
         Container::setInstance($container);
 
         // Config (mutable Repository).
@@ -75,7 +77,7 @@ abstract class MkLaravelTestCase extends BaseTestCase
             'app' => [
                 'name' => 'MkDirectorTest',
                 'env' => 'testing',
-                'key' => 'base64:' . base64_encode(random_bytes(32)),
+                'key' => 'base64:'.base64_encode(random_bytes(32)),
                 'debug' => false,
             ],
             'database' => [
@@ -110,12 +112,13 @@ abstract class MkLaravelTestCase extends BaseTestCase
 
         // Cache (ArrayStore-backed Repository).
         $container->singleton('cache', function (): CacheRepository {
-            return new CacheRepository(new ArrayStore());
+            return new CacheRepository(new ArrayStore);
         });
 
         // Database Capsule without connecting (so unit tests can mock Schema, etc.).
         $container->singleton('db', function (Container $app): Capsule {
             $capsule = new Capsule($app);
+
             // Do NOT addConnection here — unit tests mock the Schema facade
             // and do not require an active connection.
             return $capsule;
@@ -128,7 +131,8 @@ abstract class MkLaravelTestCase extends BaseTestCase
         // later via Facade::swap(). Once Mockery swaps the facade root,
         // calls go through the mock.
         $container->bind('db.schema', function (): object {
-            return new class {
+            return new class
+            {
                 public function __call(string $method, array $args): mixed
                 {
                     return $this;
@@ -137,7 +141,40 @@ abstract class MkLaravelTestCase extends BaseTestCase
         });
 
         // Filesystem.
-        $container->singleton('files', fn (): Filesystem => new Filesystem());
+        $container->singleton('files', fn (): Filesystem => new Filesystem);
+
+        // FilesystemManager — lo que hace funcionar la facade `Storage`.
+        //
+        // `files` (arriba) NO alcanza: es el helper de bajo nivel, y
+        // `Storage::disk()` resuelve por el binding `filesystem`. Sin esto,
+        // cualquier código del paquete que toque un disk —`HasMkMedia`, por
+        // ejemplo— sólo se puede testear mockeando la facade, que es tanto
+        // como no testearlo: un mock no dice si el archivo terminó en el disk.
+        //
+        // El disk `local` apunta a un directorio TEMPORAL POR PROCESO, no a
+        // `storage/` del paquete: dos corridas en paralelo no se pisan, y una
+        // suite que deja basura no ensucia el repo.
+        // La config va ACÁ y no adentro del closure: si se setea al resolver
+        // el singleton, `config('filesystems.default')` es null para todo el
+        // código que la lee ANTES del primer `Storage::disk()` — y ese código
+        // existe (`HasMkMedia` resuelve el disk antes de guardar nada).
+        $container['config']->set('filesystems', [
+            'default' => 'local',
+            'disks' => [
+                'local' => [
+                    'driver' => 'local',
+                    'root' => sys_get_temp_dir().'/mk-director-tests-'.getmypid(),
+                ],
+            ],
+        ]);
+
+        $container->singleton('filesystem', fn (Container $app): FilesystemManager => new FilesystemManager($app));
+
+        // El alias del CONTRATO, además del string. `UploadedFile::store()`
+        // resuelve `Filesystem\Factory` —no `'filesystem'`—, así que sin esto
+        // la facade `Storage` anda y la subida de un archivo igual explota con
+        // "Target [Filesystem\Factory] is not instantiable".
+        $container->alias('filesystem', FilesystemFactory::class);
 
         // Auth facade chainable stub. The real AuthManager needs a
         // Laravel-booted kernel + user provider; in unit tests we just
@@ -148,7 +185,8 @@ abstract class MkLaravelTestCase extends BaseTestCase
         // tests that forget to mock a specific call do not blow up
         // with BindingResolutionException.
         $container->bind('auth', function (): object {
-            return new class {
+            return new class
+            {
                 public function __call(string $method, array $args): mixed
                 {
                     return $this;
@@ -159,7 +197,8 @@ abstract class MkLaravelTestCase extends BaseTestCase
         // Auth driver manager (used when the real AuthManager resolves
         // a guard). Same chainable stub strategy.
         $container->bind('auth.driver', function (): object {
-            return new class {
+            return new class
+            {
                 public function __call(string $method, array $args): mixed
                 {
                     return $this;
