@@ -245,6 +245,32 @@ abstract class MkDTO
 
     protected function castToString(mixed $value): string
     {
+        // 🔴 Un archivo subido NUNCA se convierte a string en silencio.
+        //
+        // `gettype()` de un UploadedFile es 'object', así que caía al `default`
+        // y `(string) $file` devuelve la RUTA DEL TEMPORAL
+        // (`/private/var/tmp/phpXXXX`). PHP borra ese temporal al terminar el
+        // request, así que la fila queda apuntando a un archivo inexistente:
+        // corrupción silenciosa y permanente, que después se ve como un avatar
+        // roto y obliga a arqueología para entender de dónde salió.
+        //
+        // Caso real: dos filas de admins de RETO quedaron así (2026-07-13,
+        // antes del fix de wiring del FileStoragePlugin).
+        //
+        // Si el DTO recibe un UploadedFile es porque `FileStoragePlugin` NO lo
+        // procesó — cuando corre, lo que llega acá ya es el path almacenado.
+        // O sea que guardarlo es SIEMPRE un error, y fallar fuerte es
+        // estrictamente mejor que persistir basura.
+        if ($value instanceof \SplFileInfo) {
+            throw new InvalidArgumentException(
+                'Se intentó guardar un archivo subido como string: se habría persistido '
+                .'la ruta del temporal, que PHP borra al terminar el request. '
+                .'Registrá FileStoragePlugin y declará el campo en su config '
+                .'`fields` (o marcalo con el sufijo `:file` en el scaffolder) '
+                .'para que el archivo se almacene y llegue acá como path.'
+            );
+        }
+
         return match (gettype($value)) {
             'string' => $value,
             'integer', 'double', 'boolean' => (string) $value,
