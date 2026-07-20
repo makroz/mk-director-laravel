@@ -75,6 +75,23 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Media (tabla polimórfica `mk_media`)
+    |--------------------------------------------------------------------------
+    | Usada por el trait `HasMkMedia` para adjuntar N archivos/embeds a
+    | cualquier modelo. Resuelve el caso de galería, que `FileStoragePlugin`
+    | no cubre (ese plugin es 1 columna = 1 path y sigue siendo lo correcto
+    | para un avatar).
+    |
+    | `table` es configurable para que un consumer con una tabla `mk_media`
+    | preexistente pueda renombrarla sin forkear el paquete — mismo patrón
+    | que `mk_progressive_codes`.
+    */
+    'media' => [
+        'table' => env('MK_MEDIA_TABLE', 'mk_media'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Module Discovery Paths
     |--------------------------------------------------------------------------
     |

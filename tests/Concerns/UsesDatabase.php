@@ -8,6 +8,7 @@ use Illuminate\Container\Container;
 use Illuminate\Database\Capsule\Manager as Capsule;
 use Illuminate\Database\Eloquent\Model as EloquentModel;
 use Illuminate\Database\Schema\Builder as SchemaBuilder;
+use Illuminate\Events\Dispatcher;
 
 /**
  * UsesDatabase — conexión sqlite :memory: REAL para los tests que la necesitan.
@@ -73,6 +74,29 @@ trait UsesDatabase
         ], 'testing');
         $capsule->getDatabaseManager()->setDefaultConnection('testing');
         $capsule->setAsGlobal();
+
+        // 🔴 SIN ESTO NO HAY EVENTOS DE MODELO.
+        //
+        // `bootEloquent()` NO instala un event dispatcher: sin él, Eloquent
+        // no emite `creating` / `deleting` / `saving`, y CUALQUIER
+        // `static::deleting(...)` de un trait (HasMkMedia, HasProgressiveCode,
+        // los que vengan) es código muerto que nunca corre.
+        //
+        // El síntoma es traicionero: los tests de borrado en cascada fallaban
+        // corridos solos y pasaban en la suite completa, porque otro archivo
+        // de test dejaba un dispatcher puesto en el estático global de
+        // Eloquent. Verde por contaminación cruzada — order-dependent, el mismo
+        // problema que documenta phpunit.xml.
+        $capsule->setEventDispatcher(new Dispatcher($container));
+
+        // Eloquent bootea cada modelo UNA sola vez por proceso, y
+        // `static::deleting(...)` registra el listener contra el dispatcher
+        // que exista EN ESE MOMENTO. Como acá se crea un dispatcher nuevo por
+        // test, un modelo booteado en el test anterior quedaría con sus
+        // listeners colgando del dispatcher viejo — y sus hooks no correrían.
+        // Limpiar la caché de booteo obliga a re-registrarlos contra el actual.
+        EloquentModel::clearBootedModels();
+
         $capsule->bootEloquent();
 
         // `:memory:` vive DENTRO de la conexión PDO: cada reconexión estrena una
@@ -125,6 +149,10 @@ trait UsesDatabase
             $this->capsule = null;
         }
 
+        // Y el dispatcher se saca también: dejarlo puesto es justo lo que hace
+        // que otro archivo de test se ponga verde por contaminación en vez de
+        // por mérito propio.
+        EloquentModel::unsetEventDispatcher();
         EloquentModel::unsetConnectionResolver();
     }
 }

@@ -138,6 +138,11 @@ class MkServiceProvider extends ServiceProvider
         // admins tables are available to every project.
         $this->loadMigrationsFrom(__DIR__.'/Auth/Database/Migrations');
 
+        // Migraciones de dominio del paquete (no-Auth): `mk_media`, etc.
+        // Dir separado a propósito — Auth/Database/Migrations es el store de
+        // RBAC y meter tablas de dominio ahí borra esa frontera.
+        $this->loadMigrationsFrom(__DIR__.'/Database/Migrations');
+
         // R-PKG-046 F9-B07 — Lazy plugin boot.
         //
         // El singleton PluginManager está registrado en `register()` pero su
