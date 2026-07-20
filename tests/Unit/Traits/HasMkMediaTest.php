@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Model as EloquentModel;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
+use Mk\Director\Enums\MkEmbedProvider;
 use Mk\Director\Enums\MkMediaKind;
 use Mk\Director\Models\MkMedia;
 use Mk\Director\Tests\Concerns\UsesDatabase;
@@ -210,7 +211,7 @@ test('un embed no intenta borrar ningún archivo', function () {
     $owner = MediaOwnerBigint::create([]);
     $owner->attachMedia([
         'kind' => MkMediaKind::Embed,
-        'provider' => 'youtube',
+        'provider' => MkEmbedProvider::YouTube,
         'provider_id' => 'dQw4w9WgXcQ',
         'source_url' => 'https://youtu.be/dQw4w9WgXcQ',
     ]);

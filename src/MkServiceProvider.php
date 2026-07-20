@@ -29,6 +29,7 @@ use Mk\Director\Console\Commands\MkSkillListCommand;
 use Mk\Director\Console\Commands\MkUpdateCommand;
 use Mk\Director\Console\Commands\SecurityLintCommand;
 use Mk\Director\Controllers\OpenApiController;
+use Mk\Director\Embeds\MkEmbedService;
 use Mk\Director\Managers\CacheManager;
 use Mk\Director\Managers\PluginManager;
 use Mk\Director\ModuleLoader\ModuleLoaderServiceProvider;
@@ -92,6 +93,21 @@ class MkServiceProvider extends ServiceProvider
         // singleton so the same instance is shared by the
         // middleware (writer) and the trait (reader).
         $this->app->singleton(TenantContext::class);
+
+        // MkEmbedService — reconocimiento de URLs de YouTube/TikTok/Instagram.
+        //
+        // Singleton porque no tiene estado propio y sí un caché que conviene
+        // compartir dentro del request. El caché se resuelve acá y no adentro
+        // del servicio para que un consumer sin `cache` configurado (o un test)
+        // pueda construirlo a mano sin caché y siga funcionando: el servicio lo
+        // toma como nullable a propósito.
+        $this->app->singleton(MkEmbedService::class, function ($app) {
+            return new MkEmbedService(
+                cache: $app->bound('cache') ? $app->make('cache')->store() : null,
+                timeout: (int) config('mk_director.embeds.timeout', 3),
+                cacheTtl: (int) config('mk_director.embeds.cache_ttl', 86400),
+            );
+        });
     }
 
     /**

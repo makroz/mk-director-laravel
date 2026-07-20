@@ -125,6 +125,27 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Embeds (YouTube / TikTok / Instagram)
+    |--------------------------------------------------------------------------
+    | Usado por `MkEmbedService`. CERO API keys: YouTube no necesita red
+    | (su miniatura sale por convención de URL) y TikTok/Instagram usan sus
+    | oEmbed públicos.
+    |
+    | `timeout` es bajo a propósito: esto corre mientras alguien espera que se
+    | guarde su publicación, y un tercero lento no puede hacerlo esperar. Si se
+    | vence, el embed se guarda igual sin miniatura.
+    |
+    | `cache_ttl` (segundos) aplica tanto al éxito como al fallo — cachear sólo
+    | el éxito haría que una URL que el proveedor no reconoce le pegue en cada
+    | request que muestre el post.
+    */
+    'embeds' => [
+        'timeout' => (int) env('MK_EMBEDS_TIMEOUT', 3),
+        'cache_ttl' => (int) env('MK_EMBEDS_CACHE_TTL', 86400),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | URL del storage según el host de la request (DESARROLLO)
     |--------------------------------------------------------------------------
     | `config/filesystems.php` arma la url del disk `public` desde `APP_URL`,

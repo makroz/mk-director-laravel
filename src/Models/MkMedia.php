@@ -7,6 +7,7 @@ namespace Mk\Director\Models;
 use Illuminate\Database\Eloquent\Model as EloquentModel;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 use Illuminate\Support\Facades\Storage;
+use Mk\Director\Enums\MkEmbedProvider;
 use Mk\Director\Enums\MkMediaKind;
 
 /**
@@ -44,6 +45,7 @@ class MkMedia extends EloquentModel
 
     protected $casts = [
         'kind' => MkMediaKind::class,
+        'provider' => MkEmbedProvider::class,
         'meta' => 'array',
         'size' => 'integer',
         'width' => 'integer',

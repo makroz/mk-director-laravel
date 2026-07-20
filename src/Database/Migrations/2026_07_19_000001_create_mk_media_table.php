@@ -77,7 +77,11 @@ return new class extends Migration
             // pegó el usuario; `provider` + `provider_id` es lo que se extrajo.
             // Separados a propósito: el legacy sobrecargaba UNA columna `url`
             // con tres significados distintos según el `type`.
-            $blueprint->string('provider')->nullable();
+            // Ver Mk\Director\Enums\MkEmbedProvider. Int-backed desde 1, igual
+            // que `kind`: el set es cerrado (sólo se guarda un provider que el
+            // paquete sabe detectar por regex), así que una columna de texto
+            // libre podría contener cualquier cosa y nada la validaría.
+            $blueprint->unsignedTinyInteger('provider')->nullable();
             $blueprint->string('provider_id')->nullable();
             $blueprint->text('source_url')->nullable();
             $blueprint->text('thumbnail_url')->nullable();
