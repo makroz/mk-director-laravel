@@ -2115,7 +2115,9 @@ PHP,
         $defaults['phone'] = ['type' => 'string', 'unique' => false];
 
         if ($withStatus) {
-            $defaults['status'] = ['type' => 'string', 'unique' => false];
+            // Revert 2026-07-19: `int`, alineado con la columna
+            // `unsignedTinyInteger` y con el enum int-backed.
+            $defaults['status'] = ['type' => 'int', 'unique' => false];
         }
 
         return $defaults;
@@ -4232,10 +4234,11 @@ PHP,
      * legacy (BC). Cuando está activo, threadea el status end-to-end para que la
      * feature funcione out-of-the-box (antes había que cablear 4 archivos a mano).
      *
-     * R-PKG-047 D4: `string` values (no `int`) post-D4 — la columna enum string-backed
-     * pinea `default('active')` y los Resources exponen `status` como string.
+     * Revert 2026-07-19: `int` values. La columna es `unsignedTinyInteger` con
+     * `default(1)` y los Resources exponen `status` como int (+ `status_label`
+     * para la UI). Ver el docblock de `Mk\Director\Auth\Enums\ScopeStatus`.
      *
-     * @param  string[]  $statusStates  Lista de nombres de estados canónicos (post-D4).
+     * @param  string[]  $statusStates  Lista de nombres de estados canónicos.
      * @return array<string, string>
      */
     protected function buildStatusCrudReplacements(bool $withStatus, array $statusStates, string $scope, string $scopeLower): array
@@ -4256,20 +4259,21 @@ PHP,
             ];
         }
 
-        // Resource: expone status (string) + status_label (string) — contrato con el front.
-        // Post-D4: status es STRING (backed enum values), no int.
+        // Resource: expone status (int) + status_label (string) — contrato con
+        // el front. El label va aparte justamente para que la UI no tenga que
+        // conocer los valores numéricos.
         $resourceEntry = "            'status' => \$this->status?->value,\n"
             ."            'status_label' => \$this->status?->label(),\n";
 
         // DTO: param + mapeos (el DTO es opt-in, pero debe ser consistente).
-        $dtoParam = "        public ?string \$status = null,\n";
-        $dtoFromRequest = "            status: \$request->input('status') !== null ? (string) \$request->input('status') : null,\n";
-        $dtoFromArray = "            status: isset(\$data['status']) ? (string) \$data['status'] : null,\n";
+        $dtoParam = "        public ?int \$status = null,\n";
+        $dtoFromRequest = "            status: \$request->input('status') !== null ? (int) \$request->input('status') : null,\n";
+        $dtoFromArray = "            status: isset(\$data['status']) ? (int) \$data['status'] : null,\n";
         $dtoToArray = "            'status' => \$this->status,\n";
 
         // Requests: valida contra el enum (Rule::enum). `sometimes`+`nullable`
         // porque la columna tiene default (no es obligatorio en create).
-        $ruleStore = "            'status' => ['sometimes', 'nullable', 'string', \\Illuminate\\Validation\\Rule::enum({$enumFqcn}::class)],\n";
+        $ruleStore = "            'status' => ['sometimes', 'nullable', 'integer', \\Illuminate\\Validation\\Rule::enum({$enumFqcn}::class)],\n";
         $ruleUpdate = $ruleStore;
 
         // Factory: default al primer estado; states por cada estado no-default.
@@ -4292,7 +4296,7 @@ PHP,
      * N10 — genera un factory state method por cada estado NO-default (el
      * primero es el default de definition()). Ej: `suspended()` → status Suspended.
      *
-     * R-PKG-047 D4: status es STRING (backed enum value), no int.
+     * Revert 2026-07-19: status es INT (backed enum value).
      *
      * @param  string[]  $statusStates  Lista de nombres de estados canónicos.
      */

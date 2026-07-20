@@ -125,19 +125,25 @@ test('N12: field unique conserva la regla unique (store + update ignore)', funct
 
 // ─── N9/N10 — status threadeado end-to-end ────────────────────────────────
 
-test('R-PKG-047 D4: buildStatusCrudReplacements threadea status (string-backed enum, default ON)', function () {
-    // D4: status es string-backed (no int). El command pinea los 4 cases
-    // canónicos como array indexado ['Active', 'Inactive', 'Blocked', 'Pending']
-    // (los 4 que matchean los cases de ScopeStatus canónico).
+test('buildStatusCrudReplacements threadea status (enum int-backed, default ON)', function () {
+    // Revert 2026-07-19: status es int-backed (ver el docblock de ScopeStatus).
+    // El command pinea los 4 cases canónicos como array indexado
+    // ['Active', 'Inactive', 'Blocked', 'Pending'].
     $repl = feedback4Invoke('buildStatusCrudReplacements', [true, ['Active', 'Inactive', 'Blocked', 'Pending'], 'Admin', 'admin']);
 
-    // Resource expone status (string) + status_label.
+    // Resource expone status (int) + status_label. El label es lo único que
+    // le permite a la UI mostrar algo legible sin conocer los números.
     expect($repl['{{statusResourceEntry}}'])
         ->toContain("'status' => \$this->status?->value,")
         ->toContain("'status_label' => \$this->status?->label(),");
 
-    // Requests validan status contra el enum (Rule::enum).
-    expect($repl['{{statusRequestRuleStore}}'])->toContain('Rule::enum(');
+    // Requests validan status contra el enum (Rule::enum) y con la regla de
+    // tipo alineada: con `'string'` y un enum int-backed, Rule::enum nunca
+    // matchearía y el alta fallaría con un mensaje que no dice nada.
+    expect($repl['{{statusRequestRuleStore}}'])
+        ->toContain('Rule::enum(')
+        ->toContain("'integer'")
+        ->not->toContain("'string'");
 
     // Factory default + state methods por cada estado no-default.
     expect($repl['{{statusFactoryDefault}}'])->toContain('::default()->value');
@@ -147,8 +153,11 @@ test('R-PKG-047 D4: buildStatusCrudReplacements threadea status (string-backed e
         ->toContain('public function pending(): static')
         ->not->toContain('is_active'); // D4: ya no usa la columna legacy.
 
-    // DTO threadeado (D4: status es STRING-backed enum, no int).
-    expect($repl['{{statusDtoParam}}'])->toContain('public ?string $status = null,');
+    // DTO threadeado con el tipo correcto. Éste es el assert que cazó que el
+    // revert había quedado a medias: la columna ya era entera y el DTO seguía
+    // declarando `?string`.
+    expect($repl['{{statusDtoParam}}'])->toContain('public ?int $status = null,');
+    expect($repl['{{statusDtoFromRequest}}'])->toContain('(int) $request->input(\'status\')');
 });
 
 test('R-PKG-047 D2: sin --with-status los placeholders son vacíos (BC) y factory usa inactive() legacy', function () {
