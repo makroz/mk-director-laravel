@@ -92,6 +92,31 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | URL del storage según el host de la request (DESARROLLO)
+    |--------------------------------------------------------------------------
+    | `config/filesystems.php` arma la url del disk `public` desde `APP_URL`,
+    | que es UN solo valor. En desarrollo eso no alcanza: el navegador de tu
+    | máquina llega por `127.0.0.1` y el celular con la app por la IP de LAN,
+    | así que uno de los dos siempre recibe URLs que no puede resolver. Y como
+    | la IP de LAN la reparte DHCP, se rompe sola cuando cambia el lease.
+    |
+    | Con esto activo, la url se arma con el host de la request entrante y cada
+    | cliente recibe una que SÍ puede resolver.
+    |
+    | 🔴 `null` = automático, y automático significa SOLO EN LOCAL.
+    |
+    | No lo pongas en `true` en producción: derivar URLs del header `Host` es
+    | host header injection / envenenamiento de caché. Un atacante manda
+    | `Host: evil.com` y tu app emite URLs a su servidor, que después terminan
+    | en mails y en cachés compartidas. En producción el único valor correcto
+    | es `APP_URL` (o el CDN).
+    */
+    'storage_url' => [
+        'follow_request_host' => env('MK_STORAGE_URL_FOLLOW_REQUEST_HOST', null),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Module Discovery Paths
     |--------------------------------------------------------------------------
     |

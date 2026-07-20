@@ -12,7 +12,6 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\ServiceProvider;
 use Mk\Director\Auth\AuthServiceProvider;
-use Mk\Director\ModuleLoader\ModuleLoaderServiceProvider;
 use Mk\Director\Console\Commands\AuthCreateSuperAdminCommand;
 use Mk\Director\Console\Commands\DiscoverAbilitiesCommand;
 use Mk\Director\Console\Commands\FixSanctumUuidsCommand;
@@ -23,6 +22,8 @@ use Mk\Director\Console\Commands\MakeDTOCommand;
 use Mk\Director\Console\Commands\MakeModuleCommand;
 use Mk\Director\Console\Commands\MakeServiceCommand;
 use Mk\Director\Console\Commands\MkCheckCommand;
+use Mk\Director\Console\Commands\MkMigrateIsActiveToStatusCommand;
+use Mk\Director\Console\Commands\MkMigrateStatusToIntCommand;
 use Mk\Director\Console\Commands\MkSkillDeployCommand;
 use Mk\Director\Console\Commands\MkSkillListCommand;
 use Mk\Director\Console\Commands\MkUpdateCommand;
@@ -30,9 +31,11 @@ use Mk\Director\Console\Commands\SecurityLintCommand;
 use Mk\Director\Controllers\OpenApiController;
 use Mk\Director\Managers\CacheManager;
 use Mk\Director\Managers\PluginManager;
+use Mk\Director\ModuleLoader\ModuleLoaderServiceProvider;
 use Mk\Director\Plugins\FileStoragePlugin;
 use Mk\Director\Tenancy\TenantContext;
 use Mk\Director\Tenancy\TenantResolver;
+use Mk\Director\Utils\MkRequestAwareStorageUrl;
 
 class MkServiceProvider extends ServiceProvider
 {
@@ -124,7 +127,7 @@ class MkServiceProvider extends ServiceProvider
 
         // D2: auto-register unless feature flag is explicitly disabled.
         if (config('mk_director.features.file_storage_plugin', true)
-            && !in_array(FileStoragePlugin::class, $pluginClasses, true)
+            && ! in_array(FileStoragePlugin::class, $pluginClasses, true)
         ) {
             $pluginClasses[] = FileStoragePlugin::class;
         }
@@ -158,6 +161,8 @@ class MkServiceProvider extends ServiceProvider
         // Container resuelve FileStoragePlugin buscando PluginManager → encuentra
         // el singleton YA CONSTRUIDO. Inyecta OK. No loop.
         $this->app->make(PluginManager::class)->boot();
+
+        $this->applyRequestAwareStorageUrl();
 
         $this->registerTenantMiddleware();
 
@@ -199,8 +204,8 @@ class MkServiceProvider extends ServiceProvider
                 FixSanctumUuidsCommand::class,
                 // R-PKG-047 D4: helper command para migrar `is_active` boolean
                 // pre-D4 al `status` enum string-backed (4 estados canónicos).
-                \Mk\Director\Console\Commands\MkMigrateIsActiveToStatusCommand::class,
-                \Mk\Director\Console\Commands\MkMigrateStatusToIntCommand::class,
+                MkMigrateIsActiveToStatusCommand::class,
+                MkMigrateStatusToIntCommand::class,
             ]);
         }
 
@@ -338,6 +343,50 @@ class MkServiceProvider extends ServiceProvider
      * e.g. inside a test — picks up the new state without
      * requiring the framework to re-boot.
      */
+    /**
+     * En DESARROLLO, arma la url del disk `public` con el host de la request
+     * entrante en vez de con `APP_URL`.
+     *
+     * `config/filesystems.php` deriva esa url de `APP_URL`, que es UN solo
+     * valor — pero en dev la url correcta depende de quién pregunta: el
+     * navegador local llega por `127.0.0.1` y el celular por la IP de LAN.
+     * Con un valor fijo, uno de los dos siempre recibe URLs que no resuelve, y
+     * como la IP la reparte DHCP se rompe sola al cambiar el lease.
+     *
+     * 🔴 Sólo aplica en entorno local. Derivar URLs del header `Host` es host
+     * header injection en producción. Ver {@see MkRequestAwareStorageUrl}.
+     */
+    protected function applyRequestAwareStorageUrl(): void
+    {
+        $configured = config('mk_director.storage_url.follow_request_host');
+
+        if (! MkRequestAwareStorageUrl::shouldApply(
+            $this->app->environment('local'),
+            $this->app->runningInConsole(),
+            $configured === null ? null : (bool) $configured,
+        )) {
+            return;
+        }
+
+        // Se resuelve por callback y no acá: en `boot()` todavía puede no
+        // haber una request, y además así cada request usa SU propio host
+        // (importa con Octane/Swoole, donde el proceso sobrevive entre
+        // requests y un valor calculado una sola vez quedaría pegado).
+        $this->app->booted(function (): void {
+            $request = $this->app->bound('request') ? $this->app['request'] : null;
+
+            if ($request === null || ! method_exists($request, 'getSchemeAndHttpHost')) {
+                return;
+            }
+
+            config([
+                'filesystems.disks.public.url' => MkRequestAwareStorageUrl::buildUrl(
+                    $request->getSchemeAndHttpHost()
+                ),
+            ]);
+        });
+    }
+
     protected function registerTenantMiddleware(): void
     {
         /** @var Router $router */
@@ -451,7 +500,7 @@ class MkServiceProvider extends ServiceProvider
             //  - false-positive flushes on consumer tables named like system
             //    tables (e.g. `cache_stats`, `password_reset_tokens_attempts`)
             foreach ($systemTables as $table) {
-                $pattern = '/(?:FROM|INTO|UPDATE)\s+`?' . preg_quote($table, '/') . '`?\b/i';
+                $pattern = '/(?:FROM|INTO|UPDATE)\s+`?'.preg_quote($table, '/').'`?\b/i';
                 if (preg_match($pattern, $query->sql) === 1) {
                     return;
                 }
