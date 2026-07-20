@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace Mk\Director\DTOs;
 
+use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Http\Request;
 use InvalidArgumentException;
 
 /**
  * DTO Factory - Crea DTOs automáticamente desde configuración
- * 
+ *
  * Soporta:
  * - DTO explícito definido por el dev
  * - Fallback automático si no hay DTO
@@ -22,7 +24,7 @@ class DTOFactory
      * Crear DTO desde request - detecta si hay DTO definido o usa fallback
      */
     public static function makeFromRequest(
-        \Illuminate\Http\Request $request,
+        Request $request,
         string $modelClass,
         ?string $dtoClass = null,
         ?array $enumMap = null
@@ -56,6 +58,7 @@ class DTOFactory
     protected static function makeFromDTO(array $data, string $dtoClass): array
     {
         $dto = $dtoClass::fromArray($data);
+
         return $dto->toArray();
     }
 
@@ -108,7 +111,7 @@ class DTOFactory
                 $validValues = array_column($enumClass::cases(), 'value');
                 throw new InvalidArgumentException(
                     "Valor inválido para el campo (Enum {$enumClass}): '{$value}'. "
-                    . "Valores válidos: " . implode(', ', $validValues)
+                    .'Valores válidos: '.implode(', ', $validValues)
                 );
             }
             throw new InvalidArgumentException("Valor inválido: '{$value}'");
@@ -148,7 +151,7 @@ class DTOFactory
                 'boolean', 'bool' => filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? (bool) $value,
                 'integer', 'int' => (int) $value,
                 'float', 'double', 'real', 'decimal' => (float) $value,
-                'datetime', 'date', 'timestamp' => $value instanceof \DateTime ? $value : ($value ? \Carbon\Carbon::parse($value) : null),
+                'datetime', 'date', 'timestamp' => $value instanceof \DateTime ? $value : ($value ? Carbon::parse($value) : null),
                 default => $value,
             };
         }
@@ -162,31 +165,31 @@ class DTOFactory
     protected static function safeJsonDecode(string $value): array|object
     {
         if (function_exists('json_validate')) {
-            if (!json_validate($value)) {
-                throw new InvalidArgumentException("Payload JSON inválido detectado por DTOFactory.");
+            if (! json_validate($value)) {
+                throw new InvalidArgumentException('Payload JSON inválido detectado por DTOFactory.');
             }
         }
-        
+
         $decoded = json_decode($value, true);
         if (json_last_error() !== JSON_ERROR_NONE) {
-            throw new InvalidArgumentException("Payload JSON inválido: " . json_last_error_msg());
+            throw new InvalidArgumentException('Payload JSON inválido: '.json_last_error_msg());
         }
-        
+
         return $decoded;
     }
 
     public static function detectEnums(string $modelClass): array
     {
         $enums = [];
-        
+
         $reflection = new \ReflectionClass($modelClass);
         $modelDir = dirname($reflection->getFileName());
         $modelNamespace = $reflection->getNamespaceName();
 
         // Resolve the enum namespace from the model's own namespace, not hardcoded App\Modules\.
         // e.g. App\Modules\Survey\Models\SurveyModel → App\Modules\Survey\Enums\
-        $enumNamespace  = preg_replace('/\\\\Models$/', '\\Enums', $modelNamespace)
-            ?: $modelNamespace . '\\Enums';
+        $enumNamespace = preg_replace('/\\\\Models$/', '\\Enums', $modelNamespace)
+            ?: $modelNamespace.'\\Enums';
 
         if (function_exists('config')) {
             try {
@@ -198,19 +201,19 @@ class DTOFactory
             }
         }
 
-        $enumDir = dirname($modelDir) . '/Enums';
-        $enumFiles = glob($enumDir . '/*Enum.php') ?: [];
-        
+        $enumDir = dirname($modelDir).'/Enums';
+        $enumFiles = glob($enumDir.'/*Enum.php') ?: [];
+
         foreach ($enumFiles as $file) {
             $className = basename($file, '.php');
-            
+
             // Mapear: SurveyStatusEnum -> status
             $fieldName = ltrim(
                 strtolower(preg_replace('/([A-Z])/', '_$1', str_replace('Enum', '', $className))),
                 '_'
             );
 
-            $fqcn = $enumNamespace . '\\' . $className;
+            $fqcn = $enumNamespace.'\\'.$className;
 
             if (class_exists($fqcn) || interface_exists($fqcn)) {
                 $enums[$fieldName] = $fqcn;

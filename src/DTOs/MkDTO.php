@@ -9,7 +9,7 @@ use InvalidArgumentException;
 
 /**
  * MkDTO - Base class for Data Transfer Objects
- * 
+ *
  * Proporciona:
  * - Type safety con propiedades tipadas
  * - Validación automática de enums
@@ -31,10 +31,10 @@ abstract class MkDTO
      */
     public static function fromArray(array $data): static
     {
-        $dto = new static();
-        
+        $dto = new static;
+
         foreach ($data as $key => $value) {
-            if (!property_exists($dto, $key)) {
+            if (! property_exists($dto, $key)) {
                 continue;
             }
 
@@ -47,7 +47,7 @@ abstract class MkDTO
                 throw new \LogicException(
                     sprintf(
                         'Cannot hydrate readonly property %s::$%s after construction. '
-                        . 'Override fromArray() in your DTO to inject values via the constructor.',
+                        .'Override fromArray() in your DTO to inject values via the constructor.',
                         static::class,
                         $key
                     )
@@ -67,10 +67,10 @@ abstract class MkDTO
     {
         $data = [];
         $reflection = new \ReflectionClass($this);
-        
+
         foreach ($reflection->getProperties(\ReflectionProperty::IS_PUBLIC | \ReflectionProperty::IS_PROTECTED) as $property) {
             $key = $property->getName();
-            
+
             // PHP 8+ Uninitialized check
             if ($property->isInitialized($this)) {
                 $value = $this->{$key};
@@ -91,14 +91,14 @@ abstract class MkDTO
         $enums = [];
 
         $reflection = new \ReflectionClass($modelClass);
-        $modelDir  = dirname($reflection->getFileName());
+        $modelDir = dirname($reflection->getFileName());
         $modelName = $reflection->getShortName();
 
         // Resolve the enum namespace from the model's own namespace, not hardcoded App\Modules\.
         // e.g. App\Modules\Survey\Models\SurveyModel → App\Modules\Survey\Enums\
         $modelNamespace = $reflection->getNamespaceName();
-        $enumNamespace  = preg_replace('/\\\\Models$/', '\\Enums', $modelNamespace)
-            ?: $modelNamespace . '\\Enums';
+        $enumNamespace = preg_replace('/\\\\Models$/', '\\Enums', $modelNamespace)
+            ?: $modelNamespace.'\\Enums';
 
         // Allow override via config (e.g. config('mk_director.enum_namespace_resolver'))
         if (function_exists('config')) {
@@ -111,8 +111,8 @@ abstract class MkDTO
             }
         }
 
-        $enumDir = dirname($modelDir) . '/Enums';
-        $enumFiles = glob($enumDir . '/*Enum.php') ?: [];
+        $enumDir = dirname($modelDir).'/Enums';
+        $enumFiles = glob($enumDir.'/*Enum.php') ?: [];
 
         foreach ($enumFiles as $file) {
             $className = basename($file, '.php');
@@ -123,7 +123,7 @@ abstract class MkDTO
                 '_'
             );
 
-            $fqcn = $enumNamespace . '\\' . $className;
+            $fqcn = $enumNamespace.'\\'.$className;
 
             // Solo registrar si la clase realmente existe (evita referencias rotas)
             if (class_exists($fqcn) || interface_exists($fqcn)) {
@@ -140,7 +140,7 @@ abstract class MkDTO
     protected function validateAndCast(string $key, mixed $value): mixed
     {
         $types = (array) $this->getPropertyType($key);
-        
+
         if ($value === null || in_array('mixed', $types)) {
             return $value;
         }
@@ -151,7 +151,7 @@ abstract class MkDTO
         }
 
         // Si es una union, seleccionar el primer tipo representativo para casting
-        $type = current(array_filter($types, fn($t) => $t !== 'null' && $t !== 'mixed')) ?: 'mixed';
+        $type = current(array_filter($types, fn ($t) => $t !== 'null' && $t !== 'mixed')) ?: 'mixed';
 
         return match ($type) {
             'string' => $this->castToString($value),
@@ -171,11 +171,11 @@ abstract class MkDTO
     {
         $reflection = new \ReflectionProperty($this, $property);
         $type = $reflection->getType();
-        
+
         if ($type instanceof \ReflectionNamedType) {
             return $type->getName();
         }
-        
+
         if ($type instanceof \ReflectionUnionType) {
             $out = [];
             foreach ($type->getTypes() as $t) {
@@ -183,9 +183,10 @@ abstract class MkDTO
                     $out[] = $t->getName();
                 }
             }
-            return !empty($out) ? $out : 'mixed';
+
+            return ! empty($out) ? $out : 'mixed';
         }
-        
+
         return 'mixed';
     }
 
@@ -195,7 +196,7 @@ abstract class MkDTO
     protected function isEnumProperty(string $property): string|bool
     {
         $types = (array) $this->getPropertyType($property);
-        
+
         foreach ($types as $type) {
             if (enum_exists($type)) {
                 return $type;
@@ -229,7 +230,7 @@ abstract class MkDTO
             $validValues = array_column($enumClass::cases(), 'value');
             throw new InvalidArgumentException(
                 "Valor inválido para {$property}: '{$value}'. "
-                . "Valores válidos: " . implode(', ', $validValues)
+                .'Valores válidos: '.implode(', ', $validValues)
             );
         }
     }
@@ -287,16 +288,16 @@ abstract class MkDTO
         if (is_string($value)) {
             // Soporte estricto para JSON validación PHP 8.3+
             if (function_exists('json_validate')) {
-                if (!json_validate($value)) {
-                    throw new InvalidArgumentException("Formato JSON inválido detectado en DTO.");
+                if (! json_validate($value)) {
+                    throw new InvalidArgumentException('Formato JSON inválido detectado en DTO.');
                 }
             }
-            
+
             $decoded = json_decode($value, true);
             if (json_last_error() !== JSON_ERROR_NONE) {
-                throw new InvalidArgumentException("Formato JSON inválido: " . json_last_error_msg());
+                throw new InvalidArgumentException('Formato JSON inválido: '.json_last_error_msg());
             }
-            
+
             return is_array($decoded) ? $decoded : [$value];
         }
 
