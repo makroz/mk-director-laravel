@@ -107,6 +107,24 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Comentarios (tabla polimórfica `mk_comments`)
+    |--------------------------------------------------------------------------
+    | Usada por el trait `HasMkComments`. Anidamiento de UN solo nivel
+    | (comentario → respuesta, y ahí termina) y `SoftDeletes` de verdad — el
+    | legacy tenía la columna `deleted_at` sin el trait, así que el borrado
+    | era físico y la columna sólo daba una falsa sensación de reversibilidad.
+    |
+    | `per_page` es el default de `paginatedComments()`. Existe porque el hilo
+    | de comentarios NO se devuelve entero nunca: un post viral con 5.000
+    | comentarios no puede serializarse en una respuesta.
+    */
+    'comments' => [
+        'table' => env('MK_COMMENTS_TABLE', 'mk_comments'),
+        'per_page' => (int) env('MK_COMMENTS_PER_PAGE', 15),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | URL del storage según el host de la request (DESARROLLO)
     |--------------------------------------------------------------------------
     | `config/filesystems.php` arma la url del disk `public` desde `APP_URL`,
