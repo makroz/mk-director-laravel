@@ -516,9 +516,11 @@ test('F10-B07: buildProfileFieldsFillable() mapea type=file a ?string (PHP váli
 // `--profile-fields="photo_path:file"`, el scaffolder lo trata como un file
 // field normal (columna `photo_path`, accessor `getPhotoPathUrlAttribute`).
 //
-// Side fix: el enum en `{{statusColumn}}` ahora pinea 'blocked' (R-PKG-047
-// D4 BC break) en vez del legacy 'suspended'. Idem el enum-status.stub
-// pinea `case Blocked = 'blocked';` (covered separately in F10-B12).
+// Side fix: el tercer estado canónico pasó de `Suspended` a `Blocked`
+// (R-PKG-047 D4 BC break). Tras el revert del 2026-07-19 el enum volvió a
+// int-backed: `{{statusColumn}}` emite una columna `unsignedTinyInteger`
+// con default 1, y el enum-status.stub pinea `case Blocked = 3;`
+// (covered separately in F10-B12).
 
 test('F10-B10: buildProfileFieldsReplacements() acepta $loginField y dedup contra core fields', function () {
     $source = commandSource();
@@ -559,20 +561,23 @@ test('F10-B10: $columns emission SKIP si key en core fields (no duplicate)', fun
     expect($source)->toMatch('/if\s*\(\s*!\s*\$isCore\s*\)\s*\{\s*\$\s*columns\s*\.\=/');
 });
 
-test('F10-B10: {{statusColumn}} enum pinea blocked (no suspended) — R-PKG-047 D4', function () {
+test('F10-B10: {{statusColumn}} emite columna int con default 1 (no el enum string legacy)', function () {
     $source = commandSource();
 
-    // R-PKG-047 D4 BC break: el enum canónico post-D4 es `Blocked` (no
-    // `Suspended`). El helper `{{statusColumn}}` en el array de replacements
-    // pinea el enum con los 4 estados canónicos.
-    //
-    // Pin: la string `'blocked'` aparece en el source (pinea `'active','inactive','blocked','pending'`).
-    expect($source)->toContain("'blocked'");
+    // Revert 2026-07-19: el enum volvió a int-backed, así que la migración ya
+    // no emite `$table->enum('status', [...strings...])` sino una columna
+    // numérica con default 1 = ScopeStatus::Active.
+    expect($source)->toMatch("/\\\$table->unsignedTinyInteger\\('status'\\)->default\\(1\\)->index\\(\\);/");
 
-    // Pin: la string legacy `'suspended'` NO aparece en el array de status
-    // (puede aparecer en otros comentarios / BC break notes — verificar solo
-    // que NO está en el `\$table->enum(...)` line).
+    // Pin: NO vuelve el enum string, ni en su forma post-D4 ('blocked') ni en
+    // la legacy pre-D4 ('suspended').
+    expect($source)->not->toContain("['active','inactive','blocked','pending']");
     expect($source)->not->toContain("['active','inactive','suspended','pending']");
+
+    // Pin: el tercer estado canónico sigue siendo `Blocked` (R-PKG-047 D4 BC
+    // break) — eso no cambió con el revert del backing type. Scopeado al array
+    // `$statusStates`: `'Suspended'` todavía aparece suelto en comentarios de BC.
+    expect($source)->toMatch("/\\\$statusStates\\s*=[^\\]]*'Blocked'[^\\]]*\\]/");
 });
 // ── F10-B01 + F10-B02 regression tests (R-PKG-050) ────────────────────────
 //
@@ -619,7 +624,7 @@ test('F10-B02: resolveRequiredProfileFields() acepta ?array y retorna [] si null
 });
 // ── F10-B12 regression tests (R-PKG-050) ──────────────────────────────────
 //
-// Bug: `enum-status.stub` pineaba `case Suspended = 'suspended'` (pre-D4
+// Bug: `enum-status.stub` pineaba un case `Suspended` (pre-D4
 // legacy). R-PKG-047 D4 BC break cambió el canon a `Blocked`. Además, el
 // wrapper extiende `ScopeStatus` (base enum del paquete) que también tenía
 // `case Suspended` — el scaffolder pineaba stubs que NO podían extender
@@ -634,8 +639,9 @@ test('F10-B02: resolveRequiredProfileFields() acepta ?array y retorna [] si null
 test('F10-B12: ScopeStatus base enum pinea Blocked (no Suspended) — R-PKG-047 D4', function () {
     $source = file_get_contents(packageRoot().'/src/Auth/Enums/ScopeStatus.php');
 
-    // Pin: la case `Blocked` existe con value 'blocked'.
-    expect($source)->toMatch('/case\s+Blocked\s*=\s*[\'"]blocked[\'"]/');
+    // Pin: la case `Blocked` existe y es el 3er estado canónico (int-backed
+    // tras el revert del 2026-07-19).
+    expect($source)->toMatch('/case\s+Blocked\s*=\s*3\s*;/');
 
     // Pin: la case `Suspended` NO existe (pre-D4 removida).
     expect($source)->not->toMatch('/case\s+Suspended\s*=/');
@@ -644,8 +650,9 @@ test('F10-B12: ScopeStatus base enum pinea Blocked (no Suspended) — R-PKG-047 
 test('F10-B12: enum-status.stub pinea Blocked (no Suspended)', function () {
     $source = stubSource('auth-user/enum-status.stub');
 
-    // Pin: la case `Blocked` existe.
-    expect($source)->toMatch('/case\s+Blocked\s*=\s*[\'"]blocked[\'"]/');
+    // Pin: la case `Blocked` existe y es el 3er estado canónico (int-backed
+    // tras el revert del 2026-07-19), alineada con `ScopeStatus::Blocked`.
+    expect($source)->toMatch('/case\s+Blocked\s*=\s*3\s*;/');
 
     // Pin: la case `Suspended` NO existe.
     expect($source)->not->toMatch('/case\s+Suspended\s*=/');

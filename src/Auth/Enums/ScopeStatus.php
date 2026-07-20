@@ -5,67 +5,69 @@ declare(strict_types=1);
 namespace Mk\Director\Auth\Enums;
 
 /**
- * ScopeStatus — enum canónico (SSoT) del paquete mk-director.
+ * ScopeStatus — enum canónico (SSoT) del paquete mk-director. INT-BACKED.
  *
  * ============================================================
- *  Patrón R-PKG-038 + R-PKG-047 D4
+ *  Historia: R-PKG-047 D4 y su corrección (2026-07-19)
  * ============================================================
  *
  * Antes de R-PKG-047, cada scope scaffoldeado generaba su propio
- * `{Scope}Status` enum (`int`-backed, configurable via `--status-values`,
- * con valores 1..N asignados en orden de declaración). Drift entre scopes
- * + flag extra requerida + fail-fast contra typos = fricción operacional.
+ * `{Scope}Status` int-backed **configurable via `--status-values`**, con
+ * valores 1..N asignados en orden de declaración. Eso sí era un problema
+ * real: el `1` del Admin no significaba lo mismo que el `1` del Member.
  *
- * Post-R-PKG-047 D4, el paquete expone UN enum canónico `ScopeStatus`
- * (`string`-backed, 4 estados pineados por la agencia) que los scopes
- * scaffoldeados reusan sin override. Los 4 estados cubren los casos
- * comunes de negocio:
+ * R-PKG-047 D4 arregló ese drift, pero en el mismo commit (af62e81) viajaron
+ * DOS decisiones independientes empaquetadas como una:
  *
- *   - **Active**:    usuario con permiso de autenticarse normalmente.
- *   - **Inactive**:  usuario explícitamente dado de baja (no se loguea).
- *   - **Blocked**: usuario bloqueado temporalmente por admin (ban).
- *   - **Pending**:   usuario creado pero pendiente de aprobación / verify.
+ *   1. Fijar 4 estados canónicos en un SSoT y eliminar `--status-values`.
+ *      → CORRECTA y necesaria. Es lo único que el drift exigía.
+ *   2. Cambiar el backing type de int a string.
+ *      → Se subió de colado. El argumento del drift NO la justifica: con un
+ *        único enum canónico, `Active=1..Pending=4` tiene drift cero porque
+ *        no hay un segundo enum con el cual desincronizarse.
  *
- * El scaffolder `mk:make:auth-user {Scope}` pine un **thin wrapper**
- * (`{Scope}Status` que extiende `ScopeStatus`) para preservar BC con
- * consumers que pinean `use App\Modules\Admin\Enums\AdminStatus;` directo.
- * El thin wrapper solo override `values()` y `default()` (que mantienen
- * los 4 estados canónicos via delegation a ScopeStatus).
+ * La revisión del 2026-07-19 no encontró NINGÚN bug que motivara (2): todas
+ * las menciones de "int-backed" en el paquete son descriptivas o notas de BC,
+ * ninguna reporta un defecto. Y el cambio, que decía eliminar drift, lo creó
+ * un nivel más arriba: la épica S6.5 de Condaty migró todo `char → numérico`,
+ * así que el paquete quedó apuntando al lado contrario del otro sistema de
+ * la agencia.
+ *
+ * Por eso este enum vuelve a int-backed, conservando (1): los 4 estados
+ * siguen pineados como SSoT y `--status-values` sigue eliminado.
+ *
+ * **NO revertir a string sin leer esto primero.** Si aparece una razón
+ * genuina, que quede documentada acá con el caso concreto.
+ *
+ * ============================================================
+ *  Convención de valores
+ * ============================================================
+ *
+ * Los valores arrancan en **1, no en 0** (regla de la agencia, FEEDBACK4).
+ * El 0 es indistinguible de `null`/`false` en un montón de bordes — casts
+ * flojos, `empty()`, query strings — y esa ambigüedad ya nos mordió antes.
  *
  * ============================================================
  *  Compat / BC
  * ============================================================
  *
- * - **Pre-D4 `{Scope}Status` int-backed**: NO hay migrador automático
- *   incluido en este commit. El helper `migrateIsActiveToStatus()` (per
- *   `php artisan mk:migrate-is-active Admin`) maneja la transición
- *   `is_active` boolean → `status` enum para scopes pre-D4.
- *
- * - **Scope sin `ScopeStatus` cast (pre-D4)**: BaseAuthController::userHasValidStatus()
- *   fallback a `is_active` boolean via `Schema::hasColumn()` (BC).
- *
- * - **Scope que ya pineaba `{Scope}Status` int-backed**: el thin wrapper
- *   per-scope pineado post-D4 es compatible si el consumer NO dependía
- *   del valor numérico. Si dependía (e.g. `match($status->value) { 1 => ... }`),
- *   el consumer debe migrar a `match($status) { AdminStatus::Active => ... }`
- *   — BC break aceptable per R-G-033 (RETO regenera + clean rebuild).
- *
- * - **Hardcoded `is_active` boolean en query custom del consumer**: el
- *   helper `migrateIsActiveToStatus()` convierte la columna in-place
- *   (conserva data, cambia tipo). Después el consumer debe migrar queries
- *   de `where('is_active', true)` a `where('status', ScopeStatus::Active)`.
- *
- * - **Drift footgun prevention**: el modelo concreto del scope (e.g.
- *   `Admin extends AuthUser`) pine el cast `protected $casts = [
- *   'status' => ScopeStatus::class]`. Si se olvida, el cast retorna null
- *   y `userHasValidStatus()` fallback a `is_active` boolean (BC fallback).
+ * - **Consumers post-D4 con la columna `status` string** (es el caso de
+ *   RETO): `php artisan mk:migrate-status-to-int {Scope}` convierte la
+ *   columna y la data in-place. Usa {@see self::fromLegacyString()}.
+ * - **Cross-stack**: `values()` vuelve a devolver `int[]`. Los frontends
+ *   (`@makroz/web` / `@makroz/mobile`) comparan contra números; si alguno
+ *   pineaba el string, hay que regenerar.
+ * - **Drift footgun**: el modelo concreto del scope pine el cast
+ *   `protected $casts = ['status' => ScopeStatus::class]`. Si se olvida,
+ *   el cast retorna null y `userHasValidStatus()` cae al fallback
+ *   `is_active` boolean.
  */
-enum ScopeStatus: string
+enum ScopeStatus: int
 {
-    case Active = 'active';
-    case Inactive = 'inactive';
-    case Blocked = 'blocked';
-    case Pending = 'pending';
+    case Active = 1;
+    case Inactive = 2;
+    case Blocked = 3;
+    case Pending = 4;
 
     /**
      * ¿Este status permite al usuario autenticarse?
@@ -86,7 +88,7 @@ enum ScopeStatus: string
     /**
      * Status por default al crear un user nuevo.
      *
-     * Convention de la agencia: `Active` (login funcional por default).
+     * Convención de la agencia: `Active` (login funcional por default).
      * Si el consumer quiere `Pending` (workflow de aprobación admin),
      * override este método en el thin wrapper per-scope.
      */
@@ -96,18 +98,55 @@ enum ScopeStatus: string
     }
 
     /**
-     * Lista de values string del enum (en orden de declaración canónico).
+     * Lista de values int del enum (en orden de declaración canónico).
      *
-     * Útil para migration `enum` column + dropdown UI select + API filter.
-     * Shape preservada cross-stack: `@makroz/web` `@makroz/mobile` pueden
-     * consumir este array directamente como `ScopeStatus.values()` sin
-     * introspection PHP-side.
+     * Útil para la regla de validación, el dropdown de UI y los filtros de
+     * API. Shape preservada cross-stack: los frontends consumen este array
+     * directamente sin introspection PHP-side.
      *
-     * @return array<int, string>
+     * @return array<int, int>
      */
     public static function values(): array
     {
-        return array_map(static fn (self $case): string => $case->value, self::cases());
+        return array_map(static fn (self $case): int => $case->value, self::cases());
+    }
+
+    /**
+     * Mapa `value => label` listo para poblar un select.
+     *
+     * Existe para que el consumer no tenga que reconstruirlo a mano y se le
+     * escape un estado cuando agreguemos uno.
+     *
+     * @return array<int, string>
+     */
+    public static function options(): array
+    {
+        $options = [];
+
+        foreach (self::cases() as $case) {
+            $options[$case->value] = $case->label();
+        }
+
+        return $options;
+    }
+
+    /**
+     * Traduce el value STRING de la era D4 al case int-backed actual.
+     *
+     * Lo usa `mk:migrate-status-to-int` para convertir la data de consumers
+     * que alcanzaron a migrar a string. Acepta también 'suspended', que fue
+     * el nombre del tercer estado antes de que R-PKG-050 (F10-B12) lo
+     * renombrara a 'blocked': hay bases con ese valor escrito.
+     */
+    public static function fromLegacyString(string $legacy): self
+    {
+        return match (strtolower(trim($legacy))) {
+            'active' => self::Active,
+            'inactive' => self::Inactive,
+            'blocked', 'suspended' => self::Blocked,
+            'pending' => self::Pending,
+            default => throw new \ValueError("Status legacy desconocido: {$legacy}"),
+        };
     }
 
     /**
@@ -119,10 +158,10 @@ enum ScopeStatus: string
     public function label(): string
     {
         return match ($this) {
-            self::Active    => 'Activo',
-            self::Inactive  => 'Inactivo',
+            self::Active => 'Activo',
+            self::Inactive => 'Inactivo',
             self::Blocked => 'Bloqueado',
-            self::Pending   => 'Pendiente',
+            self::Pending => 'Pendiente',
         };
     }
 }

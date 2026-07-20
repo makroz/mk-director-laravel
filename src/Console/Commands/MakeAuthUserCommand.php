@@ -732,21 +732,25 @@ PHP,
         // valor por defecto. El enum se genera aparte (ver abajo, tras los stubs base).
         $statusEnumFqcn = "\\App\\Modules\\{$scope}\\Enums\\{$scope}Status";
         $statusReplacements = [
-            // R-PKG-047 D4 — `enum` column string-backed con 4 valores canónicos.
-            // F10-B10 (R-PKG-050): pine enum canónico post-D4 (4 estados, 'blocked'
-            // en vez del legacy 'suspended'). R-PKG-047 D4 cambió el canon:
-            // {Scope}Status enum ahora es `Blocked` (no `Suspended`) para
-            // matchear con el enum-status.stub actualizado. Pre-D4, este
-            // helper pineaba 'suspended' que NO matcheaba con el enum
-            // generado por el stub → silent mismatch (la columna aceptaba
-            // 'suspended' pero el enum PHP solo definía los otros 3).
+            // Columna `status` INT-BACKED (revert 2026-07-19 de R-PKG-047 D4).
             //
-            // NOTA: la columna enum requiere MySQL/PostgreSQL/SQLite support;
-            // mysql antiguo (< 5.7) no soporta ENUM type — usar
-            // `mk:migrate-is-active` post-D4 si tu scope pre-D4 pineaba
-            // `is_active` boolean y quiere migrar el type.
+            // D4 la había pasado a `enum('status', [...])` string. Ver el
+            // docblock de `Mk\Director\Auth\Enums\ScopeStatus` para el análisis
+            // completo: el drift que D4 arreglaba lo causaba el flag
+            // `--status-values` configurable, no el backing type, y el cambio
+            // a string creó drift con Condaty (épica S6.5, char → numérico).
+            //
+            // El valor literal `1` es `ScopeStatus::Active->value`. Va
+            // hardcodeado a propósito: una migración es un artefacto
+            // congelado en el tiempo y no debe depender de código de app que
+            // puede cambiar debajo. Si algún día se renumera el enum, las
+            // migraciones ya corridas tienen que seguir describiendo lo que
+            // realmente pasó.
+            //
+            // Bonus del revert: `unsignedTinyInteger` no tiene el problema de
+            // portabilidad del type ENUM, que mysql < 5.7 no soporta.
             '{{statusColumn}}' => $withStatus
-                ? "\$table->enum('status', ['active','inactive','blocked','pending'])->default('active')->index();\n            "
+                ? "\$table->unsignedTinyInteger('status')->default(1)->index();\n            "
                 : '',
             '{{statusFillableEntry}}' => $withStatus
                 ? "        'status',\n"

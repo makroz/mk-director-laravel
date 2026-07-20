@@ -13,8 +13,13 @@ use Throwable;
 /**
  * MkMigrateIsActiveToStatusCommand — R-PKG-047 D4 migration helper.
  *
- * Convierte la columna `is_active` boolean de un scope pre-D4 al enum `status`
- * string-backed (4 estados canónicos pineados por `ScopeStatus`).
+ * Convierte la columna `is_active` boolean de un scope pre-D4 a la columna
+ * `status` INT-backed (4 estados canónicos pineados por `ScopeStatus`).
+ *
+ * NOTA (revert 2026-07-19): entre R-PKG-047 D4 y esta fecha, este comando
+ * escribía una columna `ENUM(...)` string. Ver el docblock de `ScopeStatus`
+ * para el análisis. Si ya corriste este comando en su versión string, usá
+ * `php artisan mk:migrate-status-to-int {Scope}` para terminar de convertir.
  *
  * Pipeline:
  *   1. Resolver tabla del scope (`{moduleNamePluralLower}`) via argumento.
@@ -23,8 +28,8 @@ use Throwable;
  *      - Tiene `is_active` boolean?
  *      - NO tiene `status` enum ya (idempotente: skip si existe).
  *   3. ALTER TABLE:
- *      - `is_active = true` → `status = 'active'`
- *      - `is_active = false` → `status = 'inactive'`
+ *      - `is_active = true` → `status = ScopeStatus::Active->value` (1)
+ *      - `is_active = false` → `status = ScopeStatus::Inactive->value` (2)
  *      - Renombrar columna a `status` (no se borra el dato, se conserva).
  *      - Si se pasa `--drop-is-active`, drop la columna original (BC: default false).
  *
@@ -45,7 +50,7 @@ class MkMigrateIsActiveToStatusCommand extends Command
         {--drop-is-active : Borrar la columna is_active después de renombrar (NO recomendado sin audit previo de queries custom).}
         {--dry-run : Solo mostrar el plan SQL sin ejecutar (recomendado pre-prod).}';
 
-    protected $description = 'Migra la columna is_active boolean a status enum string-backed (4 estados canónicos pineados por ScopeStatus). R-PKG-047 D4 migration helper.';
+    protected $description = 'Migra la columna is_active boolean a status int-backed (4 estados canónicos pineados por ScopeStatus).';
 
     public function handle(): int
     {
@@ -117,11 +122,18 @@ class MkMigrateIsActiveToStatusCommand extends Command
 
         $this->line("   📊 Pre-migration: {$trueCount} activos, {$falseCount} inactivos, {$nullCount} null.");
 
+        // Los valores salen del enum y no van hardcodeados: si algún día se
+        // renumeran los cases, este comando sigue escribiendo lo correcto.
+        // (Distinto criterio que el de las migraciones generadas, que sí van
+        // con el literal porque son artefactos congelados en el tiempo.)
+        $active = ScopeStatus::Active->value;
+        $inactive = ScopeStatus::Inactive->value;
+
         if ($this->option('dry-run')) {
             $this->warn('   💧 DRY-RUN: no se ejecutaron cambios. SQL plan abajo:');
-            $this->line("      ALTER TABLE `{$table}` ADD COLUMN `status` ENUM('active','inactive','suspended','pending') DEFAULT 'active' AFTER `is_active`;");
-            $this->line("      UPDATE `{$table}` SET `status` = 'active' WHERE `is_active` = 1;");
-            $this->line("      UPDATE `{$table}` SET `status` = 'inactive' WHERE `is_active` = 0;");
+            $this->line("      ALTER TABLE `{$table}` ADD COLUMN `status` TINYINT UNSIGNED NOT NULL DEFAULT {$active} AFTER `is_active`;");
+            $this->line("      UPDATE `{$table}` SET `status` = {$active} WHERE `is_active` = 1;");
+            $this->line("      UPDATE `{$table}` SET `status` = {$inactive} WHERE `is_active` = 0;");
             if ($this->option('drop-is-active')) {
                 $this->line("      ALTER TABLE `{$table}` DROP COLUMN `is_active`;");
             } else {
@@ -132,12 +144,19 @@ class MkMigrateIsActiveToStatusCommand extends Command
         }
 
         try {
-            // Step 1: agregar columna enum string con default 'active' (BC: sin romper inserts existentes).
-            DB::statement("ALTER TABLE `{$table}` ADD COLUMN `status` ENUM('active','inactive','suspended','pending') NOT NULL DEFAULT 'active' AFTER `is_active`");
+            // Step 1: agregar columna TINYINT con default Active (BC: sin romper
+            // inserts existentes). Revert 2026-07-19: antes era una columna
+            // ENUM string. Además de la razón de fondo (ver el docblock de
+            // ScopeStatus), el ENUM traía dos problemas propios: no lo soporta
+            // mysql < 5.7, y el literal que se escribía acá incluía
+            // 'suspended', un estado que el enum PHP ya no define — la columna
+            // aceptaba un valor que la app no podía castear.
+            DB::statement("ALTER TABLE `{$table}` ADD COLUMN `status` TINYINT UNSIGNED NOT NULL DEFAULT {$active} AFTER `is_active`");
 
-            // Step 2: migrar data — true → active, false → inactive. Null/otros → default 'active'.
-            DB::statement("UPDATE `{$table}` SET `status` = 'active' WHERE `is_active` = 1");
-            DB::statement("UPDATE `{$table}` SET `status` = 'inactive' WHERE `is_active` = 0");
+            // Step 2: migrar data — true → Active, false → Inactive.
+            // Null/otros quedan en el default de la columna (Active).
+            DB::statement("UPDATE `{$table}` SET `status` = {$active} WHERE `is_active` = 1");
+            DB::statement("UPDATE `{$table}` SET `status` = {$inactive} WHERE `is_active` = 0");
 
             // Step 3 (opcional): drop la columna original.
             if ($this->option('drop-is-active')) {

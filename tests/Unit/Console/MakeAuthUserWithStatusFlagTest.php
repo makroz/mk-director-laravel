@@ -15,14 +15,19 @@ use Mk\Director\Tests\MkLaravelTestCase;
  * agencia: Active/Inactive/Blocked/Pending).
  *
  * **R-PKG-047 D4 (2026-07-09)**: el enum per-scope pasó de int-backed configurable
- * a string-backed con 4 cases hardcoded pineados por la agencia. El scaffolder
- * emite un thin wrapper que extiende `ScopeStatus` (enum canónico del paquete).
- * NO hay templating dinámico — los 4 states son fijos.
+ * a 4 cases hardcoded pineados por la agencia. El scaffolder emite un thin
+ * wrapper que delega en `ScopeStatus` (enum canónico del paquete). NO hay
+ * templating dinámico — los 4 states son fijos.
+ *
+ * **Revert (2026-07-19)**: D4 también había cambiado el backing type a string;
+ * eso se revirtió a int (values canónicos 1..4). Los 4 estados pineados y la
+ * eliminación de `--status-values` se conservan. Ver el docblock de
+ * `ScopeStatus` para el análisis completo.
  *
  * Contrato pineado acá:
  *   - El command NO acepta `--with-status` (eliminado en D2).
  *   - El command acepta `--no-status` (D2 opt-out).
- *   - `enum-status.stub` existe, es string-backed, NO templatizado (los 4 cases
+ *   - `enum-status.stub` existe, es int-backed, NO templatizado (los 4 cases
  *     pineados hardcoded), y delega a `ScopeStatus` (SSoT canónico del paquete).
  *   - El scaffolder cablea el placeholder `{{statusColumn}}`, `{{statusFillableEntry}}`,
  *     `{{statusCastEntry}}` y `{{statusRequestRuleStore/Update}}` (default ON post-D2).
@@ -43,21 +48,23 @@ test('R-PKG-047 D2: --with-status flag está ELIMINADO (default ON, --no-status 
     expect((string) file_get_contents($path))->toContain('--no-status :');
 });
 
-test('R-PKG-047 D4: enum-status.stub es thin wrapper string-backed (no templatizado)', function () {
+test('R-PKG-047 D4: enum-status.stub es thin wrapper int-backed (no templatizado)', function () {
     $stub = packageRootStatus().'/src/Stubs/auth-user/enum-status.stub';
 
     expect(file_exists($stub))->toBeTrue("enum-status.stub debe existir en {$stub}");
 
     $src = (string) file_get_contents($stub);
 
-    // D4: string-backed (no int-backed pre-D4).
-    expect($src)->toContain('enum {{ModuleName}}Status: string');
+    // Revert 2026-07-19: int-backed (el backing string de D4 se revirtió; los
+    // 4 estados canónicos y la eliminación de --status-values se conservan).
+    expect($src)->toContain('enum {{ModuleName}}Status: int');
 
-    // D4: los 4 cases pineados hardcoded (no templating dinámico).
-    expect($src)->toContain("case Active   = 'active';");
-    expect($src)->toContain("case Inactive = 'inactive';");
-    expect($src)->toContain("case Blocked  = 'blocked';");
-    expect($src)->toContain("case Pending  = 'pending';");
+    // Los 4 cases pineados hardcoded con sus values canónicos 1..4
+    // (no templating dinámico).
+    expect($src)->toContain('case Active = 1;');
+    expect($src)->toContain('case Inactive = 2;');
+    expect($src)->toContain('case Blocked = 3;');
+    expect($src)->toContain('case Pending = 4;');
 
     // D4: thin wrapper delega a ScopeStatus (SSoT canónico del paquete).
     expect($src)->toContain('use Mk\\Director\\Auth\\Enums\\ScopeStatus;');
@@ -95,7 +102,7 @@ test('R-PKG-047 D4: ScopeStatus enum canónico del paquete tiene los 4 estados +
     expect($src)->toContain('public static function default(): self');
     expect($src)->toMatch('/return\s+self::Active/');
 
-    // values() retorna los 4 values string canónicos.
+    // values() retorna los 4 values int canónicos.
     expect($src)->toContain('public static function values(): array');
 });
 

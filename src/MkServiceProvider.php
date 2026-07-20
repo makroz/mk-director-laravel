@@ -195,6 +195,7 @@ class MkServiceProvider extends ServiceProvider
                 // R-PKG-047 D4: helper command para migrar `is_active` boolean
                 // pre-D4 al `status` enum string-backed (4 estados canónicos).
                 \Mk\Director\Console\Commands\MkMigrateIsActiveToStatusCommand::class,
+                \Mk\Director\Console\Commands\MkMigrateStatusToIntCommand::class,
             ]);
         }
 

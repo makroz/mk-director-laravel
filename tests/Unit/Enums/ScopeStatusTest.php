@@ -14,11 +14,13 @@ use Mk\Director\Auth\Enums\ScopeStatus;
  * ver AuthUserCompleteFlowE2ETest.php (Feature test con DB activa).
  */
 
-it('ScopeStatus enum tiene 4 casos pineados con valores string canónicos (D4 SSoT)', function () {
-    expect(ScopeStatus::Active->value)->toBe('active');
-    expect(ScopeStatus::Inactive->value)->toBe('inactive');
-    expect(ScopeStatus::Blocked->value)->toBe('blocked');
-    expect(ScopeStatus::Pending->value)->toBe('pending');
+it('ScopeStatus enum tiene 4 casos pineados con valores int canónicos 1..4 (SSoT)', function () {
+    // Revert 2026-07-19: el enum volvió a int-backed. Los values arrancan en
+    // 1 (regla de la agencia, FEEDBACK4: el 0 se confunde con null/false).
+    expect(ScopeStatus::Active->value)->toBe(1);
+    expect(ScopeStatus::Inactive->value)->toBe(2);
+    expect(ScopeStatus::Blocked->value)->toBe(3);
+    expect(ScopeStatus::Pending->value)->toBe(4);
 });
 
 it('ScopeStatus::Active->canAuthenticate() retorna true (gate default de BaseAuthController::userHasValidStatus)', function () {
@@ -35,11 +37,11 @@ it('ScopeStatus::default() retorna Active (convención de la agencia — login f
     expect(ScopeStatus::default())->toBe(ScopeStatus::Active);
 });
 
-it('ScopeStatus::values() retorna array de 4 strings canónicos en orden de declaración (cross-stack contract)', function () {
+it('ScopeStatus::values() retorna array de 4 ints canónicos en orden de declaración (cross-stack contract)', function () {
     $values = ScopeStatus::values();
 
     expect($values)
         ->toBeArray()
         ->toHaveCount(4)
-        ->toBe(['active', 'inactive', 'blocked', 'pending']);
+        ->toBe([1, 2, 3, 4]);
 });
