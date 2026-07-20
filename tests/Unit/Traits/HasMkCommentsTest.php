@@ -219,13 +219,29 @@ it('trae las respuestas eager-loaded, sin N+1', function () {
 
 // ─── Borrado del dueño ────────────────────────────────────────────────────────
 
-it('borra los comentarios al borrar el contenido', function () {
+it('borra FÍSICAMENTE los comentarios al borrar el contenido', function () {
+    // 🔴 `withTrashed()`, no `count()`. La versión anterior de este test
+    // asserteaba `MkComment::count()`, que EXCLUYE los soft-deleted: el trait
+    // hacía `delete()` y dejaba las filas colgando de un dueño inexistente, y
+    // el test no podía verlo. Lo destapó el piloto RETO (FEEDBACK12).
+    //
+    // Un comentario soft-deleted apuntando a un dueño borrado físicamente es
+    // una fila huérfana: no se puede restaurar a nada y nadie la limpia nunca.
     $root = $this->post->addComment($this->author, 'Raíz');
     $this->post->addComment($this->author, 'Respuesta', $root);
 
     $this->post->delete();
 
-    expect(MkComment::count())->toBe(0);
+    expect(MkComment::withTrashed()->count())->toBe(0);
+});
+
+it('se lleva también los comentarios que YA estaban soft-deleted', function () {
+    $comment = $this->post->addComment($this->author, 'Borrado antes');
+    $comment->delete();
+
+    $this->post->delete();
+
+    expect(MkComment::withTrashed()->count())->toBe(0);
 });
 
 it('conserva los comentarios en un soft delete del contenido', function () {

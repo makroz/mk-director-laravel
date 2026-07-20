@@ -147,10 +147,21 @@ trait HasMkComments
      * {@see HasMkMedia::bootHasMkMedia()} y {@see HasMkReactions}, incluido el
      * respeto por SoftDeletes: restaurar un post tiene que devolverte su hilo.
      *
-     * El borrado de los comentarios acá es SOFT (es lo que hace `delete()` en
-     * {@see MkComment}). Eso es deliberado: si el dueño se borró físicamente
-     * los comentarios quedan como registro, y si un consumer necesita
-     * limpiarlos de verdad tiene `forceDelete()` a mano.
+     * 🔴 EL BORRADO ACÁ ES `forceDelete()`, NO `delete()`.
+     *
+     * Este método sólo corre cuando el dueño se va FÍSICAMENTE. Un comentario
+     * soft-deleted que apunta a un dueño que ya no existe es, por definición,
+     * una fila huérfana: no se puede restaurar a nada y nadie la limpia nunca
+     * — justo lo que este hook existe para evitar.
+     *
+     * El `withTrashed()` es parte del mismo argumento: los comentarios que YA
+     * estaban soft-deleted también quedarían colgando.
+     *
+     * Bug encontrado por el piloto RETO (FEEDBACK12) contra Postgres. La
+     * versión anterior hacía `delete()` y la suite del paquete la daba por
+     * buena, porque asserteaba `MkComment::count()` — que excluye los
+     * soft-deleted y por lo tanto no podía ver la fila que quedaba. El test
+     * que lo destapó cuenta con `withTrashed()`.
      */
     protected static function bootHasMkComments(): void
     {
@@ -161,7 +172,7 @@ trait HasMkComments
                 return;
             }
 
-            $model->comments()->get()->each->delete();
+            $model->comments()->withTrashed()->get()->each->forceDelete();
         });
     }
 }
