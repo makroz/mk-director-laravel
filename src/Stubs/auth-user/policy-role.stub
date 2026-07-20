@@ -26,31 +26,31 @@ class RolePolicy
 
     public function viewAny({{ModuleName}} $user): bool
     {
-        return $user->hasAbility('{{moduleNameLower}}.roles.viewAny');
+        return $user->canMk('{{moduleNameLower}}.roles.viewAny');
     }
 
     public function view({{ModuleName}} $user, Role $role): bool
     {
-        return $user->hasAbility('{{moduleNameLower}}.roles.view');
+        return $user->canMk('{{moduleNameLower}}.roles.view');
     }
 
     public function create({{ModuleName}} $user): bool
     {
-        return $user->hasAbility('{{moduleNameLower}}.roles.create');
+        return $user->canMk('{{moduleNameLower}}.roles.create');
     }
 
     public function update({{ModuleName}} $user, Role $role): bool
     {
-        return $user->hasAbility('{{moduleNameLower}}.roles.update');
+        return $user->canMk('{{moduleNameLower}}.roles.update');
     }
 
     public function delete({{ModuleName}} $user, Role $role): bool
     {
-        return $user->hasAbility('{{moduleNameLower}}.roles.delete');
+        return $user->canMk('{{moduleNameLower}}.roles.delete');
     }
 
     public function syncAbilities({{ModuleName}} $user): bool
     {
-        return $user->hasAbility('{{moduleNameLower}}.roles.syncAbilities');
+        return $user->canMk('{{moduleNameLower}}.roles.syncAbilities');
     }
 }

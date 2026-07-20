@@ -5,6 +5,60 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [UNRELEASED] — Policies de `--with-crud`: `canMk()` en vez de `hasAbility()` (bug latente)
+
+> **Fixed**: las Policies generadas por `mk:make:auth-user --with-crud` llamaban
+> a `$user->hasAbility(...)`, **método que no existe** en los modelos de ese
+> pack. Todo consumer que corrió `--with-crud` tiene un
+> `BadMethodCallException` latente en sus 3 Policies.
+>
+> **Causa raíz — reuse de stub cross-pack**: el generador tomaba
+> `module-rbac/policy-user.stub` para emitir `{Scope}Policy`. Ese stub está
+> escrito para el modelo de `mk:module --with-rbac`, que extiende
+> `Illuminate\Foundation\Auth\User` y **define `hasAbility()` a mano**. Los
+> modelos de `--with-crud` extienden `Mk\Director\Auth\Models\AuthUser`, cuyo
+> trait `HasAbilities` expone **`canMk()`** y no tiene `hasAbility()`. El stub
+> cruzó el límite del pack arrastrando una dependencia que del otro lado no
+> existe. `auth-user/policy-role.stub` y `policy-ability.stub` tenían la misma
+> llamada.
+>
+> **Por qué nadie lo vio**: el gate efectivo de las rutas generadas lo hace el
+> middleware `mk.ability:`, así que las Policies son código muerto salvo que
+> alguien invoque `Gate::authorize()` / `$this->authorize()` explícitamente.
+> Los tests del paquete **aseguraban el bug** — verificaban que el stub cruzado
+> estuviera referenciado, y pasaban en verde con el defecto adentro. El
+> `DEVELOPER_GUIDE` §3.8.3 ya documentaba desde v1.8.1 que `hasAbility()` no
+> existe; los stubs nunca se alinearon con esa doc.
+>
+>   - `auth-user/policy-user.stub` **nuevo** — copia adaptada con `canMk()` +
+>     docblock que explica por qué. El generador ya no lee el de `module-rbac`.
+>   - `auth-user/policy-role.stub` + `policy-ability.stub`: `hasAbility()` →
+>     `canMk()`.
+>   - `module-rbac/policy-*.stub` **sin cambios** — `hasAbility()` es correcto
+>     ahí (modelo base distinto). Los dos packs son coherentes por separado;
+>     lo que estaba mal era mezclarlos.
+>   - Tests nuevos (`tests/Unit/Console/PolicyStubAbilityMethodTest.php`, 11):
+>     verifican el CONTRATO por pack — que cada stub use el método que su
+>     modelo base realmente expone — en vez de asertar sobre el layout del
+>     source. Los 3 tests que bendecían el bug fueron corregidos.
+>
+> **Fixed (2)**: `Gate::policy()` sobre los modelos CENTRALES `Role`/`Ability`
+> colisionaba en silencio entre scopes. Son una sola clase compartida, así que
+> dos scopes manager registrando policy sobre ella no conviven: gana el que
+> bootea último, y como el `before()` de la ganadora typehintea SU modelo, un
+> actor del otro scope produce **`TypeError`, no un deny**. El generador ahora
+> detecta al scope dueño (`centralPolicyOwner()`), le cede el registro y avisa
+> por consola en vez de emitir la colisión callado. Documentado en
+> `DEVELOPER_GUIDE` §3.8.4 con la recomendación (el gate scope-aware es
+> `mk.ability:`; reservá Policies para los modelos propios de cada scope).
+>
+> **Impacto para el consumer**: el código ya generado NO se regenera solo.
+> Corré `rg 'hasAbility\(' app/Modules/*/Policies/` y reemplazá por `canMk(`
+> en los scopes creados con `--with-crud`. Los de `mk:module --with-rbac` se
+> dejan como están. Sin cambios cross-stack — `@makroz/core/web/mobile` no
+> requieren update (el `hasAbility` del frontend es otro contrato, sin
+> relación).
+
 ## [UNRELEASED] — Unauthenticated email-OTP password reset ("forgot password" via PIN)
 
 > **Added**: PIN variant of the classic `password/forgot` + `password/reset`

@@ -728,7 +728,7 @@ test('FEEDBACK-A1/A3: --with-crud genera las 3 Policies + registra Gate::policy'
     $src = pkgFileContents('src/Console/Commands/MakeAuthUserCommand.php');
 
     // Genera {Scope}Policy (module-rbac) + Role/Ability (variantes auth-user).
-    expect($src)->toContain("'module-rbac/policy-user.stub'");
+    expect($src)->toContain("'auth-user/policy-user.stub'");
     expect($src)->toContain("'auth-user/policy-role.stub'");
     expect($src)->toContain("'auth-user/policy-ability.stub'");
     // Registro vía Gate::policy en el ServiceProvider.

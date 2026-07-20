@@ -1963,11 +1963,24 @@ PHP,
         // Con esto `mk:make:auth-user --with-crud --with-auth-rbac` produce
         // login + RBAC aislado + Policies + CRUD en un solo comando (A1).
         if ($withPolicies) {
-            // {Scope}Policy: el stub de module-rbac ya referencia el modelo del
-            // scope (App\Modules\{Scope}\Models\{Scope}) — reusable tal cual.
+            // {Scope}Policy: stub PROPIO del pack auth-user.
             // Se genera SIEMPRE (también para consumer): gatea el modelo
             // propio, independiente de quién rutee el CRUD.
-            $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'module-rbac/policy-user.stub', 'Policies', "{$scope}Policy.php", $crudReplacements);
+            //
+            // Antes reusaba `module-rbac/policy-user.stub`. Parecía inocuo —
+            // ambos referencian `App\Modules\{Scope}\Models\{Scope}` — pero ese
+            // stub llama a `hasAbility()`, método que define el modelo de
+            // module-rbac (extiende `Authenticatable`, RBAC módulo-local). Los
+            // modelos de ESTE pack extienden `AuthUser`, que expone `canMk()` y
+            // NO tiene `hasAbility()`. El stub cruzó el límite del pack
+            // arrastrando una dependencia que del otro lado no existe, y toda
+            // policy generada por `--with-crud` quedó con un
+            // `BadMethodCallException` latente. No explotó porque el gate
+            // efectivo lo hace el middleware `mk.ability:` y las policies son
+            // código muerto — hasta el primer `Gate::authorize()`.
+            //
+            // Cada pack tiene ahora su propio stub. No volver a cruzarlos.
+            $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/policy-user.stub', 'Policies', "{$scope}Policy.php", $crudReplacements);
             // Role/Ability: variantes auth-user que apuntan a los modelos CENTRALES
             // del paquete (Mk\Director\Auth\Models\*), no a modelos módulo-locales.
             // F10-B08: se omiten para consumer — gatearían RoleController/
@@ -2003,6 +2016,46 @@ PHP,
      * vía `Gate::policy()` en `boot()`. Idempotente: si ya están registradas,
      * no re-inyecta. Agrega el import de `Gate` si falta.
      */
+    /**
+     * ¿Algún OTRO scope ya registró Policy sobre los modelos centrales
+     * (`Mk\Director\Auth\Models\Role` / `Ability`)?
+     *
+     * Escanea los ServiceProviders hermanos bajo `app/Modules/`. Devuelve el
+     * nombre del scope dueño, o `null` si el registro está libre.
+     *
+     * @param  string  $basePath  Ruta del módulo que se está generando
+     *                            (`app/Modules/{Scope}`).
+     * @param  string  $scope  Scope actual — se excluye del escaneo.
+     */
+    protected function centralPolicyOwner(string $basePath, string $scope): ?string
+    {
+        $modulesPath = dirname($basePath);
+
+        if (! File::isDirectory($modulesPath)) {
+            return null;
+        }
+
+        foreach (File::directories($modulesPath) as $moduleDir) {
+            $candidate = basename($moduleDir);
+
+            if ($candidate === $scope) {
+                continue;
+            }
+
+            $provider = "{$moduleDir}/Providers/{$candidate}ServiceProvider.php";
+
+            if (! File::exists($provider)) {
+                continue;
+            }
+
+            if (str_contains(File::get($provider), 'Mk\\Director\\Auth\\Models\\Role::class')) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
     protected function extendServiceProviderWithPolicies(string $basePath, string $scope, bool $isConsumer = false): void
     {
         $providerPath = "{$basePath}/Providers/{$scope}ServiceProvider.php";
@@ -2035,9 +2088,34 @@ PHP,
             "        // A1/A3: Policies default-deny (super-admin bypass en before()).\n"
             ."        Gate::policy(\\App\\Modules\\{$scope}\\Models\\{$scope}::class, \\App\\Modules\\{$scope}\\Policies\\{$scope}Policy::class);\n";
         if (! $isConsumer) {
-            $registrations .=
-                "        Gate::policy(\\Mk\\Director\\Auth\\Models\\Role::class, \\App\\Modules\\{$scope}\\Policies\\RolePolicy::class);\n"
-                ."        Gate::policy(\\Mk\\Director\\Auth\\Models\\Ability::class, \\App\\Modules\\{$scope}\\Policies\\AbilityPolicy::class);\n";
+            // `Role`/`Ability` son los modelos CENTRALES del paquete: una sola
+            // clase compartida por todos los scopes. `Gate::policy()` mapea
+            // clase → policy, así que dos scopes manager registrando la misma
+            // clase NO conviven: gana el provider que bootea último (orden de
+            // `bootstrap/providers.php`), y el otro scope queda con una policy
+            // que jamás corre. Peor: el `before()` de la policy ganadora
+            // typehintea SU modelo, así que un actor del otro scope entra como
+            // tipo incompatible → TypeError, no un simple deny.
+            //
+            // No es resoluble desde el Gate — con `Role::class` a secas no hay
+            // forma de saber si el actor es Admin o Member. El gate scope-aware
+            // es el middleware `mk.ability:` (la ability lleva el scope en el
+            // nombre). Por eso acá cedemos el registro al primer manager y
+            // avisamos, en vez de emitir una colisión silenciosa.
+            $owner = $this->centralPolicyOwner($basePath, $scope);
+
+            if ($owner !== null) {
+                $this->warn("   ⚠️  Role/Ability ya tienen Policy registrada por el scope '{$owner}'.");
+                $this->line("      No se registran las de '{$scope}': `Gate::policy()` mapea por clase y");
+                $this->line('      son los modelos CENTRALES del paquete — el segundo registro pisaría al');
+                $this->line("      primero. Las Policies de '{$scope}' se generan igual (podés invocarlas");
+                $this->line('      directo), pero el gate efectivo de este scope es `mk.ability:`, que sí');
+                $this->line('      es scope-aware. Ver DEVELOPER_GUIDE → "Policies sobre modelos centrales".');
+            } else {
+                $registrations .=
+                    "        Gate::policy(\\Mk\\Director\\Auth\\Models\\Role::class, \\App\\Modules\\{$scope}\\Policies\\RolePolicy::class);\n"
+                    ."        Gate::policy(\\Mk\\Director\\Auth\\Models\\Ability::class, \\App\\Modules\\{$scope}\\Policies\\AbilityPolicy::class);\n";
+            }
         }
         $registrations .= "\n";
 

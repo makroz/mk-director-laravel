@@ -27,12 +27,12 @@ class AbilityPolicy
 
     public function viewAny({{ModuleName}} $user): bool
     {
-        return $user->hasAbility('{{moduleNameLower}}.abilities.viewAny');
+        return $user->canMk('{{moduleNameLower}}.abilities.viewAny');
     }
 
     public function view({{ModuleName}} $user, Ability $ability): bool
     {
-        return $user->hasAbility('{{moduleNameLower}}.abilities.view');
+        return $user->canMk('{{moduleNameLower}}.abilities.view');
     }
 
     public function create({{ModuleName}} $user): bool

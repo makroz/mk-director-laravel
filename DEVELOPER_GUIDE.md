@@ -946,7 +946,38 @@ if ($admin->hasAbility('admin.admins.view')) { // Inexistente
 
 **Workaround del consumer** (ya NO necesario post-v1.8.1 doc): si tu consumer usa `can()` esperando Laravel Gate behavior, fallará con `Call to undefined method Admin::can()` (PHP error) o `SQLSTATE HY000` con columna inválida (DB error). El paquete solo expone `canMk` — usá ese.
 
-**Spec**: HALLAZGO-NEW-FASE14-06, feedback RETO fase 14 (2026-06-29). Cross-ref: §3.8 RBAC integration, `references/04-auth-flow.md` (HasAbilities trait detail).
+**Matiz importante — `hasAbility()` SÍ existe, pero en el otro pack**: la tabla de arriba habla del trait `HasAbilities`, que usan los modelos generados por `mk:make:auth-user` (extienden `AuthUser`). El pack `mk:module --with-rbac` es un mundo aparte: genera un modelo que extiende `Illuminate\Foundation\Auth\User` (decisión D2), con su propio `Role` módulo-local, sus propias pivots, y **su propio `hasAbility()` definido a mano**. Ahí `hasAbility()` es lo correcto y `canMk()` no existe.
+
+| Pack | Modelo base | Método de abilities | Modelo `Role` |
+|---|---|---|---|
+| `mk:make:auth-user [--with-crud]` | `Mk\Director\Auth\Models\AuthUser` | **`canMk()`** | Central del paquete |
+| `mk:module --with-rbac` | `Illuminate\Foundation\Auth\User` | **`hasAbility()`** | Módulo-local |
+
+No son intercambiables, y el error clásico es copiar una Policy de un pack al otro: compila, pasa el lint, y muere en runtime con `BadMethodCallException` la primera vez que alguien la invoca. Regresión real: hasta v1.9.x el generador de `--with-crud` reusaba `module-rbac/policy-user.stub`, así que TODAS las policies de ese pack salían llamando a `hasAbility()`. Nadie lo notó porque el gate efectivo lo hace el middleware `mk.ability:` y las policies quedaban como código muerto. Ver §3.8.4.
+
+**Spec**: HALLAZGO-NEW-FASE14-06, feedback RETO fase 14 (2026-06-29). Cross-ref: §3.8 RBAC integration, §3.8.4 (policies sobre modelos centrales), `references/04-auth-flow.md` (HasAbilities trait detail).
+
+#### 3.8.4. Policies sobre modelos centrales (`Role` / `Ability`) — colisión entre scopes
+
+`Mk\Director\Auth\Models\Role` y `Ability` son **una sola clase compartida por todos los scopes**. `Gate::policy()` mapea clase → policy, así que dos scopes manager que registren la misma clase **no conviven**:
+
+```php
+// AdminServiceProvider::boot()
+Gate::policy(\Mk\Director\Auth\Models\Role::class, \App\Modules\Admin\Policies\RolePolicy::class);
+
+// MemberServiceProvider::boot()  ← bootea después: GANA
+Gate::policy(\Mk\Director\Auth\Models\Role::class, \App\Modules\Member\Policies\RolePolicy::class);
+```
+
+Gana el provider que bootea último según `bootstrap/providers.php`. Y no es un simple "la otra policy no corre": el `before()` de la policy ganadora typehintea SU modelo (`Member $user`), así que un `Admin` pasando por ese gate entra como tipo incompatible → **`TypeError`, no un deny**.
+
+**No es resoluble desde el Gate.** Con `Role::class` a secas no hay información para saber si el actor es Admin o Member. Cualquier "arreglo" a ese nivel es un workaround contra la arquitectura.
+
+**El gate scope-aware es el middleware `mk.ability:`** — la ability lleva el scope en el nombre (`admin.roles.viewAny` vs `member.roles.viewAny`), así que discrimina sin ambigüedad. Es el que ya protege las rutas generadas.
+
+**Qué hace el generador**: desde v1.9.x, `mk:make:auth-user --with-crud` detecta si otro scope ya registró Policy sobre los modelos centrales (`centralPolicyOwner()`). Si lo hay, **cede el registro al primero y avisa por consola**. Las Policies se generan igual — podés invocarlas directo (`new RolePolicy)->viewAny($user)`) — pero no se registran en el Gate.
+
+**Recomendación para el consumer**: si tenés un solo scope manager, no te afecta. Si tenés dos o más, no dependas de `Gate::authorize()` sobre `Role`/`Ability`: usá el middleware `mk.ability:` (que ya está en las rutas) y, si necesitás el chequeo en código, `$user->canMk('{scope}.roles.{action}')` directo. Reservá las Policies para los modelos **propios** de cada scope (`Admin`, `Member`, …), donde el mapeo clase → policy sí es unívoco.
 
 ### Spec
 

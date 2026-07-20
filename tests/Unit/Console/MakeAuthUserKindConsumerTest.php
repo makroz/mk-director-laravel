@@ -106,7 +106,7 @@ test('generateCrudPack() omite RolePolicy/AbilityPolicy (no {Scope}Policy) cuand
     $src = kindConsumerCmdSource();
 
     expect($src)->toMatch(
-        '/generateStub\(\$scope, \$scopeLower, \$scopePlural, \$loginField, \'module-rbac\/policy-user\.stub\'.*?'
+        '/generateStub\(\$scope, \$scopeLower, \$scopePlural, \$loginField, \'auth-user\/policy-user\.stub\'.*?'
         .'if \(! \$isConsumer\) \{\s*'
         .'\$this->generateStub\(\$scope, \$scopeLower, \$scopePlural, \$loginField, \'auth-user\/policy-role\.stub\'/s'
     );
@@ -122,7 +122,15 @@ test('extendServiceProviderWithPolicies() omite Gate::policy de Role/Ability cua
     $src = kindConsumerCmdSource();
 
     expect($src)->toContain('protected function extendServiceProviderWithPolicies(string $basePath, string $scope, bool $isConsumer = false): void');
-    expect($src)->toMatch('/if \(! \$isConsumer\) \{\s*\$registrations \.=/');
+
+    // El registro de Role/Ability vive dentro del `if (! $isConsumer)`. No se
+    // matchea el cuerpo literal: adentro ahora está además el guard de colisión
+    // (`centralPolicyOwner()`), y un regex sobre el layout exacto se rompe con
+    // cualquier refactor sin que haya regresión real.
+    $desde = (int) mb_strpos($src, 'protected function extendServiceProviderWithPolicies');
+    $bloque = mb_substr($src, $desde);
+
+    expect($bloque)->toMatch('/if \(! \$isConsumer\) \{.*Auth\\\\\\\\Models\\\\\\\\Role::class/s');
 });
 
 // ── Stub de rutas consumer ─────────────────────────────────────────────────

@@ -1,0 +1,75 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Modules\{{ModuleName}}\Policies;
+
+use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
+
+/**
+ * {{ModuleName}}Policy — autorización para CRUD + assignRole/revokeRole.
+ *
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud`.
+ *
+ * Convenciones (RBAC-004, R-PKG-008):
+ *   - `before()` da bypass total al role `super-admin` (estándar de facto).
+ *   - Default-deny: cada método retorna `canMk('{scope}.{resource}.{action}')`.
+ *   - Convención de ability name: `{moduleNameLower}.{moduleNamePluralLower}.{action}`.
+ *
+ * IMPORTANTE — `canMk()`, no `hasAbility()`:
+ * El modelo de este pack extiende `Mk\Director\Auth\Models\AuthUser`, cuyo
+ * chequeo de abilities es `canMk()` (trait `HasAbilities`): resuelve grants
+ * directos + los heredados vía roles, soporta wildcards (`admin.*`) y cachea
+ * por usuario. `hasAbility()` NO existe en `AuthUser` — es un método propio
+ * del pack `mk:module --with-rbac`, que usa otro modelo base. Llamarlo acá
+ * tira `BadMethodCallException` en runtime.
+ *
+ * Spec: RBAC-004 (R-PKG-008).
+ */
+class {{ModuleName}}Policy
+{
+    /**
+     * Super-admin bypass — corta antes de evaluar la ability específica.
+     * Retornar `true` → siempre permite. Retornar `null` → sigue con el
+     * método específico. Retornar `false` → siempre deniega.
+     */
+    public function before({{ModuleName}} $user, string $ability): ?bool
+    {
+        return $user->hasRole('super-admin') ? true : null;
+    }
+
+    public function viewAny({{ModuleName}} $user): bool
+    {
+        return $user->canMk('{{moduleNameLower}}.{{moduleNamePluralLower}}.viewAny');
+    }
+
+    public function view({{ModuleName}} $user, {{ModuleName}} $model): bool
+    {
+        return $user->canMk('{{moduleNameLower}}.{{moduleNamePluralLower}}.view');
+    }
+
+    public function create({{ModuleName}} $user): bool
+    {
+        return $user->canMk('{{moduleNameLower}}.{{moduleNamePluralLower}}.create');
+    }
+
+    public function update({{ModuleName}} $user, {{ModuleName}} $model): bool
+    {
+        return $user->canMk('{{moduleNameLower}}.{{moduleNamePluralLower}}.update');
+    }
+
+    public function delete({{ModuleName}} $user, {{ModuleName}} $model): bool
+    {
+        return $user->canMk('{{moduleNameLower}}.{{moduleNamePluralLower}}.delete');
+    }
+
+    public function assignRole({{ModuleName}} $user): bool
+    {
+        return $user->canMk('{{moduleNameLower}}.{{moduleNamePluralLower}}.assignRole');
+    }
+
+    public function revokeRole({{ModuleName}} $user): bool
+    {
+        return $user->canMk('{{moduleNameLower}}.{{moduleNamePluralLower}}.revokeRole');
+    }
+}
