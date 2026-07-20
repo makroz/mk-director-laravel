@@ -47,6 +47,13 @@ class MkMigrateStatusToIntCommand extends Command
 
     protected $description = 'Convierte la columna status string (R-PKG-047 D4) a int-backed, alineada con ScopeStatus.';
 
+    /**
+     * ¿El último scope procesado tenía trabajo real por hacer? Distingue el
+     * "no hice nada porque es dry-run" del "no hice nada porque ya estaba
+     * migrado", que para el usuario son situaciones opuestas.
+     */
+    private bool $lastScopeNeededWork = false;
+
     public function handle(): int
     {
         $scopes = $this->resolveScopes();
@@ -59,6 +66,12 @@ class MkMigrateStatusToIntCommand extends Command
 
         $converted = 0;
         $failed = 0;
+        // Se cuenta aparte de `$converted`: en dry-run ningún scope se
+        // convierte, pero decir "ninguno requirió conversión" justo después de
+        // haber listado dos que sí la requieren es un resumen que contradice al
+        // detalle — y en un comando de migración de datos eso invita a creer
+        // que no hay nada que hacer.
+        $pendingInDryRun = 0;
 
         foreach ($scopes as $scope) {
             $result = $this->migrateScope($scope);
@@ -67,6 +80,8 @@ class MkMigrateStatusToIntCommand extends Command
                 $failed++;
             } elseif ($result === true) {
                 $converted++;
+            } elseif ($result === null && $this->lastScopeNeededWork) {
+                $pendingInDryRun++;
             }
         }
 
@@ -78,7 +93,9 @@ class MkMigrateStatusToIntCommand extends Command
             return self::FAILURE;
         }
 
-        if ($converted > 0) {
+        if ($pendingInDryRun > 0) {
+            $this->warn("💧 DRY-RUN: {$pendingInDryRun} scope(s) REQUIEREN conversión. Volvé a correr sin --dry-run para aplicarla.");
+        } elseif ($converted > 0) {
             $this->info("✅ {$converted} scope(s) convertido(s) a `status` int-backed.");
         } else {
             $this->warn('⚠️  Ningún scope requirió conversión (o ya estaban en int).');
@@ -96,6 +113,7 @@ class MkMigrateStatusToIntCommand extends Command
     private function migrateScope(string $scope): ?bool
     {
         $table = strtolower($scope).'s';
+        $this->lastScopeNeededWork = false;
 
         $this->newLine();
         $this->info("🔧 Procesando scope: {$scope} (tabla `{$table}`)");
@@ -113,10 +131,8 @@ class MkMigrateStatusToIntCommand extends Command
         }
 
         // Idempotencia: si ya es numérica, no hay nada que hacer.
-        $type = strtolower((string) Schema::getColumnType($table, 'status'));
-
-        if (in_array($type, ['integer', 'smallint', 'bigint', 'tinyint', 'decimal'], true)) {
-            $this->warn("   ⚠️  `{$table}.status` ya es numérica ({$type}). Skip (idempotente).");
+        if (($numericType = $this->numericColumnType($table, 'status')) !== null) {
+            $this->warn("   ⚠️  `{$table}.status` ya es numérica ({$numericType}). Skip (idempotente).");
 
             return null;
         }
@@ -166,6 +182,7 @@ class MkMigrateStatusToIntCommand extends Command
         }
 
         if ($this->option('dry-run')) {
+            $this->lastScopeNeededWork = true;
             $this->warn('   💧 DRY-RUN: no se ejecutaron cambios.');
 
             return null;
@@ -220,6 +237,48 @@ class MkMigrateStatusToIntCommand extends Command
 
             return false;
         }
+    }
+
+    /**
+     * Devuelve el nombre del tipo si la columna ya es numérica, o null si no.
+     *
+     * 🔴 Se miran DOS fuentes a propósito. `Schema::getColumnType()` devuelve
+     * el nombre CRUDO del driver y `getColumns()` expone además uno
+     * normalizado; para un `unsignedTinyInteger` en Postgres eso da `int2` y
+     * `smallint` respectivamente, mientras que en sqlite ambos dan `integer`.
+     *
+     * Este método existe por un bug real: la versión anterior comparaba sólo
+     * contra `['integer','smallint','bigint','tinyint','decimal']` usando el
+     * nombre crudo. En sqlite pasaba, en Postgres el `int2` no matcheaba, el
+     * guard de idempotencia no disparaba y el comando intentaba re-migrar una
+     * columna YA migrada. Sólo lo salvó la validación previa, que abortó al no
+     * poder mapear el value `1` como string legacy.
+     */
+    private function numericColumnType(string $table, string $column): ?string
+    {
+        $numeric = [
+            'integer', 'smallint', 'bigint', 'tinyint', 'mediumint',
+            'decimal', 'numeric', 'real', 'double',
+            // Alias internos de Postgres (los que devuelve getColumnType).
+            'int2', 'int4', 'int8', 'float4', 'float8',
+        ];
+
+        $candidates = [strtolower((string) Schema::getColumnType($table, $column))];
+
+        $meta = collect(Schema::getColumns($table))->firstWhere('name', $column);
+
+        if ($meta !== null) {
+            $candidates[] = strtolower((string) ($meta['type_name'] ?? ''));
+            $candidates[] = strtolower((string) ($meta['type'] ?? ''));
+        }
+
+        foreach ($candidates as $candidate) {
+            if ($candidate !== '' && in_array($candidate, $numeric, true)) {
+                return $candidate;
+            }
+        }
+
+        return null;
     }
 
     /**

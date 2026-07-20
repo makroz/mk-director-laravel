@@ -132,13 +132,59 @@ test('un NULL también aborta en vez de caer al default', function () {
     expect(DB::table('admins')->where('id', 2)->value('status'))->toBeNull();
 });
 
-test('el dry-run no modifica nada', function () {
+test('el dry-run no modifica nada y AVISA que la conversión hace falta', function () {
     DB::table('admins')->insert([['id' => 1, 'status' => 'blocked']]);
 
-    [$exit] = ($this->runCommand)(['scope' => 'Admin', '--dry-run' => true]);
+    [$exit, $output] = ($this->runCommand)(['scope' => 'Admin', '--dry-run' => true]);
 
     expect($exit)->toBe(0);
     expect(DB::table('admins')->value('status'))->toBe('blocked');
+
+    // El resumen NO puede contradecir al detalle. Antes decía "Ningún scope
+    // requirió conversión" justo después de listar uno que sí la requería —
+    // en un comando de migración de datos eso invita a creer que ya está todo
+    // hecho y a no volver a correrlo.
+    expect($output)->toContain('REQUIEREN conversión');
+    expect($output)->not->toContain('Ningún scope requirió conversión');
+});
+
+test('con la columna ya migrada el dry-run NO dice que haga falta convertir', function () {
+    // La contracara del test anterior: "no hice nada porque es dry-run" y "no
+    // hice nada porque ya estaba migrado" son situaciones opuestas y el
+    // comando tiene que distinguirlas.
+    Schema::drop('admins');
+    Schema::create('admins', function (Blueprint $table): void {
+        $table->id();
+        $table->unsignedTinyInteger('status')->default(1);
+    });
+    DB::table('admins')->insert([['id' => 1, 'status' => 1]]);
+
+    [$exit, $output] = ($this->runCommand)(['scope' => 'Admin', '--dry-run' => true]);
+
+    expect($exit)->toBe(0);
+    expect($output)->not->toContain('REQUIEREN conversión');
+    expect($output)->toContain('idempotente');
+});
+
+test('la columna resultante queda NOT NULL con el default del enum', function () {
+    // Regresión del incidente real en RETO (Postgres): la columna vieja tenía
+    // un NOT NULL y un CHECK constraint colgando; ambos se van con el
+    // dropColumn de la columna vieja, pero la NUEVA tiene que nacer NOT NULL
+    // igual — si quedara nullable, un insert sin status guardaría null y el
+    // cast del enum explotaría al releerlo.
+    DB::table('admins')->insert([['id' => 1, 'status' => 'active']]);
+
+    ($this->runCommand)(['scope' => 'Admin']);
+
+    $column = collect(Schema::getColumns('admins'))->firstWhere('name', 'status');
+
+    expect($column['nullable'])->toBeFalse();
+
+    // sqlite devuelve el default CON las comillas adentro de la string
+    // (`"'1'"`), así que un `(int)` directo da 0 y el test fallaría por una
+    // particularidad del driver y no por el código. Se limpian antes de casteo.
+    expect((int) trim((string) $column['default'], "'\""))
+        ->toBe(ScopeStatus::default()->value);
 });
 
 test('es idempotente: si la columna ya es int, no hace nada', function () {
