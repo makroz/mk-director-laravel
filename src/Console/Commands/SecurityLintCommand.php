@@ -121,6 +121,7 @@ final class SecurityLintCommand extends Command
 
             $findings = array_merge($findings, $this->checkGuardedEmpty($contents, $relative));
             $findings = array_merge($findings, $this->checkMissingForeignKeys($contents, $relative));
+            $findings = array_merge($findings, $this->checkMorphOwnerPk($contents, $relative));
         }
 
         return $findings;
@@ -199,6 +200,139 @@ final class SecurityLintCommand extends Command
         }
 
         return $findings;
+    }
+
+    /**
+     * FB12-#12: un modelo que es DUEÑO de las relaciones polimórficas del
+     * paquete (`HasMkMedia`/`HasMkComments`/`HasMkReactions`) cuya tabla usa un
+     * PK `uuid` NATIVO se rompe en Postgres. Las columnas `*able_id` del paquete
+     * son `string` (soportan consumers uuid Y bigint), y `withCount`/`whereHas`/
+     * `has` comparan COLUMNA CON COLUMNA (`tu_tabla.id = mk_*.{*able}_id` →
+     * `uuid = varchar`), que pgsql, de tipado estricto, rechaza. El fix es tipar
+     * el PK `string(36)` (`HasUuids` genera el uuid igual).
+     *
+     * Filesystem glue: detecta el trait en el modelo, deriva la tabla y busca la
+     * migración que la crea. El veredicto lo da `auditMorphOwnerPk`, que es PURO
+     * (dos strings entran, un finding sale) y por eso se testea sin bootear nada.
+     *
+     * @return list<array{level:string,path:string,line:int,message:string}>
+     */
+    private function checkMorphOwnerPk(string $contents, string $relative): array
+    {
+        if (! $this->usesMorphOwnerTrait($contents)) {
+            return [];
+        }
+
+        $table = $this->deriveTableName($contents);
+        if ($table === null) {
+            return [];
+        }
+
+        $migration = $this->findCreateMigration($table);
+        if ($migration === null) {
+            // No encontramos la migración (layout no estándar): no podemos
+            // auditar el tipo del PK. Silencio antes que un falso positivo.
+            return [];
+        }
+
+        [$migrationSource, $migrationRelative] = $migration;
+
+        $finding = $this->auditMorphOwnerPk($contents, $migrationSource, $migrationRelative);
+
+        return $finding === null ? [] : [$finding];
+    }
+
+    /**
+     * NÚCLEO PURO Y TESTEABLE: dado el source del modelo y el de la migración que
+     * crea su tabla, devuelve el finding si el modelo es dueño de morphs del
+     * paquete Y la migración declara un PK `uuid` nativo; null si no.
+     *
+     * WARNING, no ERROR: sólo pgsql es estricto; MySQL/SQLite no se ven
+     * afectados y forzar un error rompería a esos consumers sin motivo.
+     *
+     * @return array{level:string,path:string,line:int,message:string}|null
+     */
+    public function auditMorphOwnerPk(string $modelSource, string $migrationSource, string $migrationRelative = ''): ?array
+    {
+        if (! $this->usesMorphOwnerTrait($modelSource)) {
+            return null;
+        }
+
+        // PK `uuid` nativo: `$table->uuid('id')->primary()`. Un `string('id')`
+        // (el fix) NO matchea, así que una tabla ya corregida no se marca.
+        if (! preg_match('/->\s*uuid\(\s*[\'"]id[\'"]\s*\)\s*->\s*primary\(/', $migrationSource, $m, PREG_OFFSET_CAPTURE)) {
+            return null;
+        }
+
+        $line = substr_count(substr($migrationSource, 0, (int) $m[0][1]), "\n") + 1;
+
+        return [
+            'level' => 'warning',
+            'path' => $migrationRelative,
+            'line' => $line,
+            'message' => 'Tabla dueña de morphs del paquete (HasMkMedia/HasMkComments/HasMkReactions) '
+                . "con PK uuid('id') nativo. En Postgres rompe withCount/whereHas/has (uuid = varchar). "
+                . "Usá \$table->string('id', 36) — HasUuids genera el uuid igual.",
+        ];
+    }
+
+    /**
+     * ¿El modelo aplica alguno de los tres traits dueños de morphs? Matchea la
+     * línea `use ...HasMk{Media,Comments,Reactions}` — tanto el `use` de la
+     * clase como el import, cualquiera basta para señalar que el modelo los usa.
+     */
+    private function usesMorphOwnerTrait(string $contents): bool
+    {
+        return (bool) preg_match('/\buse\b[^;]*\bHasMk(Media|Comments|Reactions)\b/', $contents);
+    }
+
+    /**
+     * Nombre de tabla del modelo: `protected $table = '...'` si está declarado;
+     * si no, se deriva del nombre de la clase (snake + plural), la convención de
+     * Eloquent.
+     */
+    private function deriveTableName(string $contents): ?string
+    {
+        if (preg_match('/protected\s+\$table\s*=\s*[\'"]([a-zA-Z0-9_]+)[\'"]/', $contents, $m)) {
+            return $m[1];
+        }
+        if (preg_match('/\bclass\s+([A-Za-z0-9_]+)/', $contents, $m)) {
+            return Str::of($m[1])->snake()->plural()->toString();
+        }
+        return null;
+    }
+
+    /**
+     * Busca la migración que hace `Schema::create('<table>'`, escaneando desde
+     * base_path (excluyendo vendor/node_modules). Cubre el layout estándar
+     * (`database/migrations`) y el modular (`app/Modules/<mod>/Database/Migrations`).
+     *
+     * @return array{0:string,1:string}|null  [source, ruta relativa] o null
+     */
+    private function findCreateMigration(string $table): ?array
+    {
+        $root = function_exists('base_path') ? base_path() : getcwd();
+        if (! is_dir($root)) {
+            return null;
+        }
+
+        $finder = (new Finder())
+            ->files()
+            ->in($root)
+            ->exclude(['vendor', 'node_modules'])
+            ->path('/[Mm]igrations/')
+            ->name('*.php');
+
+        $pattern = '/Schema::create\(\s*[\'"]' . preg_quote($table, '/') . '[\'"]/';
+
+        foreach ($finder as $file) {
+            $source = (string) file_get_contents($file->getRealPath());
+            if (preg_match($pattern, $source)) {
+                return [$source, $file->getRelativePathname()];
+            }
+        }
+
+        return null;
     }
 
     private function searchMigrationsForForeignKey(string $relatedShort, string $column): bool

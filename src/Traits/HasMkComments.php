@@ -15,6 +15,16 @@ use Mk\Director\Models\MkComment;
  *
  * Spec: Comunicaciones Fase 1, PR 3.
  *
+ * 🔴 POSTGRES — EL PK DEL MODELO DUEÑO DEBE SER `string`, NO `uuid` NATIVO
+ * -----------------------------------------------------------------------
+ * `mk_comments.commentable_id` es `string` a propósito: soporta consumers con
+ * PKs uuid Y bigint. En Postgres, de tipado estricto, `withCount`/`whereHas`/
+ * `has` comparan COLUMNA CON COLUMNA (`tu_tabla.id = mk_comments.commentable_id`).
+ * Si el PK del modelo dueño es `uuid` NATIVO, eso es `uuid = varchar` y pgsql se
+ * niega ("operator does not exist"). Tipá el PK como `$table->string('id', 36)`
+ * (`HasUuids` genera el uuid igual). MySQL/SQLite no distinguen tipos y esconden
+ * el problema — lo caza `mk:security-lint`.
+ *
  * USO
  * ---
  *   class Post extends Model

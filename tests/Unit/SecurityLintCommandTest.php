@@ -102,6 +102,70 @@ test('SecurityLintCommand exit code contract: 0 on success, 1 on any error', fun
     expect($source)->toContain('$strict && $warnCount > 0');
 });
 
+// ── FB12-#12: PK uuid nativo + traits de morphs = roto en Postgres ──────────
+//
+// Tests BEHAVIORALES sobre el núcleo puro `auditMorphOwnerPk`: dos strings
+// entran (source del modelo, source de la migración), un finding sale. No se
+// grepea el source del comando —eso da falsos verdes— se ejercita la lógica.
+
+function uuidOwnerMigration(): string
+{
+    return "<?php\nreturn new class extends Migration {\n"
+        . "    public function up(): void {\n"
+        . "        Schema::create('posts', function (Blueprint \$table) {\n"
+        . "            \$table->uuid('id')->primary();\n"
+        . "            \$table->text('body');\n"
+        . "        });\n    }\n};\n";
+}
+
+function stringOwnerMigration(): string
+{
+    return "<?php\nreturn new class extends Migration {\n"
+        . "    public function up(): void {\n"
+        . "        Schema::create('posts', function (Blueprint \$table) {\n"
+        . "            \$table->string('id', 36)->primary();\n"
+        . "            \$table->text('body');\n"
+        . "        });\n    }\n};\n";
+}
+
+function morphOwnerModel(): string
+{
+    return "<?php\nuse Mk\\Director\\Traits\\HasMkMedia;\n"
+        . "class Post extends Model {\n    use HasMkMedia, HasMkComments;\n}\n";
+}
+
+test('auditMorphOwnerPk flags a morph owner whose table PK is native uuid', function () {
+    $cmd = new \Mk\Director\Console\Commands\SecurityLintCommand();
+
+    $finding = $cmd->auditMorphOwnerPk(morphOwnerModel(), uuidOwnerMigration(), 'create_posts_table.php');
+
+    expect($finding)->not->toBeNull()
+        ->and($finding['level'])->toBe('warning')
+        ->and($finding['path'])->toBe('create_posts_table.php')
+        ->and($finding['message'])->toContain('uuid')
+        ->and($finding['message'])->toContain("string('id', 36)")
+        // La línea apunta a la declaración del PK uuid (línea 5 del fixture).
+        ->and($finding['line'])->toBe(5);
+});
+
+test('auditMorphOwnerPk does NOT flag a morph owner already fixed to string PK', function () {
+    $cmd = new \Mk\Director\Console\Commands\SecurityLintCommand();
+
+    // El fix (`string('id', 36)`) NO debe marcarse: si lo hiciera, el lint
+    // gritaría sobre tablas ya correctas y nadie lo tomaría en serio.
+    expect($cmd->auditMorphOwnerPk(morphOwnerModel(), stringOwnerMigration(), 'x.php'))->toBeNull();
+});
+
+test('auditMorphOwnerPk ignores a model that does NOT own package morphs', function () {
+    $cmd = new \Mk\Director\Console\Commands\SecurityLintCommand();
+
+    // Una tabla uuid es PERFECTAMENTE válida si no es dueña de morphs del
+    // paquete (admins/members). El lint no debe tocarla.
+    $plainModel = "<?php\nclass Admin extends Model {\n    use HasUuids;\n}\n";
+
+    expect($cmd->auditMorphOwnerPk($plainModel, uuidOwnerMigration(), 'x.php'))->toBeNull();
+});
+
 test('SecurityLintCommand supports JSON output format (CI-friendly)', function () {
     $source = securityLintCommandSource();
     expect($source)->not->toBeEmpty();

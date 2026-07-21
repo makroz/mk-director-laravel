@@ -17,6 +17,16 @@ use RuntimeException;
  *
  * Spec: Comunicaciones Fase 1, PR 1.
  *
+ * 🔴 POSTGRES — EL PK DEL MODELO DUEÑO DEBE SER `string`, NO `uuid` NATIVO
+ * -----------------------------------------------------------------------
+ * `mk_media.mediable_id` es `string` a propósito: soporta consumers con PKs
+ * uuid Y bigint. En Postgres, de tipado estricto, `withCount`/`whereHas`/`has`
+ * comparan COLUMNA CON COLUMNA (`tu_tabla.id = mk_media.mediable_id`). Si el PK
+ * del modelo dueño es `uuid` NATIVO, eso es `uuid = varchar` y pgsql se niega
+ * ("operator does not exist"). Tipá el PK como `$table->string('id', 36)`
+ * (`HasUuids` genera el uuid igual). MySQL/SQLite no distinguen tipos y esconden
+ * el problema — lo caza `mk:security-lint`.
+ *
  * Reemplaza el modelo 1-columna-1-path de `FileStoragePlugin` para los casos
  * de galería. Los dos conviven: para un avatar (un archivo, una columna) el
  * plugin sigue siendo lo correcto y más barato; para una publicación con N
