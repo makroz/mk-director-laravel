@@ -187,6 +187,71 @@ trait HasMkMedia
     }
 
     /**
+     * Borra piezas de media puntuales de ESTE modelo, por id — fila y archivo.
+     *
+     * El caso de uso es la edición de una galería: el cliente marca una foto y
+     * al guardar manda su id acá para que desaparezca. Complementa a
+     * {@see attachUploadedFile()} (agregar) con la operación inversa (quitar).
+     *
+     * 🔴 SCOPEADO A `$this->media()` — ES LA DEFENSA CONTRA IDOR.
+     * El id llega del cliente. Si se borrara con `MkMedia::whereIn('id', $ids)`
+     * a secas, cualquiera podría mandar el id de la foto de OTRO post y borrarla:
+     * un borrado horizontal entre dueños. Al filtrar por la relación
+     * —que ya trae el `mediable_type` + `mediable_id` de este modelo— un id ajeno
+     * simplemente no matchea y la llamada es un no-op silencioso. La seguridad no
+     * depende de que el consumer se acuerde de validar la pertenencia: es
+     * imposible por construcción.
+     *
+     * Devuelve cuántas piezas se borraron de verdad, para que el consumer pueda
+     * distinguir "borré 3" de "el cliente mandó ids que no existían o no eran míos".
+     *
+     * @param  array<int, int|string>  $ids
+     * @return int piezas efectivamente borradas
+     */
+    public function detachMedia(array $ids): int
+    {
+        // 🔴 CAST A INT — NO ES COSMÉTICO, ES POSTGRES. `mk_media.id` es bigint,
+        // pero estos ids llegan del cliente y por multipart TODO viaja como
+        // string ('5', no 5). En Postgres, de tipado estricto, `whereIn('id',
+        // ['5'])` es `bigint = varchar` y se niega ("operator does not exist").
+        // MySQL/SQLite coercionan y esconden el problema hasta producción. Se
+        // castea acá, en el paquete, porque el paquete es dueño de que esta PK
+        // sea siempre numérica; un id no numérico se vuelve 0 y no matchea nada.
+        $ids = array_map(static fn ($id): int => (int) $id, $ids);
+
+        if ($ids === []) {
+            return 0;
+        }
+
+        $pieces = $this->media()->whereIn('id', $ids)->get();
+
+        $pieces->each(fn (MkMedia $media) => $this->deleteMkMediaPiece($media));
+
+        return $pieces->count();
+    }
+
+    /**
+     * Borra una pieza: primero su archivo (si tiene uno propio), después la fila.
+     *
+     * Único lugar donde vive la secuencia archivo→fila. Lo comparten el borrado
+     * del dueño ({@see bootHasMkMedia()}) y el borrado puntual
+     * ({@see detachMedia()}): una segunda copia se desincronizaría —un embed no
+     * tiene archivo, un path null tampoco— y dejaría archivos huérfanos o
+     * intentaría borrar lo que no existe.
+     */
+    protected function deleteMkMediaPiece(MkMedia $media): void
+    {
+        if ($media->kind instanceof MkMediaKind
+            && $media->kind->hasStoredFile()
+            && $media->path !== null) {
+            Storage::disk($media->disk ?: config('filesystems.default'))
+                ->delete($media->path);
+        }
+
+        $media->delete();
+    }
+
+    /**
      * Ancho y alto de una imagen guardada, o array vacío si no se pudieron leer.
      *
      * Devolver vacío en vez de null-por-clave es deliberado: así las columnas
@@ -241,16 +306,9 @@ trait HasMkMedia
                 return;
             }
 
-            $model->media()->get()->each(function (MkMedia $media): void {
-                if ($media->kind instanceof MkMediaKind
-                    && $media->kind->hasStoredFile()
-                    && $media->path !== null) {
-                    Storage::disk($media->disk ?: config('filesystems.default'))
-                        ->delete($media->path);
-                }
-
-                $media->delete();
-            });
+            $model->media()->get()->each(
+                fn (MkMedia $media) => $model->deleteMkMediaPiece($media)
+            );
         });
     }
 }

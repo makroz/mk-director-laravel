@@ -208,6 +208,77 @@ test('borrar el dueño borra su media y su archivo, sin tocar la de otro dueño'
     expect(iterator_to_array($this->deletedFiles))->toBe([['s3', 'gone.jpg']]);
 });
 
+test('detachMedia borra las piezas indicadas y sus archivos', function () {
+    $owner = MediaOwnerBigint::create([]);
+    $a = $owner->attachMedia(['kind' => MkMediaKind::Image, 'disk' => 's3', 'path' => 'a.jpg']);
+    $b = $owner->attachMedia(['kind' => MkMediaKind::Image, 'disk' => 's3', 'path' => 'b.jpg']);
+    $c = $owner->attachMedia(['kind' => MkMediaKind::Image, 'disk' => 's3', 'path' => 'c.jpg']);
+
+    $borradas = $owner->detachMedia([$a->id, $c->id]);
+
+    expect($borradas)->toBe(2);
+    // Sólo queda la que no se pidió borrar.
+    expect(MkMedia::pluck('path')->all())->toBe(['b.jpg']);
+    // Y los archivos de las borradas se limpiaron del disk DE SU FILA.
+    expect(iterator_to_array($this->deletedFiles))->toBe([['s3', 'a.jpg'], ['s3', 'c.jpg']]);
+});
+
+test('detachMedia NO borra media de otro dueño aunque le pasen el id (IDOR)', function () {
+    // El punto de seguridad entero: el id viene del cliente. Pasar el id de la
+    // foto de OTRO post NO puede borrarla. El scope por la relación lo hace
+    // imposible, no improbable.
+    $mine = MediaOwnerBigint::create([]);
+    $theirs = MediaOwnerBigint::create([]);
+
+    $myPiece = $mine->attachMedia(['kind' => MkMediaKind::Image, 'disk' => 's3', 'path' => 'mine.jpg']);
+    $theirPiece = $theirs->attachMedia(['kind' => MkMediaKind::Image, 'disk' => 's3', 'path' => 'theirs.jpg']);
+
+    // `$mine` intenta borrar la pieza ajena Y la propia en la misma llamada.
+    $borradas = $mine->detachMedia([$theirPiece->id, $myPiece->id]);
+
+    // Sólo se borró la propia; la ajena sigue intacta, archivo incluido.
+    expect($borradas)->toBe(1);
+    expect(MkMedia::pluck('path')->all())->toBe(['theirs.jpg']);
+    expect(iterator_to_array($this->deletedFiles))->toBe([['s3', 'mine.jpg']]);
+});
+
+test('detachMedia acepta ids como STRING (multipart) sin romper en Postgres', function () {
+    // Por multipart los ids llegan como '5', no 5. El cast a int del método es
+    // lo que evita el `bigint = varchar` de Postgres. Se prueba con strings a
+    // propósito: es como pega el cliente real.
+    $owner = MediaOwnerBigint::create([]);
+    $a = $owner->attachMedia(['kind' => MkMediaKind::Image, 'disk' => 's3', 'path' => 'a.jpg']);
+    $b = $owner->attachMedia(['kind' => MkMediaKind::Image, 'disk' => 's3', 'path' => 'b.jpg']);
+
+    $borradas = $owner->detachMedia([(string) $a->id]);
+
+    expect($borradas)->toBe(1);
+    expect(MkMedia::pluck('path')->all())->toBe(['b.jpg']);
+});
+
+test('detachMedia con lista vacía es un no-op', function () {
+    $owner = MediaOwnerBigint::create([]);
+    $owner->attachMedia(['kind' => MkMediaKind::Image, 'disk' => 's3', 'path' => 'a.jpg']);
+
+    expect($owner->detachMedia([]))->toBe(0);
+    expect(MkMedia::count())->toBe(1);
+    expect(iterator_to_array($this->deletedFiles))->toBe([]);
+});
+
+test('detachMedia de un embed borra la fila sin tocar ningún archivo', function () {
+    $owner = MediaOwnerBigint::create([]);
+    $embed = $owner->attachMedia([
+        'kind' => MkMediaKind::Embed,
+        'provider' => MkEmbedProvider::YouTube,
+        'provider_id' => 'dQw4w9WgXcQ',
+        'source_url' => 'https://youtu.be/dQw4w9WgXcQ',
+    ]);
+
+    expect($owner->detachMedia([$embed->id]))->toBe(1);
+    expect(MkMedia::count())->toBe(0);
+    expect(iterator_to_array($this->deletedFiles))->toBe([]);
+});
+
 test('un embed no intenta borrar ningún archivo', function () {
     $owner = MediaOwnerBigint::create([]);
     $owner->attachMedia([
