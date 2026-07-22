@@ -14,6 +14,7 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use Mk\Director\Enums\MkCommentReportReason;
 use Mk\Director\Enums\MkCommentReportStatus;
+use Mk\Director\Traits\HasMkReactions;
 
 /**
  * MkComment — un comentario de un autor sobre un contenido.
@@ -138,7 +139,7 @@ class MkComment extends EloquentModel
      * Reporta este comentario en nombre de `$reporter`.
      *
      * IDEMPOTENTE por el UNIQUE de la tabla, misma lógica que
-     * {@see \Mk\Director\Traits\HasMkReactions::react()}: intentamos insertar y,
+     * {@see HasMkReactions::react()}: intentamos insertar y,
      * si la base rechaza el duplicado, es que esta persona YA lo había
      * reportado — devolvemos ese reporte en vez de reventar. No pre-chequeamos
      * con un SELECT porque entre el SELECT y el INSERT hay una ventana en la que
@@ -198,6 +199,28 @@ class MkComment extends EloquentModel
             ])->save();
 
             $this->resolvePendingReports($moderator, MkCommentReportStatus::Actioned);
+        });
+    }
+
+    /**
+     * Borra (soft) el comentario por moderación y resuelve sus reportes
+     * pendientes como "accionados", TODO en una transacción — mismo criterio
+     * que {@see hideForModeration()}: la cola de admin nunca queda a medio
+     * camino (borrado pero con reportes todavía pendientes, o al revés).
+     *
+     * Borrar es MÁS DURO que ocultar y son acciones distintas, no una el
+     * fallback de la otra:
+     *  - Ocultar deja LÁPIDA: el autor sigue viendo su comentario con el motivo,
+     *    y es REVERSIBLE ({@see unhide()}).
+     *  - Borrar no deja nada: el global scope de `SoftDeletes` lo saca para
+     *    TODOS —incluido su autor— y propaga el soft delete a las respuestas
+     *    (lo hace el `deleting` de este modelo). Es la decisión final.
+     */
+    public function deleteForModeration(EloquentModel $moderator): void
+    {
+        DB::transaction(function () use ($moderator): void {
+            $this->resolvePendingReports($moderator, MkCommentReportStatus::Actioned);
+            $this->delete();
         });
     }
 

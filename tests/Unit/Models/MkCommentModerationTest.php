@@ -173,6 +173,33 @@ it('descartar resuelve los reportes sin ocultar el comentario', function () {
         ->and($comment->reports()->first()->status)->toBe(MkCommentReportStatus::Dismissed);
 });
 
+it('borrar por moderación acciona los reportes y hace soft delete', function () {
+    // Borrar es más duro que ocultar: no deja lápida (el SoftDeletes lo saca
+    // para todos) pero SÍ resuelve las denuncias, todo en una transacción.
+    $comment = $this->post->addComment($this->author, 'Fuera de acá');
+    $comment->reportBy($this->reporter, MkCommentReportReason::Harassment);
+
+    $comment->deleteForModeration($this->admin);
+
+    expect($comment->trashed())->toBeTrue()
+        ->and(MkComment::find($comment->id))->toBeNull()               // global scope lo saca
+        ->and($comment->reports()->first()->status)->toBe(MkCommentReportStatus::Actioned)
+        ->and($comment->reports()->first()->resolved_by_id)->toBe((string) $this->admin->getKey());
+});
+
+it('borrar por moderación un raíz propaga el soft delete a las respuestas', function () {
+    // Sin la cascada, las respuestas quedarían visibles colgando de un padre
+    // que ya no se ve — el hilo roto que evita el `deleting` del modelo.
+    $raiz = $this->post->addComment($this->author, 'Raíz');
+    $respuesta = $this->post->addComment($this->reporter, 'Respuesta', $raiz);
+    $raiz->reportBy($this->reporter, MkCommentReportReason::Spam);
+
+    $raiz->deleteForModeration($this->admin);
+
+    expect(MkComment::find($raiz->id))->toBeNull()
+        ->and(MkComment::find($respuesta->id))->toBeNull();
+});
+
 it('no re-resuelve un reporte ya terminal (histórico inmutable)', function () {
     // Descarto, y después oculto: el reporte YA resuelto como Dismissed no debe
     // pasar a Actioned. Sólo los pendientes se accionan.
