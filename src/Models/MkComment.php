@@ -142,21 +142,28 @@ class MkComment extends EloquentModel
      * si la base rechaza el duplicado, es que esta persona YA lo había
      * reportado — devolvemos ese reporte en vez de reventar. No pre-chequeamos
      * con un SELECT porque entre el SELECT y el INSERT hay una ventana en la que
-     * el otro request ya insertó; la única defensa real es el UNIQUE. El SELECT
-     * del catch corre afuera de toda transacción a propósito: en Postgres un
-     * INSERT fallido aborta la transacción entera.
+     * el otro request ya insertó; la única defensa real es el UNIQUE.
+     *
+     * 🔴 EL INSERT VA EN `DB::transaction`, NO SUELTO. Si el reporte corre
+     * dentro de una transacción externa (un request con varias escrituras, o
+     * `RefreshDatabase` en los tests contra Postgres), un INSERT que falla por
+     * el UNIQUE aborta la transacción ENTERA —"current transaction is aborted"—
+     * y el SELECT del catch muere con ella. Envuelto, el fallo revierte sólo el
+     * SAVEPOINT anidado y la transacción externa sobrevive, así que el catch
+     * puede consultar el reporte existente. Es el mismo motivo por el que
+     * `react()` hace el toggle adentro de una transacción.
      */
     public function reportBy(EloquentModel $reporter, MkCommentReportReason $reason, ?string $note = null): MkCommentReport
     {
         try {
             /** @var MkCommentReport $report */
-            $report = $this->reports()->create([
+            $report = DB::transaction(fn (): MkCommentReport => $this->reports()->create([
                 'reporter_type' => $reporter->getMorphClass(),
                 'reporter_id' => (string) $reporter->getKey(),
                 'reason' => $reason,
                 'note' => $note,
                 'status' => MkCommentReportStatus::Pending,
-            ]);
+            ]));
 
             return $report;
         } catch (UniqueConstraintViolationException) {
