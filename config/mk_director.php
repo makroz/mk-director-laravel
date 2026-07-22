@@ -125,6 +125,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Reportes de comentarios (tabla `mk_comment_reports`)
+    |--------------------------------------------------------------------------
+    | Moderación comunitaria: un miembro reporta un comentario, un admin lo
+    | revisa y decide (ocultar / borrar / descartar). El comentario oculto le
+    | sale al autor como lápida con el motivo, y desaparece del muro público.
+    |
+    | 🔴 Un reporte por persona por comentario lo garantiza el UNIQUE de la
+    | tabla, NO el código — misma defensa que el like (ver `reactions`).
+    */
+    'comment_reports' => [
+        'table' => env('MK_COMMENT_REPORTS_TABLE', 'mk_comment_reports'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Embeds (YouTube / TikTok / Instagram)
     |--------------------------------------------------------------------------
     | Usado por `MkEmbedService`. CERO API keys: YouTube no necesita red
