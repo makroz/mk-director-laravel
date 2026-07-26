@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Schema;
 use Mk\Director\Auth\Models\Ability;
 use Mk\Director\Auth\Pivots\MkAbilityUserPivot;
 use Mk\Director\Auth\Services\AbilityResolver;
+use Mk\Director\Auth\Support\MorphPivot;
 use Mk\Director\Database\Eloquent\Relations\MkBelongsToMany;
 
 /**
@@ -249,17 +250,11 @@ trait HasAbilities
      */
     public function abilityPivotExtras(): array
     {
-        static $hasUserType = null;
-
-        if ($hasUserType === null) {
-            try {
-                $hasUserType = Schema::hasColumn('ability_user', 'user_type');
-            } catch (\Throwable) {
-                $hasUserType = false;
-            }
-        }
-
-        return $hasUserType ? ['user_type' => static::class] : [];
+        // `getMorphClass()`, no `static::class`. Ver el gemelo en
+        // `HasRoles::pivotExtras()`.
+        return MorphPivot::hasUserTypeColumn('ability_user')
+            ? ['user_type' => MorphPivot::canonical($this)]
+            : [];
     }
 
     /**

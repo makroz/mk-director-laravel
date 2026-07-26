@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Support\Facades\Schema;
 use Mk\Director\Auth\Models\Role;
 use Mk\Director\Auth\Pivots\MkRoleUserPivot;
+use Mk\Director\Auth\Support\MorphPivot;
 use Mk\Director\Database\Eloquent\Relations\MkBelongsToMany;
 
 /**
@@ -230,20 +231,14 @@ trait HasRoles
      */
     public function pivotExtras(): array
     {
-        static $hasUserType = null;
-
-        if ($hasUserType === null) {
-            try {
-                $hasUserType = Schema::hasColumn('role_user', 'user_type');
-            } catch (\Throwable) {
-                // Si la tabla no existe todavía (consumer no migró), no agregar
-                // extras. Cuando migre, el próximo attach ya tendrá el cache miss
-                // y re-detectará.
-                $hasUserType = false;
-            }
-        }
-
-        return $hasUserType ? ['user_type' => static::class] : [];
+        // 🔴 `getMorphClass()`, NO `static::class`. Esto escribía el FQCN
+        // mientras que `MkBelongsToMany` —el otro camino de escritura, el que
+        // usa un `attach()` pelado— escribía el alias del morph map. La misma
+        // columna quedaba con dos vocabularios según por dónde entraste, y
+        // cualquier filtro sobre ella tenía que adivinar cuál.
+        return MorphPivot::hasUserTypeColumn('role_user')
+            ? ['user_type' => MorphPivot::canonical($this)]
+            : [];
     }
 
     /**

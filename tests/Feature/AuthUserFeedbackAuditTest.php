@@ -409,34 +409,33 @@ test('BUG-NEW-15: AuthCreateSuperAdminCommand autogenera name del email local-pa
 
 // ─── BUG-NEW-16 — HasRoles/HasAbilities mutations sin user_type en pivot ───────
 
-test('BUG-NEW-16: HasRoles/HasAbilities mutations setean user_type cuando la pivot tiene la columna (MME-polimórfico)', function () {
+test('BUG-NEW-16: las mutaciones de pivot siguen encapsulando el seteo de user_type', function () {
+    // 🔴 ESTE TEST MEDÍA EL TEXTO FUENTE Y POR ESO BLOQUEABA SU PROPIO ARREGLO.
+    //
+    // Afirmaba, con `toContain()` sobre el archivo, que las traits dijeran
+    // literalmente `'user_type' => static::class`. O sea fijaba la
+    // IMPLEMENTACIÓN, no el contrato — y `static::class` resultó ser
+    // exactamente la mitad del bug: el otro camino de escritura
+    // (`MkBelongsToMany`) usaba `getMorphClass()`, así que la misma columna
+    // quedaba con dos vocabularios según por dónde entraras. Ver
+    // {@see Mk\Director\Auth\Support\MorphPivot}.
+    //
+    // Un test que copia el código no puede distinguir "cambiaron la
+    // implementación" de "rompieron el contrato". Queda lo que SÍ es contrato
+    // de BUG-NEW-16 —que el seteo esté encapsulado en un helper y no repetido
+    // en cada mutación— y el comportamiento se verifica donde corresponde, con
+    // una base de datos, en `RbacMorphScopeIsolationTest`.
     $hasRolesSrc = pkgFileContents('src/Auth/Concerns/HasRoles.php');
     $hasAbilitiesSrc = pkgFileContents('src/Auth/Concerns/HasAbilities.php');
 
-    // HasRoles::assignRole debe:
-    //   1. Detectar via Schema::hasColumn('role_user', 'user_type').
-    //   2. Si existe, agregar extras ['user_type' => static::class] al syncWithoutDetaching.
+    expect($hasRolesSrc)->toMatch('/function\\s+pivotExtras\\s*\\(/')
+        ->and($hasAbilitiesSrc)->toMatch('/function\\s+abilityPivotExtras\\s*\\(/')
+        ->and($hasRolesSrc)->toMatch('/function\\s+syncRoles/');
 
-    expect($hasRolesSrc)->toContain('use Illuminate\\Support\\Facades\\Schema;')
-        ->and($hasRolesSrc)->toMatch("/Schema::hasColumn\\(\\s*'role_user'\\s*,\\s*'user_type'\\s*\\)/")
-        ->and($hasRolesSrc)->toContain("'user_type' => static::class");
-
-    // HasRoles::syncRoles idem.
-    expect($hasRolesSrc)->toMatch('/function\\s+syncRoles/');
-
-    // HasAbilities::giveAbilityTo + syncDirectAbilities idem pero para ability_user.
-    expect($hasAbilitiesSrc)->toContain('use Illuminate\\Support\\Facades\\Schema;')
-        ->and($hasAbilitiesSrc)->toMatch("/Schema::hasColumn\\(\\s*'ability_user'\\s*,\\s*'user_type'\\s*\\)/")
-        ->and($hasAbilitiesSrc)->toContain("'user_type' => static::class");
-
-    // Y debe haber un helper method pivotExtras() / abilityPivotExtras() que encapsule el check.
-    expect($hasRolesSrc)->toMatch('/function\\s+pivotExtras\\s*\\(/');
-    expect($hasAbilitiesSrc)->toMatch('/function\\s+abilityPivotExtras\\s*\\(/');
-
-    // BC: si la pivot NO tiene user_type, el comportamiento es idéntico al previo (sin extras).
-    // Lo verificamos buscando el pattern `[]` como retorno del helper cuando NO tiene la columna.
-    expect($hasRolesSrc)->toContain('return $hasUserType ? [\'user_type\' => static::class] : [];');
-    expect($hasAbilitiesSrc)->toContain('return $hasUserType ? [\'user_type\' => static::class] : [];');
+    // Las mutaciones usan el helper en vez de armar el payload a mano: eso es
+    // lo que impide que una de ellas se olvide de `user_type`.
+    expect(substr_count($hasRolesSrc, '$this->pivotExtras()'))->toBeGreaterThanOrEqual(2)
+        ->and(substr_count($hasAbilitiesSrc, '$this->abilityPivotExtras()'))->toBeGreaterThanOrEqual(2);
 });
 
 // ─── BUG-NEW-17 — HasAbilities::abilities() SQL roto (WHERE ability_id IS NULL) ────
