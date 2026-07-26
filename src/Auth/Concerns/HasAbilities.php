@@ -176,6 +176,7 @@ trait HasAbilities
             $payload === [] ? [$abilityModel->id] : [$abilityModel->id => $payload]
         );
 
+        $this->forgetGrantRelations();
         $this->invalidateAbilityCache();
     }
 
@@ -193,6 +194,7 @@ trait HasAbilities
 
         $this->directAbilities()->detach($abilityModel->id);
 
+        $this->forgetGrantRelations();
         $this->invalidateAbilityCache();
     }
 
@@ -227,6 +229,7 @@ trait HasAbilities
 
         $this->directAbilities()->sync($ids);
 
+        $this->forgetGrantRelations();
         $this->invalidateAbilityCache();
     }
 
@@ -294,35 +297,108 @@ trait HasAbilities
      */
     private function collectAllAbilityNames(): Collection
     {
-        // Path 1: abilities del user vía roles
-        $fromRoles = collect();
+        return $this->abilityNamesFromRoles()
+            ->merge($this->abilityNamesFromDirectGrants())
+            ->unique()
+            ->values();
+    }
 
+    /**
+     * Nombres de abilities que le llegan al usuario por sus roles.
+     *
+     * 🔴 REUSA LA RELACIÓN YA CARGADA, Y NO ES UNA MICRO-OPTIMIZACIÓN.
+     * `MkAuthenticate` hace `loadMissing(['roles.abilities', 'directAbilities'])`
+     * en CADA request autenticado, precisamente para que los chequeos de authz
+     * río abajo no vuelvan a la base. Este método usaba `$this->roles()` —con
+     * paréntesis, o sea el query builder de la relación— que ignora por
+     * completo lo que se cargó y consulta de nuevo.
+     *
+     * El resultado era lo peor de los dos mundos: se pagaban las queries del
+     * eager load Y las del chequeo, y nadie leía nunca el resultado del eager
+     * load. Medido en `GET /api/admin/wall`: 8 queries, de las cuales cuatro
+     * eran dos pares que traían exactamente lo mismo.
+     */
+    private function abilityNamesFromRoles(): Collection
+    {
         try {
-            $roleIds = $this->roles()->pluck('roles.id');
-            if ($roleIds->isNotEmpty()) {
-                $fromRoles = Ability::query()
-                    ->whereIn('id', function ($query) use ($roleIds) {
-                        $query->select('ability_id')
-                            ->from('ability_role')
-                            ->whereIn('role_id', $roleIds);
-                    })
-                    ->pluck('name');
+            if ($this->relationLoaded('roles')) {
+                $roles = $this->roles;
+
+                // `every()` sobre una colección vacía devuelve true, que acá es
+                // la respuesta correcta: sin roles no hay abilities por rol y
+                // no hace falta ninguna query.
+                if ($roles->every(fn ($role) => $role->relationLoaded('abilities'))) {
+                    return $roles->flatMap(fn ($role) => $role->abilities->pluck('name'));
+                }
+
+                return $this->abilityNamesForRoleIds($roles->pluck('id'));
             }
+
+            return $this->abilityNamesForRoleIds($this->roles()->pluck('roles.id'));
         } catch (\Throwable) {
-            $fromRoles = collect();
+            // Tablas roles/ability_role no publicadas — feature no activo.
+            return collect();
+        }
+    }
+
+    /**
+     * @param  Collection<int, mixed>  $roleIds
+     * @return Collection<int, string>
+     */
+    private function abilityNamesForRoleIds(Collection $roleIds): Collection
+    {
+        if ($roleIds->isEmpty()) {
+            return collect();
         }
 
-        // Path 2: abilities directos
-        $fromDirect = collect();
+        return Ability::query()
+            ->whereIn('id', function ($query) use ($roleIds) {
+                $query->select('ability_id')
+                    ->from('ability_role')
+                    ->whereIn('role_id', $roleIds);
+            })
+            ->pluck('name');
+    }
 
+    /**
+     * Nombres de abilities otorgados directamente (pivot `ability_user`).
+     * Mismo criterio que {@see abilityNamesFromRoles()}: si la relación ya
+     * está cargada se lee, si no se consulta.
+     */
+    private function abilityNamesFromDirectGrants(): Collection
+    {
         try {
-            $fromDirect = $this->directAbilities()->pluck('abilities.name');
+            if ($this->relationLoaded('directAbilities')) {
+                return $this->directAbilities->pluck('name');
+            }
+
+            return $this->directAbilities()->pluck('abilities.name');
         } catch (\Throwable) {
             // Tabla ability_user no publicada — feature no activo.
-            $fromDirect = collect();
+            return collect();
         }
+    }
 
-        return $fromRoles->merge($fromDirect)->unique()->values();
+    /**
+     * Descarta las copias en memoria de `roles`, `directAbilities` y
+     * `abilities`.
+     *
+     * 🔴 SIN ESTO, REUSAR LA RELACIÓN CARGADA SERÍA UN CAMBIO DE COMPORTAMIENTO.
+     * Los mutadores (`assignRole`, `removeRole`, `syncRoles`, `giveAbilityTo`,
+     * `revokeAbilityTo`, `syncDirectAbilities`) invalidan el cache del
+     * `AbilityResolver`, pero eso no toca la colección que el modelo ya tiene
+     * en memoria. Antes daba igual, porque cada chequeo consultaba de nuevo;
+     * ahora que se reusa, una copia vieja sobreviviría a su propia mutación y
+     * el usuario seguiría teniendo —o seguiría sin tener— el permiso que se le
+     * acaba de cambiar, hasta el final del request.
+     */
+    private function forgetGrantRelations(): void
+    {
+        foreach (['roles', 'directAbilities', 'abilities'] as $relacion) {
+            if ($this->relationLoaded($relacion)) {
+                $this->unsetRelation($relacion);
+            }
+        }
     }
 
     /**

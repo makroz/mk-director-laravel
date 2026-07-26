@@ -6,6 +6,7 @@ namespace Mk\Director\Auth\Services;
 
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
+use Mk\Director\Auth\Models\Ability;
 
 /**
  * AbilityResolver — central authority for "can this user do X?".
@@ -42,15 +43,14 @@ class AbilityResolver
 
     /**
      * @param  callable(Authenticatable): array<int, string>  $loader
-     *         Resolves the user's ability names from the DB. Injected by
-     *         the service provider so this class stays framework-agnostic.
+     *                                                                 Resolves the user's ability names from the DB. Injected by
+     *                                                                 the service provider so this class stays framework-agnostic.
      */
     public function __construct(
         private readonly CacheRepository $cache,
         private readonly int $ttl = self::DEFAULT_TTL,
         private $loader = null,
-    ) {
-    }
+    ) {}
 
     /**
      * Set the loader callable. Called by the service provider because the
@@ -132,7 +132,7 @@ class AbilityResolver
             ? (string) $user->getAuthIdentifier()
             : (string) ($user->getKey() ?? 'unknown');
 
-        return 'mk_abilities:' . $type . ':' . $id;
+        return 'mk_abilities:'.$type.':'.$id;
     }
 
     /**
@@ -153,7 +153,7 @@ class AbilityResolver
         $segments = explode('.', $ability, 2);
         $resource = $segments[0] ?? null;
 
-        if ($resource !== null && $resource !== '' && $collection->contains($resource . '.*')) {
+        if ($resource !== null && $resource !== '' && $collection->contains($resource.'.*')) {
             return true;
         }
 
@@ -167,12 +167,29 @@ class AbilityResolver
     {
         if (is_callable($this->loader)) {
             $result = ($this->loader)($user);
+
             return is_array($result) ? array_values(array_unique($result)) : [];
         }
 
-        // Fallback for tests / sandbox that do not register a loader:
-        // try the HasAbilities-style direct + roles path. We swallow any
-        // errors (e.g. missing tables in unit context) and return empty.
+        // Sin loader registrado —y HOY NO LO REGISTRA NADIE: `setLoader()` no
+        // tiene un solo call site en el paquete, así que este "fallback" es
+        // en realidad el camino normal de producción—, resolvemos por el
+        // usuario mismo.
+        //
+        // 🔴 DELEGAR EN `getEffectiveAbilities()` NO ES SÓLO DRY. Este método
+        // tenía una SEGUNDA implementación del mismo cálculo, y las dos
+        // derivaron: la del trait aprendió a reusar las relaciones que
+        // `MkAuthenticate` deja cargadas, y ésta seguía consultando de nuevo.
+        // Dos copias de una regla de autorización que responden distinto es
+        // la clase de diferencia que nadie nota hasta que importa.
+        if (method_exists($user, 'getEffectiveAbilities')) {
+            try {
+                return $user->getEffectiveAbilities();
+            } catch (\Throwable) {
+                // Cae al path de abajo, que tolera tablas no publicadas.
+            }
+        }
+
         $names = [];
 
         if (method_exists($user, 'directAbilities')) {
@@ -189,8 +206,8 @@ class AbilityResolver
         if (method_exists($user, 'roles')) {
             try {
                 $roleIds = $user->roles()->pluck('roles.id')->all();
-                if (! empty($roleIds) && class_exists(\Mk\Director\Auth\Models\Ability::class)) {
-                    $roleNames = \Mk\Director\Auth\Models\Ability::query()
+                if (! empty($roleIds) && class_exists(Ability::class)) {
+                    $roleNames = Ability::query()
                         ->whereIn('id', function ($q) use ($roleIds) {
                             $q->select('ability_id')
                                 ->from('ability_role')
