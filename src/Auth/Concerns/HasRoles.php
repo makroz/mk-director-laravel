@@ -102,6 +102,8 @@ trait HasRoles
 
         // Roles feed into abilities via ability_role; invalidate the
         // ability cache so the next canMk() re-resolves.
+        $this->forgetGrantRelations();
+
         if (method_exists($this, 'invalidateAbilityCache')) {
             $this->invalidateAbilityCache();
         }
@@ -121,6 +123,8 @@ trait HasRoles
         }
 
         $this->roles()->detach($roleModel->id);
+
+        $this->forgetGrantRelations();
 
         if (method_exists($this, 'invalidateAbilityCache')) {
             $this->invalidateAbilityCache();
@@ -186,6 +190,8 @@ trait HasRoles
         }
 
         $this->roles()->sync($ids);
+
+        $this->forgetGrantRelations();
 
         if (method_exists($this, 'invalidateAbilityCache')) {
             $this->invalidateAbilityCache();
