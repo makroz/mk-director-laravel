@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Schema;
 use Mk\Director\Auth\Concerns\HasAbilities;
 use Mk\Director\Auth\Concerns\HasRoles;
 use Mk\Director\Auth\Pivots\MkPivot;
+use Mk\Director\Auth\Support\MorphPivot;
 
 /**
  * MkBelongsToMany — BelongsToMany del paquete que auto-inyecta `user_type`
@@ -86,7 +87,6 @@ class MkBelongsToMany extends BelongsToMany
      *
      * @var array<string, bool|null>
      */
-    private static array $userTypeColumnCache = [];
 
     /**
      * Crea una MkBelongsToMany a partir de una BelongsToMany,
@@ -155,7 +155,41 @@ class MkBelongsToMany extends BelongsToMany
             $targetProp->setValue($instance, $value);
         }
 
+        $instance->scopeToParentMorph();
+
         return $instance;
+    }
+
+    /**
+     * Restringe la relación a las filas de la pivot que pertenecen a ESTE
+     * parent, según su identidad polimórfica.
+     *
+     * 🔴 VA ACÁ Y NO EN LA TRAIT, Y LA DIFERENCIA ES TODO EL PUNTO.
+     * `HasRoles::roles()` es override-able, y los consumidores la overridean
+     * de verdad —RETO lo hace en `Admin` y en `Member`, porque las pivots usan
+     * `user_id` y Eloquent inferiría `admin_id`. Un filtro puesto en la trait
+     * desaparece con el override, justo en los modelos que más lo necesitan.
+     *
+     * `MkBelongsToMany::from()` es la costura por la que pasan las dos: la
+     * relación de la trait y la del consumidor. Poner el filtro acá es la
+     * única forma de que no se pueda perder por reescribir la relación.
+     *
+     * (RETO tenía su propio `wherePivot('user_type', static::class)` en cada
+     * override — el FQCN pelado. Funcionaba mientras la escritura también
+     * usara FQCN, y dejaba INVISIBLE cualquier fila escrita por el camino del
+     * alias. Dos vocabularios, dos mitades que no se hablaban.)
+     */
+    private function scopeToParentMorph(): void
+    {
+        if ($this->parent === null) {
+            return;
+        }
+
+        if (! MorphPivot::hasUserTypeColumn($this->getTable())) {
+            return;
+        }
+
+        $this->wherePivotIn('user_type', MorphPivot::identities($this->parent));
     }
 
     /**
@@ -235,12 +269,10 @@ class MkBelongsToMany extends BelongsToMany
 
     /**
      * Lee la property `using` via reflection (es protected en BelongsToMany).
-     *
-     * @return string|null
      */
     private function readUsingProperty(): ?string
     {
-        $reflection = new \ReflectionClass(\Illuminate\Database\Eloquent\Relations\BelongsToMany::class);
+        $reflection = new \ReflectionClass(BelongsToMany::class);
         if (! $reflection->hasProperty('using')) {
             return null;
         }
@@ -275,43 +307,16 @@ class MkBelongsToMany extends BelongsToMany
             return $attributes;
         }
 
-        // 2. Detectar si la pivot tiene columna user_type (cacheado).
-        $table = $this->getTable();
-
-        if (! isset(self::$userTypeColumnCache[$table])) {
-            // Usar DB::connection()->getSchemaBuilder() directamente — más
-            // robusto que el facade Schema::hasColumn() que requiere
-            // `db.schema` bindeado en el container (algunos setups como
-            // Capsule-based testing no lo bindean, lo cual hace fallar
-            // silenciosamente Schema::hasColumn y cachear `false`).
-            try {
-                if (! function_exists('app')) {
-                    self::$userTypeColumnCache[$table] = null;
-                } else {
-                    $app = app();
-                    if (! $app->bound('db')) {
-                        self::$userTypeColumnCache[$table] = null;
-                    } else {
-                        $schema = $app->make('db')->connection()->getSchemaBuilder();
-                        self::$userTypeColumnCache[$table] = $schema->hasColumn($table, 'user_type') ? true : false;
-                    }
-                }
-            } catch (\Throwable) {
-                // DB no disponible / tabla no existe / facade falla.
-                // Marcar como "indeterminado" (null) — el merge intentará con
-                // verificación adicional más abajo.
-                self::$userTypeColumnCache[$table] = null;
-            }
-        }
-
-        // 3. Si el cache dice "no tiene columna" explícitamente, no forzar.
-        if (self::$userTypeColumnCache[$table] === false) {
+        // 2. ¿Corresponde escribir `user_type`? La detección vive en
+        //    `MorphPivot` y no acá: estaba duplicada, con dos caches
+        //    independientes de la misma pregunta que podían contestar
+        //    distinto. Ahora hay una sola, y es la robusta —schema builder
+        //    directo en vez del facade `Schema`, que necesita `db.schema`
+        //    bindeado y falla en silencio cuando no lo está.
+        if (! MorphPivot::shouldWriteUserType($this->getTable())) {
             return $attributes;
         }
 
-        // 4. Si el cache es null (indeterminado) o true, intentar setear user_type.
-        //    Defense-in-depth: si la columna no existe, el INSERT fallará
-        //    con SQLSTATE — eso es OK, mejor que pinear silenciosamente.
         if ($this->parent !== null) {
             $attributes['user_type'] = $this->parent->getMorphClass();
         }
@@ -327,6 +332,9 @@ class MkBelongsToMany extends BelongsToMany
      */
     public static function clearUserTypeCache(): void
     {
-        self::$userTypeColumnCache = [];
+        // La detección vive en MorphPivot desde que se unificaron las dos
+        // copias; el flush tiene que ir al mismo lugar o limpia un cache que
+        // ya nadie lee.
+        MorphPivot::flushSchemaCache();
     }
 }
