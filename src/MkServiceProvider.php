@@ -37,6 +37,15 @@ use Mk\Director\Plugins\FileStoragePlugin;
 use Mk\Director\Tenancy\TenantContext;
 use Mk\Director\Tenancy\TenantResolver;
 use Mk\Director\Utils\MkRequestAwareStorageUrl;
+// 🔴 ESTE IMPORT FALTABA Y HABÍA DOS `catch (Throwable $e)` MUERTOS.
+// Sin él, dentro del namespace `Mk\Director` el nombre pelado resuelve a
+// `Mk\Director\Throwable` —una clase que no existe— así que el catch no
+// matchea NUNCA. No es un error de sintaxis ni de tipos: PHP lo acepta, el
+// linter lo acepta, y el bloque simplemente no corre. El de
+// `registerAutoDiscoverAbilities()` decía proteger el boot de un
+// auto-discover fallido y lo dejaba pasar entero.
+// El que sí funcionaba (línea ~195) usa `\Throwable` con la barra.
+use Throwable;
 
 class MkServiceProvider extends ServiceProvider
 {
@@ -192,7 +201,7 @@ class MkServiceProvider extends ServiceProvider
                 if ($this->app->resolved(TenantContext::class)) {
                     $this->app->make(TenantContext::class)->flush();
                 }
-            } catch (\Throwable) {
+            } catch (Throwable) {
                 // ignore — never let a flush failure break the response
             }
         });
@@ -262,6 +271,29 @@ class MkServiceProvider extends ServiceProvider
      *     el kernel Artisan, que bindea correctamente la instancia del
      *     comando + argumentos.
      */
+    /**
+     * Anota algo durante el boot sin poder romperlo.
+     *
+     * 🔴 UN RESCATE NO PUEDE AGREGAR UN FALLO NUEVO. Los avisos de acá salen
+     * justo cuando el entorno está a medio armar —sin base, sin cache, a veces
+     * sin logger— y ahí `Log::debug()` no es inocente: sin el binding `log`
+     * tira `BindingResolutionException: Target class [log] does not exist` y se
+     * lleva puesto el boot que veníamos a salvar. Lo cazó el test de este
+     * mismo rescate, que sin esto fallaba EN LA LÍNEA DEL LOG y no en la que
+     * estaba probando.
+     */
+    protected function avisoDeBoot(string $mensaje): void
+    {
+        try {
+            if ($this->app->bound('log')) {
+                Log::debug($mensaje);
+            }
+        } catch (Throwable) {
+            // Sin logger no hay a dónde escribir, y no hay nada peor que hacer
+            // que volarle el arranque a alguien por no poder avisarle.
+        }
+    }
+
     protected function registerAutoDiscoverAbilities(): void
     {
         if (! config('mk_director.features.auto_discover_abilities', false)) {
@@ -323,9 +355,31 @@ class MkServiceProvider extends ServiceProvider
         // negligible.
         //
         // Spec: HALLAZGO-NEW-FASE14-01, feedback RETO fase 14 (2026-06-29).
+        // 🔴 EL GUARD TAMBIÉN NECESITA SU PROPIO GUARD.
+        //
+        // Arriba dice que la introspección cuesta "one schema introspection per
+        // boot — negligible". Es cierto cuando HAY base. Cuando no la hay,
+        // `Schema::hasTable()` no devuelve false: TIRA. Y este boot lo dispara
+        // `package:discover`, o sea `composer install`, así que instalar
+        // dependencias exigía una base viva. En un clone limpio el install moría
+        // con "Database file at path [...] does not exist" — un mensaje que no
+        // nombra ni las abilities ni el auto-discover.
+        //
+        // "No pude preguntar" y "la tabla no está" llevan al mismo lado: no hay
+        // nada que descubrir todavía, se sigue de largo. Auto-discover es una
+        // comodidad de desarrollo, nunca un requisito para arrancar.
         $abilitiesTable = config('mk_director.auth.tables.abilities', 'abilities');
-        if (! Schema::hasTable($abilitiesTable)) {
-            Log::debug("MK-Director: skip auto-discover-abilities — table [{$abilitiesTable}] not migrated yet.");
+
+        try {
+            $existe = Schema::hasTable($abilitiesTable);
+        } catch (Throwable $e) {
+            $this->avisoDeBoot("MK-Director: skip auto-discover-abilities — sin conexión para consultar [{$abilitiesTable}]: ".$e->getMessage());
+
+            return;
+        }
+
+        if (! $existe) {
+            $this->avisoDeBoot("MK-Director: skip auto-discover-abilities — table [{$abilitiesTable}] not migrated yet.");
 
             return;
         }

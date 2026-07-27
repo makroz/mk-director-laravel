@@ -98,19 +98,20 @@ describe('HALLAZGO-NEW-FASE14-01 — registerAutoDiscoverAbilities() RefreshData
         expect(preg_match('/Log::error[^\n]*skip auto-discover-abilities/', $source))->toBe(0);
     });
 
-    test('method returns early after the Schema::hasTable skip (does NOT fall through to Artisan::call)', function () use ($source): void {
-        // The skip pattern is:
-        //   if (! Schema::hasTable(...)) {
-        //       Log::debug(...);
-        //       return;
-        //   }
-        //
-        // Without the `return;`, the code would fall through to the
-        // Artisan::call() and trigger the RuntimeException anyway.
-
-        // Pin the return statement within the Schema::hasTable block.
-        expect($source)->toMatch('/Schema::hasTable.*?Log::debug.*?return;/s');
-    });
+    // 🔴 ACÁ HABÍA UN REGEX SOBRE EL CÓDIGO FUENTE:
+    //
+    //   expect($source)->toMatch('/Schema::hasTable.*?Log::debug.*?return;/s');
+    //
+    // La intención era buena —comprobar que el skip CORTA y no cae al
+    // `Artisan::call()`— pero lo que medía era el ORDEN DE TRES CADENAS en el
+    // archivo. Bastó extraer el log a un helper (`avisoDeBoot()`, que se define
+    // más arriba en la clase) para que el regex se pusiera rojo sin que el
+    // comportamiento cambiara ni un poco: un falso positivo que cuesta tiempo
+    // y erosiona la confianza en la suite.
+    //
+    // Lo reemplaza un test que ejecuta el método y comprueba que Artisan NO se
+    // llama, en
+    // tests/Unit/MkServiceProviderBootSinBaseTest.php.
 
     test('HALLAZGO-NEW-FASE14-01 reference is documented in source comments (drift trazable per R-G-032)', function () use ($source): void {
         // Drift trazable per R-G-032 — the fix must be discoverable via
