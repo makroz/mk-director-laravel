@@ -256,22 +256,37 @@ it('el rol base del scope del módulo se sigue vaciando aunque no declare nada',
     // Sin esto, sacar la última `baseline: true` de un módulo dejaría su rol
     // base con la ability adentro para siempre: el grupo del guard ya no
     // existiría en el array y nadie lo reconciliaría.
+    //
+    // 🔴 CORRE EL UPSERT ANTES DE SINCRONIZAR, Y AHORA ESO ES OBLIGATORIO.
+    //
+    // Antes este test sembraba `abilities` a mano e invocaba SÓLO
+    // `sincronizarRolBase`. Dejaba la tabla diciendo `is_baseline = true` para
+    // una ability que el array declaraba `false` — un estado que el comando
+    // real NO PUEDE producir, porque `processModule()` siempre corre
+    // `upsertAbilities()` primero y ése es justamente el que baja el flag.
+    //
+    // Importa decirlo, y no cambiar el test en silencio: la corrección del rol
+    // base multi-módulo hace que la reconciliación lea la lista de baselines
+    // DE LA TABLA en vez del array del módulo de turno (es la única forma de
+    // que un módulo no pise a los otros). Eso introduce una dependencia de
+    // orden REAL —upsert antes que sync— que este test ahora ejercita en vez
+    // de saltear. La propiedad que defendía sigue defendida, y se prueba en
+    // rojo: sin la reconciliación, el rol queda con la ability adentro.
     $capsule = scopeCapsule();
-    $db = $capsule->getConnection();
-    $db->table('abilities')->insert([
-        'name' => 'member.wall.viewAny', 'is_baseline' => true,
-        'created_at' => now(), 'updated_at' => now(),
-    ]);
+    $cmd = scopeCommand();
 
-    invocar(scopeCommand(), 'sincronizarRolBase', ['member', [
-        ['name' => 'member.wall.viewAny', 'description' => null, 'baseline' => true],
-    ]]);
+    $declararBaseline = function (bool $esBaseline) use ($cmd): void {
+        $abilities = [['name' => 'member.wall.viewAny', 'description' => null, 'baseline' => $esBaseline]];
+
+        foreach (['upsertAbilities', 'sincronizarRolBase'] as $metodo) {
+            invocar($cmd, $metodo, ['member', $abilities]);
+        }
+    };
+
+    $declararBaseline(true);
     expect(baseDeGuard($capsule, 'member'))->toBe(['member.wall.viewAny']);
 
     // Ninguna baseline declarada: el grupo `member` ya no viene en el array.
-    invocar(scopeCommand(), 'sincronizarRolBase', ['member', [
-        ['name' => 'member.wall.viewAny', 'description' => null, 'baseline' => false],
-    ]]);
-
+    $declararBaseline(false);
     expect(baseDeGuard($capsule, 'member'))->toBe([]);
 });

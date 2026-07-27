@@ -263,3 +263,96 @@ it('sin la columna del pivot NO sincroniza, en vez de arriesgarse a sacar permis
         // Las abilities SÍ se persisten: lo que se saltea es sólo el rol.
         ->and($capsule->getConnection()->table('abilities')->count())->toBe(1);
 });
+
+// ─── Varios módulos declarando baselines del MISMO scope ────────────────
+
+/**
+ * 🔴 EL BUG QUE ROMPÍA LA FEATURE EN CUANTO HABÍA DOS MÓDULOS.
+ *
+ * `reconciliarRolBase()` corre UNA VEZ POR MÓDULO. Cuando reconciliaba contra
+ * las abilities que declaraba el módulo de turno, cada módulo BORRABA las
+ * baselines de los otros y dejaba sólo las suyas: el rol base terminaba con las
+ * del ÚLTIMO procesado, y quién es el último lo decide el orden de registro de
+ * los providers.
+ *
+ * Medido en RETO con dos módulos reales (Communications y Events):
+ *
+ *     módulo A ....... rol base: +0 / -4  → queda con 0
+ *     módulo Events .. rol base: +2 / -0  → queda con 2
+ *     módulo Comms ... rol base: +4 / -2  → queda con 4
+ *
+ * Y el reporte del comando decía `BASELINE` en verde para las seis. El usuario
+ * ve que salió bien y los permisos no están.
+ *
+ * Nadie lo vio antes porque la feature se construyó y se probó con UN módulo
+ * declarando baselines, que es el caso en el que el bug no existe.
+ */
+it('🔴 dos módulos que declaran baselines del mismo scope NO se pisan', function () {
+    $capsule = rolBaseCapsule();
+    $cmd = rolBaseCommand();
+
+    descubrir($cmd, 'communications', [
+        ['name' => 'member.wall.viewAny', 'description' => null, 'baseline' => true],
+        ['name' => 'member.wall.react', 'description' => null, 'baseline' => true],
+    ]);
+
+    descubrir($cmd, 'events', [
+        ['name' => 'member.events.viewAny', 'description' => null, 'baseline' => true],
+        ['name' => 'member.events.rsvp', 'description' => null, 'baseline' => true],
+    ]);
+
+    expect(abilitiesDelRolBase($capsule, 'member'))->toBe([
+        'member.events.rsvp',
+        'member.events.viewAny',
+        'member.wall.react',
+        'member.wall.viewAny',
+    ]);
+});
+
+/**
+ * El orden no puede importar. Si importara, el resultado dependería de en qué
+ * orden `bootstrap/providers.php` registra los módulos — o sea de un detalle
+ * que nadie asocia con permisos.
+ */
+it('el orden en que se procesan los módulos no cambia el resultado', function () {
+    $capsule = rolBaseCapsule();
+    $cmd = rolBaseCommand();
+
+    descubrir($cmd, 'events', [
+        ['name' => 'member.events.rsvp', 'description' => null, 'baseline' => true],
+    ]);
+    descubrir($cmd, 'communications', [
+        ['name' => 'member.wall.viewAny', 'description' => null, 'baseline' => true],
+    ]);
+
+    expect(abilitiesDelRolBase($capsule, 'member'))
+        ->toBe(['member.events.rsvp', 'member.wall.viewAny']);
+});
+
+/**
+ * Y sacarle el flag a UNA sigue funcionando: la reconciliación tiene que poder
+ * quitar sin llevarse puestas las de los otros módulos. Sin este test, el
+ * arreglo podría ser "no borres nunca nada", que también dejaría el rol
+ * correcto en el test de arriba y rompería la limpieza.
+ */
+it('sacar baseline en un módulo no toca las de los otros', function () {
+    $capsule = rolBaseCapsule();
+    $cmd = rolBaseCommand();
+
+    descubrir($cmd, 'communications', [
+        ['name' => 'member.wall.viewAny', 'description' => null, 'baseline' => true],
+    ]);
+    descubrir($cmd, 'events', [
+        ['name' => 'member.events.rsvp', 'description' => null, 'baseline' => true],
+        ['name' => 'member.events.viewAny', 'description' => null, 'baseline' => true],
+    ]);
+
+    // Events deja de declarar `viewAny` como baseline.
+    descubrir($cmd, 'events', [
+        ['name' => 'member.events.rsvp', 'description' => null, 'baseline' => true],
+        ['name' => 'member.events.viewAny', 'description' => null, 'baseline' => false],
+    ]);
+
+    expect(abilitiesDelRolBase($capsule, 'member'))
+        ->toBe(['member.events.rsvp', 'member.wall.viewAny']);
+});

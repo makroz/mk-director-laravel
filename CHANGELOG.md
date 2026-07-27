@@ -5,6 +5,46 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [UNRELEASED] — `src/Http/Resources/`: los modelos del paquete se serializan en el paquete
+
+> **Added** (capa nueva, aditivo): `Mk\Director\Http\Resources\{MkMediaResource,
+> MkAbilityResource, MkRoleResource}`. El paquete no tenía ninguna capa de
+> Resources hasta ahora.
+>
+> **Causa raíz — el shape de un modelo del paquete lo estaba decidiendo el
+> consumer.** `MkMedia`, `Ability` y `Role` son modelos de mk-director, pero
+> sus Resources vivían dentro de módulos de la app: uno escrito a mano
+> (`Communications\...\MediaResource`) y cuatro **emitidos por**
+> `mk:make:auth-user X --with-crud` (R-PKG-014), que copiaba el `toArray()`
+> completo dentro de cada módulo scaffolded. Una app con dos scopes terminaba
+> con dos `RoleResource` idénticos salvo el namespace — dos lugares donde
+> arreglar el mismo bug, sin nada que los mantuviera sincronizados.
+>
+> **El síntoma que lo destapó**: un módulo nuevo que quiere mostrar media no
+> puede importar el `MediaResource` de otro módulo — `mk:lint:boundaries` lo
+> prohíbe (R-MK-001). Las únicas salidas eran romper la frontera o hacer una
+> tercera copia. Al vivir en el paquete el problema desaparece: el linter sólo
+> mira FQCN `App\Modules\*`, y `Mk\Director\*` le es transparente.
+>
+>   - `src/Stubs/auth-user/{role,ability}-resource.stub` → **subclases finas**
+>     (`class RoleResource extends MkRoleResource`) en vez de copiar el shape.
+>     El módulo conserva el punto de extensión (sobreescribir `toArray()` y
+>     llamar a `parent::`) sin heredar la duplicación. Los controllers
+>     generados no cambian: siguen refiriendo a la clase de su namespace.
+>
+> **Compat**: 🔴 **el JSON no cambia**. Los tres payloads conservan el set de
+> claves y el orden exactos. `tests/Unit/Http/Resources/` (15 tests, sqlite
+> real) pinea `array_keys(...)` clave por clave, incluido que `abilities` sea
+> CONDICIONAL (`whenLoaded`) y desaparezca del payload cuando la relación no
+> está cargada — distinguir "no tiene abilities" de "no las pediste" es lo que
+> evita el N+1 en el índice de roles.
+>
+> **Deuda que quedó documentada, no arreglada**: `MkAbilityResource` sigue
+> emitiendo `'module'`, pero la tabla `abilities` **no tiene esa columna** en
+> el paquete ni en el consumer — serializa `null` desde siempre. Se mantiene
+> porque los fronts ya la reciben y sacarla sería breaking. Hay un test que lo
+> deja asentado como deuda en vez de como feature.
+
 ## [UNRELEASED] — Policies de `--with-crud`: `canMk()` en vez de `hasAbility()` (bug latente)
 
 > **Fixed**: las Policies generadas por `mk:make:auth-user --with-crud` llamaban
