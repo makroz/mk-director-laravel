@@ -7,6 +7,7 @@ namespace Mk\Director\Tests\Unit\Performance;
 use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository as CacheRepository;
 use Illuminate\Container\Container;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Facade;
 use Mk\Director\Controllers\OpenApiController;
@@ -32,14 +33,14 @@ afterEach(function () {
  * T5.1 — OpenAPI cache
  */
 test('OpenApiController::spec wraps the generator output in Cache::remember()', function () {
-    $src = (string) file_get_contents(__DIR__ . '/../../../src/Controllers/OpenApiController.php');
+    $src = (string) file_get_contents(__DIR__.'/../../../src/Controllers/OpenApiController.php');
 
     expect($src)->toContain('Cache::remember');
     expect($src)->toContain("'mk_openapi_spec'");
 });
 
 test('OpenApiController reads the TTL from config (default 86400)', function () {
-    $src = (string) file_get_contents(__DIR__ . '/../../../src/Controllers/OpenApiController.php');
+    $src = (string) file_get_contents(__DIR__.'/../../../src/Controllers/OpenApiController.php');
 
     expect($src)->toContain('mk_director.openapi.cache_ttl');
     expect($src)->toContain('86400');
@@ -50,7 +51,7 @@ test('OpenApiController exposes the cache key as a public constant', function ()
 });
 
 test('GenerateDocsCommand invalidates the OpenAPI cache on success', function () {
-    $src = (string) file_get_contents(__DIR__ . '/../../../src/Console/Commands/GenerateDocsCommand.php');
+    $src = (string) file_get_contents(__DIR__.'/../../../src/Console/Commands/GenerateDocsCommand.php');
 
     expect($src)->toContain('Cache::forget');
     expect($src)->toContain('OpenApiController::CACHE_KEY');
@@ -59,23 +60,23 @@ test('GenerateDocsCommand invalidates the OpenAPI cache on success', function ()
 test('OpenApiController::spec returns JsonResponse wrapping the cached spec', function () {
     // Boot a fresh container with an array cache and a stub generator.
     $container = Container::getInstance();
-    $container->singleton('cache', fn (): CacheRepository => new CacheRepository(new ArrayStore()));
+    $container->singleton('cache', fn (): CacheRepository => new CacheRepository(new ArrayStore));
     Facade::setFacadeApplication($container);
 
     $generator = Mockery::mock(OpenApiGeneratorService::class);
     $generator->shouldReceive('generate')->andReturn(['openapi' => '3.0.0', 'paths' => []]);
 
-    $controller = new OpenApiController();
+    $controller = new OpenApiController;
     $response = $controller->spec($generator);
 
-    expect($response)->toBeInstanceOf(\Illuminate\Http\JsonResponse::class);
+    expect($response)->toBeInstanceOf(JsonResponse::class);
     $body = json_decode($response->getContent(), true);
     expect($body)->toBe(['openapi' => '3.0.0', 'paths' => []]);
 });
 
 test('OpenApiController::spec uses cached result on second call (no second generator invocation)', function () {
     $container = Container::getInstance();
-    $container->singleton('cache', fn (): CacheRepository => new CacheRepository(new ArrayStore()));
+    $container->singleton('cache', fn (): CacheRepository => new CacheRepository(new ArrayStore));
     Facade::setFacadeApplication($container);
 
     $generator = Mockery::mock(OpenApiGeneratorService::class);
@@ -83,7 +84,7 @@ test('OpenApiController::spec uses cached result on second call (no second gener
     // come from cache.
     $generator->shouldReceive('generate')->once()->andReturn(['openapi' => '3.0.0']);
 
-    $controller = new OpenApiController();
+    $controller = new OpenApiController;
     $r1 = $controller->spec($generator);
     $r2 = $controller->spec($generator);
 
@@ -94,7 +95,7 @@ test('OpenApiController::spec uses cached result on second call (no second gener
  * T5.2 — ModuleProviderRegistry
  */
 test('ModuleProviderRegistry exposes a discover() method and a flush() method', function () {
-    $registry = new ModuleProviderRegistry();
+    $registry = new ModuleProviderRegistry;
 
     expect(method_exists($registry, 'discover'))->toBeTrue();
     expect(method_exists($registry, 'flush'))->toBeTrue();
@@ -102,35 +103,39 @@ test('ModuleProviderRegistry exposes a discover() method and a flush() method', 
 });
 
 test('ModuleProviderRegistry source rejects symlinked module directories (R2-016)', function () {
-    $src = (string) file_get_contents(__DIR__ . '/../../../src/ModuleLoader/ModuleProviderRegistry.php');
+    $src = (string) file_get_contents(__DIR__.'/../../../src/ModuleLoader/ModuleProviderRegistry.php');
 
     expect($src)->toContain('isLink()');
     expect($src)->toContain('realpath');
 });
 
 test('ModuleProviderRegistry source rejects a symlinked Modules directory itself', function () {
-    $src = (string) file_get_contents(__DIR__ . '/../../../src/ModuleLoader/ModuleProviderRegistry.php');
+    $src = (string) file_get_contents(__DIR__.'/../../../src/ModuleLoader/ModuleProviderRegistry.php');
 
     expect($src)->toContain('is_link($candidate)');
 });
 
-test('ModuleProviderRegistry uses Cache::remember with a TTL derived from config', function () {
-    $src = (string) file_get_contents(__DIR__ . '/../../../src/ModuleLoader/ModuleProviderRegistry.php');
-
-    expect($src)->toContain('Cache::remember');
-    expect($src)->toContain('mk_director.modules.cache_ttl');
-    expect($src)->toContain('3600');
-});
+// 🔴 ACÁ VIVÍA UN TEST QUE NO MEDÍA NADA Y ADEMÁS FIJABA EL BUG.
+//
+// Leía el archivo fuente y exigía que contuviera la cadena `Cache::remember`.
+// Eso no verifica que el TTL salga de la config: verifica que alguien escribió
+// esas letras. Y `Cache::remember` era exactamente la línea que hacía que
+// `composer install` necesitara una base de datos viva, así que el test
+// bendecía el bug — y encima habría frenado el arreglo.
+//
+// El reemplazo mide comportamiento (qué TTL llega al store, y qué pasa cuando
+// el store revienta) y vive en
+// tests/Unit/ModuleLoader/ModuleProviderRegistryCacheDownTest.php.
 
 test('ModuleProviderRegistry cache key is derived from the canonical modules path hash', function () {
-    $src = (string) file_get_contents(__DIR__ . '/../../../src/ModuleLoader/ModuleProviderRegistry.php');
+    $src = (string) file_get_contents(__DIR__.'/../../../src/ModuleLoader/ModuleProviderRegistry.php');
 
     expect($src)->toContain('CACHE_KEY_PREFIX');
     expect($src)->toContain('md5');
 });
 
 test('ModuleLoaderServiceProvider delegates discovery to the registry (R4-006)', function () {
-    $src = (string) file_get_contents(__DIR__ . '/../../../src/ModuleLoader/ModuleLoaderServiceProvider.php');
+    $src = (string) file_get_contents(__DIR__.'/../../../src/ModuleLoader/ModuleLoaderServiceProvider.php');
 
     expect($src)->toContain('ModuleProviderRegistry');
     expect($src)->toContain('$registry->discover()');
