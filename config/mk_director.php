@@ -271,6 +271,25 @@ return [
             'logout' => env('MK_AUTH_ABILITY_LOGOUT'),
         ],
 
+        // Nombre del ROL BASE de cada scope: el que junta las abilities
+        // declaradas con `#[Ability(..., baseline: true)]` — las que tiene
+        // cualquier usuario autenticado del scope por el solo hecho de existir
+        // (ver el propio perfil, ver el muro, cambiarse la clave).
+        //
+        // Hay un rol base POR SCOPE, distinguidos por `guard`, igual que
+        // super-admin/admin/editor/viewer: `base`+`admin` y `base`+`member` son
+        // dos filas distintas.
+        //
+        // Lo mantiene `php artisan mk:discover-abilities`, que lo crea cuando
+        // hay al menos una baseline declarada y después lo sincroniza. Nunca
+        // crea un rol vacío.
+        //
+        // 🔴 CAMBIARLE EL NOMBRE CON DATOS YA SEMBRADOS NO RENOMBRA NADA: la
+        // próxima corrida del discovery crea un rol NUEVO con el nombre nuevo y
+        // deja el viejo donde estaba, con sus usuarios adentro. Si hay que
+        // cambiarlo, va con una migración de datos.
+        'base_role' => env('MK_AUTH_BASE_ROLE', 'base'),
+
         // R-PKG-010: rate limits por endpoint público del AuthController.
         // Aplican via middleware `throttle:{limit},{minutes}` solo cuando
         // el scope se genera con `--with-auth-rbac`.

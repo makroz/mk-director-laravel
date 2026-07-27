@@ -197,6 +197,11 @@ class DiscoverAbilitiesCommand extends Command
 
         if ($shouldWrite && ! empty($abilities)) {
             $this->upsertAbilities($scope, $abilities);
+
+            // El rol base va DESPUÉS del upsert y no antes: necesita los `id`
+            // de las abilities, y una recién declarada todavía no existe hasta
+            // que el upsert la escribe.
+            $this->sincronizarRolBase($scope, $abilities);
         }
 
         return [
@@ -511,6 +516,136 @@ class DiscoverAbilitiesCommand extends Command
      * `DB::connection()->getSchemaBuilder()` es más robusto: usa el
      * DatabaseManager bindeado en `db` y delega al schema builder de esa conexión.
      */
+    /**
+     * Deja el ROL BASE del scope igual a lo que declara el código.
+     *
+     * El rol base junta las abilities marcadas `#[Ability(..., baseline: true)]`:
+     * las que tiene cualquier usuario autenticado del scope por existir. Hay uno
+     * por scope, distinguidos por `guard`.
+     *
+     * 🔴 LA REGLA ES DE UNA LÍNEA: SÓLO TOCA LO QUE PUSO ÉL MISMO.
+     *
+     * Cada vinculación que crea queda marcada con `ability_role.is_baseline = 1`.
+     * Al reconciliar, agrega las baseline que faltan y saca las suyas que dejaron
+     * de serlo. Las filas con 0 —las que sembró el `{Scope}RolesSeeder`, las que
+     * agregó un admin desde la UI— no las mira nunca.
+     *
+     * Sin esa marca la reconciliación sería imposible de hacer bien: una ability
+     * que perdió el flag y una que un admin agregó a mano terminan las dos con
+     * `abilities.is_baseline = false` dentro del rol base, indistinguibles. Ver
+     * el porqué largo en la migración `..._add_is_baseline_to_ability_role_table`.
+     *
+     * 🔴 NUNCA CREA UN ROL VACÍO. Si el scope no declaró ninguna baseline y no
+     * hay un rol base de antes, no pasa nada. Un rol sin permisos colgando en la
+     * UI de todos los scopes que no usan la feature es basura, y peor: invita a
+     * que alguien le cuelgue cosas creyendo que hace algo.
+     *
+     * @param  array<int, array{name: string, description: ?string, baseline?: bool}>  $abilities
+     */
+    private function sincronizarRolBase(string $scope, array $abilities): void
+    {
+        $tablaAbilities = $this->resolveAbilitiesTable($scope);
+
+        // Mismo criterio que en el upsert: sin las columnas/tablas no se
+        // adivina. Y acá el silencio alcanza — `upsertAbilities()` ya avisó.
+        if (! $this->tieneColumnaBaseline($tablaAbilities)
+            || ! $this->tableExists('roles')
+            || ! $this->tableExists('ability_role')
+            || ! $this->tieneColumnaBaselineEnPivot()) {
+            return;
+        }
+
+        $nombreRol = (string) config('mk_director.auth.base_role', 'base');
+        $declaradas = array_values(array_unique(array_map(
+            static fn (array $a): string => $a['name'],
+            array_filter($abilities, static fn (array $a): bool => (bool) ($a['baseline'] ?? false)),
+        )));
+
+        $rol = DB::table('roles')->where('name', $nombreRol)->where('guard', $scope)->first();
+
+        if ($declaradas === [] && $rol === null) {
+            return;
+        }
+
+        if ($rol === null) {
+            $rolId = DB::table('roles')->insertGetId([
+                'name' => $nombreRol,
+                'guard' => $scope,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+            $this->info("   → rol base `{$nombreRol}` (guard {$scope}) creado.");
+        } else {
+            $rolId = $rol->id;
+        }
+
+        // Ids de las baseline DECLARADAS AHORA. Se resuelven por nombre contra
+        // la tabla, no por lo que traiga el array: el upsert ya corrió, así que
+        // la fila existe sí o sí.
+        $idsDeclaradas = $declaradas === []
+            ? []
+            : DB::table($tablaAbilities)->whereIn('name', $declaradas)->pluck('id')->all();
+
+        // Lo que YO puse antes en este rol.
+        $idsMias = DB::table('ability_role')
+            ->where('role_id', $rolId)
+            ->where('is_baseline', true)
+            ->pluck('ability_id')
+            ->all();
+
+        $aAgregar = array_diff($idsDeclaradas, $idsMias);
+        $aSacar = array_diff($idsMias, $idsDeclaradas);
+
+        if ($aAgregar !== []) {
+            DB::table('ability_role')->insert(array_map(static fn ($id): array => [
+                'ability_id' => $id,
+                'role_id' => $rolId,
+                'is_baseline' => true,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ], array_values($aAgregar)));
+        }
+
+        if ($aSacar !== []) {
+            // El `where` de `is_baseline` es redundante —los ids salieron de ahí—
+            // y se deja igual: es la invariante del método y hace que un DELETE
+            // suelto no pueda llevarse por delante lo que puso una persona.
+            DB::table('ability_role')
+                ->where('role_id', $rolId)
+                ->where('is_baseline', true)
+                ->whereIn('ability_id', array_values($aSacar))
+                ->delete();
+        }
+
+        if ($aAgregar !== [] || $aSacar !== []) {
+            $this->info(
+                "   → rol base `{$nombreRol}`: +".count($aAgregar).' / -'.count($aSacar)
+                .' (queda con '.count($idsDeclaradas).' baseline).'
+            );
+        }
+    }
+
+    /**
+     * ¿La pivot `ability_role` tiene la marca `is_baseline`?
+     *
+     * Sin ella el rol base NO se toca. Podría sincronizarse igual, pero sin
+     * poder distinguir lo propio de lo ajeno el precio de equivocarse es sacarle
+     * permisos a alguien — y eso no se hace a las apuradas por una columna que
+     * falta. Falta la migración: que se corra.
+     */
+    private function tieneColumnaBaselineEnPivot(): bool
+    {
+        try {
+            if (! function_exists('app') || ! app()->bound('db')) {
+                return false;
+            }
+
+            return app('db')->connection()->getSchemaBuilder()->hasColumn('ability_role', 'is_baseline');
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
     /**
      * ¿La tabla de abilities tiene la columna `is_baseline`?
      *
