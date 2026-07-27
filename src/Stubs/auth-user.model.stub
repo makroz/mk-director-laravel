@@ -5,7 +5,8 @@ declare(strict_types=1);
 namespace App\Modules\{{ModuleName}}\Models;
 
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
-{{factoryHasFactoryUse}}{{mustVerifyEmailUse}}{{statusUseImport}}use Mk\Director\Auth\Models\AuthUser;
+{{factoryHasFactoryUse}}{{mustVerifyEmailUse}}{{statusUseImport}}use Mk\Director\Auth\Concerns\AssignsBaseRole;
+use Mk\Director\Auth\Models\AuthUser;
 
 /**
  * {{ModuleName}} — modelo concreto de un scope de autenticación MK.
@@ -42,6 +43,20 @@ use Illuminate\Database\Eloquent\Concerns\HasUuids;
 class {{ModuleName}} extends AuthUser
 {
     {{factoryHasFactoryTrait}}use HasUuids;
+
+    /**
+     * Al crearse, el usuario recibe solo el ROL BASE de su scope: el que junta
+     * las abilities declaradas con `#[Ability(..., baseline: true)]` — las que
+     * tiene cualquier usuario autenticado por el solo hecho de existir (ver el
+     * propio perfil, cambiarse la clave).
+     *
+     * Lo arma y lo mantiene `php artisan mk:discover-abilities`. Si este scope
+     * no declaró ninguna baseline no hay rol base, y esto es un no-op: no crea
+     * roles vacíos.
+     *
+     * Sacá el trait si preferís asignar los roles a mano en el registro.
+     */
+    use AssignsBaseRole;
 
     /**
      * Tabla propia del scope. NO compartir con `auth_users` —

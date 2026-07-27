@@ -86,6 +86,47 @@ class {{ModuleName}}RolesSeeder extends Seeder
                 $this->attachAbility($viewer, "{$scope}.{$resource}.{$action}", ucfirst($action).' '.$resource.'.');
             }
         }
+
+        // ── base: la línea de base del scope ────────────────────────────
+        //
+        // Los cuatro roles de arriba son de GESTIÓN: se asignan a mano, a quien
+        // corresponda. Éste es distinto — lo recibe TODO usuario del scope al
+        // nacer, vía el trait `AssignsBaseRole` del modelo. Junta lo que puede
+        // hacer cualquiera por el solo hecho de estar logueado: ver su perfil,
+        // cambiarse la clave.
+        //
+        // 🔴 ACÁ SE CREA VACÍO Y ESO ESTÁ BIEN. Sus abilities NO se siembran:
+        // las pone `php artisan mk:discover-abilities` leyendo los
+        // `#[Ability(..., baseline: true)]` del código, y las mantiene (agrega
+        // las nuevas, saca las que perdieron el flag). Sembrarlas acá sería
+        // partir el contrato en dos lugares — el seeder y los controllers — y
+        // esa es exactamente la forma que se desincroniza sin que nadie lo note.
+        //
+        // 🔴 SÍ, EL DISCOVERY HACE LO CONTRARIO — Y LOS DOS TIENEN RAZÓN.
+        //
+        // `mk:discover-abilities` se niega a crear un rol base vacío, porque
+        // corre sobre TODOS los scopes de TODOS los consumidores: dejaría un rol
+        // sin permisos colgando en proyectos que ni saben de la feature.
+        //
+        // Acá es al revés. Este seeder es de UN scope que alguien scaffoldeó, y
+        // el modelo de ese scope viene con `AssignsBaseRole`. La pregunta es qué
+        // pasa con los usuarios creados ANTES de la primera corrida del
+        // discovery:
+        //
+        //   - Si el rol existe desde el día uno, todos lo tienen, y el día que
+        //     el discovery le meta las baseline, TODOS las reciben — el permiso
+        //     vive en el rol, no copiado en cada usuario.
+        //   - Si no existe, el trait es no-op y esa camada queda afuera PARA
+        //     SIEMPRE, sin ningún rastro de por qué. Hay que salir a asignarles
+        //     el rol a mano, si alguien se da cuenta.
+        //
+        // Un rol vacío de más se ve y se explica. Un grupo de usuarios sin sus
+        // permisos, y sin nada que lo delate, es la clase de bug que se descubre
+        // por un ticket de soporte tres meses después.
+        Role::query()->updateOrCreate(
+            ['name' => config('mk_director.auth.base_role', 'base'), 'guard' => $scope],
+            ['is_fixed' => FixedStatus::Fixed->value],
+        );
     }
 
     /**
