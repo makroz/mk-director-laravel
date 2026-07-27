@@ -272,9 +272,24 @@ it('agrupa los conteos por tipo', function () {
 it('no materializa contador si el modelo no declaró columna', function () {
     // El default es NO materializar. Que esto no explote es el contrato: el
     // paquete no puede asumir que el modelo del consumer tenga la columna.
+    //
+    // 🔴 ACÁ HABÍA UN `not->toThrow(\Throwable::class)` QUE NO MEDÍA NADA.
+    // `toThrow` de Pest matchea por clase EXACTA, no por `instanceof` — medido:
+    //   expect(fn () => throw new RuntimeException('x'))->toThrow(Throwable::class)      → FALLA
+    //   expect(fn () => throw new RuntimeException('x'))->not->toThrow(Throwable::class) → PASA
+    // Como nada es exactamente `Throwable` (es una interfaz), la negación no
+    // podía fallar nunca. El test daba verde aunque `react()` reventara.
+    //
+    // La forma honesta es llamar al método pelado: si tira, el test falla solo
+    // y con el stack de verdad. Y después se afirma que además HIZO lo suyo —
+    // no explotar es la mitad del contrato, la otra es haber guardado la
+    // reacción sin inventarse la columna.
     $post = ReactablePost::create([]);
 
-    expect(fn () => $post->react(ReactionAuthorBigint::create([])))->not->toThrow(\Throwable::class);
+    $post->react(ReactionAuthorBigint::create([]));
+
+    expect($post->reactions()->count())->toBe(1)
+        ->and(Schema::hasColumn('posts', 'reactions_count'))->toBeFalse();
 });
 
 it('mantiene el contador materializado en alta y baja', function () {
