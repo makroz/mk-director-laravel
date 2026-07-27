@@ -87,10 +87,23 @@ test('DiscoverAbilitiesCommand has overridable modulesPath() (testability, D7)',
     expect($src)->toContain("config('mk_director.paths.modules'");
 });
 
-test('DiscoverAbilitiesCommand uses Str::plural for scope detection', function () {
+test('DiscoverAbilitiesCommand escribe en la tabla per-scope {scope}_abilities', function () {
+    // 🔴 ESTE TEST ANTES FIJABA UN BUG. Afirmaba
+    // `toContain("Str::snake(Str::plural(\$moduleName))")` — o sea, EXIGÍA que el
+    // scope se pluralizara. Y el scope pluralizado estaba mal en todos lados:
+    // `mk:module X --with-rbac` crea la tabla en singular, las rutas exigen
+    // `mk.ability:member.auth.login`, y el guard de los roles es singular.
+    //
+    // Un test que copia la implementación línea por línea no puede detectar que
+    // la implementación está equivocada: la fija. Y encima daba sensación de
+    // cobertura sobre la parte MENOS trivial del comando. La derivación del
+    // scope se mide ahora por comportamiento, contra sqlite real, en
+    // `DiscoverAbilitiesScopeSingularTest`.
+    //
+    // De lo viejo sobrevive la otra mitad, que sí vale: que exista el camino a
+    // la tabla per-scope.
     $src = (string) file_get_contents(dirname(__DIR__, 2).'/src/Console/Commands/DiscoverAbilitiesCommand.php');
 
-    expect($src)->toContain("Str::snake(Str::plural(\$moduleName))");
     expect($src)->toContain('{$scope}_abilities');
 });
 
