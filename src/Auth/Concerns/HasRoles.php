@@ -103,7 +103,18 @@ trait HasRoles
 
         // Roles feed into abilities via ability_role; invalidate the
         // ability cache so the next canMk() re-resolves.
-        $this->forgetGrantRelations();
+        // 🔴 GUARDADA, IGUAL QUE SU VECINA DE DOS LÍNEAS ABAJO.
+        // `forgetGrantRelations()` vive en `HasAbilities`, no acá. Llamarla a
+        // pelo convertía a `HasAbilities` en un requisito NO DECLARADO de este
+        // trait: `getAuthScope()` sí está como `abstract` —contrato explícito—
+        // y esto no, así que un modelo que use sólo `HasRoles` compila, pasa el
+        // linter, y revienta recién al asignar un rol con
+        // "Call to undefined method ::forgetGrantRelations()". Que el `if` de
+        // abajo ya existiera para el otro método opcional muestra que la
+        // asimetría era un descuido, no una decisión.
+        if (method_exists($this, 'forgetGrantRelations')) {
+            $this->forgetGrantRelations();
+        }
 
         if (method_exists($this, 'invalidateAbilityCache')) {
             $this->invalidateAbilityCache();
@@ -125,7 +136,18 @@ trait HasRoles
 
         $this->roles()->detach($roleModel->id);
 
-        $this->forgetGrantRelations();
+        // 🔴 GUARDADA, IGUAL QUE SU VECINA DE DOS LÍNEAS ABAJO.
+        // `forgetGrantRelations()` vive en `HasAbilities`, no acá. Llamarla a
+        // pelo convertía a `HasAbilities` en un requisito NO DECLARADO de este
+        // trait: `getAuthScope()` sí está como `abstract` —contrato explícito—
+        // y esto no, así que un modelo que use sólo `HasRoles` compila, pasa el
+        // linter, y revienta recién al asignar un rol con
+        // "Call to undefined method ::forgetGrantRelations()". Que el `if` de
+        // abajo ya existiera para el otro método opcional muestra que la
+        // asimetría era un descuido, no una decisión.
+        if (method_exists($this, 'forgetGrantRelations')) {
+            $this->forgetGrantRelations();
+        }
 
         if (method_exists($this, 'invalidateAbilityCache')) {
             $this->invalidateAbilityCache();
@@ -192,7 +214,18 @@ trait HasRoles
 
         $this->roles()->sync($ids);
 
-        $this->forgetGrantRelations();
+        // 🔴 GUARDADA, IGUAL QUE SU VECINA DE DOS LÍNEAS ABAJO.
+        // `forgetGrantRelations()` vive en `HasAbilities`, no acá. Llamarla a
+        // pelo convertía a `HasAbilities` en un requisito NO DECLARADO de este
+        // trait: `getAuthScope()` sí está como `abstract` —contrato explícito—
+        // y esto no, así que un modelo que use sólo `HasRoles` compila, pasa el
+        // linter, y revienta recién al asignar un rol con
+        // "Call to undefined method ::forgetGrantRelations()". Que el `if` de
+        // abajo ya existiera para el otro método opcional muestra que la
+        // asimetría era un descuido, no una decisión.
+        if (method_exists($this, 'forgetGrantRelations')) {
+            $this->forgetGrantRelations();
+        }
 
         if (method_exists($this, 'invalidateAbilityCache')) {
             $this->invalidateAbilityCache();
