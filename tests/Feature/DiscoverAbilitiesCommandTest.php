@@ -115,19 +115,28 @@ test('Ability attribute is TARGET_METHOD + IS_REPEATABLE', function () {
     expect($attr->flags & \Attribute::IS_REPEATABLE)->toBe(\Attribute::IS_REPEATABLE);
 });
 
-test('Ability attribute has name and description properties', function () {
+test('Ability attribute has name, description and baseline properties', function () {
     $reflection = new ReflectionClass(AbilityAttribute::class);
 
     expect($reflection->hasProperty('name'))->toBeTrue();
     expect($reflection->hasProperty('description'))->toBeTrue();
+    expect($reflection->hasProperty('baseline'))->toBeTrue();
 
     $constructor = $reflection->getConstructor();
-    expect($constructor->getNumberOfParameters())->toBe(2);
+    expect($constructor->getNumberOfParameters())->toBe(3);
 
     $params = $constructor->getParameters();
     expect($params[0]->getName())->toBe('name');
     expect($params[1]->getName())->toBe('description');
     expect($params[1]->allowsNull())->toBeTrue();
+
+    // `baseline` va TERCERO y con default, y las dos cosas importan: es lo que
+    // hace que agregarlo sea BC. Cualquier `#[Ability('x')]` o
+    // `#[Ability('x', 'desc')]` que ya existía sigue compilando y sigue
+    // significando exactamente lo mismo — role-gated.
+    expect($params[2]->getName())->toBe('baseline')
+        ->and($params[2]->isDefaultValueAvailable())->toBeTrue()
+        ->and($params[2]->getDefaultValue())->toBeFalse();
 });
 
 // ─── End-to-end tests (eval-based, full isolation per test) ─────────────

@@ -203,8 +203,17 @@ class DiscoverAbilitiesCommand extends Command
             'module' => $moduleName,
             'scope' => $scope,
             'source' => $discovery['source'],
+            // 🔴 `baseline` VIAJA HASTA ACÁ A PROPÓSITO. Este mapper alimenta la
+            // tabla humana Y el `--json` que consume el CI. Antes recortaba a
+            // name+description, así que agregar la columna al reporte sin tocar
+            // esto la habría mostrado vacía SIEMPRE — y el JSON del CI nunca se
+            // habría enterado de que una ability concede permisos a todo el scope.
             'abilities' => array_values(array_map(
-                fn (array $a): array => ['name' => $a['name'], 'description' => $a['description']],
+                fn (array $a): array => [
+                    'name' => $a['name'],
+                    'description' => $a['description'],
+                    'baseline' => (bool) ($a['baseline'] ?? false),
+                ],
                 $abilities
             )),
             'action' => $action,
@@ -254,10 +263,33 @@ class DiscoverAbilitiesCommand extends Command
 
         $abilities = [];
         foreach ($names as $name) {
-            if (! is_string($name)) {
+            // Forma clásica: un string pelado. Sigue andando igual que siempre.
+            if (is_string($name)) {
+                $abilities[] = ['name' => $name, 'description' => null, 'baseline' => false];
+
                 continue;
             }
-            $abilities[] = ['name' => $name, 'description' => null];
+
+            // 🔴 FORMA EXTENDIDA, Y NO ES UN CAPRICHO.
+            // Cuando un módulo implementa `discoverAbilities()`, ese array es el
+            // ÚNICO source-of-truth: los atributos se IGNORAN por completo. Sin
+            // esta forma, un módulo que use el provider NO PODRÍA declarar una
+            // baseline NUNCA — la feature tendría un agujero justo en los
+            // módulos más grandes, que son los que usan el provider.
+            //
+            //   return [
+            //       'admin.posts.viewAny',                                  // role-gated
+            //       ['name' => 'admin.profile.view', 'baseline' => true],   // baseline
+            //   ];
+            if (is_array($name) && isset($name['name']) && is_string($name['name'])) {
+                $abilities[] = [
+                    'name' => $name['name'],
+                    'description' => isset($name['description']) && is_string($name['description'])
+                        ? $name['description']
+                        : null,
+                    'baseline' => (bool) ($name['baseline'] ?? false),
+                ];
+            }
         }
 
         return ['source' => 'provider', 'abilities' => $abilities];
@@ -305,6 +337,7 @@ class DiscoverAbilitiesCommand extends Command
                         $abilities[] = [
                             'name' => $name,
                             'description' => $description,
+                            'baseline' => $instance->baseline,
                         ];
                     } catch (Throwable) {
                         continue;
@@ -320,6 +353,10 @@ class DiscoverAbilitiesCommand extends Command
                     $abilities[] = [
                         'name' => $name,
                         'description' => $description,
+                        // El docblock `@mk-ability` no tiene forma de expresar
+                        // baseline, y no se la vamos a inventar: es el camino
+                        // legacy. Quien necesite baseline usa el atributo.
+                        'baseline' => false,
                     ];
                 }
             }
@@ -368,21 +405,63 @@ class DiscoverAbilitiesCommand extends Command
 
         $table = $this->resolveAbilitiesTable($scope);
 
+        // 🔴 LA COLUMNA `is_baseline` NO SE DA POR SENTADA.
+        //
+        // La migración del paquete sólo puede agregarla a la tabla `abilities`
+        // global. Las `{scope}_abilities` per-scope las creó el consumidor con
+        // `mk:module X --with-rbac`, y el paquete no sabe ni cuáles son. Escribir
+        // la columna a ciegas revienta con un error de SQL que no nombra el
+        // problema real ("column is_baseline does not exist" no le dice a nadie
+        // que le falta una migración del paquete).
+        //
+        // Si no está, se persiste todo lo demás y se AVISA — pero sólo si había
+        // algo que perder. Avisar cuando no hay ninguna baseline declarada sería
+        // ruido en cada corrida.
+        $conBaseline = $this->tieneColumnaBaseline($table);
+        $baselines = array_values(array_filter($abilities, static fn (array $a): bool => (bool) ($a['baseline'] ?? false)));
+
+        if (! $conBaseline && $baselines !== []) {
+            $this->warn(
+                "   ⚠ {$table} no tiene la columna `is_baseline`: se declararon "
+                .count($baselines).' abilities con `baseline: true` y NO se van a persistir como tales. '
+                .($table === 'abilities'
+                    ? 'Corré `php artisan migrate` (falta la migración del paquete).'
+                    : "La tabla per-scope `{$table}` la generó el scaffolder: agregale la columna con una migración propia.")
+            );
+        }
+
         $now = now();
-        $rows = array_map(static fn (array $a): array => [
-            'name' => $a['name'],
-            'description' => $a['description'],
-            'created_at' => $now,
-            'updated_at' => $now,
-        ], $abilities);
+        $rows = array_map(static function (array $a) use ($now, $conBaseline): array {
+            $fila = [
+                'name' => $a['name'],
+                'description' => $a['description'],
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
 
-        DB::table($table)->upsert(
-            $rows,
-            ['name'],                  // unique key
-            ['description', 'updated_at'] // columns to update on conflict
+            if ($conBaseline) {
+                $fila['is_baseline'] = (bool) ($a['baseline'] ?? false);
+            }
+
+            return $fila;
+        }, $abilities);
+
+        // 🔴 `is_baseline` VA EN LA LISTA DE UPDATE, y esa es la mitad del valor.
+        // Sin eso, marcar `baseline: true` en una ability que ya existía no haría
+        // nada: el UPSERT la encontraría por `name` y se saltearía la columna. El
+        // flag sólo funcionaría en abilities nuevas — y peor, SACAR el flag no lo
+        // revocaría jamás. Tiene que ser una asignación, no un alta.
+        $alActualizar = ['description', 'updated_at'];
+        if ($conBaseline) {
+            $alActualizar[] = 'is_baseline';
+        }
+
+        DB::table($table)->upsert($rows, ['name'], $alActualizar);
+
+        $this->info(
+            "   → {$table}: ".count($rows).' abilities UPSERT-ed'
+            .($conBaseline ? ' ('.count($baselines).' baseline).' : '.')
         );
-
-        $this->info("   → {$table}: ".count($rows).' abilities UPSERT-ed.');
     }
 
     /**
@@ -432,6 +511,27 @@ class DiscoverAbilitiesCommand extends Command
      * `DB::connection()->getSchemaBuilder()` es más robusto: usa el
      * DatabaseManager bindeado en `db` y delega al schema builder de esa conexión.
      */
+    /**
+     * ¿La tabla de abilities tiene la columna `is_baseline`?
+     *
+     * Mismo criterio que `tableExists()`: ante la duda, `false`. Y esa asimetría
+     * es la correcta acá — no persistir el flag deja permisos SIN dar, que se ve
+     * y se reclama. Escribir una columna que no existe rompe el comando entero y
+     * no persiste NADA, ni siquiera las abilities que sí se podían guardar.
+     */
+    private function tieneColumnaBaseline(string $table): bool
+    {
+        try {
+            if (! function_exists('app') || ! app()->bound('db')) {
+                return false;
+            }
+
+            return app('db')->connection()->getSchemaBuilder()->hasColumn($table, 'is_baseline');
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
     private function tableExists(string $table): bool
     {
         try {
@@ -708,6 +808,9 @@ class DiscoverAbilitiesCommand extends Command
                 $abilities[] = [
                     'name' => "{$scope}.{$resource}.{$verb}",
                     'description' => ucfirst($verb).' '.$resource.'.',
+                    // El CRUD generado es role-gated por definición: crear y
+                    // borrar recursos no es la línea de base de nadie.
+                    'baseline' => false,
                 ];
             }
         }
@@ -755,6 +858,12 @@ class DiscoverAbilitiesCommand extends Command
                     $entry['source'],
                     $entry['action'],
                     $a['name'],
+                    // 🔴 BASELINE SE MUESTRA, Y NO ES DECORACIÓN.
+                    // Es la diferencia entre "esto lo puede hacer quien tenga el
+                    // rol" y "esto lo puede hacer CUALQUIERA que esté logueado".
+                    // Un flag que concede permisos a todo un scope y no aparece
+                    // en ningún lado sólo se audita abriendo controllers de a uno.
+                    ($a['baseline'] ?? false) ? 'BASELINE' : '',
                     $a['description'] ?? '—',
                 ];
             }
@@ -766,7 +875,7 @@ class DiscoverAbilitiesCommand extends Command
             return;
         }
 
-        $this->table(['Scope', 'Source', 'Action', 'Ability', 'Description'], $rows);
+        $this->table(['Scope', 'Source', 'Action', 'Ability', 'Base', 'Description'], $rows);
 
         // BACK-02 (FEEDBACK5): la columna `Source` confundía ("¿lee las rutas reales
         // o deriva por nombre?"). Leyenda explícita de los dos valores posibles:
