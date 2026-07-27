@@ -121,17 +121,45 @@ test('AuthCreateSuperAdminCommand pinea is_fixed en super-admin role y wildcard 
 });
 
 // ─── (d) Los Resource stubs exponen is_fixed ─────────────────────────────────
+//
+// Estos dos guards apuntaban al `toArray()` copiado dentro de cada stub. Ese
+// `toArray()` ya no existe ahí: el shape se mudó a
+// `Mk\Director\Http\Resources\{MkRoleResource,MkAbilityResource}` y los stubs
+// quedaron como subclases finas, porque una copia por módulo scaffolded era
+// una copia por módulo donde arreglar el mismo bug.
+//
+// La invariante que estos tests protegían —"is_fixed sale como int, nunca
+// como enum ni como string"— sigue viva y AHORA se verifica mejor: contra
+// filas reales de sqlite en `tests/Unit/Http/Resources/`, en vez de grepeando
+// una línea de source que pasa en verde aunque el valor salga mal.
+//
+// Lo que queda por assertear acá es lo único que el stub sigue decidiendo:
+// que delegue en el resource del paquete en vez de volver a copiar el shape.
 
-test('role-resource stub expone is_fixed como valor numerico', function () {
+test('role-resource stub delega el shape en MkRoleResource', function () {
     $stub = fixedPkgContents('src/Stubs/auth-user/role-resource.stub');
 
-    expect($stub)->toContain('use Mk\Director\Auth\Enums\FixedStatus;');
-    expect($stub)->toContain("'is_fixed' => \$this->is_fixed instanceof FixedStatus ? \$this->is_fixed->value : (int) (\$this->is_fixed ?? 0),");
+    expect($stub)->toContain('use Mk\Director\Http\Resources\MkRoleResource;');
+    expect($stub)->toMatch('/class RoleResource extends MkRoleResource/');
+
+    // 🔴 El stub NO debe re-copiar el shape: si vuelve a traer su propio
+    // `toArray()`, volvimos al problema que este cambio resolvió.
+    expect($stub)->not->toContain('public function toArray(');
 });
 
-test('ability-resource stub expone is_fixed como valor numerico', function () {
+test('ability-resource stub delega el shape en MkAbilityResource', function () {
     $stub = fixedPkgContents('src/Stubs/auth-user/ability-resource.stub');
 
-    expect($stub)->toContain('use Mk\Director\Auth\Enums\FixedStatus;');
-    expect($stub)->toContain("'is_fixed' => \$this->is_fixed instanceof FixedStatus ? \$this->is_fixed->value : (int) (\$this->is_fixed ?? 0),");
+    expect($stub)->toContain('use Mk\Director\Http\Resources\MkAbilityResource;');
+    expect($stub)->toMatch('/class AbilityResource extends MkAbilityResource/');
+    expect($stub)->not->toContain('public function toArray(');
+});
+
+test('el shape del paquete sigue emitiendo is_fixed numerico para role y ability', function () {
+    foreach (['MkRoleResource', 'MkAbilityResource'] as $class) {
+        $src = fixedPkgContents("src/Http/Resources/{$class}.php");
+
+        expect($src)->toContain('use Mk\Director\Auth\Enums\FixedStatus;');
+        expect($src)->toContain("'is_fixed' => \$this->is_fixed instanceof FixedStatus ? \$this->is_fixed->value : (int) (\$this->is_fixed ?? 0),");
+    }
 });

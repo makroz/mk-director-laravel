@@ -52,10 +52,22 @@ test('roles.description: la migration aditiva agrega la columna', function () {
     expect($src)->toMatch("/\\\$table->(string|text)\('description'\)/");
 });
 
-test('roles.description: role-resource.stub la expone', function () {
-    $stub = (string) file_get_contents(packageRootRoleDesc().'/src/Stubs/auth-user/role-resource.stub');
+/**
+ * El shape ya no vive en el stub: se mudó a
+ * `Mk\Director\Http\Resources\MkRoleResource` y el stub quedó como subclase
+ * fina (una copia por módulo scaffolded era una copia por módulo donde
+ * arreglar el mismo bug). El guard sigue siendo el mismo —"`description` viaja
+ * en el payload"— pero apuntando a donde el payload se arma de verdad.
+ *
+ * `MkRoleResourceTest` lo verifica además contra una fila real; esto queda
+ * como el guard barato de intención, en la línea del resto del archivo.
+ */
+test('roles.description: MkRoleResource la expone', function () {
+    $src = (string) file_get_contents(
+        packageRootRoleDesc().'/src/Http/Resources/MkRoleResource.php',
+    );
 
-    expect($stub)->toMatch('/[\'"]description[\'"]\s*=>\s*\$this->description/');
+    expect($src)->toMatch('/[\'"]description[\'"]\s*=>\s*\$this->description/');
 });
 
 /**

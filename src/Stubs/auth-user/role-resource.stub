@@ -4,36 +4,27 @@ declare(strict_types=1);
 
 namespace App\Modules\{{ModuleName}}\Http\Resources;
 
-use Illuminate\Http\Request;
-use Illuminate\Http\Resources\Json\JsonResource;
-use Mk\Director\Auth\Enums\FixedStatus;
+use Mk\Director\Http\Resources\MkRoleResource;
 
 /**
- * Resource para Role.
+ * Resource para Role del módulo {{ModuleName}}.
  *
  * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
- * Roles pueden tener abilities asignadas (pivot `ability_role`).
- * Solo se incluyen si están `whenLoaded`.
+ *
+ * EL SHAPE VIVE EN EL PAQUETE, NO ACÁ — ver {@see MkRoleResource}, y el
+ * docblock de `ability-resource.stub` por la razón completa.
+ *
+ * Lo que hereda y conviene no perder de vista:
+ *  - `abilities` es CONDICIONAL (`whenLoaded`): sale sólo si el controller
+ *    hizo `->with('abilities')`. Si se resolviera siempre, el índice de roles
+ *    dispararía un N+1.
+ *  - `description` (nullable) la agrega la migración
+ *    `add_description_to_roles_table`. Revierte F10-B07, que la sacó cuando la
+ *    columna todavía no existía.
+ *
+ * 🔴 Si sobreescribís `toArray()`, AGREGÁ claves. Renombrar o sacar una de las
+ * del paquete es breaking para los fronts que ya la consumen.
  */
-class RoleResource extends JsonResource
+class RoleResource extends MkRoleResource
 {
-    /**
-     * @return array<string, mixed>
-     */
-    public function toArray(Request $request): array
-    {
-        return [
-            'id' => $this->id,
-            'name' => $this->name,
-            'guard' => $this->guard,
-            // `description` (nullable) la agrega la migración
-            // `add_description_to_roles_table` — los roles describen QUÉ hacen.
-            // Revierte F10-B07 (que la sacó cuando la columna no existía).
-            'description' => $this->description,
-            'is_fixed' => $this->is_fixed instanceof FixedStatus ? $this->is_fixed->value : (int) ($this->is_fixed ?? 0),
-            'abilities' => $this->whenLoaded('abilities', fn () => $this->abilities->pluck('name')),
-            'created_at' => $this->created_at?->toIso8601String(),
-            'updated_at' => $this->updated_at?->toIso8601String(),
-        ];
-    }
 }
