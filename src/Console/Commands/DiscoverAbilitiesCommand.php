@@ -146,7 +146,31 @@ class DiscoverAbilitiesCommand extends Command
      */
     private function processModule(string $moduleName, array $moduleInfo, bool $shouldWrite, bool $isJson): array
     {
-        $scope = Str::snake(Str::plural($moduleName));
+        // 🔴 SINGULAR, Y ANTES ESTABA PLURALIZADO. `Str::snake(Str::plural(...))`
+        // convertía el módulo `Member` en el scope `members`, y de ahí salía TODO
+        // torcido:
+        //
+        //  - El placeholder `{scope}` de `#[Ability('{scope}.auth.login')]` se
+        //    resolvía a `members.auth.login`, mientras la ruta exige
+        //    `mk.ability:member.auth.login`. La ability quedaba escrita en la
+        //    tabla y NINGUNA ruta la miraba: permisos muertos, sin error.
+        //  - `resolveAbilitiesTable()` buscaba `members_abilities`, pero
+        //    `mk:module X --with-rbac` crea la tabla en SINGULAR
+        //    (`create_{Str::snake($moduleName)}_abilities_table`), así que el
+        //    camino per-scope no matcheaba nunca y caía al global por accidente.
+        //  - `discoverAbilitiesFromMkConfig()`, en ESTE MISMO COMANDO, ya usaba
+        //    `Str::snake($moduleName)` singular. Una sola corrida escribía con
+        //    dos vocabularios: `members.auth.login` al lado de
+        //    `member.members.viewAny`.
+        //
+        // Y ahora que existe el rol base, el precio subió: `AssignsBaseRole`
+        // resuelve el rol por `guard = $user->getAuthScope()` (`member`), así que
+        // un rol base creado con guard `members` no lo encontraría JAMÁS — la
+        // feature entera muerta y en silencio.
+        //
+        // El scope es el prefijo de las abilities y el `guard` de los roles, y en
+        // los dos lugares es singular. Ver `DiscoverAbilitiesScopeSingularTest`.
+        $scope = Str::snake($moduleName);
 
         // D1 (hybrid): provider primario; attribute+docblock como fallback único.
         $discovery = $this->discoverAbilitiesFromProvider($moduleName, $moduleInfo);
@@ -540,6 +564,19 @@ class DiscoverAbilitiesCommand extends Command
      * UI de todos los scopes que no usan la feature es basura, y peor: invita a
      * que alguien le cuelgue cosas creyendo que hace algo.
      *
+     * 🔴 EL GUARD SALE DEL NOMBRE DE LA ABILITY, NO DEL MÓDULO. Un módulo puede
+     * declarar abilities de VARIOS scopes: en RETO, `Communications` declara
+     * `admin.posts.*` (backoffice) y `admin.wall.*` + `member.wall.*` (el muro,
+     * espejado por scope). Atar el guard al módulo le pondría guard
+     * `communications` a un rol base que tienen que encontrar usuarios cuyo
+     * `getAuthScope()` dice `member` — o sea, nunca. El scope es el PRIMER
+     * SEGMENTO del nombre, que es la convención que el `mk.ability:` middleware
+     * ya usa en todo el ecosistema. Por eso agrupa y puede tocar más de un rol
+     * base en la misma corrida.
+     *
+     * Una ability sin punto (`*`) no nombra ningún scope y se ignora: no hay de
+     * dónde sacarle un guard, y adivinárselo sería conceder permisos por descarte.
+     *
      * @param  array<int, array{name: string, description: ?string, baseline?: bool}>  $abilities
      */
     private function sincronizarRolBase(string $scope, array $abilities): void
@@ -555,11 +592,60 @@ class DiscoverAbilitiesCommand extends Command
             return;
         }
 
+        // Agrupadas por el scope que nombran. `$scope` (el del módulo) queda sólo
+        // para resolver la TABLA, que sí es per-módulo.
+        $porScope = [];
+        foreach ($abilities as $a) {
+            if (! (bool) ($a['baseline'] ?? false)) {
+                continue;
+            }
+
+            $delNombre = $this->scopeDelNombre($a['name']);
+            if ($delNombre === null) {
+                $this->warn("   ⚠ `{$a['name']}` está marcada baseline pero su nombre no dice a qué scope pertenece (falta el prefijo `{scope}.`): se ignora.");
+
+                continue;
+            }
+
+            $porScope[$delNombre][$a['name']] = true;
+        }
+
+        // Un scope sin baselines declaradas puede tener igual un rol base de
+        // antes que hay que vaciar — por eso también entra el guard del módulo,
+        // que es el que se venía sincronizando.
+        if (! isset($porScope[$scope])) {
+            $porScope[$scope] = [];
+        }
+
+        foreach ($porScope as $guard => $nombres) {
+            $this->reconciliarRolBase($guard, array_keys($nombres), $tablaAbilities);
+        }
+    }
+
+    /**
+     * El scope que nombra una ability: `member.wall.viewAny` → `member`.
+     *
+     * `null` si el nombre no lleva prefijo de scope (`*`, `admin` a secas).
+     */
+    private function scopeDelNombre(string $name): ?string
+    {
+        $pos = strpos($name, '.');
+
+        if ($pos === false || $pos === 0) {
+            return null;
+        }
+
+        return substr($name, 0, $pos);
+    }
+
+    /**
+     * Deja el rol base de UN guard igual a la lista de baselines que le tocan.
+     *
+     * @param  array<int, string>  $declaradas
+     */
+    private function reconciliarRolBase(string $scope, array $declaradas, string $tablaAbilities): void
+    {
         $nombreRol = (string) config('mk_director.auth.base_role', 'base');
-        $declaradas = array_values(array_unique(array_map(
-            static fn (array $a): string => $a['name'],
-            array_filter($abilities, static fn (array $a): bool => (bool) ($a['baseline'] ?? false)),
-        )));
 
         $rol = DB::table('roles')->where('name', $nombreRol)->where('guard', $scope)->first();
 
