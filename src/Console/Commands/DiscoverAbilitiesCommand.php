@@ -7,6 +7,7 @@ namespace Mk\Director\Console\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
 use Mk\Director\Auth\Attributes\Ability;
 use Mk\Director\Controllers\SmartController;
@@ -273,10 +274,8 @@ class DiscoverAbilitiesCommand extends Command
         }
 
         try {
-            // Use app()->make() to honor container bindings (the provider
-            // may be a singleton with DI dependencies).
             /** @var object $instance */
-            $instance = app($providerClass);
+            $instance = $this->instanciarProvider($providerClass);
             $names = $instance->discoverAbilities();
         } catch (Throwable $e) {
             $this->warn("Provider {$providerClass}::discoverAbilities() falló: {$e->getMessage()}. Fallback a atributos.");
@@ -322,6 +321,48 @@ class DiscoverAbilitiesCommand extends Command
         }
 
         return ['source' => 'provider', 'abilities' => $abilities];
+    }
+
+    /**
+     * Instancia el provider del módulo para poder preguntarle sus abilities.
+     *
+     * 🔴 `app($providerClass)` NO ALCANZA, Y ÉSTE ERA EL BUG. El constructor de
+     * `Illuminate\Support\ServiceProvider` pide `$app`, un parámetro que el
+     * contenedor NO puede autowirear (no hay binding para el tipo `Application`
+     * como parámetro posicional sin nombre). Todo provider real —o sea, todo el
+     * que extiende `ServiceProvider`, que es la totalidad de los providers de
+     * módulo— reventaba con:
+     *
+     *     Unresolvable dependency resolving [Parameter #0 [ <required> $app ]]
+     *
+     * Y el `catch` de arriba lo convertía en un warning y seguía por el
+     * fallback. O sea: el camino que la documentación llama FUENTE AUTORITATIVA
+     * no funcionaba para nadie, y en vez de fallar escribía OTRAS abilities.
+     * Silencioso, que es la peor forma.
+     *
+     * Los tests del paquete no lo veían porque instancian una clase `eval`-uada
+     * sin constructor, que el contenedor resuelve sin problema. Un provider de
+     * mentira que no comparte lo único que podía fallar.
+     *
+     * `resolveProvider()` es lo que usa el propio Laravel para instanciar
+     * providers (`new $provider($this)`). Se prueba primero el contenedor para
+     * no romper a un consumidor que tenga su provider bindeado con
+     * dependencias propias.
+     */
+    private function instanciarProvider(string $providerClass): object
+    {
+        $app = app();
+
+        if (is_subclass_of($providerClass, ServiceProvider::class)) {
+            // `resolveProvider()` vive en `Application`, no en `Container`: en
+            // un contenedor pelado (tests del paquete) hay que construirlo a
+            // mano igual que lo hace Laravel.
+            return method_exists($app, 'resolveProvider')
+                ? $app->resolveProvider($providerClass)
+                : new $providerClass($app);
+        }
+
+        return $app->make($providerClass);
     }
 
     /**
