@@ -27,6 +27,7 @@ use Mk\Director\Console\Commands\MkMigrateStatusToIntCommand;
 use Mk\Director\Console\Commands\MkSkillDeployCommand;
 use Mk\Director\Console\Commands\MkSkillListCommand;
 use Mk\Director\Console\Commands\MkUpdateCommand;
+use Mk\Director\Console\Commands\PruneAbilitiesCommand;
 use Mk\Director\Console\Commands\SecurityLintCommand;
 use Mk\Director\Controllers\OpenApiController;
 use Mk\Director\Embeds\MkEmbedService;
@@ -225,6 +226,7 @@ class MkServiceProvider extends ServiceProvider
                 MkSkillDeployCommand::class,
                 AuthCreateSuperAdminCommand::class,
                 DiscoverAbilitiesCommand::class,
+                PruneAbilitiesCommand::class,
                 // R-PKG-015 BUG-NEW-09: helper command para parche de Sanctum UUIDs.
                 FixSanctumUuidsCommand::class,
                 // R-PKG-047 D4: helper command para migrar `is_active` boolean
