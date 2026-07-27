@@ -659,7 +659,9 @@ class DiscoverAbilitiesCommand extends Command
         }
 
         foreach ($porScope as $guard => $nombres) {
-            $this->reconciliarRolBase($guard, array_keys($nombres), $tablaAbilities);
+            // `$nombres` ya no se pasa: la reconciliación lee la tabla, no lo
+            // que declaró este módulo. Ver `reconciliarRolBase()`.
+            $this->reconciliarRolBase($guard, $tablaAbilities);
         }
     }
 
@@ -680,17 +682,54 @@ class DiscoverAbilitiesCommand extends Command
     }
 
     /**
-     * Deja el rol base de UN guard igual a la lista de baselines que le tocan.
+     * Deja el rol base de UN guard igual a TODAS las baselines de ese guard.
      *
-     * @param  array<int, string>  $declaradas
+     * 🔴 NO RECONCILIA CONTRA `$declaradas`, Y ESA ES LA CORRECCIÓN.
+     * ==============================================================
+     *
+     * Este método corre UNA VEZ POR MÓDULO. Cuando reconciliaba contra lo que
+     * declaraba el módulo de turno, cada módulo BORRABA las baselines de los
+     * otros y dejaba sólo las suyas. El rol base terminaba con las del ÚLTIMO
+     * módulo procesado, y el orden lo decide el registro de providers.
+     *
+     * Medido en RETO, corrida completa con dos módulos que declaran baselines:
+     *
+     *     módulo A ....... rol base: +0 / -4  → queda con 0
+     *     módulo Events .. rol base: +2 / -0  → queda con 2
+     *     módulo Comms ... rol base: +4 / -2  → queda con 4
+     *
+     * Los members quedaban SIN las abilities de Eventos aunque el reporte del
+     * comando dijera `BASELINE` en verde para las dos. La feature funcionaba
+     * mientras hubiera UN solo módulo con baselines, que es exactamente el caso
+     * en que se construyó y se probó.
+     *
+     * La lista correcta sale de `abilities.is_baseline`, que el upsert mantiene
+     * por módulo y que por lo tanto conoce a TODOS los módulos ya descubiertos
+     * — incluso en una corrida acotada con `--module=X`, porque las filas de
+     * los demás ya están en la tabla con su flag.
+     *
+     * 🔴 Esto NO contradice que la marca de reconciliación viva en la
+     * VINCULACIÓN (`ability_role.is_baseline`). Son dos preguntas distintas:
+     * `abilities.is_baseline` dice CUÁLES deberían estar en el rol;
+     * `ability_role.is_baseline` dice cuáles puse YO y por lo tanto puedo
+     * sacar, para no tocar las que un admin agregó a mano. Las dos hacen falta.
      */
-    private function reconciliarRolBase(string $scope, array $declaradas, string $tablaAbilities): void
+    private function reconciliarRolBase(string $scope, string $tablaAbilities): void
     {
         $nombreRol = (string) config('mk_director.auth.base_role', 'base');
 
         $rol = DB::table('roles')->where('name', $nombreRol)->where('guard', $scope)->first();
 
-        if ($declaradas === [] && $rol === null) {
+        // Todas las baselines de este guard, las declare el módulo que las
+        // declare. El prefijo del nombre ES el guard, misma convención que usa
+        // `mk.ability:` y que `scopeDelNombre()` implementa.
+        $todasLasDelGuard = DB::table($tablaAbilities)
+            ->where('is_baseline', true)
+            ->where('name', 'like', $scope.'.%')
+            ->pluck('id')
+            ->all();
+
+        if ($todasLasDelGuard === [] && $rol === null) {
             return;
         }
 
@@ -706,12 +745,8 @@ class DiscoverAbilitiesCommand extends Command
             $rolId = $rol->id;
         }
 
-        // Ids de las baseline DECLARADAS AHORA. Se resuelven por nombre contra
-        // la tabla, no por lo que traiga el array: el upsert ya corrió, así que
-        // la fila existe sí o sí.
-        $idsDeclaradas = $declaradas === []
-            ? []
-            : DB::table($tablaAbilities)->whereIn('name', $declaradas)->pluck('id')->all();
+        // Ver el docblock: la lista sale de la TABLA, no del módulo de turno.
+        $idsDeclaradas = $todasLasDelGuard;
 
         // Lo que YO puse antes en este rol.
         $idsMias = DB::table('ability_role')
