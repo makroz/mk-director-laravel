@@ -5,6 +5,157 @@ All notable changes to `makroz/director-laravel` will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+> 🔴 **Lo publicado en Packagist es `v1.8.0` (2026-06-29).** Todo lo que
+> aparece bajo `[UNRELEASED]` vive **sin tag** en la rama `dev` — 204 commits
+> por delante de ese tag. Un `composer require makroz/director-laravel` se lleva
+> la versión vieja, **sin el flujo OTP de contraseña y sin los fixes de
+> `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
+> está en `docs/guides/ARRANQUE.md` del monorepo.
+
+## [UNRELEASED] — 🔴 BC: restaurar filtros guardados ahora lo pide el cliente con `?restore_state=1`
+
+> **Changed (BC break)**: con `remember_state => true`, el paquete seguía
+> guardando el `q` / `filter` / `sort` del último pedido **y se los
+> re-inyectaba a cualquier pedido que no los trajera**. Ahora aplicarlo lo
+> decide quien pregunta: `?restore_state=1` (nombre configurable por
+> `mk_director.features.remember_state_param`).
+>
+> **La regla**: un pedido que no manda `q` está pidiendo la lista SIN buscar.
+> Eso es una **instrucción**, no una omisión, y la respuesta tiene que
+> corresponderle a la consulta que el cliente hizo.
+>
+> **Qué producía el comportamiento anterior.** Medido en NetPizza contra un
+> endpoint con 83 filas:
+>
+> ```
+> GET /api/admin/abilities?q=branches    -> 7 filas    (correcto)
+> GET /api/admin/abilities?per_page=500  -> 7 filas    ❌  total: 7
+> GET /api/admin/abilities?per_page=200  -> 7 filas    ❌  total: 7
+> ```
+>
+> No es un error, no hay log, no hay 500: `200`, `success: true`, y un `total`
+> que **confirma el número equivocado**. La pantalla de "asignar abilities"
+> mostraba `Sin resultados` con las 83 abilities intactas en la base, y el
+> consumer no tiene forma de distinguirlo de "no hay datos".
+>
+> **⚠️ El diagnóstico original era falso y la lección lo vale.** El síntoma
+> gritaba caché —y `cache:clear` lo "arreglaba", porque el estado vive ahí—,
+> así que se escribió que "la clave de caché no incluye los parámetros de la
+> query". Es mentira: la clave de `CRUDSmart::index()` ya se armaba con
+> `toSql() + bindings + page + cursor + perPage`, o sea que dos consultas
+> distintas **ya tenían claves distintas**. **Borrar el supuesto culpable y ver
+> verde no prueba nada si el verde ya era probable por otro motivo.** Lo que lo
+> probó fue el PAR de tests: con `auto_cache` **apagado** el arrastre seguía
+> vivo (rojo), y con `remember_state` apagado y el caché prendido desaparecía
+> (verde). Los dos están pineados en
+> `tests/Feature/Listing/ListStateLeaksBetweenQueriesTest.php`.
+>
+> **Y sí había un agujero en la clave, aunque no fuera ése**: los `include` no
+> aparecen en `toSql()` —el eager loading se resuelve en queries aparte—, así
+> que `?include=x` y el mismo pedido sin include compartían entrada. Va también
+> el tenant, que hasta ahora sólo vivía en los *tags* (que son invalidación, no
+> unicidad, y que el fallback para drivers sin soporte de tags descarta salvo
+> el primero).
+>
+> **Migración del consumer**: una pantalla que dependía de la restauración
+> implícita tiene que agregar `restore_state=1` en su primera carga. Es un
+> break del lado seguro: sin el parámetro, lo peor que pasa es que la pantalla
+> abra sin filtros; antes mostraba datos equivocados afirmando éxito.
+>
+> Verificado contra la API corriendo, con 10 filas:
+>
+> ```
+> GET /api/admins?q=Jefe                        ->  1 fila
+> GET /api/admins?per_page=100                  -> 10 filas   (antes: 1)
+> GET /api/admins?per_page=100&restore_state=1  ->  1 fila
+> ```
+>
+> ⚠️ `auto_cache => true` se deja como está en los controllers scaffoldeados.
+> Ya no hace falta apagarlo.
+>
+> Doc: `docs/guides/TRAMPAS.md` § `?restore_state=1` en el monorepo.
+
+## [UNRELEASED] — Tenancy: tres fixes del piloto NetPizza
+
+> **Fixed — la validación de membresía corría antes de autenticar, o sea
+> nunca.** `MkServiceProvider` registra `TenantResolver` en el grupo `api`, y
+> en Laravel el middleware de grupo corre **antes** que el de ruta — antes de
+> `mk.auth:{scope}`. En ese punto `$request->user()` sale por el guard default
+> (`web`) y devuelve `null`; toda la validación vivía dentro de un
+> `if ($user !== null)` y se salteaba sin dejar rastro. Verificado en NetPizza:
+> un admin del tenant A mandaba `X-Tenant-ID` de B y recibía **200 con los
+> datos de B**.
+>
+> La regla se movió a `Mk\Director\Tenancy\TenantMembershipGate` y la llama
+> `MkAuthenticate`, en la misma función que produce el `$user` y **antes** de
+> `$next($request)`: no hay orden de middleware que pueda saltearla, y un
+> `POST` no llega a escribir en el tenant ajeno. `TenantResolver` la sigue
+> llamando de forma oportunista, para el consumer que lo cableó como
+> middleware de ruta.
+>
+> 🔴 **Lo que hay que no repetir**: durante meses se **endureció** esa
+> validación —se agregó la rama `ERR_TENANT_MEMBERSHIP_REQUIRED` "para cerrar
+> el agujero del consumer que olvidó el trait"— sin notar que el camino no
+> llegaba hasta ahí. Se blindó el caso difícil sin comprobar que el camino
+> normal llegara. El test que lo cubre ejercita la **cadena de middleware
+> real** (`tests/Feature/Tenancy/TenantIsolationMiddlewareChainTest.php`): un
+> unit test que llama al resolver directo pasa en verde con el bug vivo,
+> porque le pasás el usuario a mano.
+>
+> **Fixed — el opt-in que documentaba `HasTenantScope` no compilaba.** El
+> docblock pedía `protected static bool $usesTenant = true` en el modelo, y el
+> trait declaraba la misma propiedad con otro valor inicial. Eso es un fatal de
+> PHP (*"the definition differs and is considered incompatible"*): el **único
+> camino documentado** para prender el aislamiento por modelo era imposible de
+> seguir, y `mk:update` imprimía el mismo consejo. El trait ya no la declara —
+> la lee con `property_exists()`. Lo pinea
+> `tests/Feature/Tenancy/HasTenantScopeDocumentedOptInTest.php`, que **extrae
+> la línea del propio docblock** y la corre en un proceso aparte, así que no
+> puede desincronizarse de la doc que verifica.
+>
+> **Fixed — el centinela fail-closed reventaba en vez de cerrar.** El predicado
+> era `tenant_id = -1`, con el argumento de que "no puede matchear ninguna fila
+> real en ningún esquema razonable". Contra un `id` autoincremental es cierto;
+> contra `tenant_id uuid` en Postgres tira
+> `SQLSTATE[22P02]: invalid input syntax for type uuid: "-1"`. Un mecanismo de
+> seguridad que revienta en vez de cerrar no es fail-closed: es un 500 donde
+> tenía que haber una lista vacía — y encima un 500 que aparece **sólo cuando
+> falta el contexto**, o sea justo en el escenario que el guard existe para
+> cubrir. El centinela nuevo es `where 1 = 0`: independiente del esquema, cero
+> filas en MySQL/MariaDB, Postgres, SQLite y SQL Server.
+> `TenantScope::FAIL_CLOSED_SENTINEL` queda como `@deprecated` (es
+> `public const` y un consumer puede referenciarla).
+>
+> Doc: `docs/guides/MULTI_TENANT.md` en el monorepo, reescrita sobre estos tres.
+
+## [UNRELEASED] — `$signature`: las llaves literales en las descripciones rompían el parser
+
+> **Fixed**: `php artisan mk:make:auth-user Admin` fallaba con
+> `Not enough arguments (missing: "consumers")`. El comando estrella del
+> paquete era **inusable** en un proyecto nuevo.
+>
+> **Causa raíz**: el parser de firmas de Laravel extrae tokens con una regex
+> sobre `{...}`. La `$signature` de `MakeAuthUserCommand` tenía llaves
+> literales **dentro de la descripción** de `--kind` (el texto
+> `` `/api/{manager}/{consumers}` ``). El parser no distingue un token de firma
+> de unas llaves en prosa, así que declaraba `consumers` como argumento
+> posicional requerido.
+>
+> El mismo bug tenía una segunda cara, más silenciosa: **todas las
+> descripciones salían truncadas en la primera llave**. `--no-status` mostraba
+> `NO generar el enum {Scope` y ahí moría. Afectaba también a
+> `DiscoverAbilitiesCommand` y otros.
+>
+> **Por qué nadie lo vio**: un scaffolder sólo se ejercita cuando alguien crea
+> un proyecto **nuevo**. RETO se scaffoldeó antes de que esas descripciones
+> entraran, y NetPizza es el primero desde entonces.
+>
+> **El test ataca la causa raíz, no el síntoma**: es genérico sobre los 17
+> comandos y afirma dos cosas — que la lista de argumentos de cada uno sea
+> exactamente la esperada, y que **ninguna descripción contenga llaves
+> literales**. La segunda atrapa la próxima regresión en cualquier comando
+> nuevo.
+
 ## [UNRELEASED] — `src/Http/Resources/`: los modelos del paquete se serializan en el paquete
 
 > **Added** (capa nueva, aditivo): `Mk\Director\Http\Resources\{MkMediaResource,
