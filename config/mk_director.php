@@ -58,6 +58,22 @@ return [
         'sorting' => env('MK_SORTING', true),
         'search' => env('MK_SEARCH', true),
         'remember_state' => env('MK_REMEMBER_STATE', false),
+
+        /*
+         * Con qué parámetro el CLIENTE pide que se le devuelva el último
+         * estado del listado (búsqueda, filtros, orden) que había elegido.
+         *
+         * 🔴 Existe porque antes no existía: el estado se re-inyectaba en
+         * CUALQUIER pedido que no lo trajera, y eso hacía que un listado
+         * devolviera la respuesta de otra consulta. Medido:
+         * `?q=branches` y después `?per_page=500` devolvía las 7 filas del
+         * primero, con `total: 7` y `success: true`, teniendo 83 en la base.
+         *
+         * Un pedido que no manda `q` está pidiendo la lista SIN buscar. Eso es
+         * una instrucción, no una omisión. Guardar el estado se mantiene;
+         * aplicarlo ahora lo decide quien pregunta.
+         */
+        'remember_state_param' => env('MK_REMEMBER_STATE_PARAM', 'restore_state'),
         'pagination_type' => env('MK_PAGINATION_TYPE', 'length_aware'), // Options: length_aware, cursor
 
         // R-PKG-007: auto-run `mk:discover-abilities` on every boot.

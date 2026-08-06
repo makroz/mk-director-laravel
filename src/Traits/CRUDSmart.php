@@ -151,6 +151,52 @@ trait CRUDSmart
     }
 
     /**
+     * Construir la clave de caché de una query.
+     *
+     * 🔴 `toSql()` NO ALCANZA, Y ES EL AGUJERO QUE NADIE MIRA.
+     *
+     * La clave se armaba con `toSql() + bindings + page + cursor + perPage`.
+     * Eso cubre filtros, búsqueda y orden, porque todos terminan en el WHERE.
+     * Pero **el eager loading no está en el SQL**: `?include=category` se
+     * resuelve en queries APARTE, así que `toSql()` devuelve exactamente lo
+     * mismo con el include y sin él.
+     *
+     * Resultado: dos pedidos que piden cosas distintas comparten entrada de
+     * caché. El que llega segundo recibe el payload del primero —con las
+     * relaciones de más o de menos— y con `success: true`. No hay error, no
+     * hay log: hay datos equivocados afirmando éxito.
+     *
+     * ── EL TENANT ───────────────────────────────────────────────────────────
+     *
+     * Va también en la clave, y no por redundancia. Hoy el tenant sólo vive en
+     * los TAGS ({@see getCacheTags()}), y los tags son un mecanismo de
+     * INVALIDACIÓN, no de unicidad. Peor: cuando el driver de caché no soporta
+     * tags —`file` y `database`, dos defaults de Laravel—
+     * {@see CacheManager::remember()} descarta todos los
+     * tags menos el primero (la tabla), o sea que el tenant desaparece de la
+     * separación.
+     *
+     * Mientras la aislación viva en un global scope, el tenant llega igual por
+     * los bindings. Pero eso es depender de que el `where` esté puesto: si un
+     * consumer aísla fuera de la query, la caché pasa a ser una fuga entre
+     * clientes. Ponerlo explícito cuesta un `implode` y no depende de nada.
+     *
+     * @param  array<string, mixed>  $extra  discriminantes que no viven en la query
+     */
+    protected function buildQueryCacheKey($query, array $extra = []): string
+    {
+        $material = [
+            'sql' => $query->toSql(),
+            'bindings' => $query->getBindings(),
+            // Eager loads: invisibles en `toSql()`, y cambian la respuesta.
+            'with' => array_keys($query->getEagerLoads()),
+            'tenant' => app(TenantContext::class)->current(),
+        ];
+
+        return md5(serialize($material + $extra));
+    }
+
+    /**
      * Obtener tiempo de vida del caché en segundos
      */
     protected function getCacheTTL(): int
@@ -281,7 +327,11 @@ trait CRUDSmart
         $perPage = ListManager::getPerPage($request);
         $page = $request->query('page', 1);
         $cursor = $request->query('cursor', '');
-        $cacheKey = md5($query->toSql().serialize($query->getBindings()).'page:'.$page.'cursor:'.$cursor.'perPage:'.$perPage);
+        $cacheKey = $this->buildQueryCacheKey($query, [
+            'page' => $page,
+            'cursor' => $cursor,
+            'perPage' => $perPage,
+        ]);
 
         $resolver = function () use ($query, $perPage, $listFeatures) {
             $paginationType = $listFeatures['pagination_type'] ?? config('mk_director.features.pagination_type', 'length_aware');
@@ -399,7 +449,7 @@ trait CRUDSmart
             return $query->findOrFail($id);
         };
 
-        $cacheKey = md5($query->toSql().serialize($query->getBindings()).'show_id:'.$id);
+        $cacheKey = $this->buildQueryCacheKey($query, ['show_id' => $id]);
 
         $model = $this->isCacheEnabled()
             ? CacheManager::remember($cacheKey, $this->getCacheTags(), $this->getCacheTTL(), $resolver)

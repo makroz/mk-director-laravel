@@ -151,6 +151,26 @@ trait BootsHttpApp
      */
     public function httpGet(string $uri, array $headers = []): Response
     {
+        // 🔴 EL SEGUNDO REQUEST DE UN TEST SE AUTENTICABA COMO EL PRIMERO.
+        //
+        // Los guards viven en el container y `RequestGuard::user()` MEMOIZA el
+        // usuario resuelto. Entre dos requests de un mismo test el container no
+        // se reconstruye, asi que el segundo trae otro `Authorization`, se
+        // rutea bien, y `$request->user()` devuelve igual el objeto del
+        // primero.
+        //
+        // No es que falle un test: es que PASA sin medir nada. Un test de "el
+        // usuario A no ve lo del usuario B" corre las dos veces como A —
+        // verde, y sin haber probado el aislamiento jamas. Es exactamente la
+        // lente del bug: el instrumento comparte el defecto que tendria que
+        // detectar.
+        //
+        // Va aca y no en cada test porque la regla la tendria que recordar
+        // quien escriba el test siguiente, y olvidarla no da error: da un
+        // verde. Un guard olvidado no le cuesta nada al test — `mk.auth` lo
+        // vuelve a resolver del token, que es justo lo que se quiere medir.
+        $this->httpApp?->make('auth')->forgetGuards();
+
         $request = Request::create($uri, 'GET', server: array_merge(
             ['HTTP_ACCEPT' => 'application/json'],
             $headers,

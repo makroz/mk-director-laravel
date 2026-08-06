@@ -8,11 +8,12 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 
 /**
  * ListManager - Manejo de paginación, filtros y sorting
- * 
+ *
  * Encapsula toda la lógica de list management para reutilizar en cualquier controller.
  */
 class ListManager
@@ -84,16 +85,16 @@ class ListManager
     protected static function applyColumns(Request $request, Builder $query, Model $model): Builder
     {
         $cols = $request->query('cols');
-        
-        if (!$cols) {
+
+        if (! $cols) {
             return $query;
         }
 
         $columns = explode(',', $cols);
-        
+
         // Validar que las columnas existan en el modelo
         $fillable = $model->getFillable();
-        $validColumns = array_filter($columns, function($col) use ($model, $fillable) {
+        $validColumns = array_filter($columns, function ($col) use ($model, $fillable) {
             // LAR-13 (2026-07-03 audit): accept the model's actual primary
             // key column name (default 'id', but consumer models may
             // override to e.g. 'uuid'/'code'/'slug'). The literal 'id'
@@ -101,7 +102,7 @@ class ListManager
             return in_array($col, $fillable) || $col === $model->getKeyName();
         });
 
-        if (!empty($validColumns)) {
+        if (! empty($validColumns)) {
             return $query->select($validColumns);
         }
 
@@ -125,19 +126,65 @@ class ListManager
         foreach ($joinParts as $join) {
             $relation = trim($join);
 
-            if (!in_array($relation, $allowedJoins, true)) {
+            if (! in_array($relation, $allowedJoins, true)) {
                 continue;
             }
 
             // Simplified: assumes hasOne/belongsTo relationship
             // Real implementation would inspect relationships
-            $foreignKey = $table . '.' . Str::singular($relation) . '_id';
-            $query->leftJoin($relation, $foreignKey, '=', $relation . '.id');
+            $foreignKey = $table.'.'.Str::singular($relation).'_id';
+            $query->leftJoin($relation, $foreignKey, '=', $relation.'.id');
         }
 
         return $query;
     }
 
+    /**
+     * Recordar el estado del listado (búsqueda, filtros, orden) y devolverlo
+     * cuando el cliente lo pida.
+     *
+     * 🔴 ANTES RE-INYECTABA EL ESTADO EN CUALQUIER PEDIDO QUE NO LO TRAJERA, Y
+     * ESO HACÍA QUE UN LISTADO DEVOLVIERA LA RESPUESTA DE OTRA CONSULTA.
+     *
+     * Medido contra una API real con 83 filas en `abilities`:
+     *
+     *     GET /abilities?q=branches    -> 7 filas    (correcto)
+     *     GET /abilities?per_page=500  -> 7 filas    ❌ total: 7, success: true
+     *     php artisan cache:clear
+     *     GET /abilities?per_page=500  -> 83 filas   ✅
+     *
+     * El segundo pedido no traía `q`, así que caía en el `elseif` de abajo y
+     * se le metía el `branches` del anterior. La pantalla mostraba
+     * `Sin resultados` con las 83 filas intactas en la base.
+     *
+     * Es el peor tipo de bug que hay: no tira error, no loguea, responde 200 y
+     * confirma el número equivocado en `total`. El consumer no tiene forma de
+     * distinguirlo de "no hay datos".
+     *
+     * ⚠️ EL SÍNTOMA APUNTABA AL CACHÉ Y NO ERA EL CACHÉ. Como el estado vive
+     * en el caché, un `cache:clear` lo "arreglaba", y el diagnóstico natural
+     * —"la clave de caché no mira los parámetros"— es FALSO: la clave de
+     * `CRUDSmart::index()` ya se arma con `toSql() + bindings + page + cursor +
+     * perPage`. Lo prueba `tests/Feature/Listing/ListStateLeaksBetweenQueriesTest.php`,
+     * que deja el arrastre en rojo CON el caché apagado.
+     *
+     * ── LA REGLA ────────────────────────────────────────────────────────────
+     *
+     * Un pedido que no manda `q` está pidiendo la lista SIN buscar. Eso es una
+     * instrucción, no una omisión, y la respuesta tiene que corresponderle a la
+     * consulta que el cliente hizo — siempre.
+     *
+     * Guardar el estado se mantiene: es lo que permite volver a una pantalla y
+     * encontrar la búsqueda donde la dejaste. Lo que cambia es QUIÉN decide
+     * aplicarlo — ahora el cliente, con `?restore_state=1` (configurable por
+     * `mk_director.features.remember_state_param`).
+     *
+     * BC: un front que dependía de la restauración implícita tiene que agregar
+     * el parámetro en la primera carga de la pantalla. Es un break a propósito
+     * y del lado seguro: lo peor que pasa sin el parámetro es que la pantalla
+     * abra sin filtros; lo que pasaba antes era mostrar datos equivocados
+     * afirmando éxito.
+     */
     protected static function restoreState(Request $request, Model $model): void
     {
         // R2-012: hash the storage key with the app secret so user A
@@ -151,10 +198,10 @@ class ListManager
             }
         }
 
-        $baseKey = 'mk_list_state_' . $model->getTable();
+        $baseKey = 'mk_list_state_'.$model->getTable();
         $secret = (string) config('app.key', 'fallback-secret-key');
-        $userSegment = $userId !== null ? '_u' . hash('sha256', $userId) : '_anon';
-        $storageKey = $baseKey . $userSegment;
+        $userSegment = $userId !== null ? '_u'.hash('sha256', $userId) : '_anon';
+        $storageKey = $baseKey.$userSegment;
         $hashedStorageKey = hash_hmac('sha256', $storageKey, $secret);
 
         // Read state from session/cache using the hashed key.
@@ -164,12 +211,17 @@ class ListManager
             // avoid leaking the storage layout.
             $state = $request->session()->get($hashedStorageKey, []);
         } elseif ($userId !== null) {
-            $state = \Illuminate\Support\Facades\Cache::get($hashedStorageKey, []);
+            $state = Cache::get($hashedStorageKey, []);
         } else {
             return;
         }
 
         $modified = false;
+
+        // ¿El cliente PIDIÓ que se le devuelva lo último que había elegido?
+        // Sólo entonces se re-inyecta. Sin esto, un pedido sin `q` recibía la
+        // búsqueda de otro pedido y nadie se enteraba.
+        $restaurar = self::clientAskedToRestore($request);
 
         // 1. Search
         if ($request->has('q') || $request->has('search')) {
@@ -181,7 +233,7 @@ class ListManager
                 $state['q'] = $q;
                 $modified = true;
             }
-        } elseif (isset($state['q'])) {
+        } elseif ($restaurar && isset($state['q'])) {
             $request->query->set('q', $state['q']);
         }
 
@@ -195,7 +247,7 @@ class ListManager
                 $state['filter'] = $filters;
                 $modified = true;
             }
-        } elseif (isset($state['filter'])) {
+        } elseif ($restaurar && isset($state['filter'])) {
             $request->query->set('filter', $state['filter']);
         }
 
@@ -209,7 +261,7 @@ class ListManager
                 $state['sort'] = $sort;
                 $modified = true;
             }
-        } elseif (isset($state['sort'])) {
+        } elseif ($restaurar && isset($state['sort'])) {
             $request->query->set('sort', $state['sort']);
         }
 
@@ -228,9 +280,27 @@ class ListManager
             if ($request->hasSession()) {
                 $request->session()->put($hashedStorageKey, $state);
             } elseif ($userId !== null) {
-                \Illuminate\Support\Facades\Cache::put($hashedStorageKey, $state, 86400);
+                Cache::put($hashedStorageKey, $state, 86400);
             }
         }
+    }
+
+    /**
+     * ¿El cliente pidió explícitamente que se le restaure el último estado?
+     *
+     * Se lee con `filter_var`: `(bool) 'false'` es `true` en PHP, y el paquete
+     * ya pagó ese footgun (LAR-05). Así `?restore_state=false` y
+     * `?restore_state=0` significan lo que parecen.
+     */
+    protected static function clientAskedToRestore(Request $request): bool
+    {
+        $param = (string) config('mk_director.features.remember_state_param', 'restore_state');
+
+        if (! $request->has($param)) {
+            return false;
+        }
+
+        return filter_var($request->query($param), FILTER_VALIDATE_BOOLEAN);
     }
 
     /**
@@ -289,23 +359,23 @@ class ListManager
     public static function applyIncludes(Request $request, Builder $query, array $allowedIncludes = [], array $allowedWithCount = []): Builder
     {
         $include = $request->query('include');
-        if (!empty($include) && !empty($allowedIncludes)) {
+        if (! empty($include) && ! empty($allowedIncludes)) {
             $includes = is_array($include) ? $include : explode(',', $include);
             // Trim and intersect to sanitize
             $includes = array_map('trim', $includes);
             $validIncludes = array_intersect($includes, $allowedIncludes);
-            if (!empty($validIncludes)) {
+            if (! empty($validIncludes)) {
                 $query->with($validIncludes);
             }
         }
 
         $withCount = $request->query('with_count', $request->query('withCount'));
-        if (!empty($withCount) && !empty($allowedWithCount)) {
+        if (! empty($withCount) && ! empty($allowedWithCount)) {
             $counts = is_array($withCount) ? $withCount : explode(',', $withCount);
             // Trim and intersect to sanitize
             $counts = array_map('trim', $counts);
             $validCounts = array_intersect($counts, $allowedWithCount);
-            if (!empty($validCounts)) {
+            if (! empty($validCounts)) {
                 $query->withCount($validCounts);
             }
         }
@@ -317,7 +387,7 @@ class ListManager
     {
         $filters = $request->query('filter', $request->query('filters'));
 
-        if (empty($filters) || !is_array($filters) || empty($allowedFilters)) {
+        if (empty($filters) || ! is_array($filters) || empty($allowedFilters)) {
             return $query;
         }
 
@@ -326,7 +396,7 @@ class ListManager
                 continue;
             }
 
-            if (!in_array($field, $allowedFilters, true)) {
+            if (! in_array($field, $allowedFilters, true)) {
                 continue;
             }
 
@@ -353,7 +423,7 @@ class ListManager
             'gt' => '>', 'gte' => '>=',
             'lt' => '<', 'lte' => '<=',
             'like' => 'like',
-            'in' => 'in', 'not_in' => 'not in'
+            'in' => 'in', 'not_in' => 'not in',
         ];
 
         if (! array_key_exists($op, $operators)) {
@@ -389,8 +459,8 @@ class ListManager
     {
         $sort = $request->query('sort', $request->query('sortBy'));
         $dir = $request->query('dir', $request->query('orderBy', 'desc'));
-        
-        if (!$sort) {
+
+        if (! $sort) {
             // LAR-13: use $model->getKeyName() for the same reason as in apply() above.
             return $query->orderBy($model->getKeyName(), 'desc');
         }
@@ -400,17 +470,17 @@ class ListManager
         // in the allowed-sort set so consumers with custom PK names can
         // sort by their PK.
         $fillable = array_merge($model->getFillable(), [$model->getKeyName(), 'created_at', 'updated_at']);
-        
+
         foreach ($sortFields as $field) {
             $field = trim($field);
             $currentDir = $dir;
-            
+
             // Allow '-field' notation for desc
             if (str_starts_with($field, '-')) {
                 $field = substr($field, 1);
                 $currentDir = 'desc';
             }
-            
+
             if (in_array($field, $fillable)) {
                 $currentDir = strtolower($currentDir) === 'asc' ? 'asc' : 'desc';
                 $query->orderBy($field, $currentDir);
@@ -419,8 +489,8 @@ class ListManager
 
         // Fallback si no hay órdenes válidos
         if (empty($query->getQuery()->orders)) {
-             // LAR-13: same getKeyName() rationale as above.
-             $query->orderBy($model->getKeyName(), 'desc');
+            // LAR-13: same getKeyName() rationale as above.
+            $query->orderBy($model->getKeyName(), 'desc');
         }
 
         return $query;
@@ -501,12 +571,12 @@ class ListManager
     {
         $default = config('mk_director.list.default_per_page', 15);
         $max = config('mk_director.list.max_per_page', 100);
-        
+
         $perPage = $request->query('per_page', $request->query('perPage', $request->query('limit', $default)));
-        
+
         // Validar rango
         $perPage = max(1, min((int) $perPage, $max));
-        
+
         return $perPage;
     }
 
@@ -518,6 +588,7 @@ class ListManager
      *
      * R-PKG-024 (v1.7.0 GA): snake_case keys match the @makroz/web
      * `useMkList` / `useMkInfiniteList` consumption shape and the
+     *
      * @makroz/core `MkResponse<T>.__extraData` contract. Camel-case keys
      * (`page`, `perPage`, `lastPage`) are REMOVED — they were inconsistent
      * with the frontend and never read by any consumer.
@@ -534,18 +605,23 @@ class ListManager
      * `pagination` group wrapper. Most callers no longer need to invoke
      * this manually.
      *
-     * @param LengthAwarePaginator $paginator
-     * @param array<string, mixed> $extras Optional custom keys merged into
-     *                                     `__extraData` (flat). Caller keys
-     *                                     win on conflict (e.g., caller can
-     *                                     override `pagination` sub-object
-     *                                     entirely by passing `'pagination' => [...]`).
+     * @param  array<string, mixed>  $extras  Optional custom keys merged into
+     *                                        `__extraData` (flat). Caller keys
+     *                                        win on conflict (e.g., caller can
+     *                                        override `pagination` sub-object
+     *                                        entirely by passing `'pagination' => [...]`).
      * @return array{pagination: array{current_page: int, last_page: int, per_page: int, total: int, has_more_pages: bool}}
      */
     public static function getExtraData(LengthAwarePaginator $paginator, array $extras = []): array
     {
         return array_merge(
             ['pagination' => [
+                // ⚠️ La alineación de estos `=>` NO es cosmética: hay un test
+                // de source-parsing (`BaseControllerPaginationEnvelopeTest`)
+                // que la matchea como string literal. `pint --dirty` sobre
+                // este archivo la colapsa y lo pone en rojo. La brittleness es
+                // del test, no de acá — pero mientras exista, esto se deja
+                // como está.
                 'current_page'   => $paginator->currentPage(),
                 'last_page'      => $paginator->lastPage(),
                 'per_page'       => $paginator->perPage(),
