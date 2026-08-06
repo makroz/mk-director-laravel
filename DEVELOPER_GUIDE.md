@@ -2,6 +2,28 @@
 
 Bienvenido a la guía oficial de **MK-Director Core**, el motor de backend diseñado para acelerar el desarrollo de APIs robustas mediante una capa de abstracción potente sobre Laravel.
 
+> ## 🔴 Antes de leer nada de acá
+>
+> **1. La versión.** Lo publicado en Packagist es `v1.8.0` (2026-06-29); la
+> rama `dev` está **204 commits** por delante y **sin tag**. Un
+> `composer require makroz/director-laravel` se lleva la vieja —sin el flujo
+> OTP de contraseña, sin los fixes de `canMk()`— y **no avisa**. El cableado
+> correcto (`path repository` con symlink) está en
+> **`docs/guides/ARRANQUE.md`** del monorepo.
+>
+> **2. Los flags `--with-*` ya no existen.** `--with-crud`,
+> `--with-auth-rbac`, `--with-status` y `--status-values` fueron **eliminados**
+> (BC break R-PKG-047 D2): hoy son defaults ON y se apagan con `--no-crud`,
+> `--no-rbac`, `--no-status`. **Varias secciones de este documento todavía los
+> muestran** — quedaron como registro de qué se arregló en cada sprint. Leelas
+> por el *por qué*, no copies los comandos. La tabla de flags vigente está en
+> el `README.md`.
+>
+> **3. Si estás arrancando un proyecto**, no empieces por esta guía:
+> `docs/guides/ARRANQUE.md` (de cero a una API corriendo) y después
+> `docs/guides/TRAMPAS.md` (lo que muerde cuando ya anda). Esta guía es la
+> referencia del motor, no el camino de entrada.
+
 ---
 
 ## 🏗️ 1. Arquitectura y Filosofía
@@ -2289,6 +2311,68 @@ Usa el parámetro `filter[columna][operador]=valor`.
   - `lt` / `lte`: Less than
   - `in`: Lista de valores (ej: `filter[category_id][in]=1,2,3`)
 
+#### 🔴 `allowed_filters` es una WHITELIST, y lo que no declarás DESAPARECE
+
+```php
+protected $mkConfig = [
+    'features' => [
+        'allowed_filters' => ['status', 'guard'],   // ← si no está acá, NO existe
+    ],
+];
+```
+
+`ListManager::applyFilters()` hace `continue` sobre todo campo que no esté en
+la lista: **sin 422, sin log**. Y si `allowed_filters` está vacío o ausente,
+descarta **todos** los filtros.
+
+Medido contra la API corriendo, con 5 roles y un `RoleController` recién
+scaffoldeado (que sale **sin** `allowed_filters`):
+
+```
+GET /api/admin/roles?per_page=100                        -> 5 filas
+GET /api/admin/roles?per_page=100&filter[guard]=admin    -> 5 filas
+GET /api/admin/roles?per_page=100&filter[guard]=noexiste -> 5 filas   ← ⚠️
+```
+
+El tercero es el que lo delata: un filtro que **no puede** matchear nada
+devuelve todo, con `success: true`. Si sólo mirás los dos primeros, "funciona".
+
+⚠️ **Asimetría que confunde**: un **operador** desconocido
+(`filter[age][gt3]=18`) tira `InvalidArgumentException`; un **campo**
+desconocido se evapora. Ver el operador fallar ruidosamente no te dice nada
+sobre el campo.
+
+**Regla operativa**: cada filtro nuevo del front necesita su columna en
+`allowed_filters`. Si un filtro "no hace nada", ese es el primer lugar donde
+mirar — no el front.
+
+### 4.2.1 🔴 BC — `?restore_state=1` para restaurar los filtros guardados
+
+Con `'remember_state' => true` (default de los controllers scaffoldeados), el
+paquete guarda el `q` / `filter` / `sort` del último pedido por usuario y por
+tabla. **Ya no se los re-inyecta solo** a un pedido que no los traiga: hay que
+pedirlo.
+
+```
+GET /api/admins?q=Jefe                        ->  1 fila
+GET /api/admins?per_page=100                  -> 10 filas   (antes devolvía 1)
+GET /api/admins?per_page=100&restore_state=1  ->  1 fila
+```
+
+**La regla**: un pedido que no manda `q` está pidiendo la lista SIN buscar. Eso
+es una **instrucción**, no una omisión.
+
+El nombre del parámetro sale de `mk_director.features.remember_state_param`. Se
+lee con `filter_var(..., FILTER_VALIDATE_BOOLEAN)`, así que `?restore_state=0`
+y `?restore_state=false` significan lo que parecen (`(bool) 'false'` es `true`
+en PHP, y el paquete ya pagó ese footgun).
+
+**Migración**: la pantalla que dependía de la restauración implícita agrega el
+parámetro en su primera carga. Es un break del lado seguro: sin él, lo peor que
+pasa es que la pantalla abra sin filtros; antes devolvía datos equivocados
+afirmando éxito (`200`, `success: true`, y un `total` que confirmaba el número
+equivocado). Ver `CHANGELOG.md` § `[UNRELEASED] — BC: restaurar filtros`.
+
 ### 4.3 Búsqueda Global (`q=`)
 Realiza una búsqueda tipo "LIKE" en todos los campos definidos en la configuración `'searchable'` del controlador.
 - Ejemplo: `/api/surveys?q=encuesta`
@@ -2676,6 +2760,84 @@ código actual ya pineaba el patrón descrito:
 | `MakeAuthUserCommand` --scope no propaga | HIGH R5 | El scope SÍ propaga a nombres de archivos generados (`{$scope}Controller.php`, etc., líneas 932-968). Los nombres de stubs internos son convención sin impacto en runtime. |
 | `MkDTO::detectEnums()` couples to filesystem sin logging | MEDIUM R3 | El código actual (líneas 89-118) tiene try/catch robusto + config resolver (`mk_director.enum_namespace_resolver`). |
 | `CacheManager::flush()` crashes sin recovery | MEDIUM R3 | Decisión arquitectónica pineada en R-PKG-024 (rc13): fail-fast con mensaje accionable es preferible a "nuke" con `$cache->clear()` que borra TODO el cache. La scaffolder avisa al consumer sobre la config requerida. |
+
+### 6.10 🔴 Testear endpoints con `mk.auth:{scope}` tiene dos trampas
+
+Las dos producen **tests verdes que no miden nada**, que es la peor clase de
+resultado que un test puede dar.
+
+**a) `actingAs()` y `Sanctum::actingAs()` NO sirven.**
+`AuthScopeResolver::resolve()` exige que `currentAccessToken()` sea un
+`PersonalAccessToken` **real**. `$this->actingAs($user, 'admin')` no tiene
+token; `Sanctum::actingAs(...)` da un `TransientToken`. Los dos caen en la rama
+`no_token` y devuelven **401 `ERR_SCOPE_MISMATCH`** — un mensaje que se lee
+como "el token es de otro scope" cuando el problema real es "no hay token", y
+que te manda a depurar el scope equivocado.
+
+Hay que emitir un token de verdad, con el mismo servicio que usa el login:
+
+```php
+use Mk\Director\Auth\Services\TokenIssuer;
+
+protected function bearerFor(Authenticatable $user): array
+{
+    $token = app(TokenIssuer::class)->issueAccessToken($user);
+
+    return ['Authorization' => 'Bearer '.$token->plainTextToken];
+}
+```
+
+**b) Dos requests autenticados en un mismo test se autentican como el
+primero.** No es un bug del paquete —los guards viven en el container,
+`RequestGuard::user()` memoiza, y entre dos requests de un mismo test el
+container no se reconstruye— pero **con tokens reales la trampa es
+invisible**: el segundo request lleva otro `Authorization`, el router lo enruta
+bien, y `$request->user()` devuelve el usuario del primero con sus relaciones
+ya cargadas.
+
+Lo que produce:
+
+- *"A no ve lo de B"* corre las dos veces como A. Verde, sin haber probado
+  jamás el aislamiento.
+- *"sin la ability 403, con la ability 200"* da 403 las dos veces, porque
+  `MkAuthenticate` hizo su `loadMissing(['roles.abilities', 'directAbilities'])`
+  una sola vez, **antes** del `giveAbilityTo()`. El 403 legítimo y el espurio
+  son idénticos.
+
+El fix va en el `TestCase` **base**, no en cada test: la regla la tendría que
+recordar quien escribe el test siguiente, y olvidarla **no da error, da un
+verde**.
+
+```php
+// tests/TestCase.php
+protected function call($method, $uri, $parameters = [], $cookies = [],
+                       $files = [], $server = [], $content = null)
+{
+    $this->app?->make('auth')->forgetGuards();
+
+    return parent::call($method, $uri, $parameters, $cookies, $files, $server, $content);
+}
+```
+
+Un guard olvidado no le cuesta nada al test: `mk.auth` lo vuelve a resolver del
+token en cada request, que es justo lo que se quiere medir.
+
+**Lo que le falta al paquete**: un trait de testing que traiga `bearerFor()`
+**y** el reset del guard. Hoy cada consumer descubre las dos cosas por
+separado, y la segunda sólo se descubre cuando un test miente.
+
+### 6.11 `MK_AUTO_DISCOVER_ABILITIES` prendido contamina la suite
+
+```xml
+<!-- phpunit.xml -->
+<env name="MK_AUTO_DISCOVER_ABILITIES" value="false"/>
+```
+
+El default del paquete ya es `false`, así que esto sólo hace falta si tu `.env`
+lo prende — **y si lo prendiste, prendelo con esta línea puesta**. Con
+auto-discovery activo, el provider escanea atributos y escribe en la tabla
+`abilities` en **cada boot**: filas que ningún test creó, y asserts que pasan
+por datos que aparecieron solos.
 
 ---
 
