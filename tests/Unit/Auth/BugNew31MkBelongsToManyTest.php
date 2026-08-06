@@ -10,6 +10,7 @@ use Mk\Director\Auth\Concerns\HasRoles;
 use Mk\Director\Auth\Pivots\MkPivot;
 use Mk\Director\Auth\Pivots\MkRoleUserPivot;
 use Mk\Director\Database\Eloquent\Relations\MkBelongsToMany;
+use Mk\Director\Tests\Concerns\UsesDatabase;
 use Mk\Director\Tests\MkLaravelTestCase;
 
 /**
@@ -34,13 +35,30 @@ use Mk\Director\Tests\MkLaravelTestCase;
  *
  * IMPORTANTE: usan SQLite in-memory via Capsule manager. Las migrations
  * (`role_user` con `user_type`) se crean en runtime dentro del test.
+ *
+ * 🔴 ESTE ARCHIVO ES EL TEST ORDER-DEPENDIENTE QUE DOCUMENTA `phpunit.xml`.
+ *
+ * Construir una relation Eloquent necesita un connection resolver, y este
+ * archivo no lo booteaba: pasaba porque OTRO archivo de test dejaba uno puesto
+ * en el estático global. Corrido solo, moría con "Call to a member function
+ * connection() on null". Verde por contaminación cruzada, no por mérito propio
+ * — y cualquier test nuevo que limpie bien su estado lo pone en rojo sin tener
+ * nada que ver con él.
+ *
+ * `UsesDatabase` le da su propia conexión sqlite en memoria. Ahora pasa solo.
  */
-uses(MkLaravelTestCase::class);
+uses(MkLaravelTestCase::class, UsesDatabase::class);
 
 beforeEach(function () {
+    $this->setUpDatabase();
+
     // Reset cache estático entre tests.
     MkBelongsToMany::clearUserTypeCache();
     MkPivot::clearUserTypeCache();
+});
+
+afterEach(function () {
+    $this->tearDownDatabase();
 });
 
 test('MkBelongsToMany::from() promotes BelongsToMany to MkBelongsToMany preserving state', function () {
@@ -81,7 +99,7 @@ test('MkBelongsToMany source parsing: newPivot override exists and merges user_t
 });
 
 test('MkBelongsToMany source parsing: attach override routes based on using property', function () {
-    $source = file_get_contents(__DIR__ . '/../../../src/Database/Eloquent/Relations/MkBelongsToMany.php');
+    $source = file_get_contents(__DIR__.'/../../../src/Database/Eloquent/Relations/MkBelongsToMany.php');
     expect($source)->toContain('public function attach($ids, array $attributes = [], $touch = true)');
     // El nuevo approach delega al flow attachUsingCustomClass manualmente
     // leyendo $this->using via reflection (más predecible que parent::attach()).
@@ -105,7 +123,7 @@ test('HasRoles::roles() returns MkBelongsToMany instance (R-PKG-021)', function 
 });
 
 test('HasAbilities::directAbilities() returns MkBelongsToMany instance (R-PKG-021)', function () {
-    $source = file_get_contents(__DIR__ . '/../../../src/Auth/Concerns/HasAbilities.php');
+    $source = file_get_contents(__DIR__.'/../../../src/Auth/Concerns/HasAbilities.php');
     expect($source)->toContain('MkBelongsToMany::from($relation)');
     // Tambien pinea el FQCN para Pinear que el import usa el path correcto.
     expect($source)->toContain('use Mk\\Director\\Database\\Eloquent\\Relations\\MkBelongsToMany');

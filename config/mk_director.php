@@ -545,8 +545,13 @@ return [
     |
     | `fail_closed` (LAR-11): when true AND the tenant context is null
     | AND the model has `HasTenantScope` enabled, the scope injects
-    | an impossible predicate (`where tenant_id = -1`) so the query
-    | returns 0 rows. Default false (BC-safe) — single-tenant apps see
+    | an impossible predicate (`where 1 = 0`) so the query returns 0
+    | rows. El predicado NO toca la columna de tenant a propósito:
+    | comparar contra ella obliga a elegir un tipo, y `where tenant_id = -1`
+    | —lo que había antes— tira `SQLSTATE[22P02] invalid input syntax
+    | for type uuid` en Postgres con `tenant_id uuid`. Un fail-closed
+    | que revienta en vez de cerrar no cierra nada.
+    | Default false (BC-safe) — single-tenant apps see
     | no behavior change. Enable this in multi-tenant deployments to
     | close the IDOR loophole when TenantResolver misconfiguration
     | (strict=false, malformed header, etc.) would otherwise leak rows

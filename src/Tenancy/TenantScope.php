@@ -32,7 +32,7 @@ use Illuminate\Database\Eloquent\Scope;
  * LAR-11 — fail-closed opt-in: when `tenant.fail_closed` is true in
  * config AND the context is null AND the model opted in via
  * HasTenantScope, the scope injects an impossible predicate
- * (`where tenant_id = -1`) instead of returning globally. This closes
+ * (`where 1 = 0`) instead of returning globally. This closes
  * the IDOR loophole where a misconfigured TenantResolver (strict=false)
  * would let a request slip through without tenant context, and the
  * scope would then leak rows across tenants. CLI/queue jobs must
@@ -46,11 +46,26 @@ use Illuminate\Database\Eloquent\Scope;
 class TenantScope implements Scope
 {
     /**
-     * Sentinel tenant id used when fail-closed mode is on and the
-     * resolved tenant is null. `tenant_id = -1` can never match a real
-     * auto-increment/UUID row in any reasonable schema, so the query
-     * returns zero rows. This is the contract — don't change without
-     * updating tests/Unit/Tenancy/TenantStrictFailClosedTest.php.
+     * @deprecated El predicado fail-closed ya NO compara contra la columna de
+     *             tenant, así que este centinela no se usa más. Se conserva
+     *             sólo porque es `public const` y un consumer puede
+     *             referenciarlo. No lo uses para construir predicados.
+     *
+     * 🔴 POR QUÉ SE DEJÓ DE USAR. Decía que `tenant_id = -1` "no puede matchear
+     * ninguna fila real en ningún esquema razonable". Contra un `id`
+     * autoincremental es cierto; contra `tenant_id uuid` en Postgres no
+     * devuelve cero filas: TIRA.
+     *
+     *     SQLSTATE[22P02]: invalid input syntax for type uuid: "-1"
+     *
+     * Un mecanismo de seguridad que revienta en vez de cerrar no es
+     * fail-closed: es un 500 donde tenía que haber una lista vacía. Y encima un
+     * 500 que aparece SÓLO cuando falta el contexto, o sea justo en el
+     * escenario que el guard existe para cubrir.
+     *
+     * El centinela nuevo es una contradicción INDEPENDIENTE DEL ESQUEMA
+     * (`where 1 = 0`): cero filas en MySQL/MariaDB, Postgres, SQLite y SQL
+     * Server, sin tocar la columna ni su tipo.
      */
     public const FAIL_CLOSED_SENTINEL = -1;
 
@@ -89,9 +104,14 @@ class TenantScope implements Scope
             // "deny the query" (return 0 rows). This protects against
             // IDOR when TenantResolver misconfiguration leaks through.
             if ($this->isFailClosedEnabled()) {
-                $column = $model->getTenantKey() ?? 'tenant_id';
-                $builder->where($column, '=', self::FAIL_CLOSED_SENTINEL);
+                // 🔴 Contradicción sin columna. Comparar `tenant_id` contra un
+                // valor obliga a elegir un TIPO, y no hay ninguno que sirva
+                // para todos los esquemas: `-1` explota contra `uuid` en
+                // Postgres (22P02) y un uuid explota contra `bigint`. Ver la
+                // constante FAIL_CLOSED_SENTINEL, deprecada, para el detalle.
+                $builder->whereRaw('1 = 0');
             }
+
             return;
         }
 

@@ -18,6 +18,13 @@
         aislado. Arreglarlo (que el test boote su propia conexión) es un
         cambio aparte; mientras tanto, una sola suite preserva el orden que ya
         funcionaba y no mete un rojo nuevo.
+
+        ACTUALIZACIÓN: ese test ya boota su propia conexión (`UsesDatabase`) y
+        pasa corrido solo. Se disparó al agregar tests que limpian bien su
+        estado global: apenas dejó de haber contaminación cruzada, se puso en
+        rojo. La suite única se mantiene igual por ahora — puede haber otros
+        order-dependientes sin identificar, y partirla es un cambio aparte que
+        merece su propia medición.
     -->
     <testsuites>
         <testsuite name="Tests">
