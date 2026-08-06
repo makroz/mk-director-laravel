@@ -5,7 +5,7 @@ Bienvenido a la guía oficial de **MK-Director Core**, el motor de backend dise�
 > ## 🔴 Antes de leer nada de acá
 >
 > **1. La versión.** Lo publicado en Packagist es `v1.8.0` (2026-06-29); la
-> rama `dev` está **204 commits** por delante y **sin tag**. Un
+> rama `dev` está **más de 200 commits** por delante y **sin tag**. Un
 > `composer require makroz/director-laravel` se lleva la vieja —sin el flujo
 > OTP de contraseña, sin los fixes de `canMk()`— y **no avisa**. El cableado
 > correcto (`path repository` con symlink) está en

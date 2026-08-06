@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > 🔴 **Lo publicado en Packagist es `v1.8.0` (2026-06-29).** Todo lo que
-> aparece bajo `[UNRELEASED]` vive **sin tag** en la rama `dev` — 204 commits
+> aparece bajo `[UNRELEASED]` vive **sin tag** en la rama `dev` — más de 200 commits
 > por delante de ese tag. Un `composer require makroz/director-laravel` se lleva
 > la versión vieja, **sin el flujo OTP de contraseña y sin los fixes de
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)

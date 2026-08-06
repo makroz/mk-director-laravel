@@ -40,7 +40,7 @@ El motor de backend de MK-Director. Ofrece una capa de abstracción potente para
 ## Instalación
 
 > 🔴 **Packagist te da `v1.8.0`, del 29 de junio de 2026.** La rama `dev` está
-> **204 commits** por delante y **no tiene tag**. Lo que te perdés instalando
+> **más de 200 commits** por delante y **no tiene tag**. Lo que te perdés instalando
 > de Packagist: todo el flujo OTP de contraseña, el fix de `canMk()` en las
 > Policies generadas, el fix del `$signature` que hace `mk:make:auth-user`
 > inusable, el gate de membresía de tenant y el BC de `?restore_state=1`.
