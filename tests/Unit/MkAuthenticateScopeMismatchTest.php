@@ -5,12 +5,15 @@ declare(strict_types=1);
 namespace Mk\Director\Tests\Unit;
 
 use Illuminate\Auth\AuthenticationException;
+use Illuminate\Container\Container;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Mk\Director\Auth\Exceptions\ScopeMismatchException;
 use Mk\Director\Auth\Middleware\MkAuthenticate;
 use Mk\Director\Auth\Services\AuthScopeResolver;
+use Mk\Director\Tenancy\TenantContext;
+use Mk\Director\Tenancy\TenantMembershipGate;
 use Mk\Director\Tests\TestCase;
 use Mockery;
 
@@ -19,6 +22,24 @@ uses(TestCase::class);
 afterEach(function () {
     Mockery::close();
 });
+
+/**
+ * Gate de tenancy con la feature APAGADA — que es el escenario de estos tests:
+ * miden autenticación y scope, no aislamiento multi-tenant.
+ *
+ * 🔴 El gate es una dependencia REQUERIDA de `MkAuthenticate`, no opcional con
+ * fallback al container. La fuga de aislamiento que motivó este cableado fue
+ * justo eso: una validación que no corría y nadie notaba. Un parámetro
+ * obligatorio falla fuerte en la construcción; un `?Gate = null` con `?? app()`
+ * falla en silencio y vuelve al mismo agujero.
+ */
+function gateDeTenancyApagadoScope(): TenantMembershipGate
+{
+    return new TenantMembershipGate(
+        new TenantContext,
+        Container::getInstance()->make('config'),
+    );
+}
 
 /**
  * F1.2 (LAR-03 HIGH) — MkAuthenticate MUST catch ScopeMismatchException thrown
@@ -57,7 +78,7 @@ test('MkAuthenticate returns 401 canonical envelope when token scope does not ma
             actualScope: 'member',
         ));
 
-    $middleware = new MkAuthenticate($resolver);
+    $middleware = new MkAuthenticate($resolver, gateDeTenancyApagadoScope());
 
     // /api/* → expectsJson()/is('api/*') path → envelope, no throw.
     $request = Request::create('/api/admin/dashboard', 'GET');
@@ -94,7 +115,7 @@ test('MkAuthenticate returns 401 with ERR_SCOPE_MISMATCH when token has no auth_
             actualScope: null,
         ));
 
-    $middleware = new MkAuthenticate($resolver);
+    $middleware = new MkAuthenticate($resolver, gateDeTenancyApagadoScope());
     $request = Request::create('/api/admin/dashboard', 'GET');
     $request->headers->set('Accept', 'application/json');
 
@@ -124,7 +145,7 @@ test('MkAuthenticate returns 401 with ERR_SCOPE_MISMATCH when user has no token 
             actualScope: null,
         ));
 
-    $middleware = new MkAuthenticate($resolver);
+    $middleware = new MkAuthenticate($resolver, gateDeTenancyApagadoScope());
     $request = Request::create('/api/admin/dashboard', 'GET');
     $request->headers->set('Accept', 'application/json');
 
@@ -154,7 +175,7 @@ test('MkAuthenticate web (non-api, non-json) still throws AuthenticationExceptio
             actualScope: 'member',
         ));
 
-    $middleware = new MkAuthenticate($resolver);
+    $middleware = new MkAuthenticate($resolver, gateDeTenancyApagadoScope());
     $request = Request::create('/admin/dashboard', 'GET');
 
     Auth::shouldReceive('guard')->with('admin')->andReturnSelf();

@@ -59,16 +59,32 @@ uses(MkLaravelTestCase::class);
 
 function lar05TenantResolverSource(): string
 {
-    $path = dirname(__DIR__, 3) . '/src/Tenancy/TenantResolver.php';
+    $path = dirname(__DIR__, 3).'/src/Tenancy/TenantResolver.php';
 
     expect(file_exists($path))->toBeTrue("TenantResolver.php must exist at $path");
 
     return (string) file_get_contents($path);
 }
 
+/**
+ * 🔴 La regla de membresía (allowlist + getTenantId + 403) se MUDÓ a
+ * `TenantMembershipGate`. Vivía en `TenantResolver`, que corre en el grupo
+ * `api` — o sea ANTES de `mk.auth` — donde `$request->user()` todavía es null y
+ * la validación entera se salteaba. Ahora la llama `MkAuthenticate` apenas
+ * resuelve el usuario. Los asserts de abajo apuntan al archivo nuevo.
+ */
+function lar05TenantGateSource(): string
+{
+    $path = dirname(__DIR__, 3).'/src/Tenancy/TenantMembershipGate.php';
+
+    expect(file_exists($path))->toBeTrue("TenantMembershipGate.php must exist at $path");
+
+    return (string) file_get_contents($path);
+}
+
 function lar11TenantScopeSource(): string
 {
-    $path = dirname(__DIR__, 3) . '/src/Tenancy/TenantScope.php';
+    $path = dirname(__DIR__, 3).'/src/Tenancy/TenantScope.php';
 
     expect(file_exists($path))->toBeTrue("TenantScope.php must exist at $path");
 
@@ -77,7 +93,7 @@ function lar11TenantScopeSource(): string
 
 function lar05ConfigSource(): string
 {
-    $path = dirname(__DIR__, 3) . '/config/mk_director.php';
+    $path = dirname(__DIR__, 3).'/config/mk_director.php';
 
     expect(file_exists($path))->toBeTrue("mk_director.php config must exist at $path");
 
@@ -101,57 +117,57 @@ describe('LAR-05 — TenantResolver::handle() reads strict as bool via filter_va
     });
 });
 
-describe('LAR-05 — TenantResolver enforces tenant membership in strict mode with route allowlist', function (): void {
-    $source = lar05TenantResolverSource();
+describe('LAR-05 — el gate de membresía aplica strict mode con allowlist de rutas', function (): void {
+    $source = lar05TenantGateSource();
     $config = lar05ConfigSource();
 
-    test('TenantResolver declares an allowlist_routes lookup (route-level exemption from strict)', function () use ($source): void {
+    test('el gate declara un lookup de allowlist_routes (exención por ruta del strict)', function () use ($source): void {
         // The check has two parts:
         //  1. The string `allowlist_routes` appears somewhere (proves we
         //     declared the concept and consulted it).
         //  2. Some config() call OR local array consults it.
         $hasConcept = (bool) preg_match('/allowlist[_.]routes/', $source);
-        $hasLocal   = (bool) preg_match('/isAllowlisted|allowlist/i', $source);
+        $hasLocal = (bool) preg_match('/isAllowlisted|allowlist/i', $source);
 
         expect($hasConcept)->toBeTrue(
-            'TenantResolver must reference allowlist_routes'
+            'TenantMembershipGate must reference allowlist_routes'
         );
         expect($hasLocal)->toBeTrue(
-            'TenantResolver must have an isAllowlisted() helper (or equivalent) that consults the allowlist'
+            'TenantMembershipGate must have an isAllowlisted() helper (or equivalent) that consults the allowlist'
         );
     });
 
-    test('TenantResolver rejects (403) when authenticated user has no getTenantId and route is not in allowlist', function () use ($source): void {
+    test('el gate rechaza (403) cuando el user autenticado no tiene getTenantId y la ruta no está en la allowlist', function () use ($source): void {
         $hasMembershipCheck = (bool) preg_match(
             '/method_exists\(\$user,\s*[\'"]getTenantId[\'"]\)/s',
             $source
         );
-        $has403Branch       = (bool) preg_match('/403[\s\S]{0,200}ERR_TENANT_MEMBERSHIP/s', $source);
+        $has403Branch = (bool) preg_match('/403[\s\S]{0,200}ERR_TENANT_MEMBERSHIP/s', $source);
 
         expect($hasMembershipCheck)->toBeTrue();
         expect($has403Branch)->toBeTrue(
-            'TenantResolver must reject (403) with ERR_TENANT_MEMBERSHIP when user lacks tenant trait and route is not allowlisted'
+            'TenantMembershipGate must reject (403) with ERR_TENANT_MEMBERSHIP when user lacks tenant trait and route is not allowlisted'
         );
     });
 
-    test('TenantResolver response shape for membership failure uses the canonical envelope (LAR-09 R-PKG-024)', function () use ($source): void {
+    test('el envelope del fallo de membresía es el canónico (LAR-09 R-PKG-024)', function () use ($source): void {
         // The canonical envelope may live in a helper method
         // (`canonicalErrorResponse()`) rather than inline at the call site.
         // We accept either shape: the literal `'code' => 'ERR_TENANT_*'`
         // must appear in the source (anywhere), and a `__extraData` array
         // with `code` and the missing/null data shape must exist.
         $hasErrCodeLiteral = (bool) preg_match("/'ERR_TENANT_(MISSING|MISMATCH|MEMBERSHIP_REQUIRED)'/", $source);
-        $hasExtraData      = (bool) preg_match("/'__extraData'[\s\S]{0,400}'code'\s*=>/s", $source);
-        $hasDataNull       = (bool) preg_match("/'data'\s*=>\s*null/s", $source);
+        $hasExtraData = (bool) preg_match("/'__extraData'[\s\S]{0,400}'code'\s*=>/s", $source);
+        $hasDataNull = (bool) preg_match("/'data'\s*=>\s*null/s", $source);
 
         expect($hasErrCodeLiteral)->toBeTrue(
-            'TenantResolver must declare at least one ERR_TENANT_* code constant for the error response'
+            'TenantMembershipGate must declare at least one ERR_TENANT_* code constant for the error response'
         );
         expect($hasExtraData)->toBeTrue(
-            'TenantResolver must emit __extraData with code in its canonical error envelope'
+            'TenantMembershipGate must emit __extraData with code in its canonical error envelope'
         );
         expect($hasDataNull)->toBeTrue(
-            'TenantResolver canonical error envelope must include data: null (R-PKG-024 single-level)'
+            'TenantMembershipGate canonical error envelope must include data: null (R-PKG-024 single-level)'
         );
     });
 
@@ -169,7 +185,7 @@ describe('LAR-11 — TenantScope fail-closed opt-in (config tenant.fail_closed)'
             '/(fail_closed|fail-closed|failClosed)/s',
             $source
         );
-        $hasSentinel        = (bool) preg_match(
+        $hasSentinel = (bool) preg_match(
             '/(-1|0|1\s*=\s*0|tenant_id\s*=\s*-\d)/s',
             $source
         );

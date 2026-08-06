@@ -4,80 +4,81 @@ declare(strict_types=1);
 
 namespace Mk\Director\Tests\Unit\Tenancy;
 
+use Mk\Director\Tenancy\TenantMembershipGate;
 use Mk\Director\Tests\MkLaravelTestCase;
 
 /**
- * Verifies that TenantResolver validates user↔tenant membership
- * (audit R2-004):
- *  - When the request has a user with a tenant id AND the resolved
- *    tenant differs, the middleware returns 403 ERR_TENANT_MISMATCH.
- *  - When the user has no tenant id (model without HasTenantMembership,
- *    or tenant column is null), the request passes — the missing
- *    tenant is treated as "legacy/unspecified" rather than a mismatch.
+ * La regla de membresía usuario↔tenant (audit R2-004) vive en
+ * {@see TenantMembershipGate}.
  *
- * Implementation note: we parse the TenantResolver source to assert
- * the membership check is present and positioned AFTER the
- * tenant-id resolution (otherwise the middleware could short-circuit
- * before knowing which tenant to compare against).
+ * 🔴 QUÉ MEDÍA ESTE ARCHIVO ANTES, Y POR QUÉ NO ALCANZÓ.
  *
- * @see audit-2026-06-17-R2-004
+ * Verificaba, leyendo `TenantResolver.php` como STRING, que el literal
+ * `ERR_TENANT_MISMATCH` estuviera escrito y que apareciera entre el
+ * `ERR_TENANT_MISSING` y el `$this->context->set`. Todo eso estaba, y estuvo
+ * siempre — el archivo pasaba en verde mientras un admin del tenant A accedía a
+ * los datos del tenant B con un 200.
+ *
+ * El bug era de ORDEN, no de contenido: `TenantResolver` va en el grupo `api` y
+ * corre ANTES que `mk.auth:{scope}`, así que su `$request->user()` devolvía null
+ * y la validación entera —correctamente escrita— quedaba adentro de un `if` que
+ * nunca se cumplía. Grepear el .php prueba que alguien tipeó el chequeo, no que
+ * el chequeo corra.
+ *
+ * La prueba de que la regla se APLICA es
+ * `tests/Feature/Tenancy/TenantIsolationMiddlewareChainTest.php`: cadena de
+ * middleware real, token real, 403 real. Este archivo se queda con lo único que
+ * el source-parsing sí puede afirmar honestamente: DÓNDE vive la regla y quién
+ * la llama — que es la parte que un refactor puede romper en silencio.
  */
 uses(MkLaravelTestCase::class);
 
-function tenantResolverSource(): string
+function tenancySource(string $file): string
 {
-    return (string) file_get_contents(__DIR__ . '/../../../src/Tenancy/TenantResolver.php');
+    $path = dirname(__DIR__, 3).'/src/'.$file;
+
+    expect(file_exists($path))->toBeTrue("{$path} debe existir");
+
+    return (string) file_get_contents($path);
 }
 
-test('TenantResolver source contains the membership check', function () {
-    $src = tenantResolverSource();
+test('la regla de membresía vive en TenantMembershipGate (los dos códigos de error y el getTenantId)', function () {
+    $src = tenancySource('Tenancy/TenantMembershipGate.php');
 
     expect($src)->toContain('ERR_TENANT_MISMATCH');
-});
-
-test('TenantResolver reads the user tenant via getTenantId() (HasTenantMembership)', function () {
-    $src = tenantResolverSource();
-
+    expect($src)->toContain('ERR_TENANT_MEMBERSHIP_REQUIRED');
     expect($src)->toContain('getTenantId');
+    expect($src)->toMatch('/errorResponse\(\s*403\s*,\s*[\'"]ERR_TENANT_MISMATCH[\'"]/s');
 });
 
-test('TenantResolver membership check sits between strict-mode MISSING and the context->set call', function () {
-    $src = tenantResolverSource();
+test('🔴 MkAuthenticate llama al gate — es la garantía de que el camino LLEGA a la validación', function () {
+    $src = tenancySource('Auth/Middleware/MkAuthenticate.php');
 
-    // Flow inside handle():
-    //   1. tenant id resolved (header/path/subdomain)
-    //   2. if null + strict → return 400 ERR_TENANT_MISSING
-    //   3. membership check (new) → return 403 ERR_TENANT_MISMATCH
-    //   4. context->set(tenantId)
-    //
-    // Step 3 MUST sit between step 2 and step 4 — otherwise we either
-    // return early before comparing, or we poison the context with a
-    // tenant the user is not a member of.
-    $missingPos = strpos($src, 'ERR_TENANT_MISSING');
-    $mismatchPos = strpos($src, 'ERR_TENANT_MISMATCH');
-    $contextSetPos = strpos($src, '$this->context->set');
-
-    expect($missingPos)->toBeGreaterThan(0);
-    expect($mismatchPos)->toBeGreaterThan(0);
-    expect($contextSetPos)->toBeGreaterThan(0);
-
-    expect($mismatchPos)->toBeGreaterThan($missingPos);
-    expect($contextSetPos)->toBeGreaterThan($mismatchPos);
+    // Sin esta llamada volvemos exactamente al bug: la validación existe, está
+    // bien escrita, y no corre nunca en el cableado por defecto.
+    expect($src)->toContain('TenantMembershipGate');
+    expect($src)->toContain('$this->tenantGate->check(');
 });
 
-test('TenantResolver returns 403 status code on mismatch', function () {
-    $src = tenantResolverSource();
+test('🔴 el gate se llama ANTES de $next() — un 403 posterior llegaría con la escritura ya hecha', function () {
+    $src = tenancySource('Auth/Middleware/MkAuthenticate.php');
 
-    // The new branch routes the response through `canonicalErrorResponse(403, 'ERR_TENANT_MISMATCH', ...)`
-    // (LAR-09 R-PKG-024 canonical envelope). The literal must appear in the
-    // source; the status code is inside the helper call, not adjacent to the
-    // code literal. We assert both pieces independently.
-    expect($src)->toContain('ERR_TENANT_MISMATCH');
-    expect($src)->toMatch('/canonicalErrorResponse\(\s*403\s*,\s*[\'"]ERR_TENANT_MISMATCH[\'"]/s');
+    $checkPos = strpos($src, '$this->tenantGate->check(');
+    $nextPos = strpos($src, 'return $next($request);');
+
+    expect($checkPos)->toBeGreaterThan(0);
+    expect($nextPos)->toBeGreaterThan(0);
+    expect($checkPos)->toBeLessThan($nextPos);
 });
 
-test('TenantResolver still returns 400 on missing tenant context (regression)', function () {
-    $src = tenantResolverSource();
+test('TenantResolver sigue llamando al gate (cableado alternativo: resolver como middleware de ruta)', function () {
+    $src = tenancySource('Tenancy/TenantResolver.php');
+
+    expect($src)->toContain('$this->gate->check(');
+});
+
+test('TenantResolver sigue devolviendo 400 cuando falta el tenant (regresión)', function () {
+    $src = tenancySource('Tenancy/TenantResolver.php');
 
     expect($src)->toContain('ERR_TENANT_MISSING');
     expect($src)->toMatch('/canonicalErrorResponse\(\s*400\s*,\s*[\'"]ERR_TENANT_MISSING[\'"]/s');

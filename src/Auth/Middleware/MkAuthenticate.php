@@ -11,6 +11,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Mk\Director\Auth\Exceptions\ScopeMismatchException;
 use Mk\Director\Auth\Services\AuthScopeResolver;
+use Mk\Director\Tenancy\TenantMembershipGate;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -45,6 +46,7 @@ class MkAuthenticate
 {
     public function __construct(
         private readonly AuthScopeResolver $resolver,
+        private readonly TenantMembershipGate $tenantGate,
     ) {}
 
     public function handle(Request $request, Closure $next, string $scope = 'admin'): Response
@@ -120,6 +122,28 @@ class MkAuthenticate
             );
         } catch (AuthenticationException $e) {
             return $this->unauthorizedResponse($request, $scope, $e->getMessage());
+        }
+
+        // 🔴 AISLAMIENTO MULTI-TENANT — acá y no en otro lado.
+        //
+        // `TenantResolver` va en el grupo `api`, y el middleware de GRUPO corre
+        // ANTES que el de RUTA. Cuando el resolver validaba la membresía,
+        // Sanctum todavía no había resuelto el token: `$request->user()` salía
+        // por el guard default (`web`) y devolvía null, así que el chequeo
+        // entero —que vivía dentro de un `if ($user !== null)`— no se ejecutaba
+        // NUNCA. Un admin del tenant A mandaba `X-Tenant-ID: <B>` y recibía 200
+        // con los datos de B.
+        //
+        // Llamar al gate desde acá es una garantía ESTRUCTURAL, no una
+        // convención: corre en la misma función que produce el `$user`, así que
+        // ningún orden de middleware puede saltearlo. Y corre ANTES de
+        // `$next($request)`: un 403 emitido después llegaría tarde, porque un
+        // POST ya habría escrito en el tenant ajeno.
+        //
+        // Con `mk_director.tenant.enabled = false` el gate devuelve null en la
+        // primera línea — las apps single-tenant no pagan nada.
+        if ($denied = $this->tenantGate->check($request, $user)) {
+            return $denied;
         }
 
         // Eager-load the relationship graph used by every downstream authz

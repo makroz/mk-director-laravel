@@ -8,6 +8,8 @@ use Closure;
 use Illuminate\Contracts\Config\Repository as Config;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Mk\Director\Auth\Middleware\MkAuthenticate;
+use Mk\Director\MkServiceProvider;
 
 /**
  * TenantResolver — HTTP middleware that resolves the current
@@ -29,19 +31,46 @@ use Illuminate\Http\Request;
  * tenant is missing, the request is rejected with 400. This is
  * safer than silently applying a global scope to "no rows".
  *
+ * 🔴 DÓNDE VIVE LA VALIDACIÓN DE MEMBRESÍA (y por qué NO acá).
+ *
+ * Este middleware va en el grupo `api`, y en Laravel el middleware de GRUPO
+ * corre ANTES que el de RUTA — o sea, antes de `mk.auth:{scope}`. En este
+ * punto Sanctum todavía no resolvió el token: `$request->user()` sale por el
+ * guard default (`web`) y devuelve `null`.
+ *
+ * Durante mucho tiempo la validación de membresía vivió acá, entera adentro de
+ * un `if ($user !== null)`. Como ese `if` nunca se cumplía en el cableado por
+ * defecto, el tenant se tomaba del header SIN VERIFICAR: un admin del tenant A
+ * mandaba `X-Tenant-ID: <B>` y recibía 200 con los datos de B.
+ *
+ * La regla se mudó a {@see TenantMembershipGate} y la invoca
+ * {@see MkAuthenticate} justo después de resolver
+ * el usuario. Acá se sigue llamando de forma OPORTUNISTA para el cableado
+ * alternativo (resolver registrado como middleware de ruta, después de
+ * `mk.auth`), pero la garantía real es la otra.
+ *
  * Usage in a project:
  *  - Set `mk_director.tenant.enabled = true` in `config/mk_director.php`.
- *  - The {@see \Mk\Director\MkServiceProvider} auto-registers this
+ *  - The {@see MkServiceProvider} auto-registers this
  *    middleware on the `api` group.
  *  - Add `tenant_id` (indexed, FK to tenants) to the tables you
  *    want scoped, and `use HasTenantScope` on the models.
  */
 class TenantResolver
 {
+    protected TenantMembershipGate $gate;
+
     public function __construct(
         protected TenantContext $context,
         protected Config $config,
-    ) {}
+        ?TenantMembershipGate $gate = null,
+    ) {
+        // El gate se puede inyectar, pero por default se arma con las MISMAS
+        // dependencias que ya tiene el resolver. Así `new TenantResolver($ctx,
+        // $config)` (la firma histórica, usada por consumers y tests) sigue
+        // funcionando sin que el gate quede en null y se saltee en silencio.
+        $this->gate = $gate ?? new TenantMembershipGate($context, $config);
+    }
 
     /**
      * Handle an incoming request.
@@ -85,40 +114,23 @@ class TenantResolver
                     'Missing tenant context. Provide X-Tenant-ID header.',
                 );
             }
+
             // Non-strict: leave context null, scope is a no-op.
             return $next($request);
         }
 
-        // R2-004: validate that the request's authenticated user actually
-        // belongs to this tenant. Without this check, a token issued for
-        // tenant A could access tenant B's data just by sending
-        // X-Tenant-ID: <B> on the next request.
+        // R2-004: validar que el usuario autenticado pertenezca a este tenant.
         //
-        // LAR-05: in strict mode, a user without the HasTenantMembership
-        // trait (no `getTenantId()` method) used to silently pass the
-        // membership gate. Now, in strict mode, that case is rejected
-        // unless the request path is in `tenant.allowlist_routes` (auth
-        // endpoints, public routes the consumer declared). This closes
-        // the loophole where a consumer forgot to add the trait to their
-        // User model and accidentally bypassed tenant isolation.
-        $user = $request->user();
-        if ($user !== null) {
-            if (method_exists($user, 'getTenantId')) {
-                $userTenantId = $user->getTenantId();
-                if ($userTenantId !== null && (string) $userTenantId !== (string) $tenantId) {
-                    return $this->canonicalErrorResponse(
-                        403,
-                        'ERR_TENANT_MISMATCH',
-                        'Tenant context does not match the authenticated user.',
-                    );
-                }
-            } elseif ($strict && ! $this->isAllowlisted($request)) {
-                return $this->canonicalErrorResponse(
-                    403,
-                    'ERR_TENANT_MEMBERSHIP_REQUIRED',
-                    'Authenticated user has no tenant membership. Add HasTenantMembership to your User model or add this route to tenant.allowlist_routes.',
-                );
-            }
+        // 🔴 ACÁ ESTO ES OPORTUNISTA, NO LA GARANTÍA. En el cableado por
+        // defecto (`pushMiddlewareToGroup('api', ...)`) este middleware corre
+        // ANTES de `mk.auth:{scope}`, así que `$request->user()` devuelve null
+        // y el gate no tiene a quién validar. La garantía la da
+        // {@see \Mk\Director\Auth\Middleware\MkAuthenticate}, que llama al
+        // MISMO gate apenas resuelve el usuario. Se conserva la llamada acá
+        // para el cableado alternativo: resolver registrado como middleware de
+        // RUTA, después de `mk.auth`.
+        if ($denied = $this->gate->check($request, $request->user(), $tenantId)) {
+            return $denied;
         }
 
         $this->context->set($tenantId);
@@ -127,55 +139,19 @@ class TenantResolver
     }
 
     /**
-     * Build a canonical single-level-envelope error response (R-PKG-024 +
-     * LAR-09 R-PKG-044) consistent with `BaseController::sendError()`,
-     * `MkAbility::errorResponse()` and `MkAuthenticate`. The `__extraData.code`
-     * is the machine-readable identifier the frontend branches on.
+     * Envelope canónico de error (R-PKG-024 + LAR-09 R-PKG-044), consistente
+     * con `BaseController::sendError()`, `MkAbility::errorResponse()` y
+     * `MkAuthenticate`. El `__extraData.code` es el identificador legible por
+     * máquina sobre el que ramifica el frontend.
+     *
+     * Delega en {@see TenantMembershipGate} para que exista UNA sola definición
+     * del envelope de tenancy: dos copias divergen, y cuando divergen el
+     * frontend ramifica sobre un `code` que sólo aparece en la mitad de los
+     * caminos.
      */
     protected function canonicalErrorResponse(int $status, string $code, string $message): JsonResponse
     {
-        return new JsonResponse([
-            'success' => false,
-            'message' => $message,
-            'data' => null,
-            '__extraData' => [
-                'code' => $code,
-            ],
-            'debugMsg' => [],
-        ], $status);
-    }
-
-    /**
-     * LAR-05: is the current request path exempt from the strict
-     * tenant-membership gate? Returns true when the request matches
-     * any of the patterns in `tenant.allowlist_routes`.
-     *
-     * Default patterns are the package's auth endpoints (login/refresh/
-     * forgot/reset) because a user authenticating has not yet proven
-     * tenant membership — that's the whole point of the flow. Consumers
-     * can add additional public routes (e.g. /api/webhooks/*) in
-     * `config/mk_director.php` after publishing.
-     */
-    protected function isAllowlisted(Request $request): bool
-    {
-        $patterns = (array) $this->config->get('mk_director.tenant.allowlist_routes', [
-            'api/*/auth/login',
-            'api/*/auth/refresh',
-            'api/*/auth/forgot',
-            'api/*/auth/reset',
-        ]);
-
-        $path = trim($request->path(), '/');
-
-        foreach ($patterns as $pattern) {
-            $regex = '#^' . str_replace('\*', '[^/]+', preg_quote((string) $pattern, '#')) . '$#';
-
-            if (preg_match($regex, $path) === 1) {
-                return true;
-            }
-        }
-
-        return false;
+        return $this->gate->errorResponse($status, $code, $message);
     }
 
     /**
