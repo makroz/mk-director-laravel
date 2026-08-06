@@ -21,18 +21,18 @@ use Mk\Director\Tests\MkLaravelTestCase;
  * behavior lives in bootHasTenantScope(), which the global scope
  * registration path drives.
  *
- * NOTE on PHP constraints: a class that uses a trait CANNOT redeclare
- * the trait's static property with a different default. We work around
- * this by reading the resolved value via reflection — the trait's
- * default lives on the trait's own property slot, and subclasses
- * inherit it (they cannot override). To simulate opt-in we use two
- * DIFFERENT model classes where one statically initializes the value
- * via a constructor-side effect. Real consumers would set
- * `protected static bool $usesTenant = true;` in the model file, but
- * PHP allows it ONLY if the model's declaration is identical to the
- * trait's. Since the trait defaults to false and we need a true case,
- * we verify the contract via reflection on the trait property and
- * via the source-position assertion.
+ * 🔴 ACÁ VIVÍA UNA LIMITACIÓN DEL LENGUAJE QUE ERA, EN REALIDAD, UN BUG.
+ *
+ * Este docblock explicaba que "una clase que usa un trait NO PUEDE redeclarar
+ * la propiedad estática del trait con otro default", y de ahí deducía que había
+ * que testear el opt-in por reflexión y por posición en el source, porque
+ * declararlo de verdad era imposible.
+ *
+ * La premisa era cierta y la conclusión estaba al revés: si el camino que
+ * documenta el trait no compila, lo que hay que cambiar es el trait, no el
+ * test. El trait ya no declara `$usesTenant`, así que el modelo puede
+ * declararla y el ejemplo de la doc funciona. El caso positivo se prueba
+ * ejecutándolo, en `tests/Feature/Tenancy/HasTenantScopeDocumentedOptInTest.php`.
  *
  * @see audit-2026-06-17-R2-006
  */
@@ -45,28 +45,43 @@ function enableTenantFeature(): void
     }
 }
 
-test('trait default: $usesTenant is FALSE (so adding the trait alone is a no-op)', function () {
+test('🔴 el trait NO declara $usesTenant — declararla hacía imposible el opt-in documentado', function () {
+    // Antes se afirmaba lo contrario: que el trait TENÍA la propiedad con
+    // default false. Y ahí estaba el bug: si el trait la declara, el modelo no
+    // puede redeclararla con `= true` (fatal de composición de traits), o sea
+    // que el único camino documentado para prender el aislamiento no compilaba.
+    // Ver tests/Feature/Tenancy/HasTenantScopeDocumentedOptInTest.php.
     $traitReflection = new \ReflectionClass(HasTenantScope::class);
 
-    expect($traitReflection->hasProperty('usesTenant'))->toBeTrue();
-
-    $prop = $traitReflection->getProperty('usesTenant');
-    $defaults = $prop->getDefaultValue();
-    expect($defaults)->toBeFalse();
+    expect($traitReflection->hasProperty('usesTenant'))->toBeFalse();
 });
 
-test('bootHasTenantScope short-circuits when $usesTenant is false', function () {
+test('el default sigue siendo OFF: agregar el trait solo no prende nada (R2-006)', function () {
+    $model = new class extends Model
+    {
+        use HasTenantScope;
+
+        protected $table = 'fake_default_off_anon';
+    };
+
+    expect($model::isTenantEnabled())->toBeFalse();
+});
+
+test('bootHasTenantScope short-circuits cuando el modelo no optó', function () {
     enableTenantFeature();
 
     // Create a model class dynamically that does NOT override the
     // $usesTenant default. We cannot use a `final class` here because
     // PHP rejects redeclaration; we use an anonymous class extending
     // Model and using the trait.
-    $model = new class extends Model {
+    $model = new class extends Model
+    {
         use HasTenantScope;
 
         protected $table = 'fake_opt_out_anon';
+
         protected $fillable = ['id'];
+
         public $timestamps = false;
     };
 
@@ -81,29 +96,34 @@ test('bootHasTenantScope short-circuits when $usesTenant is false', function () 
     expect($model::hasGlobalScope('tenant'))->toBeFalse();
 });
 
-test('HasTenantScope source: bootHasTenantScope checks $usesTenant before tenantEnabled()', function () {
-    $src = (string) file_get_contents(__DIR__ . '/../../../src/Tenancy/HasTenantScope.php');
+test('bootHasTenantScope chequea el opt-in del modelo ANTES que el flag global', function () {
+    $src = (string) file_get_contents(__DIR__.'/../../../src/Tenancy/HasTenantScope.php');
 
-    $usesTenantCheck = strpos($src, 'if (! static::$usesTenant)');
+    $optInCheck = strpos($src, 'if (! static::isTenantEnabled())');
     $tenantEnabledCheck = strpos($src, 'self::tenantEnabled()');
 
-    expect($usesTenantCheck)->toBeGreaterThan(0);
+    expect($optInCheck)->toBeGreaterThan(0);
     expect($tenantEnabledCheck)->toBeGreaterThan(0);
 
-    // $usesTenant must be checked first so a model can opt out
-    // independently of the global feature flag.
-    expect($usesTenantCheck)->toBeLessThan($tenantEnabledCheck);
+    // El opt-in del modelo va primero para que pueda optar por afuera
+    // independientemente del flag global de config.
+    expect($optInCheck)->toBeLessThan($tenantEnabledCheck);
 });
 
-test('HasTenantScope source declares the $usesTenant property with default false', function () {
-    $src = (string) file_get_contents(__DIR__ . '/../../../src/Tenancy/HasTenantScope.php');
+test('isTenantEnabled() lee la propiedad del modelo con property_exists (el trait ya no la declara)', function () {
+    $src = (string) file_get_contents(__DIR__.'/../../../src/Tenancy/HasTenantScope.php');
 
-    expect($src)->toContain('protected static bool $usesTenant = false');
+    expect($src)->toContain("property_exists(static::class, 'usesTenant')");
+
+    // Que el trait NO declare la propiedad se afirma por REFLEXIÓN, arriba en
+    // este mismo archivo. Un `not->toContain` sobre el .php diría que falla por
+    // el docblock que EXPLICA por qué se sacó — grepear no distingue código de
+    // comentario, y la reflexión sí.
 });
 
 test('HasTenantScope source: when both $usesTenant and tenantEnabled are true, the scope IS registered', function () {
     // Verify the boot() code path includes a TenantScope::class registration.
-    $src = (string) file_get_contents(__DIR__ . '/../../../src/Tenancy/HasTenantScope.php');
+    $src = (string) file_get_contents(__DIR__.'/../../../src/Tenancy/HasTenantScope.php');
 
     $addScopePos = strpos($src, "static::addGlobalScope('tenant'");
     expect($addScopePos)->toBeGreaterThan(0);
@@ -114,10 +134,16 @@ test('HasTenantScope source: when both $usesTenant and tenantEnabled are true, t
     // Aceptamos ambos formatos via regex `\b` (word boundary).
     expect($src)->toMatch('/new\s+TenantScope\b/');
 
-    // And both guards must precede the addGlobalScope call.
-    $usesTenantPos = strpos($src, 'if (! static::$usesTenant)');
+    // 🔴 Los dos guards tienen que ESTAR, no sólo estar antes. Antes esto se
+    // afirmaba sólo con `expect($pos)->toBeLessThan($addScopePos)`, y cuando
+    // `strpos` no encontraba nada devolvía `false` — que en una comparación
+    // laxa es menor que cualquier entero. La aserción pasaba justamente en el
+    // caso en que el guard NO existía.
+    $optInPos = strpos($src, 'if (! static::isTenantEnabled())');
     $tenantEnabledPos = strpos($src, 'if (! self::tenantEnabled())');
 
-    expect($usesTenantPos)->toBeLessThan($addScopePos);
+    expect($optInPos)->toBeGreaterThan(0);
+    expect($tenantEnabledPos)->toBeGreaterThan(0);
+    expect($optInPos)->toBeLessThan($addScopePos);
     expect($tenantEnabledPos)->toBeLessThan($addScopePos);
 });
