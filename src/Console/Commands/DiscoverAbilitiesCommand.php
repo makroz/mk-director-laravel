@@ -45,7 +45,7 @@ class DiscoverAbilitiesCommand extends Command
     protected $signature = 'mk:discover-abilities
                             {--module=* : Scope(s) a procesar. Vacío = todos los módulos descubiertos en paths.modules}
                             {--dry-run : Preview sin escribir a DB (skip prompt, never write)}
-                            {--force : Escribir/actualizar filas en {scope}_abilities (skip prompt, always write)}
+                            {--force : Escribir/actualizar filas en <scope>_abilities (skip prompt, always write)}
                             {--json : Output en JSON en vez de tabla humana}';
 
     protected $description = 'Auto-descubre abilities desde module providers (preferred), atributos PHP, o docblock @mk-ability. UPSERT idempotente en {scope}_abilities.';
