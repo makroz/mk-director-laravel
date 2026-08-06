@@ -9,7 +9,12 @@
 
 El motor de backend de MK-Director. Ofrece una capa de abstracción potente para APIs CRUD con estructura MME nativa (cada módulo es autocontenido y se comunica solo vía API pública).
 
-> 📖 **[Guía Completa del Desarrollador](DEVELOPER_GUIDE.md)**: Instalación, Configuración, CRUD, ListManager, Plugins y MME.
+> 🚀 **¿Arrancando un proyecto?** Empezá por **`docs/guides/ARRANQUE.md`** del
+> monorepo: de cero a una API corriendo, con el orden exacto de los comandos y
+> las salidas reales. Después, **`docs/guides/TRAMPAS.md`** — lo que muerde
+> cuando ya está andando.
+>
+> 📖 **[Guía Completa del Desarrollador](DEVELOPER_GUIDE.md)**: Configuración, CRUD, ListManager, Plugins y MME.
 
 ## Características Core
 
@@ -18,9 +23,9 @@ El motor de backend de MK-Director. Ofrece una capa de abstracción potente para
 - **Magic CRUD (SmartController)**: ABM declarativo extendiendo `Mk\Director\Controllers\SmartController` y configurando `$mkConfig`. Los plugins (`MkAuditLoggerPlugin`, `MkMultiTenantPlugin`) hookan automáticamente. El scaffolder `mk:module` lo genera por default. **`CRUDSmart::show/update/destroy` aceptan `string|int $id`** (v1.6.0-rc6) para soporte nativo de consumers con `HasUuids`. **`HasRoles::pivotExtras()` / `HasAbilities::abilityPivotExtras()` ahora son `public`** (v1.6.0-rc7) — el Repository scaffoldeado los consume directamente sin hardcodear el FQCN de la pivot polimórfica.
 - **FileStoragePlugin (R-PKG-045 — auto-register + mapeo explícito `request field → column`)**: `FileStoragePlugin` se carga por default vía `MkServiceProvider::registerPlugins()` (opt-out via `'features.file_storage_plugin' => false`). Soporta mapeo explícito D1 `'fields' => ['photo' => 'photo_path']` (request field `'photo'` → column `'photo_path'`) que resuelve el caso real `--profile-fields=photo_path` sin reimplementar lógica en Service. BC-safe: `'fields' => ['photo']` (array plano pre-R-PKG-045) sigue funcionando como identity map (`['photo' => 'photo']`). Hook = `beforeSave` (corre ANTES del `Model::create`/`update`). Ver [`DEVELOPER_GUIDE.md § 5.4`](DEVELOPER_GUIDE.md#54-plugins-disponibles-en-el-core).
 - **RBAC scaffolder (`mk:module --with-rbac`)**: genera un trío RBAC completo (User + Role + Ability + 2 pivots con FK + 3 Policies + RbacService + ServiceProvider con Gate bindings) en un solo comando. Por-módulo, scope-aislated. Ver [DEVELOPER_GUIDE.md § 3.5](DEVELOPER_GUIDE.md#-35-scaffolding-modules-with-rbac---with-rbac).
-- **Auth-user scaffolder (`mk:make:auth-user`)**: scope de autenticación autocontenido con `AuthUser`, `AuthController`, tokens Sanctum. Soporta `--login-field=<campo>`, `--with-auth-rbac`, `--profile-fields=<csv>` (con tipos custom y constraint `unique` vía prefijo `!`), `--verify-email`, `--with-crud` (CRUD completo + RBAC triada + DDD artifacts en una corrida), `--managed-by=<Scope>` (recurso admin-scoped administrado por OTRO scope) y `--kind=manager|consumer` (F10-B08, default `manager`, BC — `consumer` es un scope self-profile-only sin CRUD/roles/abilities propios, administrado por su `--managed-by`). Ver [DEVELOPER_GUIDE.md § 3.6-3.17](DEVELOPER_GUIDE.md).
+- **Auth-user scaffolder (`mk:make:auth-user`)**: scope de autenticación autocontenido con `AuthUser`, `AuthController` y tokens Sanctum. **CRUD, RBAC y el enum `Status` vienen ON por default** (opt-out con `--no-crud` / `--no-rbac` / `--no-status`; los viejos `--with-*` fueron eliminados en R-PKG-047 D2). Soporta además `--login-field=<campo>`, `--profile-fields=<csv>` (tipos custom, `unique` vía prefijo `!`, `:file` para auto-wire de storage), `--verify-email`, `--managed-by=<Scope>` y `--kind=manager|consumer`. La tabla completa está más abajo; el arranque paso a paso, en `docs/guides/ARRANQUE.md` del monorepo.
 - **FEEDBACK10 (RETO corrida 10 — Service hooks, auth routes, RBAC, `--kind`)**: 7 hallazgos 🔴 cerrados. `CRUDSmart::getService()` ahora resuelve Services auto-resolvibles vía `app()->make()` (F10-B03, hooks del Service dejan de estar muertos); hooks scaffoldeados `afterCreate/afterUpdate/afterDelete` cierran con `return null` (F10-B04); rutas auth alineadas a los métodos reales de `BaseAuthController` (`forgotPassword`/`resetPassword`, + `logoutAll`/`changePassword` expuestos) (F10-B06); `RoleResource` scaffoldeado ya no expone `description` (columna inexistente en `roles`) (F10-B07); `FileStoragePlugin` scaffold wiring fix — `plugins` (lista de clases) vs `plugins_config` (config) como keys separadas (F10-B02). Ver [DEVELOPER_GUIDE.md § 3.17](DEVELOPER_GUIDE.md) + `CHANGELOG.md`.
-- **Email-OTP password change + `PATCH me` ampliado (SDD `2026-07-15-profile-edit-password-otp`)**: cambio de contraseña vía **PIN de un solo uso** enviado por email (sin `current_password`) — endpoints `POST password/code/request` + `POST password/code/confirm`, motor `EmailOtpService` + tabla genérica `verification_codes` (`purpose` reusable para 2FA/email-verify; PIN **bcrypt-hasheado**, single-use, expiry, attempt-lock, throttle keyeado por `(scope, purpose, identifier)`). `PATCH me` ahora también edita `email` (unique ignorando self) + `avatar` (vía `FileStoragePlugin`). Email **desacoplado por evento** (`auth.password_change_code.requested` con el PIN en plano → el consumer cablea Mailable + listener; desbloquea de paso el `auth.password_reset.requested` muerto). Incluye fix del `BadMethodCallException` en `AuthUser::setAuthPassword()` que rompía `changePassword`/`resetPassword`, y del scaffolder que no emitía `getAvatarUrlAttribute` sin `--with-crud`. Ver [DEVELOPER_GUIDE.md § 3.18](DEVELOPER_GUIDE.md) + `CHANGELOG.md`.
+- **Email-OTP password change + `PATCH me` ampliado (SDD `2026-07-15-profile-edit-password-otp`)**: cambio de contraseña vía **PIN de un solo uso** enviado por email (sin `current_password`) — endpoints `POST password/code/request` + `POST password/code/confirm`, motor `EmailOtpService` + tabla genérica `verification_codes` (`purpose` reusable para 2FA/email-verify; PIN **bcrypt-hasheado**, single-use, expiry, attempt-lock, throttle keyeado por `(scope, purpose, identifier)`). `PATCH me` ahora también edita `email` (unique ignorando self) + `avatar` (vía `FileStoragePlugin`). Email **desacoplado por evento** (`auth.password_change_code.requested` con el PIN en plano → el consumer cablea Mailable + listener; desbloquea de paso el `auth.password_reset.requested` muerto). Incluye fix del `BadMethodCallException` en `AuthUser::setAuthPassword()` que rompía `changePassword`/`resetPassword`, y del scaffolder que no emitía `getAvatarUrlAttribute` cuando el CRUD estaba apagado. Ver [DEVELOPER_GUIDE.md § 3.18](DEVELOPER_GUIDE.md) + `CHANGELOG.md`.
   - **"Olvidé mi contraseña" por PIN (reset OTP, NO autenticado)**: variante PIN del clásico `password/forgot`/`password/reset` (ambos coexisten, aditivo/BC) para el usuario deslogueado — endpoints **públicos** `POST password/reset/code/request` + `POST password/reset/code/confirm`, mismo `EmailOtpService`/`verification_codes` con `purpose='password_reset'`. **Anti-enumeration**: el request SIEMPRE devuelve `200` genérico (aunque la cuenta no exista o el throttle-cuenta dispare — sin `429`); el confirm colapsa email desconocido y código equivocado al MISMO `422` genérico. En éxito revoca **todos** los tokens Sanctum (reset = logout global) y emite `auth.password_reset_code.requested` (PIN en plano → Mailable+listener del consumer) / `auth.password_reset.success`. Ver [DEVELOPER_GUIDE.md § 3.18.8](DEVELOPER_GUIDE.md).
 - **Single-level envelope response shape (R-PKG-024 v1.7.0 GA — OBLIGATORIO)**: `BaseController::sendResponse()` SIEMPRE emite `{success, message, data, __extraData, debugMsg}` con `data` como array directo de items (NO paginator nested) y `__extraData` como **sibling top-level de `data`**. Forma canónica que matchea `@makroz/core` `MkResponse<T>` y que consume `@makroz/web` `useMkList` + `@makroz/mobile` `useMkInfiniteList`. **PROHIBIDO `data.data` en cualquier endpoint, scaffolder, stub o DTO**. El flag opt-in `mk_director.response.top_level_extra_data` (rc12) está **ELIMINADO** post-v1.7.0. Auditoría con `php artisan mk:status --response-shape` (reporte `error` post-GA, no warning). Para paginadores, `BaseController::extractPaginationMetadata()` emite snake_case keys (`current_page`, `last_page`, `per_page`, `total`, `has_more_pages` para LengthAwarePaginator; `per_page`, `next_cursor`, `prev_cursor` para CursorPaginator) en `__extraData.pagination` agrupado (R-PKG-032 v1.8.0 — ver bullet siguiente).
 - **Pagination envelope grouping (R-PKG-032 v1.8.0 MAJOR — OBLIGATORIO)**: post-v1.8.0, las 5 (LengthAwarePaginator) / 3 (CursorPaginator) snake_case keys de paginación se agrupan bajo `__extraData.pagination` (NO flat al top-level). Custom keys del consumer (`audit_checked`, `request_id`, etc.) siguen planas en `__extraData` — el grouping es SOLO para el contrato del paquete. **BC break clean** sin flag opt-in (siguiendo política R-PKG-024). Consumers en v1.7.x que lean `response.__extraData.last_page` flat deben migrar a `response.__extraData.pagination.last_page` (1 línea). Ver `docs/UPGRADE_1.7_1.8.md` para migration guide completo.
@@ -34,40 +39,84 @@ El motor de backend de MK-Director. Ofrece una capa de abstracción potente para
 
 ## Instalación
 
+> 🔴 **Packagist te da `v1.8.0`, del 29 de junio de 2026.** La rama `dev` está
+> **204 commits** por delante y **no tiene tag**. Lo que te perdés instalando
+> de Packagist: todo el flujo OTP de contraseña, el fix de `canMk()` en las
+> Policies generadas, el fix del `$signature` que hace `mk:make:auth-user`
+> inusable, el gate de membresía de tenant y el BC de `?restore_state=1`.
+> Y **nada de eso avisa**.
+>
+> Guía completa de arranque, con el `path repository` y el orden exacto de los
+> comandos: **`docs/guides/ARRANQUE.md` del monorepo**.
+
 ```bash
-composer require makroz/director-laravel
+# Consumo desde el checkout local (lo que usan RETO y NetPizza).
+composer config repositories.mk-director '{
+  "type": "path",
+  "url": "../../mk-director/packagist/mk-director-laravel",
+  "options": {
+    "symlink": true,
+    "versions": { "makroz/director-laravel": "1.99.x-dev" }
+  }
+}'
+composer require "makroz/director-laravel:*@dev"
 ```
 
-Publica la configuración y migraciones:
+Publicá la configuración si vas a overridear algo:
 
 ```bash
 php artisan vendor:publish --tag=mk-config
-php artisan vendor:publish --tag=mk-migrations
 php artisan migrate
 ```
 
+⚠️ **Las migraciones del paquete NO se publican**: se cargan solas
+(`loadMigrationsFrom`). En un Laravel limpio, `php artisan migrate` corre las
+16 sin ningún `vendor:publish` previo. Publicarlas te deja copias que después
+divergen del paquete.
+
 ## Comandos Artisan
 
-| Comando | Descripción |
+Los 17 comandos que registra el paquete (`php artisan list mk`).
+
+| Comando | Qué hace |
 |---|---|
-| `php artisan mk:module {Name}` | Scaffolding de módulo CRUD estándar (Controller, Model, Service, Repository, DTO, etc.). |
-| `php artisan mk:module {Name} --with-rbac` | Scaffolding de módulo **con trío RBAC completo** (User + Role + Ability + 2 pivots + 3 Policies + RbacService + ServiceProvider con Gate bindings). Genera 20 archivos. **Nuevo en v1.5.0**. |
-| `php artisan mk:discover-abilities {--module=*} {--force}` | Auto-pobla `{scope}_abilities` desde el provider del módulo (preferred), atributos PHP 8.4 (`#[\Mk\Director\Auth\Attributes\Ability]`), o docblock (`@mk-ability`). UPSERT idempotente. **Nuevo en v1.5.0-rc2**. |
-| `php artisan mk:make:auth-user {Scope}` | Scaffolding de scope de autenticación con `AuthUser`, `AuthController`, tokens Sanctum. |
-| `php artisan mk:make:auth-user {Scope} --login-field=<campo>` | Variante con campo de login configurable (default `email`). Casos: `ci` (Bolivia), `phone`, `username`, `documento`. **Nuevo en v1.5.0-rc3**. |
-| `php artisan mk:make:auth-user {Scope} --with-auth-rbac` | Variante con RBAC integration: ability checks en `/me` y `/logout`, rate limit en `/login`/`/forgot`/`/reset`, audit events vía `AuthEvent`. Default BC: idéntico a v1.5.0-rc3 sin flag. **Nuevo en v1.5.0-rc4**. |
-| `php artisan mk:make:auth-user {Scope} --profile-fields=name,dni,phone` | Variante con columnas adicionales para el scope (per-scope, no compartidas). Cada field se expone vía `GET /me`, `PATCH /me` y `POST /register`. Ortogonal con `--login-field` y `--with-auth-rbac`. **Nuevo en v1.5.0-rc5**. |
-| `php artisan mk:make:auth-user {Scope} --profile-fields=name:string,birthdate:date,age:int` | Extensión con tipos custom: cada field puede ser `string`, `text`, `int`, `decimal`, `bool`, `date`, `datetime` o `json`. Sintaxis `key:type` (sin `:` = `string`, BC). Ortogonal con `--login-field`, `--with-auth-rbac` y `--verify-email`. **Nuevo en v1.6.0-rc1**. |
-| `php artisan mk:make:auth-user {Scope} --profile-fields-required=name,email` | Override del validation default `nullable` a `required` para profile fields específicos. Default BC: todos los profile fields son nullable (consistente con migration `-->`). **Nuevo en v1.6.0-rc4** (BUG-03 fix). |
-| `php artisan mk:make:auth-user {Scope} --profile-fields=name,!ci,phone` | Prefijo `!` marca el field como `unique` en la migration (`!ci` → `$table->string('ci')->unique()->nullable()`). Ortogonal con `--profile-fields-types`. **Nuevo en v1.6.0-rc4** (BUG-09 fix). |
-| `php artisan mk:make:auth-user {Scope} --with-crud` | Genera CRUD completo del scope + RBAC triada: `AdminController` + `RoleController` + `AbilityController` (SmartController) + 4 FormRequests + 3 JsonResources + 2 DTOs readonly + Repository + Interface + Service + Factory DDD + Seeder con 4 roles predefinidos. ServiceProvider extendido con binding. **Nuevo en v1.6.0-rc4** (MEJORA-02) — **hardened en v1.6.0-rc5** (R-PKG-015 BUG-NEW-05/06 fixes: import statements en routes, FK overrides en el modelo) — **privilege escalation fix en v2.0.1-rc0** (HALLAZGO-NEW-FASE18-C, BC break documentado): las 21 rutas CRUD pinean `mk.ability:{scope}.{resource}.{action}` PER-ROUTE (no group-level). Defense-in-depth contra editores con abilities reducidas que ejecutaban acciones sin ability check. **Migration**: `php artisan mk:discover-abilities --force` antes de bumpear para pineá abilities. Ver `DEVELOPER_GUIDE.md §3.15.3` + `CHANGELOG.md` § v2.0.1-rc0. |
-| `php artisan mk:make:auth-user {Scope} --kind=manager\|consumer --managed-by=<Manager>` | F10-B08: `--kind` (default `manager`, BC) tipa el scope. `consumer` **requiere** `--managed-by=<Scope existente>` — genera un scope self-profile-only (`Http/Routes/api.php` reducido a auth + `PATCH me`, SIN CRUD/`/roles`/`/abilities` propios, SIN `RoleController`/`AbilityController`); el manager administra su CRUD vía `/api/{manager}/{scopePlural}`. Flujo canónico: `mk:make:auth-user Admin --with-crud` luego `mk:make:auth-user Member --kind=consumer --managed-by=Admin --with-crud`. **Nuevo en FEEDBACK10** (RETO corrida 10). Ver `DEVELOPER_GUIDE.md §3.17.5`. |
-| `php artisan mk:fix:sanctum-uuids` | Parchea automáticamente la migration `create_personal_access_tokens_table` cambiando `$table->morphs('tokenable')` por `$table->uuidMorphs('tokenable')`. Necesario cuando el consumer usa `HasUuids` en sus modelos `AuthUser`. Idempotente. Soporta `--dry-run`. **Nuevo en v1.6.0-rc5** (R-PKG-015 BUG-NEW-09). |
-| `php artisan mk:make:auth-user {Scope} --verify-email` | Variante con verificación por email: columna `email_verified_at`, endpoints `/email/verify/{id}/{hash}` (signed URL) y `/email/resend`, dispatch de `Illuminate\Auth\Notifications\VerifyEmail` en `/register`. Default BC: idéntico a v1.5.0-rc4 sin flag. Solo aplica si `--login-field=email`. **Nuevo en v1.5.0-rc5**. |
-| `php artisan mk:auth:create-super-admin --roles=super-admin,admin,editor,viewer` | Siembra los 4 roles predefinidos con abilities específicas (`*`, CRUD completo, view+update, view-only) en una sola corrida. Default BC: solo super-admin. **Nuevo en v1.6.0-rc4** (MEJORA-04). Soporta `--name="..."` flag y fallback chain que autogenera `name` del email local-part en modo `--no-interaction` (v1.6.0-rc6). |
-| `php artisan mk:lint:boundaries` | Linter de R-MK-001: detecta imports cross-module en código de apps que usan el paquete. Required CI check. |
-| `php artisan mk:discover-abilities` | Auto-descubre abilities de las Policies de un módulo y las inserta en la tabla `{scope}_abilities`. Companion de `--with-rbac`. |
-| `php artisan mk:security-lint` | Auditoría de seguridad: secrets, RBAC, tenant isolation, etc. |
+| `mk:make:auth-user {Scope}` | Scaffoldea un scope de auth completo: modelo (`extends AuthUser`), migración, `AuthController`, rutas, ServiceProvider auto-registrado, **CRUD + RBAC + enum `Status`** y Policies default-deny. **30 archivos** en un Laravel limpio. |
+| `mk:module {Name}` | Módulo CRUD estándar (Controller, Model, Service, Repository, DTO, Contracts). |
+| `mk:module {Name} --with-rbac` | Módulo con trío RBAC propio (User + Role + Ability + 2 pivots + 3 Policies + RbacService + ServiceProvider con Gate bindings). ⚠️ Su modelo define `hasAbility()` — **no** `canMk()`, que es el del pack `mk:make:auth-user`. |
+| `mk:discover-abilities [--module=*] [--force] [--dry-run] [--json]` | Puebla `abilities` desde el `discoverAbilities()` del provider (**fuente única si existe**), o si no desde atributos `#[Ability]` + docblocks `@mk-ability`. UPSERT idempotente. |
+| `mk:prune-abilities` | Saca de la tabla las abilities que el código ya no declara. Complemento del anterior. |
+| `mk:auth:create-super-admin` | El primer usuario (`auth_scope`, rol `super-admin`, ability `*`). Corre el `{Scope}RolesSeeder` solo. Interactivo, o con `--email/--name/--password`. |
+| `mk:fix:sanctum-uuids [--dry-run]` | Parchea la migración de Sanctum a `uuidMorphs()`. `mk:make:auth-user` ya lo invoca solo. |
+| `mk:status` | Diagnóstico de los controllers MK y su configuración. |
+| `mk:lint:boundaries [--strict]` | Linter de R-MK-001 (imports cross-module). Check de CI obligatorio. |
+| `mk:security-lint` | Auditoría estática: modelos Eloquent y config de `MkMultiTenantPlugin`. |
+| `mk:generate-docs` | OpenAPI estático desde los constructores MK. |
+| `mk:update` | Actualización interactiva del ecosistema + auditoría de riesgos de compatibilidad. |
+| `mk:dto` / `mk:service` | Un DTO / un Service sueltos, con el estándar del paquete. |
+| `mk:skill:list` / `mk:skill:deploy {nombre}` | Skills de agente para el proyecto (paquete + agencia + locales). |
+| `mk:migrate-is-active` / `mk:migrate-status-to-int` | Migraciones de datos a `status` int-backed. |
+
+### Flags de `mk:make:auth-user`
+
+> 🔴 **BC break R-PKG-047 D2 — `--with-crud`, `--with-auth-rbac`,
+> `--with-status` y `--status-values` NO EXISTEN MÁS.** Hoy son defaults ON.
+> Un script viejo muere con `The "--with-crud" option does not exist.`
+
+| Flag | Qué hace |
+|---|---|
+| `--login-field=<campo>` | Campo de login. Default `email`; casos comunes `ci`, `phone`, `username`. |
+| `--profile-fields=<csv>` | Columnas extra del scope. Sintaxis `key[:type]` con 8 tipos (`string` default, `text`, `int`, `decimal`, `bool`, `date`, `datetime`, `json`); prefijo `!` = `unique`; sufijo `:file` = auto-wire de `FileStoragePlugin`. |
+| `--profile-fields-required=<csv>` | Pasa esos fields de `nullable` a `required` en la validación. |
+| `--kind=manager\|consumer` | `manager` (default) = scope completo. `consumer` = self-profile-only, administrado por otro scope. **Requiere `--managed-by`.** ⚠️ El consumer **pierde los 4 endpoints de OTP**. |
+| `--managed-by=<Manager>` | Publica `/api/{manager}/{scopePlural}` gateado con `mk.auth:{manager}`. ⚠️ **No valida que el manager exista**: con un nombre inventado genera 21 rutas que responden `500 Auth guard [x] is not defined`. El manager va **primero**. |
+| `--verify-email` | `email_verified_at` + `/email/verify/{id}/{hash}` (URL firmada) + `/email/resend`. Sólo con `--login-field=email`. |
+| `--with-permissions-endpoint` | `GET /api/{scope}/auth/me/permissions` con el desglose de abilities. |
+| `--no-crud` / `--no-rbac` / `--no-status` | Los opt-out de los tres defaults. |
+| `--skip-auth-wire` | No editar `config/auth.php` (sólo imprimir los snippets). |
+| `--skip-policies` | No generar las Policies default-deny. |
+| `--setup-sanctum` / `--migrate` / `--seed` / `--discover` | Pasos post-scaffold. Sanctum ya se auto-invoca. |
+| `--force-cors` | Re-escribir `config/cors.php` aunque exista. |
+| `--multi-tenant` | Emite `client_id` en la migración y el `$fillable`. ⚠️ El global scope filtra por **`tenant_id`**: hay que alinearlos. Ver `docs/guides/MULTI_TENANT.md`. |
 
 ## Configuración
 
