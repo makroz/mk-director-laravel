@@ -979,6 +979,62 @@ No son intercambiables, y el error clásico es copiar una Policy de un pack al o
 
 **Spec**: HALLAZGO-NEW-FASE14-06, feedback RETO fase 14 (2026-06-29). Cross-ref: §3.8 RBAC integration, §3.8.4 (policies sobre modelos centrales), `references/04-auth-flow.md` (HasAbilities trait detail).
 
+#### 3.8.3-bis. 🔴 Las Policies generadas NO corren solas — hay que prenderlas
+
+**Éste es el matiz más importante de toda la sección, y hasta ahora no estaba escrito en ningún lado.**
+
+`Gate::policy(Modelo::class, Policy::class)` en el ServiceProvider **registra** la policy. Quien tiene que **invocarla** es `CRUDSmart`, y hasta la versión que introdujo `authorize_with_policy` **no la invocaba nunca**: no había una sola referencia a `Gate`, `authorize()` ni `can()` en todo el trait.
+
+O sea: `--with-crud` generaba una Policy, la registraba, la documentaba, y el archivo quedaba como **código muerto**. Medido en el piloto NetPizza — con la Policy devolviendo `false` en **todos** sus métodos, `before()` incluido, los nueve tests del backoffice seguían en verde. La única autorización real era el `mk.ability:` de la ruta.
+
+**Cómo prenderla:**
+
+```php
+// config/mk_director.php — global
+'features' => ['authorize_with_policy' => true],
+
+// o por controller, que gana sobre el global EN LOS DOS SENTIDOS
+protected array $mkConfig = [
+    'model' => Producto::class,
+    'features' => ['authorize_with_policy' => true],
+];
+```
+
+Con eso, `CRUDSmart` autoriza así: `index→viewAny`, `show→view`, `store→create`, `update→update`, `destroy→delete`. Los de fila (`show`/`update`/`destroy`) autorizan **después** del `findOrFail`, así una fila ajena da 404 y no 403 — un 403 confirmaría que ese id existe en algún lado.
+
+**El default es `false`, y no es timidez.** Una Policy que nunca corrió es una Policy que **nunca se probó**: prenderla de golpe en un `composer update` convierte 200 en 403 sin que nadie lo haya pedido, o directamente en 500. En NetPizza, la primera vez que la Policy del scope gestionado se ejecutó tiró `TypeError: Argument #1 ($user) must be of type Mesero, Admin given` — porque el CRUD de un scope `consumer` lo rutea el **manager**, y la Policy tipaba el consumer.
+
+**Lo que sí es seguro por construcción**: un modelo **sin** Policy registrada no se ve afectado por el toggle. Sin esa condición, prenderlo cerraría el CRUD entero de todo consumer sin Policies — `Gate::authorize()` sin policy cae en las abilities sueltas del Gate, no encuentra ninguna, y **deniega**.
+
+##### 🔴 Cómo probar que tu Policy corre (el test obvio no sirve)
+
+Dos tests que quedan **en verde con la Policy desconectada**, o sea que no miden nada:
+
+- Un test unitario de la Policy (`(new ProductoPolicy)->viewAny($user)`). Claro que pasa: la Policy funciona perfecto; lo que falta es quien la llame.
+- Un request con un usuario autorizado que espera 200. Quien lo deja pasar es el `mk.ability:` de la ruta.
+
+Lo único que discrimina es la aserción **al revés**, por HTTP:
+
+```php
+Gate::policy(Producto::class, PolicyQueNiegaTodo::class);
+
+$this->withHeaders($cabeceras)->getJson('/api/productos')->assertForbidden();
+```
+
+Si eso da **200**, el enganche no está.
+
+##### ⚠️ Si lo enganchás a mano: `Gate::authorize()` a secas NO sirve
+
+El Gate resuelve el usuario por el guard **por defecto** (`web`); a tu usuario lo autenticó `mk.auth:{scope}`, que es otro. Sin `Gate::forUser($request->user())` el Gate ve `null` y **todo** da 403 — una defensa que no distingue nada, y que devuelve **el mismo código HTTP** que la implementación correcta, así que el síntoma no la delata. Al escribir el test, afirmá **qué usuario llegó** a la Policy, no sólo el status.
+
+##### Qué va en la Policy y qué va en la ruta
+
+No es redundancia. El middleware `mk.ability:` pregunta *"¿tenés el permiso?"* **antes** de saber sobre qué fila. La Policy recibe **la fila**, que es donde va la regla que el middleware no puede expresar: *"el encargado edita sólo lo de su sucursal"*, *"nadie se borra a sí mismo"*.
+
+##### ⚠️ Sólo cubre los cinco verbos heredados
+
+Los métodos propios de tu controller (`assignAccess`, `syncAbilities`, `resetPassword`, …) **no** pasan por acá: siguen defendidos únicamente por su `mk.ability:` de ruta. Si una Policy tiene que opinar sobre uno de ellos, el `authorize` va escrito a mano adentro del método.
+
 #### 3.8.4. Policies sobre modelos centrales (`Role` / `Ability`) — colisión entre scopes
 
 `Mk\Director\Auth\Models\Role` y `Ability` son **una sola clase compartida por todos los scopes**. `Gate::policy()` mapea clase → policy, así que dos scopes manager que registren la misma clase **no conviven**:

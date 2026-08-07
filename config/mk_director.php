@@ -76,6 +76,49 @@ return [
         'remember_state_param' => env('MK_REMEMBER_STATE_PARAM', 'restore_state'),
         'pagination_type' => env('MK_PAGINATION_TYPE', 'length_aware'), // Options: length_aware, cursor
 
+        /*
+         * ¿`CRUDSmart` invoca la Policy del modelo en cada verbo del CRUD?
+         *
+         * 🔴 EXISTE PORQUE EL PAQUETE EMITÍA POLICIES QUE NADIE LLAMABA.
+         *
+         * `mk:make:auth-user X --with-crud` genera una Policy por modelo, la
+         * registra con `Gate::policy()` y lo documenta — y `CRUDSmart` no
+         * tenía una sola referencia a `Gate`, `authorize()` ni `can()`. O sea:
+         * el scaffolder producía código de seguridad MUERTO, y el consumer no
+         * tenía cómo notarlo, porque ve la Policy en su repo y asume que corre.
+         *
+         * Medido en el piloto de NetPizza: con la Policy devolviendo `false`
+         * en todos sus métodos —`before` incluido— los tests del backoffice
+         * seguían en verde. La única autorización real era el `mk.ability:`
+         * de la ruta.
+         *
+         * ── 🔴 POR QUÉ EL DEFAULT ES `false` Y NO `true` ──────────────────
+         *
+         * Prenderlo por default rompería a cualquier consumer que ya tenga
+         * Policies registradas, y las rompería EN SILENCIO al hacer
+         * `composer update`: una Policy que nunca corrió es una Policy que
+         * nunca se probó. En NetPizza, la primera vez que la del scope
+         * gestionado se ejecutó, tiró **500 TypeError** — tipaba el usuario
+         * del scope equivocado. Una Policy dormida no está bien escrita: está
+         * sin estrenar.
+         *
+         * Así que la migración es del consumer, no del paquete: se prende
+         * cuando decidió prenderlo y probó sus Policies.
+         *
+         * ── LO QUE SÍ ES SEGURO POR CONSTRUCCIÓN ──────────────────────────
+         *
+         * Con esto en `true`, un modelo SIN Policy registrada no cambia en
+         * nada. Sin esa condición, prenderlo cerraría el CRUD entero de un
+         * consumer sin Policies: `Gate::authorize()` sin policy resuelve
+         * contra las abilities sueltas del Gate, no encuentra ninguna, y
+         * DENIEGA.
+         *
+         * Se puede pinear por controller en
+         * `$mkConfig['features']['authorize_with_policy']`, que gana sobre
+         * este valor en los dos sentidos.
+         */
+        'authorize_with_policy' => env('MK_AUTHORIZE_WITH_POLICY', false),
+
         // R-PKG-007: auto-run `mk:discover-abilities` on every boot.
         // Solo usar en sandbox/dev. Idempotente (UPSERT), pero agrega overhead.
         'auto_discover_abilities' => env('MK_AUTO_DISCOVER_ABILITIES', false),
