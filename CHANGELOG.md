@@ -12,6 +12,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — 🔴 `MK_DIRECTOR_DEBUG` no apagaba nada: la llave `debug` estaba declarada dos veces
+
+> **El kill switch existía, se leía, y no hacía absolutamente nada.**
+>
+> `config/mk_director.php` declaraba la llave de primer nivel `'debug'` **dos
+> veces**: una como escalar en la línea 21 (`v1.0.1`, `f259353`) y otra como
+> array anidado en la línea 553 (`rc13` / R-PKG-024, `ec44731`). En PHP la
+> última gana, así que el escalar era código muerto y `config('mk_director.debug')`
+> devolvía **siempre un array**.
+>
+> **Medido, no inferido** — ejecutando el config con `MK_DIRECTOR_DEBUG` sin setear:
+>
+> ```
+> runtime type of mk_director.debug: array
+> runtime value: {"enabled":false,"explain_enabled":false}
+> boolean cast: true   <-- lo que veían los 3 call sites
+> ```
+>
+> Un array no vacío es truthy. Los tres lugares que lo leían en contexto booleano
+> —`BaseController::sendResponse()`, `PluginManager::validateRequirements()` y el
+> log de flush de cache en `MkServiceProvider`— estaban **fijados en ON**, y
+> poner `MK_DIRECTOR_DEBUG=false` no los apagaba.
+>
+> **⚠️ La gravedad, sin inflar.** **No hubo fuga de datos.** El payload de debug
+> sale por `getDebugData()`, que además del flag exige `?_debug=1` **y** un
+> usuario autenticado con rol `super-admin` o `dev` vía `hasRole()` (R2-010). Esas
+> dos puertas nunca dejaron de funcionar. Lo que estaba roto es lo que el flag
+> **promete**: un interruptor documentado en `DEVELOPER_GUIDE.md` que el consumer
+> pone en `false` creyendo que apaga el diagnóstico, y no apaga nada.
+>
+> **PHP no avisa de esto y ningún test de comportamiento lo puede ver.** El paquete
+> tenía 189 archivos de test y ninguno lo detectó, porque el bug no está en lo que
+> el código hace: está en la diferencia entre lo que el **fuente declara** y lo que
+> el **parser devuelve**.
+
+### 🐛 Fixed
+
+- **La llave `'debug'` duplicada en `config/mk_director.php`**: se elimina el
+  escalar de la línea 21 (el sobrante de `v1.0.1`). Queda el bloque anidado, que
+  es el que el CHANGELOG de rc13 ya declaraba como la forma real
+  (*"The original flat `mk_director.debug` boolean is preserved as the inner
+  `debug.enabled` for BC"*) — sólo que nunca se borró el original ni se
+  actualizaron los call sites.
+- **Los tres call sites booleanos** pasan de `config('mk_director.debug', false)`
+  a `MkDebugConfig::enabled()`, que lee `debug.enabled`. Con esto
+  `MK_DIRECTOR_DEBUG` vuelve a controlar de verdad la salida de debug.
+- El docblock de `getDebugData()` ya no nombra el flag por su nombre viejo.
+
+### ✨ Added
+
+- **`Mk\Director\Utils\MkDebugConfig::enabled()`** — punto único de lectura del
+  switch. Existe por una razón concreta: `MkServiceProvider::register()` mergea
+  el config con `mergeConfigFrom()`, que es un `array_merge` **shallow**. Un
+  consumer que corrió `vendor:publish --tag=mk-config` **antes** de que el bloque
+  fuera anidado sigue teniendo un `'debug' => bool` plano en su propio config, y
+  ese escalar reemplaza el bloque entero. Leer `mk_director.debug.enabled` contra
+  un escalar devolvería el default y le apagaría el debug en silencio, así que el
+  helper acepta las dos formas.
+- **`tests/Unit/ConfigNoDuplicateKeysTest.php`** — el guard estructural que
+  faltaba. Dos chequeos sobre **todos** los archivos de `config/`:
+  1. Ninguna llave literal declarada dos veces en el mismo array literal, a
+     **cualquier** nivel de anidamiento (recorrido por tokens, un set de llaves
+     vistas por array abierto).
+  2. La cantidad de llaves de primer nivel que declara el fuente coincide con la
+     cantidad que devuelve el array parseado — si PHP colapsó una duplicada, el
+     parseado queda más corto. El parseo corre en un **subproceso** con una
+     `Illuminate\Foundation\Application` real, porque los config llaman helpers
+     (`app_path()`) que el container mínimo de `MkLaravelTestCase` no bindea.
+
+  Verificado en rojo: reintroduciendo el duplicado, los dos tests fallan con
+  `declares 20 top-level keys but the parsed array has 19. Duplicated: debug.`
+- **`tests/Unit/Utils/MkDebugConfigTest.php`** — 8 tests de comportamiento del
+  switch, incluido el que pinea la premisa del bug
+  (`(bool) config('mk_director.debug')` es `true` mientras `enabled` es `false`)
+  y los dos de BC para el config plano pre-anidado.
+
+### ⚠️ Notas para consumers
+
+- **RETO y cualquier consumer en producción**: si tenías `MK_DIRECTOR_DEBUG=false`
+  (o sin setear) creyendo que el debug estaba apagado, **ahora sí lo está**. El
+  cambio visible es que `sendResponse()` deja de mergear `getDebugData()` en cada
+  respuesta y `PluginManager::validateRequirements()` deja de auditar en cada
+  request. Ambos eran trabajo que no pediste.
+- Si dependías del comportamiento anterior sin saberlo y querés el diagnóstico,
+  poné `MK_DIRECTOR_DEBUG=true` explícitamente.
+- Si publicaste el config antes de que `debug` fuera un bloque anidado, tu
+  `'debug' => bool` plano **sigue funcionando** (ver `MkDebugConfig`). Igual
+  conviene alinearlo con la forma anidada al re-publicar.
+
+---
+
 ## [UNRELEASED] — 🔴 `CRUDSmart` ahora PUEDE invocar la Policy del modelo (opt-in). Antes no la invocaba nunca
 
 > **El scaffolder producía código de seguridad muerto y nadie lo notaba.**

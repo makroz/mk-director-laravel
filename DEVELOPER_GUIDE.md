@@ -2943,4 +2943,4 @@ Toda respuesta exitosa (200 OK) garantiza la presencia de la llave `data` y, en 
 
 1.  **`allowedIncludes`**: Siempre define qué relaciones puede pedir el frontend para evitar fugas de información.
 2.  **`auto_cache`**: Úsalo para tablas con mucha lectura y poca escritura. MK-Director invalidará los tags de caché automáticamente.
-3.  **`MK_DIRECTOR_DEBUG`**: Manténlo en `true` solo en local para ver el análisis de queries y tiempos de ejecución.
+3.  **`MK_DIRECTOR_DEBUG`**: Manténlo en `true` solo en local para ver el análisis de queries y tiempos de ejecución. Vive en `mk_director.debug.enabled`; en código leelo con `MkDebugConfig::enabled()`, **nunca** como `config('mk_director.debug')` en contexto booleano — esa llave es un **array**, y un array no vacío siempre es truthy (ver CHANGELOG `[UNRELEASED]`: la llave duplicada que dejaba el switch inerte).
