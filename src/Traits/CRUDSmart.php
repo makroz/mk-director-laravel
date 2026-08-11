@@ -12,6 +12,7 @@ use Illuminate\Http\Request;
 use Illuminate\Routing\Route;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\ValidationException;
 use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Contracts\MkModuleServiceInterface;
@@ -134,6 +135,66 @@ trait CRUDSmart
     protected function getListFeatures(): array
     {
         return $this->mkConfig['features'] ?? [];
+    }
+
+    /**
+     * ¿Este controller invoca la Policy del modelo?
+     *
+     * El valor per-controller (`$mkConfig['features']['authorize_with_policy']`)
+     * GANA en los dos sentidos: puede prender con el global apagado y apagar
+     * con el global prendido. Es a propósito — durante una migración, un
+     * consumer necesita ir controller por controller, y un toggle que sólo
+     * suma no permite dejar afuera al que todavía tiene la Policy sin probar.
+     */
+    protected function isPolicyAuthorizationEnabled(): bool
+    {
+        $features = $this->getListFeatures();
+
+        if (array_key_exists('authorize_with_policy', $features)) {
+            return (bool) $features['authorize_with_policy'];
+        }
+
+        return (bool) config('mk_director.features.authorize_with_policy', false);
+    }
+
+    /**
+     * Invocar la Policy del modelo configurado, si la hay y si está activada.
+     *
+     * ── 🔴 LOS TRES DETALLES QUE HACEN QUE ESTO SEA SEGURO ──────────────
+     *
+     * 1. **`Gate::forUser($request->user())`, nunca `Gate::authorize()` a
+     *    secas.** El Gate resuelve el usuario por el guard POR DEFECTO
+     *    (`web`); acá al usuario lo autenticó `mk.auth:{scope}`, que es otro.
+     *    Sin el `forUser`, el Gate ve `null` y TODO da 403 — una defensa que
+     *    no distingue nada, y que devuelve el MISMO código que la
+     *    implementación correcta, así que el síntoma no la delata.
+     *
+     * 2. **Sin Policy registrada, no se autoriza NADA.** `Gate::authorize()`
+     *    sobre un modelo sin policy cae en las abilities sueltas del Gate, no
+     *    encuentra ninguna y DENIEGA. Sin este `getPolicyFor()`, prender el
+     *    toggle cerraría el CRUD entero de todo consumer que no tenga
+     *    Policies — que es el caso más común.
+     *
+     * 3. **Se llama DESPUÉS del `findOrFail`** en `show`/`update`/`destroy`.
+     *    Así una fila de otro tenant da 404 y no 403: un 403 confirmaría que
+     *    ese id existe en algún lado. Y de paso no hace una segunda consulta
+     *    para traer la misma fila.
+     *
+     * @param  string  $ability  viewAny|view|create|update|delete
+     * @param  mixed  $argument  class-string para los de colección, el modelo
+     *                           para los que operan sobre una fila
+     */
+    protected function authorizeWithMkPolicy(string $ability, Request $request, mixed $argument): void
+    {
+        if (! $this->isPolicyAuthorizationEnabled()) {
+            return;
+        }
+
+        if (Gate::getPolicyFor($this->getModel()) === null) {
+            return;
+        }
+
+        Gate::forUser($request->user())->authorize($ability, $argument);
     }
 
     /**
@@ -297,6 +358,12 @@ trait CRUDSmart
     public function index(Request $request)
     {
         $modelClass = $this->getModel();
+
+        // Policy del modelo — colección, así que el argumento es la CLASE.
+        // Va antes de cualquier consulta: no tiene sentido armar el listado
+        // para después negarlo.
+        $this->authorizeWithMkPolicy('viewAny', $request, $modelClass);
+
         $model = new $modelClass;
 
         // Apply service hook beforeList
@@ -455,6 +522,10 @@ trait CRUDSmart
             ? CacheManager::remember($cacheKey, $this->getCacheTags(), $this->getCacheTTL(), $resolver)
             : $resolver();
 
+        // Policy del modelo — DESPUÉS del findOrFail, así una fila ajena da
+        // 404 y no 403 (un 403 confirmaría que ese id existe en algún lado).
+        $this->authorizeWithMkPolicy('view', $request, $model);
+
         // Apply service hook beforeShow
         if ($service && method_exists($service, 'beforeShow')) {
             $model = $service->beforeShow($request, $model) ?? $model;
@@ -485,6 +556,11 @@ trait CRUDSmart
     {
         $modelClass = $this->getModel();
         $service = $this->getService();
+
+        // Policy del modelo — todavía no hay fila, así que el argumento es la
+        // CLASE. Va antes de validar: un 403 no debería depender de que el
+        // payload esté bien formado.
+        $this->authorizeWithMkPolicy('create', $request, $modelClass);
 
         // R-PKG-046 F9-B08 — Resolver FormRequest si está configurado.
         $request = $this->resolveFormRequest(
@@ -672,6 +748,10 @@ trait CRUDSmart
 
         $model = $query->findOrFail($id);
 
+        // Policy del modelo — DESPUÉS del findOrFail (404 gana sobre 403) y
+        // ANTES de tocar nada.
+        $this->authorizeWithMkPolicy('update', $request, $model);
+
         // Get input
         $input = $request->all();
 
@@ -745,6 +825,10 @@ trait CRUDSmart
         $this->getPluginManager()->fireBeforeQuery($query, $request);
 
         $model = $query->findOrFail($id);
+
+        // Policy del modelo — DESPUÉS del findOrFail (404 gana sobre 403) y
+        // ANTES del hook de borrado.
+        $this->authorizeWithMkPolicy('delete', $request, $model);
 
         // Plugin Hook: beforeDelete
         $this->getPluginManager()->fireBeforeDelete($model, $request);

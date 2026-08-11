@@ -12,6 +12,204 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — 🔴 `MK_DIRECTOR_DEBUG` no apagaba nada: la llave `debug` estaba declarada dos veces
+
+> **El kill switch existía, se leía, y no hacía absolutamente nada.**
+>
+> `config/mk_director.php` declaraba la llave de primer nivel `'debug'` **dos
+> veces**: una como escalar en la línea 21 (`v1.0.1`, `f259353`) y otra como
+> array anidado en la línea 553 (`rc13` / R-PKG-024, `ec44731`). En PHP la
+> última gana, así que el escalar era código muerto y `config('mk_director.debug')`
+> devolvía **siempre un array**.
+>
+> **Medido, no inferido** — ejecutando el config con `MK_DIRECTOR_DEBUG` sin setear:
+>
+> ```
+> runtime type of mk_director.debug: array
+> runtime value: {"enabled":false,"explain_enabled":false}
+> boolean cast: true   <-- lo que veían los 3 call sites
+> ```
+>
+> Un array no vacío es truthy. Los tres lugares que lo leían en contexto booleano
+> —`BaseController::sendResponse()`, `PluginManager::validateRequirements()` y el
+> log de flush de cache en `MkServiceProvider`— estaban **fijados en ON**, y
+> poner `MK_DIRECTOR_DEBUG=false` no los apagaba.
+>
+> **⚠️ La gravedad, sin inflar.** **No hubo fuga de datos.** El payload de debug
+> sale por `getDebugData()`, que además del flag exige `?_debug=1` **y** un
+> usuario autenticado con rol `super-admin` o `dev` vía `hasRole()` (R2-010). Esas
+> dos puertas nunca dejaron de funcionar. Lo que estaba roto es lo que el flag
+> **promete**: un interruptor documentado en `DEVELOPER_GUIDE.md` que el consumer
+> pone en `false` creyendo que apaga el diagnóstico, y no apaga nada.
+>
+> **PHP no avisa de esto y ningún test de comportamiento lo puede ver.** El paquete
+> tenía 189 archivos de test y ninguno lo detectó, porque el bug no está en lo que
+> el código hace: está en la diferencia entre lo que el **fuente declara** y lo que
+> el **parser devuelve**.
+
+### 🐛 Fixed
+
+- **La llave `'debug'` duplicada en `config/mk_director.php`**: se elimina el
+  escalar de la línea 21 (el sobrante de `v1.0.1`). Queda el bloque anidado, que
+  es el que el CHANGELOG de rc13 ya declaraba como la forma real
+  (*"The original flat `mk_director.debug` boolean is preserved as the inner
+  `debug.enabled` for BC"*) — sólo que nunca se borró el original ni se
+  actualizaron los call sites.
+- **Los tres call sites booleanos** pasan de `config('mk_director.debug', false)`
+  a `MkDebugConfig::enabled()`, que lee `debug.enabled`. Con esto
+  `MK_DIRECTOR_DEBUG` vuelve a controlar de verdad la salida de debug.
+- El docblock de `getDebugData()` ya no nombra el flag por su nombre viejo.
+
+### ✨ Added
+
+- **`Mk\Director\Utils\MkDebugConfig::enabled()`** — punto único de lectura del
+  switch. Existe por una razón concreta: `MkServiceProvider::register()` mergea
+  el config con `mergeConfigFrom()`, que es un `array_merge` **shallow**. Un
+  consumer que corrió `vendor:publish --tag=mk-config` **antes** de que el bloque
+  fuera anidado sigue teniendo un `'debug' => bool` plano en su propio config, y
+  ese escalar reemplaza el bloque entero. Leer `mk_director.debug.enabled` contra
+  un escalar devolvería el default y le apagaría el debug en silencio, así que el
+  helper acepta las dos formas.
+- **`tests/Unit/ConfigNoDuplicateKeysTest.php`** — el guard estructural que
+  faltaba. Dos chequeos sobre **todos** los archivos de `config/`:
+  1. Ninguna llave literal declarada dos veces en el mismo array literal, a
+     **cualquier** nivel de anidamiento (recorrido por tokens, un set de llaves
+     vistas por array abierto).
+  2. La cantidad de llaves de primer nivel que declara el fuente coincide con la
+     cantidad que devuelve el array parseado — si PHP colapsó una duplicada, el
+     parseado queda más corto. El parseo corre en un **subproceso** con una
+     `Illuminate\Foundation\Application` real, porque los config llaman helpers
+     (`app_path()`) que el container mínimo de `MkLaravelTestCase` no bindea.
+
+  Verificado en rojo: reintroduciendo el duplicado, los dos tests fallan con
+  `declares 20 top-level keys but the parsed array has 19. Duplicated: debug.`
+- **`tests/Unit/Utils/MkDebugConfigTest.php`** — 8 tests de comportamiento del
+  switch, incluido el que pinea la premisa del bug
+  (`(bool) config('mk_director.debug')` es `true` mientras `enabled` es `false`)
+  y los dos de BC para el config plano pre-anidado.
+
+### ⚠️ Notas para consumers
+
+- **RETO y cualquier consumer en producción**: si tenías `MK_DIRECTOR_DEBUG=false`
+  (o sin setear) creyendo que el debug estaba apagado, **ahora sí lo está**. El
+  cambio visible es que `sendResponse()` deja de mergear `getDebugData()` en cada
+  respuesta y `PluginManager::validateRequirements()` deja de auditar en cada
+  request. Ambos eran trabajo que no pediste.
+- Si dependías del comportamiento anterior sin saberlo y querés el diagnóstico,
+  poné `MK_DIRECTOR_DEBUG=true` explícitamente.
+- Si publicaste el config antes de que `debug` fuera un bloque anidado, tu
+  `'debug' => bool` plano **sigue funcionando** (ver `MkDebugConfig`). Igual
+  conviene alinearlo con la forma anidada al re-publicar.
+
+---
+
+## [UNRELEASED] — 🔴 `CRUDSmart` ahora PUEDE invocar la Policy del modelo (opt-in). Antes no la invocaba nunca
+
+> **El scaffolder producía código de seguridad muerto y nadie lo notaba.**
+>
+> `mk:make:auth-user X --with-crud` genera una Policy por modelo, la registra
+> con `Gate::policy()` en el ServiceProvider y lo documenta. Y `CRUDSmart` no
+> tenía **una sola referencia** a `Gate`, `authorize()` ni `can()`:
+>
+> ```
+> $ rg -n 'authorize|Gate::|can\(' src/Traits/CRUDSmart.php src/Controllers/SmartController.php
+> (sin resultados)
+> ```
+>
+> **Medido, no inferido** (piloto NetPizza): con la Policy devolviendo `false`
+> en **todos** sus métodos —`before` incluido— los nueve tests del backoffice
+> seguían en **verde**. La única autorización real era el `mk.ability:` de la
+> ruta.
+>
+> **⚠️ La gravedad, sin inflar.** El daño en el consumidor era **cero**: el
+> middleware de ruta cubre el mismo chequeo, y con los scopes de tenant puestos
+> una fila ajena da 404 antes de llegar a autorizar. Lo que estaba roto es lo
+> que la Policy **promete**: es un archivo que existe, que se lee, que dice
+> `canMk(...)` y que da toda la impresión de defender algo. El día que alguien
+> escriba ahí la regla que **necesita la fila** —"el encargado edita sólo lo de
+> su sucursal"— no iba a correr, y no iba a fallar nada.
+>
+> ### ✨ Added
+>
+> - `mk_director.features.authorize_with_policy` (env `MK_AUTHORIZE_WITH_POLICY`,
+>   **default `false`**). Con esto en `true`, `CRUDSmart` invoca la Policy del
+>   modelo en los cinco verbos: `index→viewAny`, `show→view`, `store→create`,
+>   `update→update`, `destroy→delete`.
+> - Override **por controller** en `$mkConfig['features']['authorize_with_policy']`,
+>   que gana sobre el global **en los dos sentidos** (puede prender con el global
+>   apagado y apagar con el global prendido). Es a propósito: durante una
+>   migración hay que poder dejar afuera al controller cuya Policy todavía no se
+>   probó.
+>
+> ### 🔒 Por qué el default es `false` (y no va a cambiar sin aviso)
+>
+> Prenderlo por default rompería a cualquier consumidor con Policies ya
+> registradas, **en silencio, al hacer `composer update`**. Y no en teoría: una
+> Policy que nunca corrió es una Policy que nunca se probó. En NetPizza, la
+> primera vez que la del scope gestionado se ejecutó tiró **500 TypeError** —
+> tipaba el usuario del scope equivocado. Una Policy dormida no está bien
+> escrita: está **sin estrenar**.
+>
+> **Lo que sí es seguro por construcción**: con el toggle en `true`, un modelo
+> **sin** Policy registrada no cambia en nada (`Gate::getPolicyFor()` corta
+> antes). Sin esa condición, prenderlo cerraría el CRUD entero de todo
+> consumidor sin Policies: `Gate::authorize()` sin policy cae en las abilities
+> sueltas del Gate, no encuentra ninguna y **deniega**.
+>
+> ### 🐛 Fixed — la Policy que emite el scaffolder no podía ejecutarse
+>
+> Dos bugs que sólo aparecen cuando el código **corre**, y por eso vivieron
+> ahí desde siempre:
+>
+> - **Tipaba `{Scope} $user`.** En un scope `consumer` (`--managed-by`) el CRUD
+>   lo rutea el **manager** (`mk.auth:{manager}`), así que el usuario
+>   autenticado es del manager. Ahora tipa `AuthUser`, el abstract del paquete
+>   del que heredan todos los scopes: acepta a cualquiera y no cruza límites de
+>   módulo (R-MK-001).
+> - **Preguntaba por `{scope}.{recurso}.{acción}`**, la familia del
+>   **autoservicio**, cuando las rutas managed piden
+>   `{manager}.{recurso}.{acción}`. Aun con el tipo arreglado, habría denegado a
+>   **todo** usuario del manager correctamente configurado.
+>
+> ### 🔴 Cómo probar esto, porque el test obvio no sirve
+>
+> Un test unitario de la Policy **pasa en verde con el bug vivo**: la Policy
+> funciona perfecto, lo que no existe es quien la llame. Es la misma trampa del
+> `TenantResolver`, donde el middleware llamado a mano pasaba con la fuga
+> puesta. Y un test que pide 200 con un usuario autorizado tampoco mide nada:
+> queda verde con la Policy desconectada, porque quien deja pasar es el
+> middleware.
+>
+> Lo único que discrimina es el **camino real** con la aserción **al revés**:
+> ruta registrada, cadena de middleware, `Kernel::handle()`, y una Policy que
+> **niega** tiene que producir **403**. Está en
+> `tests/Feature/Authorization/CrudSmartInvokesPolicyTest.php`, junto con el
+> par que fija la trampa del guard (ver abajo) y los tres de BC.
+>
+> ### ⚠️ La trampa del guard, para quien enganche esto a mano
+>
+> **`Gate::authorize()` a secas no sirve.** El Gate resuelve el usuario por el
+> guard **por defecto** (`web`); acá lo autenticó `mk.auth:{scope}`, que es
+> otro. Sin `Gate::forUser($request->user())` el Gate ve `null` y **todo** da
+> 403 — una defensa que no distingue nada y que devuelve **el mismo código** que
+> la implementación correcta, así que el síntoma no la delata. Por eso el test
+> no mira sólo el status: afirma **qué usuario llegó** a la Policy.
+>
+> ### 📋 Migración
+>
+> Nada que hacer: el default reproduce el comportamiento actual. Para
+> adoptarlo:
+>
+> 1. Prendelo **por controller** (`$mkConfig['features']['authorize_with_policy'] => true`),
+>    uno por vez. El toggle global recién cuando estén todos.
+> 2. Por cada uno, escribí el test **inverso** (Policy que niega → 403). Si da
+>    200, el enganche no está.
+> 3. Revisá el **tipo del `$user`** y la **familia de abilities** de tus Policies
+>    ya generadas — el scaffolder viejo las pudo haber emitido mal, y hasta hoy
+>    eso no rompía nada porque no corrían.
+> 4. `destroy`/`update`/`show` autorizan **después** del `findOrFail`: una fila
+>    ajena sigue dando 404, no 403.
+
 ## [UNRELEASED] — 🔴 BC: restaurar filtros guardados ahora lo pide el cliente con `?restore_state=1`
 
 > **Changed (BC break)**: con `remember_state => true`, el paquete seguía

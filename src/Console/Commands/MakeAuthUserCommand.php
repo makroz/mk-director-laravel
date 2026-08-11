@@ -1020,7 +1020,7 @@ PHP,
         if ($withCrud) {
             // A1/A3: policies default-deny por default con --with-crud (skippable).
             $withPolicies = ! (bool) $this->option('skip-policies');
-            $this->generateCrudPack($scope, $scopeLower, $scopePlural, $loginField, $profileFieldsRaw, $requiredFields, $withPolicies, $withStatus, $statusStates, $isConsumer);
+            $this->generateCrudPack($scope, $scopeLower, $scopePlural, $loginField, $profileFieldsRaw, $requiredFields, $withPolicies, $withStatus, $statusStates, $isConsumer, $managedBy);
         }
 
         // ── ARCH-01/FEEDBACK6: recurso managed (otro scope administra ESTE) ──
@@ -1708,6 +1708,7 @@ PHP,
         bool $withStatus = false,
         array $statusStates = [],
         bool $isConsumer = false,
+        ?string $managedBy = null,
     ): void {
         // A1/A3/A8: 17 base + 1 enum (A8) + 3 policies (A1/A3, si $withPolicies).
         // F10-B08: un scope `consumer` NO genera RoleController/AbilityController
@@ -1779,6 +1780,24 @@ PHP,
         $fileFieldNames = $this->detectFileFields($profileFields);
         $fieldRules = $this->buildProfileFieldRules($profileFields, $requiredFields, $scopePlural, $loginField, $fileFieldNames);
         $crudReplacements = array_merge([
+            /*
+             * Prefijo de las abilities que consulta `{Scope}Policy`.
+             *
+             * 🔴 NO ES SIEMPRE EL SCOPE PROPIO, Y ASUMIRLO ERA UN BUG.
+             *
+             * Un scope `consumer` (`--managed-by=X`) no rutea su propio CRUD:
+             * lo sirve `Http/Routes/managed.php` bajo `mk.auth:{manager}` y
+             * `mk.ability:{manager}.{recurso}.{accion}`. El stub emitía
+             * `{scope}.{recurso}.{accion}` —la familia del AUTOSERVICIO— así
+             * que la Policy preguntaba por un permiso que el manager no tiene
+             * por qué tener: habría denegado a TODO admin bien configurado.
+             *
+             * Nadie lo notó porque `CRUDSmart` no invocaba la Policy. Medido
+             * en el piloto de NetPizza al engancharla.
+             */
+            '{{policyAbilityScope}}' => $managedBy !== null
+                ? Str::lower($managedBy)
+                : $scopeLower,
             '{{profileFieldsList}}' => $this->buildProfileFieldsList($profileFields),
             // F10-B05 (R-PKG-050): pasar `$loginField` a los 3 helpers DTO
             // para que su dedup de core fields (name, $loginField, password,

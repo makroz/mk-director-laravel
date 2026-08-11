@@ -5,24 +5,56 @@ declare(strict_types=1);
 namespace App\Modules\{{ModuleName}}\Policies;
 
 use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
+use Mk\Director\Auth\Models\AuthUser;
 
 /**
- * {{ModuleName}}Policy — autorización para CRUD + assignRole/revokeRole.
+ * {{ModuleName}}Policy — autorización por FILA del CRUD de {{ModuleName}}.
  *
  * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud`.
  *
- * Convenciones (RBAC-004, R-PKG-008):
- *   - `before()` da bypass total al role `super-admin` (estándar de facto).
- *   - Default-deny: cada método retorna `canMk('{scope}.{resource}.{action}')`.
- *   - Convención de ability name: `{moduleNameLower}.{moduleNamePluralLower}.{action}`.
+ * ── 🔴 ESTA POLICY NO CORRE HASTA QUE VOS LA PRENDAS ─────────────────────
  *
- * IMPORTANTE — `canMk()`, no `hasAbility()`:
- * El modelo de este pack extiende `Mk\Director\Auth\Models\AuthUser`, cuyo
- * chequeo de abilities es `canMk()` (trait `HasAbilities`): resuelve grants
- * directos + los heredados vía roles, soporta wildcards (`admin.*`) y cachea
- * por usuario. `hasAbility()` NO existe en `AuthUser` — es un método propio
- * del pack `mk:module --with-rbac`, que usa otro modelo base. Llamarlo acá
- * tira `BadMethodCallException` en runtime.
+ * `Gate::policy()` en el ServiceProvider la REGISTRA; quien la INVOCA es
+ * `CRUDSmart`, y sólo si la feature está activa:
+ *
+ *     // config/mk_director.php
+ *     'features' => ['authorize_with_policy' => true],
+ *
+ *     // o por controller, que gana sobre el global en los dos sentidos:
+ *     protected array $mkConfig = [
+ *         'features' => ['authorize_with_policy' => true],
+ *     ];
+ *
+ * El default es `false` a propósito: una Policy que nunca corrió es una
+ * Policy que nunca se probó, y prenderla de golpe en un `composer update`
+ * convertiría 200 en 403 —o en 500— sin que nadie lo pidiera. Prendela vos,
+ * con tus tests, cuando quieras.
+ *
+ * 🔴 Y PROBALA AL REVÉS. Un test que pide 200 con un usuario autorizado queda
+ * verde con la Policy desconectada: quien deja pasar es el `mk.ability:` de
+ * la ruta. Lo único que mide algo es que una Policy que NIEGA produzca 403.
+ *
+ * ── QUÉ VA ACÁ Y QUÉ VA EN LA RUTA ──────────────────────────────────────
+ *
+ * No es redundancia: el middleware `mk.ability:` pregunta "¿tenés el
+ * permiso?" ANTES de saber sobre qué fila. La Policy recibe LA FILA, que es
+ * donde va la regla que el middleware no puede expresar — "el encargado edita
+ * sólo lo de su sucursal", "nadie se borra a sí mismo".
+ *
+ * ── 🔴 EL USUARIO SE TIPA `AuthUser`, NO `{{ModuleName}}` ────────────────
+ *
+ * Quien llega acá es EL USUARIO AUTENTICADO, que no siempre es del scope de
+ * este modelo. En un scope `consumer` (`--managed-by`) el CRUD lo rutea el
+ * MANAGER: el usuario es del scope del manager, siempre. Tipar `{{ModuleName}}`
+ * hacía que el primer request real muriera con
+ * `TypeError: Argument #1 ($user) must be of type {{ModuleName}}` — un 500, no
+ * un 403. `AuthUser` es el abstract del paquete del que heredan todos los
+ * scopes, así que acepta a cualquiera y no cruza límites de módulo (R-MK-001).
+ *
+ * 🔴 EL CHEQUEO ES `canMk()`. `hasAbility()` NO EXISTE en `AuthUser` — es del
+ * pack `mk:module --with-rbac`, que usa otro modelo base. Llamarlo acá tira
+ * `BadMethodCallException`, y dentro de un `try` mal puesto eso se lee como
+ * "no tiene el permiso".
  *
  * Spec: RBAC-004 (R-PKG-008).
  */
@@ -33,43 +65,43 @@ class {{ModuleName}}Policy
      * Retornar `true` → siempre permite. Retornar `null` → sigue con el
      * método específico. Retornar `false` → siempre deniega.
      */
-    public function before({{ModuleName}} $user, string $ability): ?bool
+    public function before(AuthUser $user, string $ability): ?bool
     {
         return $user->hasRole('super-admin') ? true : null;
     }
 
-    public function viewAny({{ModuleName}} $user): bool
+    public function viewAny(AuthUser $user): bool
     {
-        return $user->canMk('{{moduleNameLower}}.{{moduleNamePluralLower}}.viewAny');
+        return $user->canMk('{{policyAbilityScope}}.{{moduleNamePluralLower}}.viewAny');
     }
 
-    public function view({{ModuleName}} $user, {{ModuleName}} $model): bool
+    public function view(AuthUser $user, {{ModuleName}} $model): bool
     {
-        return $user->canMk('{{moduleNameLower}}.{{moduleNamePluralLower}}.view');
+        return $user->canMk('{{policyAbilityScope}}.{{moduleNamePluralLower}}.view');
     }
 
-    public function create({{ModuleName}} $user): bool
+    public function create(AuthUser $user): bool
     {
-        return $user->canMk('{{moduleNameLower}}.{{moduleNamePluralLower}}.create');
+        return $user->canMk('{{policyAbilityScope}}.{{moduleNamePluralLower}}.create');
     }
 
-    public function update({{ModuleName}} $user, {{ModuleName}} $model): bool
+    public function update(AuthUser $user, {{ModuleName}} $model): bool
     {
-        return $user->canMk('{{moduleNameLower}}.{{moduleNamePluralLower}}.update');
+        return $user->canMk('{{policyAbilityScope}}.{{moduleNamePluralLower}}.update');
     }
 
-    public function delete({{ModuleName}} $user, {{ModuleName}} $model): bool
+    public function delete(AuthUser $user, {{ModuleName}} $model): bool
     {
-        return $user->canMk('{{moduleNameLower}}.{{moduleNamePluralLower}}.delete');
+        return $user->canMk('{{policyAbilityScope}}.{{moduleNamePluralLower}}.delete');
     }
 
-    public function assignRole({{ModuleName}} $user): bool
+    public function assignRole(AuthUser $user): bool
     {
-        return $user->canMk('{{moduleNameLower}}.{{moduleNamePluralLower}}.assignRole');
+        return $user->canMk('{{policyAbilityScope}}.{{moduleNamePluralLower}}.assignRole');
     }
 
-    public function revokeRole({{ModuleName}} $user): bool
+    public function revokeRole(AuthUser $user): bool
     {
-        return $user->canMk('{{moduleNameLower}}.{{moduleNamePluralLower}}.revokeRole');
+        return $user->canMk('{{policyAbilityScope}}.{{moduleNamePluralLower}}.revokeRole');
     }
 }

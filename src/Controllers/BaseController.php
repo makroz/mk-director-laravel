@@ -15,6 +15,7 @@ use Illuminate\Pagination\AbstractPaginator;
 use Illuminate\Pagination\CursorPaginator;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
+use Mk\Director\Utils\MkDebugConfig;
 
 abstract class BaseController extends LaravelController
 {
@@ -118,7 +119,7 @@ abstract class BaseController extends LaravelController
             $response['__extraData'] = $extra;
         }
 
-        if (config('mk_director.debug', false)) {
+        if (MkDebugConfig::enabled()) {
             $response = array_merge($response, $this->getDebugData());
         }
 
@@ -319,7 +320,7 @@ abstract class BaseController extends LaravelController
      * R2-010 hardening (1.2.2): the debug payload includes raw EXPLAIN
      * output and query bindings, which can leak PII / schema details
      * (column names, values) to anyone who can hit a JSON endpoint with
-     * `?debug=true&_debug=1`. The `mk_director.debug` config flag
+     * `?debug=true&_debug=1`. The `mk_director.debug.enabled` config flag
      * already gates entry to this method, but a misconfigured production
      * app that flips the flag to true is one footgun away from leaking
      * data. We now require an authenticated user with `super-admin` or
