@@ -10,6 +10,7 @@ use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Mk\Director\Contracts\MkPluginInterface;
+use Mk\Director\Utils\MkDebugConfig;
 
 /**
  * Class PluginManager
@@ -311,7 +312,7 @@ class PluginManager
 
     public function validateRequirements(array $fillable): void
     {
-        if (! config('mk_director.debug', false)) {
+        if (! MkDebugConfig::enabled()) {
             return;
         }
 

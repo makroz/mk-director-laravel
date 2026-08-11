@@ -76,7 +76,8 @@ beforeEach(function () {
 
     // Reset config to defaults (no debug, no extra flags from other tests).
     config([
-        'mk_director.debug' => false,
+        // Mirror the shipped shape: `debug` is a nested block, not a flat bool.
+        'mk_director.debug' => ['enabled' => false, 'explain_enabled' => false],
         'mk_director.response' => [],
     ]);
 });

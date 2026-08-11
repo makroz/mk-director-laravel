@@ -12,16 +12,6 @@ declare(strict_types=1);
 return [
     /*
     |--------------------------------------------------------------------------
-    | Debug Mode
-    |--------------------------------------------------------------------------
-    |
-    | Habilita el modo debug para ver queries y tiempos de ejecución.
-    |
-    */
-    'debug' => env('MK_DIRECTOR_DEBUG', false),
-
-    /*
-    |--------------------------------------------------------------------------
     | List & Pagination Settings
     |--------------------------------------------------------------------------
     */
@@ -536,6 +526,15 @@ return [
     |--------------------------------------------------------------------------
     | Debug
     |--------------------------------------------------------------------------
+    |
+    | `enabled` (env `MK_DIRECTOR_DEBUG`): master switch for the debug
+    | payload merged into every response by `BaseController::sendResponse()`,
+    | the plugin requirement audit in `PluginManager::validateRequirements()`,
+    | and the cache-flush log in `MkServiceProvider`. This is the same flag
+    | that lived at the top of this file as a flat `'debug' => bool` before
+    | v1.7.0; it moved in here when the block became nested. Read it through
+    | `MkDebugConfig::enabled()`, never as a raw `config('mk_director.debug')`
+    | truthiness check — the value is an ARRAY and an array is always truthy.
     |
     | R-PKG-024 (rc13, lifted forward — unrelated to envelope change): gate
     | for the optional `EXPLAIN` query analysis in `BaseController::getDebugData()`.

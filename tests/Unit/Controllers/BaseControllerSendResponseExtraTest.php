@@ -131,7 +131,12 @@ test('sendResponse preserves debug-merge behavior (regression guard)', function 
     $body = sendResponseBodySource();
     expect($body)->not->toBeEmpty();
 
-    expect($body)->toContain("'mk_director.debug'");
+    // The gate goes through MkDebugConfig::enabled(), NOT a raw
+    // `config('mk_director.debug')` truthiness check: that key holds an ARRAY
+    // and a non-empty array is always truthy, which pinned debug ON and made
+    // `MK_DIRECTOR_DEBUG` inert. See MkDebugConfigTest + ConfigNoDuplicateKeysTest.
+    expect($body)->toContain('MkDebugConfig::enabled()');
+    expect($body)->not->toContain("config('mk_director.debug'");
     expect($body)->toContain('getDebugData()');
     expect($body)->toContain('array_merge');
 });

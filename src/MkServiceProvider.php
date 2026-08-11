@@ -37,6 +37,7 @@ use Mk\Director\ModuleLoader\ModuleLoaderServiceProvider;
 use Mk\Director\Plugins\FileStoragePlugin;
 use Mk\Director\Tenancy\TenantContext;
 use Mk\Director\Tenancy\TenantResolver;
+use Mk\Director\Utils\MkDebugConfig;
 use Mk\Director\Utils\MkRequestAwareStorageUrl;
 // 🔴 ESTE IMPORT FALTABA Y HABÍA DOS `catch (Throwable $e)` MUERTOS.
 // Sin él, dentro del namespace `Mk\Director` el nombre pelado resuelve a
@@ -595,7 +596,7 @@ class MkServiceProvider extends ServiceProvider
                 }
                 CacheManager::flush([$table.'_all']);
 
-                if (config('mk_director.debug', false)) {
+                if (MkDebugConfig::enabled()) {
                     Log::info("MK-Director: Cache flushed for table [{$table}] due to write operation.");
                 }
             }
