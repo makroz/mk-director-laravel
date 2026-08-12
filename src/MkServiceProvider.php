@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\ServiceProvider;
 use Mk\Director\Auth\AuthServiceProvider;
 use Mk\Director\Console\Commands\AuthCreateSuperAdminCommand;
+use Mk\Director\Console\Commands\CleanReportsCommand;
 use Mk\Director\Console\Commands\DiscoverAbilitiesCommand;
 use Mk\Director\Console\Commands\FixSanctumUuidsCommand;
 use Mk\Director\Console\Commands\GenerateDocsCommand;
@@ -31,14 +32,18 @@ use Mk\Director\Console\Commands\PruneAbilitiesCommand;
 use Mk\Director\Console\Commands\SecurityLintCommand;
 use Mk\Director\Controllers\OpenApiController;
 use Mk\Director\Embeds\MkEmbedService;
+use Mk\Director\Export\Contracts\ReportHeaderProvider;
+use Mk\Director\Export\Controllers\MkReportController;
+use Mk\Director\Export\FilasDelExport;
+use Mk\Director\Export\Support\DefaultReportHeaderProvider;
 use Mk\Director\Managers\CacheManager;
 use Mk\Director\Managers\PluginManager;
+use Mk\Director\Models\MkReport;
 use Mk\Director\ModuleLoader\ModuleLoaderServiceProvider;
 use Mk\Director\Plugins\FileStoragePlugin;
 use Mk\Director\Tenancy\TenantContext;
 use Mk\Director\Tenancy\TenantResolver;
 use Mk\Director\Utils\MkDebugConfig;
-use Mk\Director\Utils\MkRequestAwareStorageUrl;
 // 🔴 ESTE IMPORT FALTABA Y HABÍA DOS `catch (Throwable $e)` MUERTOS.
 // Sin él, dentro del namespace `Mk\Director` el nombre pelado resuelve a
 // `Mk\Director\Throwable` —una clase que no existe— así que el catch no
@@ -47,6 +52,7 @@ use Mk\Director\Utils\MkRequestAwareStorageUrl;
 // `registerAutoDiscoverAbilities()` decía proteger el boot de un
 // auto-discover fallido y lo dejaba pasar entero.
 // El que sí funcionaba (línea ~195) usa `\Throwable` con la barra.
+use Mk\Director\Utils\MkRequestAwareStorageUrl;
 use Throwable;
 
 class MkServiceProvider extends ServiceProvider
@@ -104,6 +110,30 @@ class MkServiceProvider extends ServiceProvider
         // singleton so the same instance is shared by the
         // middleware (writer) and the trait (reader).
         $this->app->singleton(TenantContext::class);
+
+        // Encabezado de los reportes exportados.
+        //
+        // `bind` y no `singleton`: un job puede generar reportes de tenants
+        // distintos en el mismo worker, y un singleton se quedaría con el
+        // logo y el nombre del primero.
+        //
+        // Se registra con `bindIf` para que el binding del consumer —hecho en
+        // SU provider, que corre después— gane sin tener que desregistrar
+        // nada. Sin default el motor tiraría excepción dentro del job y el
+        // reporte quedaría en `failed` sin que nadie lo mire.
+        $this->app->bindIf(ReportHeaderProvider::class, DefaultReportHeaderProvider::class);
+
+        // El buzón por el que el controller le pasa las filas al job.
+        //
+        // 🔴 Singleton porque el job lo resuelve para VACIARLO y el controller
+        // lo resuelve para DEJAR las filas: si fueran dos instancias, el job
+        // vaciaría una y leería otra — y encontraría el buzón vacío siempre,
+        // produciendo un reporte con encabezado y ninguna fila marcado como
+        // exitoso.
+        //
+        // ⚠️ Y por eso mismo el job lo vacía ANTES de cada uso: el worker es un
+        // proceso largo y el singleton sobrevive de un job al siguiente.
+        $this->app->singleton(FilasDelExport::class);
 
         // MkEmbedService — reconocimiento de URLs de YouTube/TikTok/Instagram.
         //
@@ -234,12 +264,51 @@ class MkServiceProvider extends ServiceProvider
                 // pre-D4 al `status` enum string-backed (4 estados canónicos).
                 MkMigrateIsActiveToStatusCommand::class,
                 MkMigrateStatusToIntCommand::class,
+                // Se lleva los reportes vencidos y sus archivos. Programalo
+                // con `Schedule::command('mk:reports-clean')->hourly()`.
+                CleanReportsCommand::class,
             ]);
         }
 
         $this->registerGlobalCacheListener();
         $this->registerOpenApiRoutes();
+        $this->registerExportRoutes();
         $this->registerAutoDiscoverAbilities();
+    }
+
+    /**
+     * Las rutas del motor de reportes.
+     *
+     * ⚠️ El nombre `mk.reports.download` NO es decorativo:
+     * {@see MkReport::getDownloadUrl()} lo resuelve con
+     * `route()`. Renombrarlo deja al front sin link de descarga, y el error
+     * aparece recién cuando alguien termina un reporte.
+     */
+    protected function registerExportRoutes(): void
+    {
+        if (! config('mk_director.export.register_routes', true)) {
+            return;
+        }
+
+        Route::group([
+            'prefix' => (string) config('mk_director.export.route_prefix', 'v3/reports'),
+            'middleware' => (array) config('mk_director.export.route_middleware', ['api']),
+        ], function (): void {
+            Route::get('/', [MkReportController::class, 'index'])->name('mk.reports.index');
+            Route::delete('/', [MkReportController::class, 'destroy'])->name('mk.reports.destroy');
+
+            // 🔴 Las literales van ANTES de las que tienen `{param}`. Laravel
+            // matchea por orden de registro: con `{report}` primero, un GET a
+            // `/types` entra por ahí y busca un reporte con uuid "types". Es un
+            // endpoint muerto que devuelve 404 sin decir por qué, y
+            // `route:list` no lo muestra porque ordena alfabéticamente.
+            Route::get('types', [MkReportController::class, 'types'])->name('mk.reports.types');
+            Route::get('custom', [MkReportController::class, 'customReports'])->name('mk.reports.custom');
+
+            Route::post('{type}/export', [MkReportController::class, 'store'])->name('mk.reports.store');
+            Route::get('{report}/status', [MkReportController::class, 'status'])->name('mk.reports.status');
+            Route::get('{report}/download', [MkReportController::class, 'download'])->name('mk.reports.download');
+        });
     }
 
     /**

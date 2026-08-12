@@ -464,6 +464,265 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Export / Reportes async (PDF · XLSX · CSV)
+    |--------------------------------------------------------------------------
+    |
+    | El motor de exportación de listados. Un pedido de export SIEMPRE responde
+    | 202 con un `uuid`; el archivo lo arma un job y el front hace polling.
+    |
+    | 🔴 POR QUÉ SIEMPRE ASYNC, sin modo sync.
+    |
+    | Un export sync se muere de dos maneras distintas y las dos son invisibles
+    | hasta que el listado crece: el request se pasa de `max_execution_time`, o
+    | se queda sin memoria armando el HTML. Medido en Condaty con la lista de
+    | accesos —198.004 filas, ~422 MB de JSON— el request ni siquiera llegaba a
+    | responder: el browser mostraba "Failed to fetch". Encolar hace que apretar
+    | "Exportar" cueste lo mismo con 20 filas que con 200.000.
+    |
+    | `retention_hours` es el ÚNICO lugar donde vive la retención. En Condaty
+    | ese número estaba escrito cuatro veces por separado (dos dispatchers que
+    | sellan `expires_at` y un command que barre por antigüedad); como los dos
+    | criterios se aplican, ganaba el más corto, y quien cambiara uno solo iba a
+    | creer que subió la retención cuando no la subió.
+    |
+    | ⚠️ Un valor inválido NO puede significar "borrar todo": `MK_EXPORT_
+    | RETENTION_HOURS=` vacío da `(int) '' === 0`, y una retención de 0 horas se
+    | lleva puesto cada reporte apenas se genera. `MkReport::retentionHours()`
+    | cae al fallback ante cualquier cosa que no sea un entero positivo.
+    */
+    'export' => [
+        // Nombre de tabla configurable, mismo patrón que `media` y
+        // `progressive_codes`: un consumer con una tabla `mk_reports`
+        // preexistente puede renombrarla sin forkear el paquete.
+        'table' => env('MK_EXPORT_TABLE', 'mk_reports'),
+
+        // Disk y carpeta donde viven los archivos generados.
+        'disk' => env('MK_EXPORT_DISK', 'local'),
+        'directory' => env('MK_EXPORT_DIRECTORY', 'reports'),
+
+        // Horas que vive un reporte antes de que el limpiador se lo lleve,
+        // con su archivo. Ver la nota de arriba sobre el 0.
+        'retention_hours' => env('MK_EXPORT_RETENTION_HOURS', 48),
+
+        // El modelo de usuario del consumer, para la relación `user()` del
+        // reporte y el historial "mis descargas". Null = `auth.providers.
+        // users.model` de Laravel.
+        'user_model' => env('MK_EXPORT_USER_MODEL', null),
+
+        /*
+        | Filas por chunk, por formato. El PDF es el más chico A PROPÓSITO:
+        | mPDF mantiene el documento entero en memoria mientras lo arma, así
+        | que un chunk grande no acelera, revienta. XLSX y CSV escriben en
+        | streaming y toleran mucho más.
+        |
+        | Cada `ExportConfig` puede pisarlos con `chunkSize(string $format)`.
+        */
+        'chunk_size' => [
+            'pdf' => env('MK_EXPORT_CHUNK_PDF', 20),
+            'xlsx' => env('MK_EXPORT_CHUNK_XLSX', 500),
+            'csv' => env('MK_EXPORT_CHUNK_CSV', 1000),
+        ],
+
+        // Límite de memoria que el job se pone a sí mismo mientras arma el
+        // archivo. El worker corre con esto, no el request.
+        //
+        // ⚠️ Es un PISO, no un techo: `MemoryLimit::atLeast()` nunca BAJA un
+        // límite que ya sea mayor. Un `ini_set` a secas sí lo baja, y en modo
+        // `sync` eso le recorta la memoria a todo lo que venga después.
+        'job_memory_limit' => env('MK_EXPORT_JOB_MEMORY', '2G'),
+
+        /*
+        | Directorios donde mPDF busca fuentes.
+        |
+        | ⚠️ Van AMBOS o ninguno. Con sólo el directorio propio, mPDF no
+        | encuentra la fuente de respaldo (`DejaVuSerifCondensed.ttf`) y tira
+        | excepción; con sólo el suyo, las fuentes del proyecto no se cargan.
+        | `null` usa únicamente el de mPDF, que es lo correcto si no traés
+        | fuentes propias.
+        */
+        'pdf_font_dir' => null,
+
+        // La familia tipográfica del PDF. Tiene que existir en `pdf_font_dir`
+        // o ser una que mPDF ya traiga.
+        'pdf_font_family' => env('MK_EXPORT_PDF_FONT', 'sans-serif'),
+
+        // Orientación por defecto de la hoja: 'P' vertical, 'L' apaisada.
+        // 🔴 Un reporte con doce columnas de meses más categoría y total no
+        // entra en A4 vertical: las columnas quedan tan angostas que los
+        // importes se parten.
+        'pdf_orientation' => env('MK_EXPORT_PDF_ORIENTATION', 'P'),
+
+        /*
+        |------------------------------------------------------------------
+        | Márgenes del PDF, en milímetros
+        |------------------------------------------------------------------
+        |
+        | 🔴 EL PROBLEMA QUE ESTO RESUELVE, Y POR QUÉ NO ES UNA CONSTANTE.
+        |
+        | El margen inferior tiene que ser al menos tan alto como el pie, o el
+        | contenido lo pisa. En el motor original eso era un `25` escrito en el
+        | código, MEDIDO a mano contra UN pie concreto: logo de 22 px más dos
+        | líneas legales. Funcionaba para ese pie y para ningún otro.
+        |
+        | Y el modo de fallar era feo: con `18` el contenido llegaba hasta los
+        | 279 mm, pasaba por encima del logo (274,5) pero no de las líneas
+        | (280,3). O sea que el reporte salía BIEN casi siempre y mal a veces
+        | — el reporte real de +200 páginas se veía "respeta las 2 líneas, a
+        | veces se come el logo". Un bug que aparece cada tantas páginas es más
+        | caro de encontrar que uno que aparece siempre.
+        |
+        | Un pie personalizado por proyecto —tres líneas legales en vez de dos,
+        | un logo más alto, un bloque de datos fiscales— vuelve a romper ese
+        | número, y nada avisa.
+        |
+        | LA SOLUCIÓN: mPDF SABE MEDIR SU PROPIO PIE. Con `auto_bottom` en
+        | `'stretch'` recalcula el margen en CADA PÁGINA con el alto real del
+        | pie renderizado. El `bottom` de acá abajo deja de ser la medida y
+        | pasa a ser un PISO.
+        |
+        | Modos:
+        |   - 'stretch' (default): margen = max(bottom, footer + alto + padding).
+        |                          Crece si hace falta, nunca baja del piso.
+        |   - 'pad':               margen = footer + alto + bottom, siempre.
+        |                          El `bottom` es colchón puro. Más espacio
+        |                          desperdiciado, cero riesgo.
+        |   - false:               fijo en `bottom`. Para quien ya midió y no
+        |                          quiere que nada se mueva.
+        |
+        | `auto_padding` es la perilla de prueba y error: los milímetros de aire
+        | entre la última fila y el pie. Subilo si en tu proyecto el contenido
+        | queda demasiado pegado.
+        |
+        | ⚠️ Los altos NO se pueden calcular sin renderizar: dependen de la
+        | fuente, del tamaño, del ancho de la hoja y de cuántas líneas envuelva
+        | cada bloque. Por eso lo mide mPDF y no una fórmula nuestra. Para saber
+        | qué número le tocó a tu pie, poné `log_margins` en true: cada reporte
+        | deja en el log el alto medido y el margen resultante.
+        */
+        'margins' => [
+            'top' => 8,
+            // Piso, no la medida. Ver arriba.
+            'bottom' => 10,
+            'left' => 10,
+            'right' => 10,
+
+            // Distancia del borde de la hoja al bloque de encabezado/pie.
+            'header' => 9,
+            'footer' => 9,
+
+            'auto_top' => 'stretch',
+            'auto_bottom' => 'stretch',
+
+            // Milímetros de aire. La perilla de ajuste fino.
+            'auto_padding' => 2,
+        ],
+
+        // Deja en el log el alto medido del encabezado y del pie, y los
+        // márgenes que salieron. Para ajustar `auto_padding` con un número en
+        // vez de a ojo.
+        'log_margins' => env('MK_EXPORT_LOG_MARGINS', false),
+
+        // Separador por defecto del CSV. Excel en es-* suele preferir ';'.
+        // Cada `ExportConfig` lo pisa con `csvSeparator()`.
+        'csv_separator' => env('MK_EXPORT_CSV_SEPARATOR', ','),
+
+        /*
+        | Cómo se ve una fecha en un reporte. Los patrones de `date()` de PHP
+        | que usa TODO reporte: PDF, XLSX y CSV. Cambiar acá cambia el sistema
+        | entero — si mañana se muestra año/mes/día, es `'Y-m-d'` en `date` y
+        | no hay que tocar ningún reporte.
+        |
+        | 🔴 Están acá porque en el motor original estuvieron en TRES lugares a
+        | la vez —`DateFormat`, `ColumnDefinition` y el mapa de celdas del
+        | generador de XLSX— y se separaron: `date` daba `Y-m-d` de un lado y
+        | `d/m/Y` del otro. El usuario veía una fecha en pantalla y otra en el
+        | PDF del mismo dato.
+        |
+        | ⚠️ Si cambiás `date` o `datetime`, mirá también `xlsx_cell_formats`:
+        | son los mismos formatos escritos en el idioma de Excel, y si se
+        | separan el PDF y la planilla muestran fechas distintas.
+        */
+        'date_formats' => [
+            'date' => env('MK_EXPORT_DATE_FORMAT', 'd/m/Y'),
+            'datetime' => env('MK_EXPORT_DATETIME_FORMAT', 'd/m/Y H:i'),
+            'time' => env('MK_EXPORT_TIME_FORMAT', 'H:i'),
+        ],
+
+        // El equivalente para las celdas de Excel, que no entiende los
+        // patrones de PHP y usa los suyos. Tienen que decir lo mismo que los
+        // de arriba: si `date` es `d/m/Y`, acá va `dd/mm/yyyy`.
+        'xlsx_cell_formats' => [
+            'date' => env('MK_EXPORT_XLSX_DATE_FORMAT', 'dd/mm/yyyy'),
+            'datetime' => env('MK_EXPORT_XLSX_DATETIME_FORMAT', 'dd/mm/yyyy hh:mm'),
+            'time' => env('MK_EXPORT_XLSX_TIME_FORMAT', 'hh:mm'),
+        ],
+
+        /*
+        | Zona horaria con la que se MUESTRAN las fechas.
+        |
+        | 🔴 La base guarda en UTC. Sin convertir no corre sólo la hora: corre
+        | el DÍA. Medido en Condaty (UTC-4): **629 de 10169 pagos y 11 de 70
+        | alertas** caen en una fecha distinta según se lean en UTC o en la
+        | zona local — un pago de las 21:00 aparecía al día siguiente.
+        |
+        | Null usa la `app.timezone` de Laravel.
+        */
+        'display_timezone' => env('MK_EXPORT_DISPLAY_TIMEZONE', null),
+
+        /*
+        | El "marco" del reporte: el pie legal y el logo del pie.
+        |
+        | Un `ExportConfig` puede pisar el pie entero devolviendo HTML desde
+        | `footerHtml()`. Esto es el default del sistema.
+        |
+        | `footer_logo` es una ruta ABSOLUTA a un archivo de imagen, o null.
+        | Se lee una sola vez por proceso y se cachea como data URI: mPDF no
+        | puede resolver rutas relativas ni URLs desde dentro de un job.
+        */
+        'chrome' => [
+            'legal_lines' => [],
+            'footer_logo' => env('MK_EXPORT_FOOTER_LOGO', null),
+            'footer_logo_width' => env('MK_EXPORT_FOOTER_LOGO_WIDTH', 102),
+            'footer_logo_height' => env('MK_EXPORT_FOOTER_LOGO_HEIGHT', 22),
+
+            // Los dos rótulos del bloque de firmas. Vacío = sin firmas.
+            'signatures' => [],
+        ],
+
+        // Prefijo de las rutas del motor: GET /{prefix}, POST
+        // /{prefix}/{type}/export, GET /{prefix}/{uuid}/status, etc.
+        'route_prefix' => env('MK_EXPORT_ROUTE_PREFIX', 'v3/reports'),
+
+        // Middleware del grupo de rutas. Igual que el resto del paquete,
+        // el scope de auth lo decide el consumer.
+        //
+        // ⚠️ Vacío deja el historial de reportes PÚBLICO. Los params guardados
+        // dicen qué estuvo mirando cada usuario, así que esto va con auth sí o
+        // sí; el default trae `mk.auth` y el consumer le pone el scope.
+        'route_middleware' => ['api', 'mk.auth'],
+
+        // Poné false si preferís declarar las rutas del motor a mano en el
+        // `routes/api.php` de tu app.
+        'register_routes' => true,
+
+        /*
+        | Dónde buscar los `ExportConfig` y los `CustomReport`.
+        |
+        | `paths` null usa `app/Modules` si existe. Un consumer que organice
+        | distinto —`app/Domain`, varios directorios— los declara acá.
+        |
+        | La búsqueda es RECURSIVA: un módulo anidado
+        | (`Modules/Finanzas/Pagos/Export/`) también se encuentra.
+        */
+        'discovery' => [
+            'paths' => null,
+            'config_dir' => 'Export',
+            'custom_dir' => 'CustomReports',
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Cache Strategy
     |--------------------------------------------------------------------------
     */

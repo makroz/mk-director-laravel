@@ -17,6 +17,7 @@ use Illuminate\Validation\ValidationException;
 use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Contracts\MkModuleServiceInterface;
 use Mk\Director\DTOs\DTOFactory;
+use Mk\Director\Export\Concerns\ExportaListados;
 use Mk\Director\Managers\CacheManager;
 use Mk\Director\Managers\ListManager;
 use Mk\Director\Managers\PluginManager;
@@ -30,6 +31,11 @@ use Mk\Director\Tenancy\TenantContext;
  */
 trait CRUDSmart
 {
+    // El enganche del export: `?_export=pdf|xlsx|csv` en el listado responde
+    // 202 y encola el archivo. Un módulo sin `ExportConfig` registrado no
+    // cambia en nada — el trait devuelve `null` y el listado sigue de largo.
+    use ExportaListados;
+
     /**
      * Configuración del módulo - debe definirse en el controller
      */
@@ -477,6 +483,17 @@ trait CRUDSmart
         // Plugin Hook: afterResponse (receives the raw paginator so plugins
         // can read total / currentPage / etc. without unwrapping).
         $this->getPluginManager()->fireAfterResponse($paginator);
+
+        // 🔴 El export va DESPUÉS de `afterList`, no antes. `afterList` es el
+        // gancho donde el módulo DECORA las filas, y con el orden invertido el
+        // archivo sale con el dato crudo de la columna mientras la pantalla
+        // muestra el resuelto: dos verdades para la misma fila.
+        //
+        // Devuelve `null` cuando este request no pide export o el módulo no
+        // tiene `ExportConfig`, y ahí el listado sigue como siempre.
+        if ($export = $this->exportarListado($request, $paginator->items())) {
+            return $export;
+        }
 
         return $this->sendResponse($paginator, '', 200, $extra);
     }

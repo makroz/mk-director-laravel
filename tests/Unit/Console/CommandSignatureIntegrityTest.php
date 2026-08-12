@@ -51,6 +51,9 @@ function mkExpectedCommandArguments(): array
         'mk:migrate-status-to-int' => ['scope'],
         'mk:module' => ['name'],
         'mk:prune-abilities' => [],
+        // Se lleva los reportes vencidos y sus archivos. Sin argumentos: el
+        // criterio es `expires_at`, que ya está en cada fila.
+        'mk:reports-clean' => [],
         'mk:security-lint' => [],
         'mk:service' => ['name'],
         'mk:skill:deploy' => ['name'],
