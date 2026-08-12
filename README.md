@@ -33,6 +33,8 @@ El motor de backend de MK-Director. Ofrece una capa de abstracción potente para
 - **RETO fase 14 feedback fixes (v1.8.1-rc0 — acumula al lote RELEASE_AT_END)**: 6 hallazgos pineados como fixes aditivos/BC-safe. (a) **`Schema::hasTable()` guard pre-`Artisan::call()` en auto-discover** (HALLAZGO-NEW-FASE14-01) — testing con `RefreshDatabase` ya NO rompe con `RuntimeException: Ninguna tabla de abilities existe`. (b) **`\Auth::forgetGuards()` post-logout** (HALLAZGO-NEW-FASE14-03) — testing Pest/PHPUnit ya NO cachea el user en el guard entre requests del mismo test. (c) Tabla `__extraData` opt-in para paginators en `DEVELOPER_GUIDE.md §1.4` (HALLAZGO-NEW-FASE14-02). (d) REST conventions DELETE 200+body en `§1.5` (HALLAZGO-NEW-FASE14-04). (e) Models per-scope vs globales en `§1.6` (HALLAZGO-NEW-FASE14-05). (f) `canMk()` vs `can()` vs `hasAbility()` en `§3.8.3` (HALLAZGO-NEW-FASE14-06). Sin cross-stack changes — `@makroz/core/web/mobile` NO requieren update.
 - **S8 Fase 7 scaffolder hardening (v2.0.1-rc0 — RETO fase 6 clean rebuild feedback, HALLAZGO-NEW-FASE18-A/B/C — BC break documentado en C)**: 3 hallazgos pineados como fixes (A, B) + 1 BC break (C). (A) **`forgot()` llaves extras en `AuthController.stub`** — 5 líneas huérfanas + llave extra eliminadas; `php artisan route:list` ya NO crashea con `ParseError: syntax error, unexpected variable "$token"` en línea ~370. (B) **`me/permissions` route regression guard** — 7 tests source-parsing pineados para asegurar que el scaffolder pineá la route DENTRO del bloque `mk.auth:{scope}` (canónico desde R-PKG-043 FASE19-02). (C) **`mk.ability` per-route en CRUD** (BC break, R-G-033 autoriza) — las 21 rutas CRUD scaffoldeadas pinean `mk.ability:{scope}.{resource}.{action}` PER-ROUTE (no group-level). Defense-in-depth contra privilege escalation: editor con abilities reducidas ya NO puede ejecutar acciones sin ability check. Ver `DEVELOPER_GUIDE.md §3.15.1-3.15.3` + `CHANGELOG.md` § v2.0.1-rc0.
 - **Refresh + reset + forgot implementación completa** (v1.6.0-rc4): `RefreshTokenParser` (Sanctum v4 `id|plaintext`), `TokenIssuer::rotateRefreshToken()` con defense-in-depth contra escalación de scope, persistencia en `{scope}_password_reset_tokens`.
+- **Motor de reportes (PDF · XLSX · CSV)**: un módulo declara sus columnas en un `ExportConfig` y su listado se exporta en los tres formatos. `GET /api/v3/{modulo}?_export=xlsx` responde **202** con un `uuid`; el archivo lo arma un job y el front hace polling. Incluye historial de descargas, barra de progreso real, reportes CUSTOM (consulta propia, devuelve bytes) y el limpiador `mk:reports-clean`. 🔴 **Siempre async, sin modo sync**: un export síncrono se muere por `max_execution_time` o por memoria, y las dos formas son invisibles hasta que el listado crece — medido con 198.004 filas (~422 MB de JSON), el request ni llegaba a responder. 🔴 **El margen inferior del PDF lo mide mPDF**, no una constante: se recalcula en cada página con el alto real del pie, así que un pie personalizado por proyecto no queda pisado por el contenido. Un `ExportConfig` mínimo son **tres** métodos (`use ExportConfigDefaults`). Guía: [`docs/guides/EXPORT.md`](../../docs/guides/EXPORT.md) del monorepo.
+- **Escrituras atómicas en `CRUDSmart`**: `store()`, `update()` y `destroy()` envuelven la escritura y sus hooks `after*` en una transacción. Antes no lo hacían —mientras `storeMany()` sí—, así que el bulk era atómico y el single no: un `afterCreate` que tirara dejaba la fila escrita y devolvía 500.
 - **List & Search Managers**: Parsing de strings complejos para búsquedas relacionales y joins dinámicos.
 - **MME (MVC Modular Encapsulated)**: ModuleLoader auto-registra módulos, comunicación inter-módulo solo vía API pública.
 - **Auth + RBAC**: Sistema completo con abilities, roles, scopes y middleware `MkAbility`.
@@ -76,7 +78,7 @@ divergen del paquete.
 
 ## Comandos Artisan
 
-Los 17 comandos que registra el paquete (`php artisan list mk`).
+Los 18 comandos que registra el paquete (`php artisan list mk`).
 
 | Comando | Qué hace |
 |---|---|
@@ -88,6 +90,7 @@ Los 17 comandos que registra el paquete (`php artisan list mk`).
 | `mk:auth:create-super-admin` | El primer usuario (`auth_scope`, rol `super-admin`, ability `*`). Corre el `{Scope}RolesSeeder` solo. Interactivo, o con `--email/--name/--password`. |
 | `mk:fix:sanctum-uuids [--dry-run]` | Parchea la migración de Sanctum a `uuidMorphs()`. `mk:make:auth-user` ya lo invoca solo. |
 | `mk:status` | Diagnóstico de los controllers MK y su configuración. |
+| `mk:reports-clean [--dry-run]` | Borra los reportes vencidos **y sus archivos**. Programalo con `Schedule::command('mk:reports-clean')->hourly()`. ⚠️ Sin él el disco crece para siempre con archivos que ya nadie puede pedir. |
 | `mk:lint:boundaries [--strict]` | Linter de R-MK-001 (imports cross-module). Check de CI obligatorio. |
 | `mk:security-lint` | Auditoría estática: modelos Eloquent y config de `MkMultiTenantPlugin`. |
 | `mk:generate-docs` | OpenAPI estático desde los constructores MK. |
