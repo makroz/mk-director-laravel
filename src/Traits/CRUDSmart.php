@@ -613,16 +613,30 @@ trait CRUDSmart
         $fillable = $this->getFillable();
         $input = array_intersect_key($input, array_flip($fillable));
 
-        // Create model
-        $model = $modelClass::create($input);
+        // 🔴 La escritura y sus hooks van en UNA transacción.
+        //
+        // Sin esto, un `afterCreate` que tire —o un plugin de `afterSave`—
+        // deja la fila YA ESCRITA y el request devuelve 500: un registro
+        // huérfano, sin el efecto secundario que lo acompañaba. Y era peor que
+        // un descuido: `storeMany()` SÍ usa `DB::transaction`, así que el
+        // bulk era atómico y el single no. El mismo motor, dos garantías
+        // distintas según cuántos ítems mandara el front.
+        //
+        // ⚠️ El alcance es la escritura, no el método entero. La validación,
+        // la policy y el `beforeCreate` corren ANTES a propósito: son de sólo
+        // lectura, y meterlas adentro mantendría abierta una transacción
+        // mientras un hook hace trabajo lento —una llamada HTTP, por ejemplo—.
+        $model = DB::transaction(function () use ($modelClass, $input, $service, $request) {
+            $model = $modelClass::create($input);
 
-        // Apply service hook afterCreate
-        if ($service && method_exists($service, 'afterCreate')) {
-            $service->afterCreate($request, $model, $input);
-        }
+            if ($service && method_exists($service, 'afterCreate')) {
+                $service->afterCreate($request, $model, $input);
+            }
 
-        // Plugin Hook: afterSave
-        $this->getPluginManager()->fireAfterSave($model, $request, 'create');
+            $this->getPluginManager()->fireAfterSave($model, $request, 'create');
+
+            return $model;
+        });
 
         // Auto-invalidate cache if enabled
         if ($this->isCacheEnabled()) {
@@ -790,17 +804,26 @@ trait CRUDSmart
         $fillable = $this->getFillable();
         $input = array_intersect_key($input, array_flip($fillable));
 
-        // Update model
-        $model->update($input);
-        $model = $model->fresh();
+        // La escritura y sus hooks, en una transacción. Ver el comentario
+        // equivalente en `store()`.
+        //
+        // ⚠️ Acá el rollback importa MÁS que en `store()`: una creación que
+        // falla a medias deja una fila de más, que se ve. Una actualización
+        // que falla a medias deja la fila con los valores nuevos y sin el
+        // efecto que los justificaba — y no se distingue de una actualización
+        // que salió bien.
+        $model = DB::transaction(function () use ($model, $input, $service, $request, $id) {
+            $model->update($input);
+            $model = $model->fresh();
 
-        // Apply service hook afterUpdate
-        if ($service && method_exists($service, 'afterUpdate')) {
-            $service->afterUpdate($request, $model, $input, $id);
-        }
+            if ($service && method_exists($service, 'afterUpdate')) {
+                $service->afterUpdate($request, $model, $input, $id);
+            }
 
-        // Plugin Hook: afterSave
-        $this->getPluginManager()->fireAfterSave($model, $request, 'update');
+            $this->getPluginManager()->fireAfterSave($model, $request, 'update');
+
+            return $model;
+        });
 
         // Auto-invalidate cache if enabled
         if ($this->isCacheEnabled()) {
@@ -858,15 +881,22 @@ trait CRUDSmart
             }
         }
 
-        $model->delete();
+        // El borrado y sus hooks, en una transacción. Ver `store()`.
+        //
+        // ⚠️ Un `afterDelete` que tira es el caso más caro de los tres: la
+        // fila ya no está y el efecto que tenía que acompañarla —limpiar un
+        // archivo, avisar a otro sistema, ajustar un saldo— no ocurrió. No hay
+        // forma de deshacerlo a mano porque el registro que decía qué borrar
+        // es justamente el que se fue.
+        DB::transaction(function () use ($model, $service, $request, $id) {
+            $model->delete();
 
-        // Apply service hook afterDelete
-        if ($service && method_exists($service, 'afterDelete')) {
-            $service->afterDelete($request, $model, $id);
-        }
+            if ($service && method_exists($service, 'afterDelete')) {
+                $service->afterDelete($request, $model, $id);
+            }
 
-        // Plugin Hook: afterDelete
-        $this->getPluginManager()->fireAfterDelete($model, $request);
+            $this->getPluginManager()->fireAfterDelete($model, $request);
+        });
 
         // Auto-invalidate cache if enabled
         if ($this->isCacheEnabled()) {
