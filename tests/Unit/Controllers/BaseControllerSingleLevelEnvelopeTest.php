@@ -115,18 +115,10 @@ describe('R-PKG-024 — CRUDSmart::index() passes paginator directly to sendResp
     });
 });
 
-describe('R-PKG-024 — Controller::index() (legacy template method) passes paginator directly', function (): void {
-    $controller = readSourceRPkg024('src/Controllers/Controller.php');
-
-    test('Controller::index() does NOT wrap response in [data => ..., __extraData => ...] array', function () use ($controller): void {
-        expect($controller)->not->toContain("config('mk_director.response.top_level_extra_data'");
-        expect($controller)->not->toContain("'__extraData' => \$extra");
-    });
-
-    test('Controller::index() delegates pagination extraction to BaseController', function () use ($controller): void {
-        expect($controller)->toContain('return $this->sendResponse($paginator, \'\', 200, $extra)');
-    });
-});
+// El bloque que medía `Controller::index()` se fue con la clase: el template
+// method legacy (pre-1.3.0) se eliminó porque no lo extendía nadie — ni un
+// stub, ni un test de comportamiento, ni un consumer. Lo único que quedaba
+// eran dos tests leyendo su código fuente como texto.
 
 describe('R-PKG-024 — Package-wide invariant: NO data.data nesting', function (): void {
     // Scan all PHP files under src/ for any pattern that could produce

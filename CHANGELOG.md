@@ -12,6 +12,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Motor de reportes (PDF · XLSX · CSV), y `CRUDSmart` escribe en transacción
+
+### Added — motor de exportación
+
+`mpdf/mpdf ^8.3` y `phpoffice/phpspreadsheet ^5.3` entran como dependencias
+duras: todo consumer del paquete tiene listados, y todo listado se exporta.
+
+- **`src/Export/`** — el motor completo. `ExportService` orquesta; `MpdfGenerator`,
+  `XlsxGenerator` y `CsvGenerator` renderizan; `ColumnDefinition` declara las
+  columnas; `AsyncExportManager` + los dos registries + los dos jobs manejan el
+  flujo async.
+- **`MkReport`** (`mk_reports`) y las 7 rutas del historial de descargas.
+- **`mk:reports-clean`** — se lleva los reportes vencidos **y sus archivos**.
+- **`CRUDSmart` usa `ExportaListados`**: cualquier `SmartController` exporta con
+  `?_export=pdf|xlsx|csv` sin escribir una línea.
+- Front en `@makroz/web`: `useMkAsyncExport`, `MkDownloadButton`,
+  `MkExportProgress`, `MkDownloadHistory`.
+
+🔴 **El margen inferior del PDF lo MIDE mPDF, no una constante.** Con
+`export.margins.auto_bottom` en `'stretch'`, el margen se recalcula en cada
+página con el alto real del pie. Un pie personalizado por proyecto —otra línea
+legal, un logo más alto— ya no puede quedar pisado por el contenido.
+
+### Fixed (BREAKING para quien tenga un `afterCreate` que dependa de escribir a medias)
+
+🔴 **`CRUDSmart::store()`, `update()` y `destroy()` ahora escriben dentro de una
+transacción.** Antes no abrían transacción ni tenían `catch`, mientras
+`storeMany()` **sí** usaba `DB::transaction`: el bulk era atómico y el single
+no. El mismo motor daba dos garantías distintas según cuántos ítems mandara el
+front.
+
+Con un hook `after*` que tirara, la escritura quedaba hecha y el request
+devolvía 500. En `destroy()` era peor: la fila desaparecía y el efecto que
+tenía que acompañarla no ocurría, sin forma de deshacerlo a mano porque el
+registro que decía qué limpiar era justamente el que se fue.
+
+El alcance es la escritura y sus hooks, **no el método entero**: la validación,
+la policy y los `before*` siguen corriendo afuera para no mantener una
+transacción abierta mientras un hook hace trabajo lento.
+
+### Removed (BREAKING)
+
+🔴 **`Mk\Director\Controllers\Controller` eliminada** (214 líneas, `abstract`),
+junto con `tests/Unit/Controllers/ControllerIndexTopLevelTest.php`.
+
+El changelog ya la llamaba *"legacy template method, pre-1.3.0"*. Verificado
+antes de borrar: **no la extendía nadie** — ni un stub del scaffolder, ni un
+test de comportamiento, ni RETO, ni NetPizza. Lo único que la tocaba eran dos
+tests que leían su código fuente con `file_get_contents` + `preg_match`, o sea
+que comprobaban que el archivo existía y decía ciertas palabras, no que hiciera
+algo.
+
+**Migración**: el camino vivo es `SmartController` + `CRUDSmart`, con los hooks
+en un `MkModuleServiceInterface`. Un consumer que la extendiera —no encontramos
+ninguno— pasa a `extends SmartController` y mueve sus hooks al service; ojo con
+la aridad, que es distinta (`beforeCreate($request, $input)` en vez de
+`beforeCreate($request)`).
+
 ## [UNRELEASED] — 🔴 `MK_DIRECTOR_DEBUG` no apagaba nada: la llave `debug` estaba declarada dos veces
 
 > **El kill switch existía, se leía, y no hacía absolutamente nada.**
