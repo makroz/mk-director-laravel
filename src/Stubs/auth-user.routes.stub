@@ -13,14 +13,13 @@ use Illuminate\Support\Facades\Route;
  * valida en 3 capas que el token pertenece al scope correcto (ver
  * docs/guides/AUTH.md § "The 4 defense layers against cross-scope mix-up").
  *
- * R-PKG-010: cuando el scope se genera con `--with-auth-rbac`, los
- * endpoints públicos (`/login`, `/password/forgot`, `/password/reset`) llevan
- * middleware `throttle:{limit},{minutes},{scope}-{endpoint}` configurable por
- * `mk_director.auth.rate_limits.{endpoint}`. El prefijo `{scope}-{endpoint}`
- * es lo que separa los contadores: `ThrottleRequests` no mete la ruta en la
- * clave, así que sin él TODOS los endpoints (y todos los scopes) comparten un
- * contador por IP (hallazgo #30 del piloto NetPizza). Default mode (sin flag):
- * idéntico a v1.5.0-rc3 (sin rate limit middleware). BC preservada.
+ * TODA ruta pública (fuera del grupo `mk.auth`) lleva
+ * `throttle:{limit},{minutes},{scope}-{endpoint}`, con o sin `--no-rbac`
+ * (antes login/forgot/reset colgaban de RBAC y refresh no lo tenía nunca).
+ * Los límites salen de `mk_director.auth.rate_limits.{endpoint}`. El prefijo
+ * `{scope}-{endpoint}` es lo que separa los contadores: `ThrottleRequests` no
+ * mete la ruta en la clave, así que sin él TODOS los endpoints (y todos los
+ * scopes) comparten un contador por IP (hallazgo #30 del piloto NetPizza).
  *
  * Endpoints condicionales:
  *   - `POST /register` — SÓLO con `--with-register` (opt-in: sin CRUD es un
@@ -52,7 +51,7 @@ use Illuminate\Support\Facades\Route;
 Route::prefix('api/{{moduleNameLower}}/auth')->group(function () {
     // ── Públicas ────────────────────────────────────────────────────
     Route::post('login', [AuthController::class, 'login']){{rbacLoginThrottle}};
-    Route::post('refresh', [AuthController::class, 'refresh']);
+    Route::post('refresh', [AuthController::class, 'refresh']){{refreshThrottle}};
     {{registerRoute}}Route::post('password/forgot', [AuthController::class, 'forgotPassword']){{rbacForgotThrottle}};
     Route::post('password/reset', [AuthController::class, 'resetPassword']){{rbacResetThrottle}};
     // forgot-vía-OTP: variante por PIN de 6 dígitos del reset (públicas, como

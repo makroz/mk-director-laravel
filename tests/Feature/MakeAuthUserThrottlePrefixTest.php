@@ -136,3 +136,88 @@ test('COMPORTAMIENTO: quemar el pedido de código NO le come intentos al login',
         ->toBe([200, 200, 200, 200, 200]);
     expect($post('/probe/login'))->toBe(429);
 });
+
+/**
+ * Auditoría de TODA ruta pública (sin `mk.auth`) que emite el scaffolder.
+ *
+ * Encontrado por el gate de NetPizza «toda ruta pública tiene rate limit»
+ * sobre el `Operator` recién generado: `POST auth/refresh` salía sin throttle.
+ * Y con `--no-rbac` también login/forgot/reset (el throttle colgaba del flag de
+ * RBAC), y el `email/verify` firmado nunca lo tuvo.
+ *
+ * 🔴 La lista de rutas NO está escrita acá: sale del archivo generado. Una ruta
+ * pública nueva sin throttle pone esto en rojo sin que nadie tenga que acordarse
+ * de agregarla.
+ */
+test('toda ruta pública generada lleva throttle con prefijo {scope}- único', function (array $args, string $scope) {
+    [$exit, $output, $base] = $this->runScaffolderInTempDir($args);
+    expect($exit)->toBe(0, $output);
+
+    // 🔴 Los controllers generados no son autoloadables en el tempdir, y con un
+    // `[Clase::class, 'metodo']` que no resuelve Laravel (13.20) registra la
+    // ruta pero SE COME el `Route::middleware([...])` del registrar: las rutas
+    // CRUD salían sin `mk.auth` y este test las contaba como públicas. Un
+    // stand-in con `__callStatic` hace que la acción resuelva como en un
+    // consumer, sin cargar el controller real.
+    $controllerNamespace = 'App\\Modules\\'.$args['scope'].'\\Http\\Controllers\\';
+    $standInLoader = function (string $class) use ($controllerNamespace): void {
+        if (str_starts_with($class, $controllerNamespace)) {
+            $short = substr($class, strlen($controllerNamespace));
+            eval('namespace '.rtrim($controllerNamespace, '\\').'; class '.$short.' { public static function __callStatic($m, $a) {} }');
+        }
+    };
+    spl_autoload_register($standInLoader);
+
+    // Sólo las rutas que agrega el archivo generado (la app ya trae otras, ej.
+    // `sanctum/csrf-cookie`, que no son del scaffolder).
+    $routesBefore = app('router')->getRoutes()->getRoutes();
+    try {
+        require $base.'/app/Modules/'.$args['scope'].'/Http/Routes/api.php';
+    } finally {
+        spl_autoload_unregister($standInLoader);
+    }
+    $generatedRoutes = array_filter(
+        app('router')->getRoutes()->getRoutes(),
+        fn ($route) => ! in_array($route, $routesBefore, true),
+    );
+
+    $publicRoutes = [];
+    foreach ($generatedRoutes as $route) {
+        $middleware = array_filter($route->middleware(), 'is_string');
+        $isProtected = (bool) array_filter($middleware, fn ($mw) => str_starts_with($mw, 'mk.auth:'));
+        if (! $isProtected) {
+            $publicRoutes[$route->uri()] = array_values(array_filter($middleware, fn ($mw) => str_starts_with($mw, 'throttle:')));
+        }
+    }
+
+    // Contrapruebas: el archivo se leyó (login es pública) y la clasificación
+    // ve el `mk.auth` (me es protegida). Sin la segunda, un parseo que no leyera
+    // middleware contaría todo como público — o nada.
+    expect($publicRoutes)->toHaveKey("api/{$scope}/auth/login");
+    expect($publicRoutes)->not->toHaveKey("api/{$scope}/auth/me");
+
+    $prefixes = [];
+    foreach ($publicRoutes as $uri => $throttles) {
+        expect($throttles)->toHaveCount(1, "{$uri} es pública y no tiene throttle");
+        $parts = explode(',', substr($throttles[0], strlen('throttle:')));
+        expect($parts)->toHaveCount(3, "{$uri} emite {$throttles[0]} sin prefijo");
+        expect($parts[2])->toStartWith("{$scope}-", "{$uri}: el prefijo no nombra al scope");
+        $prefixes[] = $parts[2];
+    }
+    expect(array_unique($prefixes))->toHaveCount(count($prefixes));
+})->with([
+    'manager sin RBAC, con register y verify' => [['scope' => 'Operator', '--no-crud' => true, '--no-rbac' => true, '--with-register' => true, '--verify-email' => true], 'operator'],
+    'manager default (CRUD + RBAC)' => [['scope' => 'Operator', '--verify-email' => true], 'operator'],
+    'consumer sin RBAC' => [['scope' => 'Mesero', '--kind' => 'consumer', '--managed-by' => 'Admin', '--no-rbac' => true, '--verify-email' => true], 'mesero'],
+]);
+
+test('refresh: throttle leído de rate_limits.refresh (default 20,1) y la clave existe en la config', function () {
+    [$exit, $output, $base] = $this->runScaffolderInTempDir(['scope' => 'Operator', '--no-crud' => true]);
+    expect($exit)->toBe(0, $output);
+
+    $throttles = routeThrottles($base.'/app/Modules/Operator/Http/Routes/api.php');
+    expect($throttles['api/operator/auth/refresh'] ?? null)->toBe('throttle:20,1,operator-refresh');
+
+    $config = require dirname(__DIR__, 2).'/config/mk_director.php';
+    expect($config['auth']['rate_limits'])->toHaveKey('refresh');
+});

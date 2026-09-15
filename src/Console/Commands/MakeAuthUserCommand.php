@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\HasApiTokens;
+use Mk\Director\Auth\Enums\ScopeStatus;
 use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Auth\Services\AuthScopeResolver;
 
@@ -150,7 +151,7 @@ class MakeAuthUserCommand extends Command
         {--login-field=email : Campo usado para login (default: email). El scaffolder pine `protected function loginField(): string` retornando el <valor> elegido, en el thin-wrapper AuthController. Valores comunes: email, ci, phone, username, documento.}
         {--profile-fields= : (D2) Campos adicionales para el perfil del scope (CSV con sintaxis key[:type], default: ninguno = BC). Default ON: el scaffolder pine automáticamente `name, email (nullable si login-field≠email), <loginField>, phone, status` como baseline (5 columnas). --profile-fields AGREGA sobre el baseline, NO pisa (fail-fast si intenta pisar `name`). Tipos soportados: string, text, int, decimal, bool, date, datetime, json.}
         {--no-crud : (D2 opt-out) NO generar el CRUD pack completo del scope. Default: CRUD ON (AdminController + RoleController + AbilityController + DTOs + Repository + Service + Factory + Seeder + Requests + Resources + ServiceProvider). Si el scope no necesita CRUD (login-only flows), pinear este flag.}
-        {--no-rbac : (D2 opt-out) NO integrar RBAC (ability checks en /me y /logout, rate limiting en /login, /forgot, /reset, audit log via AuthEvent). Default: RBAC ON. Pinear solo si tu app no usa roles/abilities (e.g. trivial login-only).}
+        {--no-rbac : (D2 opt-out) NO integrar RBAC (ability checks en /me y /logout, audit log via AuthEvent). El rate limiting de las rutas públicas se emite IGUAL. Default: RBAC ON. Pinear solo si tu app no usa roles/abilities (e.g. trivial login-only).}
         {--no-status : (D2 opt-out) NO generar el enum <Scope>Status ni la columna `status` en la migración. Default: status ON (enum de 4 estados post-D4: Active/Inactive/Blocked/Pending). Pinear solo si tu scope no necesita status (e.g. login-only sin admin gating).}
         {--with-register : Genera POST /api/<scope>/auth/register + AuthController::register() (alta de usuarios, throttle `rate_limits.register` con prefijo propio). OPT-IN: sin CRUD el endpoint es PÚBLICO — cualquiera se crea una cuenta. Con CRUD queda gateado por mk.auth + ability create. Incompatible con --multi-tenant (sería un alta sin tenant).}
         {--verify-email : Habilita verificación por email: columna email_verified_at, endpoints /email/verify/<id>/<hash> y /email/resend, y dispatch de Illuminate\Auth\Notifications\VerifyEmail en /register si además se pasa --with-register (sin él, el primer email sale por /email/resend). Default BC: false. Aplican cuando --login-field=email. Se ignora con warning si --login-field≠email.}
@@ -432,10 +433,14 @@ class MakeAuthUserCommand extends Command
                 '{{rbacAuditForgot}}',
                 '{{rbacAuditResetTodo}}',
                 '{{rbacAuthorizeAbilityMethod}}',
-                '{{rbacLoginThrottle}}',
-                '{{rbacForgotThrottle}}',
-                '{{rbacResetThrottle}}',
             ], '');
+
+        // 🔴 Los throttles de las rutas PÚBLICAS no dependen de `--no-rbac`.
+        // Colgaban de ese flag, así que un scope sin RBAC nacía con login,
+        // forgot y reset sin límite (fuerza bruta abierta), y `refresh` no lo
+        // tuvo nunca. Lo encontró el gate de NetPizza «toda ruta pública tiene
+        // rate limit» sobre el `Operator` recién generado.
+        $rbacReplacements = array_merge($rbacReplacements, $this->buildPublicRouteThrottles($scopeLower));
 
         $loginFieldReplacements = [
             // R-PKG-011: `email_verified_at` column/cast/import ahora depende de
@@ -815,6 +820,24 @@ PHP,
             '{{statusColumn}}' => $withStatus
                 ? "\$table->unsignedTinyInteger('status')->default(1)->index();\n            "
                 : '',
+            // CHECK de `status` (gate de NetPizza sobre el `Operator` generado):
+            // sin él la base acepta `status = 99`, y al leer la fila el cast al
+            // enum tira `ValueError` — la fila queda incargable y el login de
+            // ese usuario da 500, lejos de donde se escribió el dato malo.
+            //
+            // Los valores salen de `$statusStates` (los mismos casos que pinea
+            // el enum) resueltos contra `ScopeStatus`, del que el enum generado
+            // delega `values()`: una sola fuente. Se escriben LITERALES en la
+            // migración por lo mismo que el `default(1)`: una migración es un
+            // artefacto congelado y no lee código de app.
+            //
+            // Sólo pgsql/mysql/mariadb: sqlite no admite `ALTER TABLE … ADD
+            // CONSTRAINT` sobre una tabla existente (habría que recrearla), y
+            // los tests de los consumers suelen correr ahí. `down()` no cambia:
+            // `dropIfExists` se lleva la tabla con su constraint.
+            '{{statusCheckConstraint}}' => $withStatus
+                ? $this->buildStatusCheckConstraint($scopePlural, $statusStates)
+                : '',
             '{{statusFillableEntry}}' => $withStatus
                 ? "        'status',\n"
                 : '',
@@ -1165,6 +1188,32 @@ PHP,
         $this->runPostScaffoldSteps($scope, $scopeLower, $withCrud, $setupSanctum, $migrate, $seed, $discover);
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Bloque PHP que agrega `{tabla}_status_check` a la tabla del scope.
+     *
+     * @param  string[]  $statusStates  Nombres de los casos canónicos (ver handle()).
+     */
+    protected function buildStatusCheckConstraint(string $table, array $statusStates): string
+    {
+        $values = implode(', ', array_map(
+            static fn (string $name): int => constant(ScopeStatus::class.'::'.$name)->value,
+            $statusStates,
+        ));
+
+        return <<<PHP
+
+        // CHECK de `status`: la base rechaza un valor fuera del enum. Sin él, un
+        // `status` inválido deja la fila incargable (el cast al enum tira
+        // `ValueError` al leerla). sqlite no admite `ADD CONSTRAINT` sobre una
+        // tabla existente: ahí se saltea. (FQCN: con `--no-status` el stub no
+        // debe arrastrar un `use` sin usar.)
+        if (in_array(\\Illuminate\\Support\\Facades\\DB::getDriverName(), ['pgsql', 'mysql', 'mariadb'], true)) {
+            \\Illuminate\\Support\\Facades\\DB::statement('ALTER TABLE {$table} ADD CONSTRAINT {$table}_status_check CHECK (status IN ({$values}))');
+        }
+
+PHP;
     }
 
     /**
@@ -4063,6 +4112,46 @@ MD;
     }
 
     /**
+     * Throttles de las rutas PÚBLICAS de auth (fuera del grupo `mk.auth`).
+     *
+     * Siempre emitidos, con o sin `--no-rbac`. Todos con prefijo
+     * `{scope}-{endpoint}`: la clave de `ThrottleRequests` es
+     * `prefijo + sha1(dominio|ip)`, y sin prefijo todas las rutas de todos los
+     * scopes comparten un contador por IP (hallazgo #30).
+     *
+     * @return array<string, string>
+     */
+    protected function buildPublicRouteThrottles(string $scopeLower): array
+    {
+        return [
+            // ── Routes: rate limit en /login ─────────────────────────────
+            // Inline placeholder: el stub tiene `Route::post('login', ...){{rbacLoginThrottle}};`.
+            // El nombre `rbac*` quedó de cuando sólo se emitía con RBAC; se
+            // conserva para no romper stubs publicados por consumers.
+            //
+            // 🔴 El TERCER parámetro (`,{scope}-login`) NO es decorado. La clave de
+            // `ThrottleRequests` es `$prefix.sha1(dominio|ip)`: la ruta no entra.
+            // Sin prefijo, login/forgot/reset y los del PIN —de TODOS los scopes—
+            // escriben en UN contador por IP, y el TTL lo fija el primero que
+            // escribe. Medido en el piloto NetPizza (hallazgo #30): 3 pedidos de
+            // código dejaron el login con 2 intentos y bloqueado 10 minutos.
+            // Mismo formato que el piloto ya parcheó a mano (`admin-login`).
+            '{{rbacLoginThrottle}}' => "->middleware('throttle:'.config('mk_director.auth.rate_limits.login', '5,1').',{$scopeLower}-login')",
+
+            // ── Routes: rate limit en /forgot ────────────────────────────
+            '{{rbacForgotThrottle}}' => "->middleware('throttle:'.config('mk_director.auth.rate_limits.forgot', '3,1').',{$scopeLower}-forgot')",
+
+            // ── Routes: rate limit en /reset ─────────────────────────────
+            '{{rbacResetThrottle}}' => "->middleware('throttle:'.config('mk_director.auth.rate_limits.reset', '3,1').',{$scopeLower}-reset')",
+
+            // ── Routes: rate limit en /refresh ───────────────────────────
+            // Público: el refresh token viaja en el body. Default más holgado
+            // (20,1) porque un front lo llama solo, en cada expiración.
+            '{{refreshThrottle}}' => "->middleware('throttle:'.config('mk_director.auth.rate_limits.refresh', '20,1').',{$scopeLower}-refresh')",
+        ];
+    }
+
+    /**
      * Construye los placeholders RBAC (R-PKG-010) cuando `--with-auth-rbac` está activo.
      *
      * Cada placeholder se reemplaza por el bloque de código correspondiente:
@@ -4070,7 +4159,6 @@ MD;
      *   - constructor con AbilityResolver inyectado (opcional via container)
      *   - ability checks en /me y /logout (configurables por endpoint)
      *   - audit events (AuthEvent::dispatch) en login success/fail, logout, forgot
-     *   - rate limit middleware en /login, /forgot, /reset
      *   - helper method `authorizeAbility()` que delega a AbilityResolver
      *
      * Default values se leen de `config('mk_director.auth.*')` con fallback
@@ -4218,25 +4306,6 @@ PHP,
         }
     }
 PHP,
-
-            // ── Routes: rate limit en /login ─────────────────────────────
-            // Inline placeholder: el stub tiene `Route::post('login', ...){{rbacLoginThrottle}};`.
-            // Default: vacío (sin throttle). RBAC: `->middleware('throttle:...')`.
-            //
-            // 🔴 El TERCER parámetro (`,{scope}-login`) NO es decorado. La clave de
-            // `ThrottleRequests` es `$prefix.sha1(dominio|ip)`: la ruta no entra.
-            // Sin prefijo, login/forgot/reset y los del PIN —de TODOS los scopes—
-            // escriben en UN contador por IP, y el TTL lo fija el primero que
-            // escribe. Medido en el piloto NetPizza (hallazgo #30): 3 pedidos de
-            // código dejaron el login con 2 intentos y bloqueado 10 minutos.
-            // Mismo formato que el piloto ya parcheó a mano (`admin-login`).
-            '{{rbacLoginThrottle}}' => "->middleware('throttle:'.config('mk_director.auth.rate_limits.login', '5,1').',{$scopeLower}-login')",
-
-            // ── Routes: rate limit en /forgot ────────────────────────────
-            '{{rbacForgotThrottle}}' => "->middleware('throttle:'.config('mk_director.auth.rate_limits.forgot', '3,1').',{$scopeLower}-forgot')",
-
-            // ── Routes: rate limit en /reset ─────────────────────────────
-            '{{rbacResetThrottle}}' => "->middleware('throttle:'.config('mk_director.auth.rate_limits.reset', '3,1').',{$scopeLower}-reset')",
         ];
     }
 
@@ -5127,7 +5196,7 @@ PHP;
 
     // ── Email verification (signed URLs) ──────────────────────────
     Route::get('email/verify/{id}/{hash}', [AuthController::class, 'verifyEmail'])
-        ->middleware('signed')
+        ->middleware(['signed', 'throttle:6,1,{$scopeLower}-email-verify'])
         ->name('{$scopeLower}.auth.verify');
     Route::post('email/resend', [AuthController::class, 'resendVerification'])
         ->middleware('throttle:6,1,{$scopeLower}-email-resend')

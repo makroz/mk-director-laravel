@@ -688,6 +688,8 @@ el comportamiento idéntico a v1.5.0-rc3.
 ### Uso
 
 ```bash
+# (Histórico, pre-R-PKG-047: hoy RBAC es default y el rate limit de las rutas
+# públicas se emite siempre, también con --no-rbac. Ver §3.19.2.)
 # Default (BC): sin RBAC, sin rate limit, sin audit log — idéntico a v1.5.0-rc3
 php artisan mk:make:auth-user Admin
 
@@ -789,6 +791,7 @@ php artisan mk:make:auth-user Admin --login-field=ci --with-auth-rbac
         'login' => env('MK_AUTH_RATE_LIMIT_LOGIN', '5,1'),
         'forgot' => env('MK_AUTH_RATE_LIMIT_FORGOT', '3,1'),
         'reset' => env('MK_AUTH_RATE_LIMIT_RESET', '3,1'),
+        'refresh' => env('MK_AUTH_RATE_LIMIT_REFRESH', '20,1'),
         'register' => env('MK_AUTH_RATE_LIMIT_REGISTER', '3,1'), // sólo con --with-register
     ],
     // v1.6.0-rc4 (R-PKG-014 BUG-07 fix): rotación de refresh tokens.
@@ -2400,14 +2403,19 @@ Todo `throttle:` generado lleva tercer parámetro:
 | `password/code/request` / `confirm` | `{scope}-pwd-code-req` / `{scope}-pwd-code-confirm` |
 | `email/resend` (`--verify-email`) | `{scope}-email-resend` |
 | `register` (`--with-register`) | `{scope}-register` (clave `rate_limits.register`, default `3,1`) |
+| `refresh` | `{scope}-refresh` (clave `rate_limits.refresh`, default `20,1`) |
+| `email/verify/{id}/{hash}` (`--verify-email`, firmada) | `{scope}-email-verify` (`6,1`) |
+
+🔴 **Toda ruta pública lleva throttle, con o sin `--no-rbac`.** Antes
+login/forgot/reset colgaban del flag de RBAC (un scope `--no-rbac` nacía con el
+login sin límite) y `refresh` no lo tenía nunca. Lo fija
+`MakeAuthUserThrottlePrefixTest`, que saca la lista de rutas públicas del
+archivo GENERADO: una ruta pública nueva sin throttle lo pone en rojo.
 
 ⚠️ **Scopes ya generados**: siguen sin prefijo. Agregalo a mano en su
 `Http/Routes/api.php` con el mismo formato
 (`'throttle:'.config('mk_director.auth.rate_limits.login', '5,1').',admin-login'`).
 
-`refresh` no lleva throttle en lo que genera el scaffolder, y
-`mk_director.auth.rate_limits` no declara una clave `refresh`: un consumer que
-throttlee `refresh` a mano tiene que pasarle su default en el `config()`.
 
 #### 3.19.3 `register` generado: opt-in con `--with-register` (hallazgo #49)
 
@@ -2440,15 +2448,6 @@ throttlee `refresh` a mano tiene que pasarle su default en el `config()`.
   token "public"`). Los métodos viven en `BaseAuthController`; el docblock ya no
   usa la sintaxis de placeholder.
 
-#### 3.19.5 Modelo, migración y rutas generadas
-
-- `$casts` tenía **dos** claves `status` (`'integer'` del profile field de base y
-  el enum `{Scope}Status`). PHP se queda con la última sin avisar: el enum
-  ganaba, y el `'integer'` quedaba como código muerto que se lee como cierto.
-  Ahora sólo el enum; con `--no-status`, ninguna.
-- Sangrías: las columnas de profile fields de la migración (`phone`) salían a 20
-  espacios, y la ruta `password/forgot` a columna 0 cuando había register.
-
 #### 3.19.4 `mk:auth:create-super-admin --scope=<scope>` (hallazgo #47)
 
 ```bash
@@ -2470,6 +2469,41 @@ php artisan mk:auth:create-super-admin --scope=operador --email=ops@example.com 
   `{Scope}RolesSeeder` si existe. `--no-roles` crea sólo el usuario. Sin las
   tablas `roles`/`role_user` también se saltean, con aviso, en vez de reventar
   con el usuario ya creado.
+
+
+#### 3.19.5 Modelo, migración y rutas generadas
+
+- `$casts` tenía **dos** claves `status` (`'integer'` del profile field de base y
+  el enum `{Scope}Status`). PHP se queda con la última sin avisar: el enum
+  ganaba, y el `'integer'` quedaba como código muerto que se lee como cierto.
+  Ahora sólo el enum; con `--no-status`, ninguna.
+- Sangrías: las columnas de profile fields de la migración (`phone`) salían a 20
+  espacios, y la ruta `password/forgot` a columna 0 cuando había register.
+
+#### 3.19.6 CHECK de `status` en la migración generada
+
+Con `--status` (el default) la migración agrega, después del `Schema::create`
+de la tabla del scope:
+
+```php
+if (in_array(\Illuminate\Support\Facades\DB::getDriverName(), ['pgsql', 'mysql', 'mariadb'], true)) {
+    \Illuminate\Support\Facades\DB::statement('ALTER TABLE operators ADD CONSTRAINT operators_status_check CHECK (status IN (1, 2, 3, 4))');
+}
+```
+
+- **Por qué**: sin él la base acepta `status = 99`, y al leer la fila el cast al
+  enum `{Scope}Status` tira `ValueError`: la fila queda incargable y el login de
+  ese usuario da 500, lejos de donde se escribió el dato malo.
+- **Valores**: los casos que pinea el enum generado (`$statusStates` resueltos
+  contra `ScopeStatus`), escritos literales — una migración es un artefacto
+  congelado, igual que el `default(1)`.
+- **sqlite se saltea**: no admite `ALTER TABLE … ADD CONSTRAINT` sobre una tabla
+  existente. Los tests de un consumer en sqlite no ven el CHECK.
+- **`down()`** no cambia: `dropIfExists` se lleva la tabla con su constraint.
+- **Scopes ya generados no lo tienen.** Para agregarlo, una migración nueva con
+  el mismo `DB::statement` (y un `down()` con `DROP CONSTRAINT`).
+- Verificado a mano contra PostgreSQL 18 y MariaDB 11.4: `status = 4` entra,
+  `status = 99` lo rechaza el constraint.
 
 ---
 

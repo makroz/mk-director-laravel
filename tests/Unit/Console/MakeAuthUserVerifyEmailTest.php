@@ -126,7 +126,8 @@ test('auth-user.auth-controller.stub NO tiene el placeholder de verifyEmail meth
 test('buildVerifyEmailReplacements genera signed URL para /email/verify/{id}/{hash}', function () {
     $source = commandSource011Ve();
 
-    expect($source)->toContain("->middleware('signed')");
+    // `signed` + throttle con prefijo propio: la ruta es pública (sin mk.auth).
+    expect($source)->toContain("->middleware(['signed', 'throttle:6,1,{\$scopeLower}-email-verify'])");
     expect($source)->toContain("'email/verify/{id}/{hash}'");
     // R-PKG-031 PKG-NEW-17 fix (v1.7.1-rc1): PHP interpolation `{$scopeLower}` en lugar
     // del literal `{{moduleNameLower}}` (que el consumer tenía que `sed`-ar con

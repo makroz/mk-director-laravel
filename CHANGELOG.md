@@ -12,6 +12,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `mk:make:auth-user`: toda ruta pública con throttle, y CHECK en la columna `status`
+
+Lo encontraron los gates de NetPizza sobre el `Operator` recién generado.
+Cambia **lo que se genera** de ahora en más. Detalle en `DEVELOPER_GUIDE.md`
+§ 3.19.2 y § 3.19.6.
+
+### Fixed
+
+- 🔴 **`POST auth/refresh` salía sin throttle**, y es pública. Ahora
+  `throttle:{rate_limits.refresh},{scope}-refresh`.
+- 🔴 **Con `--no-rbac`, login/forgot/reset salían sin throttle**: el rate limit
+  colgaba del flag de RBAC. Ahora las rutas públicas lo llevan siempre.
+- **`GET email/verify/{id}/{hash}`** (`--verify-email`, firmada y pública) no
+  tenía throttle: `throttle:6,1,{scope}-email-verify`.
+- 🔴 **La columna `status` generada no tenía CHECK.** La base aceptaba
+  `status = 99` y el cast al enum tiraba `ValueError` al leer la fila: el
+  usuario quedaba incargable (login 500). La migración agrega
+  `{tabla}_status_check` con los valores del enum, en pgsql/mysql/mariadb;
+  en sqlite se saltea (no admite `ADD CONSTRAINT` sobre una tabla existente).
+
+### Added
+
+- **`mk_director.auth.rate_limits.refresh`** (`MK_AUTH_RATE_LIMIT_REFRESH`,
+  default `20,1`).
+
+### ⚠️ Notas para consumers
+
+- **Los scopes ya generados no reciben el CHECK ni los throttles
+  retroactivamente.** El CHECK se agrega con una migración nueva; los throttles,
+  a mano en `Http/Routes/api.php`.
+- NetPizza ya throttlea `refresh` a mano leyendo `rate_limits.refresh` con
+  default `20,1`: ahora la clave existe en la config del paquete con el mismo
+  valor.
+- `--no-rbac` ya no implica "sin rate limit" en lo que se genere desde ahora.
+
 ## [UNRELEASED] — 🔴 `mk:make:auth-user` generaba un alta PÚBLICA en todo scope: `register` pasa a `--with-register`
 
 Encontrado generando `php artisan mk:make:auth-user Operator --no-crud` en el
@@ -121,8 +156,8 @@ toca. Detalle en `DEVELOPER_GUIDE.md` § 3.19.
 - `mk:auth:create-super-admin` sin `--scope` resuelve el admin por
   `config/auth.php` en vez del FQCN fijo. En RETO y en los dos NetPizza el guard
   `admin` apunta a `App\Modules\Admin\Models\Admin`: mismo modelo.
-- `mk_director.auth.rate_limits` no declara `refresh`, y el scaffolder no emite
-  throttle en `refresh`: quien lo throttlee a mano pasa su default en `config()`.
+- `refresh`: ver la entrada de arriba (throttle `{scope}-refresh` y clave
+  `rate_limits.refresh`).
 
 ## [UNRELEASED] — Motor de reportes (PDF · XLSX · CSV), y `CRUDSmart` escribe en transacción
 

@@ -354,6 +354,9 @@ return [
             'login' => env('MK_AUTH_RATE_LIMIT_LOGIN', '5,1'),
             'forgot' => env('MK_AUTH_RATE_LIMIT_FORGOT', '3,1'),
             'reset' => env('MK_AUTH_RATE_LIMIT_RESET', '3,1'),
+            // `POST /auth/refresh` es PÚBLICO (el refresh token viaja en el
+            // body). Más holgado que login: el front lo llama solo al expirar.
+            'refresh' => env('MK_AUTH_RATE_LIMIT_REFRESH', '20,1'),
             // `POST /auth/register`, sólo si el scope se generó con
             // `--with-register`. Sin CRUD es un alta PÚBLICA: mismo corte
             // anti-abuso que forgot/reset.

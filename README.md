@@ -115,7 +115,7 @@ Los 18 comandos que registra el paquete (`php artisan list mk`).
 | `--managed-by=<Manager>` | Publica `/api/{manager}/{scopePlural}` gateado con `mk.auth:{manager}`. ⚠️ **No valida que el manager exista**: con un nombre inventado genera 21 rutas que responden `500 Auth guard [x] is not defined`. El manager va **primero**. |
 | `--verify-email` | `email_verified_at` + `/email/verify/{id}/{hash}` (URL firmada) + `/email/resend`. Sólo con `--login-field=email`. Con `--with-register`, además despacha la verificación al registrar; sin él, el primer email sale por `/email/resend`. |
 | `--with-permissions-endpoint` | `GET /api/{scope}/auth/me/permissions` con el desglose de abilities. |
-| `--no-crud` / `--no-rbac` / `--no-status` | Los opt-out de los tres defaults. |
+| `--no-crud` / `--no-rbac` / `--no-status` | Los opt-out de los tres defaults. `--no-rbac` **no** quita los throttles: toda ruta pública generada lleva uno. |
 | `--skip-auth-wire` | No editar `config/auth.php` (sólo imprimir los snippets). |
 | `--skip-policies` | No generar las Policies default-deny. |
 | `--setup-sanctum` / `--migrate` / `--seed` / `--discover` | Pasos post-scaffold. Sanctum ya se auto-invoca. |
@@ -123,8 +123,11 @@ Los 18 comandos que registra el paquete (`php artisan list mk`).
 | `--with-register` | **Opt-in.** Genera `POST /api/{scope}/auth/register` + `register()`, con throttle `rate_limits.register` (prefijo `{scope}-register`). 🔴 Sin CRUD es un alta **pública**: cualquiera se crea una cuenta. Con CRUD queda gateado por `mk.auth` + ability `create`. Falla combinado con `--multi-tenant`. |
 | `--multi-tenant` | Emite `client_id` en la migración y el `$fillable`. Rechaza `--with-register` (un alta sin tenant crearía el usuario sin tenant). ⚠️ El global scope filtra por **`tenant_id`**: hay que alinearlos. Ver `docs/guides/MULTI_TENANT.md`. |
 
-> Los `throttle:` que emite el scaffolder llevan prefijo propio
-> (`throttle:5,1,{scope}-login`). Sin él, `ThrottleRequests` usa la misma clave
+> **Toda ruta pública** que emite el scaffolder (login, refresh, forgot, reset,
+> los del PIN, `email/verify`, `register`) lleva `throttle:` con prefijo propio
+> (`throttle:5,1,{scope}-login`), también con `--no-rbac`. Con `--status` (el
+> default) la migración agrega además un CHECK `{tabla}_status_check` en
+> pgsql/mysql/mariadb. Sin él, `ThrottleRequests` usa la misma clave
 > (IP) para todos: login, forgot, reset y los del PIN —de todos los scopes—
 > comparten un solo contador. Los scopes generados antes de este cambio siguen
 > sin prefijo: agregalo a mano en su `Http/Routes/api.php`.
