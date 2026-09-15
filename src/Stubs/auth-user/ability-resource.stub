@@ -9,7 +9,7 @@ use Mk\Director\Http\Resources\MkAbilityResource;
 /**
  * Resource para Ability del módulo {{ModuleName}}.
  *
- * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}}`.
  *
  * EL SHAPE VIVE EN EL PAQUETE, NO ACÁ.
  * `Ability` es un modelo de mk-director: cómo se ve lo define mk-director.

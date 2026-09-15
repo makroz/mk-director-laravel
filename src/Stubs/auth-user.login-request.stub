@@ -9,21 +9,10 @@ use Illuminate\Foundation\Http\FormRequest;
 /**
  * Validación para POST /api/{{moduleNameLower}}/auth/login.
  *
- * Generado por `php artisan mk:make:auth-user {{ModuleName}}` post-R-PKG-047 D5.
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}}`.
  *
- * R-PKG-047 D5 — loginField pineado dinámicamente desde `--login-field=<campo>`.
- * Si el campo es `email` (default), la rule es `['required','email','max:255']`.
- * Para otros campos (`ci`, `phone`, etc.), la rule es `['required','string','max:255']`.
- *
- * Override este método `rules()` para custom validation (regex CI Bolivia,
- * formato phone E.164, etc.) — pineá `customizeLoginValidationRules()` en
- * el AuthController thin wrapper per scope en su lugar.
- *
- * Compat / BC:
- * - Pre-D5, el AuthController usaba `\$request->validate([...])` inline con
- *   placeholders templated desde MakeAuthUserCommand (loginField hardcoded
- *   en stubs ad-hoc). Post-D5, este FormRequest canónico absorbe la lógica
- *   y permite override por consumer sin tocar el BaseAuthController.
+ * Para reglas propias del login (un formato de documento, un teléfono E.164),
+ * preferí `customizeLoginValidationRules()` en el `AuthController` del scope.
  */
 class LoginRequest extends FormRequest
 {
@@ -34,10 +23,6 @@ class LoginRequest extends FormRequest
 
     /**
      * Reglas de validación para el endpoint /login.
-     *
-     * El placeholder `{{loginField}}` se reemplaza por el campo real en
-     * compile-time (e.g. 'email', 'ci', 'phone'). Cuando el campo es 'email'
-     * se aplica el rule `email`; para otros campos el rule es `string`.
      *
      * @return array<string, mixed>
      */

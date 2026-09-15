@@ -10,12 +10,10 @@ use Illuminate\Validation\Rule;
 /**
  * Validación para actualizar un {{ModuleName}} (partial update).
  *
- * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}}`.
  *
  * Todos los campos son `sometimes` — solo se actualiza lo que viene.
  * `{{loginField}}` y profile fields con `unique` validan IGNORANDO el row actual.
- *
- * R-PKG-047 D5 — `{{loginField}}` pineado dinámicamente desde `--login-field=<campo>`.
  */
 class Update{{ModuleName}}Request extends FormRequest
 {

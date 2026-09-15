@@ -118,8 +118,9 @@ test('BUG-NEW-22: AdminRepository stub usa pivotExtras() y abilityPivotExtras() 
     // syncDirectAbilities debe invocar ->abilityPivotExtras() en el payload del sync.
     expect($stub)->toContain('->abilityPivotExtras()');
 
-    // Debe haber comentario R-PKG-017 BUG-NEW-22 explicando el cambio.
-    expect($stub)->toContain('R-PKG-017 BUG-NEW-22');
+    // Y un comentario que diga por qué. (Pin reescrito: antes pedía el id del
+    // ticket; el código generado ya no lleva ids internos, hallazgo #44.)
+    expect($stub)->toContain('`pivotExtras()` agrega el `user_type`');
 
     // NO debe quedar la versión hardcodeada con Admin::class en el payload del sync.
     expect($stub)->not->toContain("'user_type' => Admin::class");
@@ -206,34 +207,28 @@ test('BUG-NEW-25: buildProfileFieldsReplacements emite docblock con cierre \\n (
     // Buscamos en la función buildProfileFieldsReplacements el patrón específico.
     $method = extractMethodBody($src, 'buildProfileFieldsReplacements');
 
-    // Debe haber el cierre con `\n` simple (NO `\n\n`).
-    expect($method)->toContain('"     */\n"');
-
-    // NO debe quedar la versión vieja con `\n\n` que era drift-prone.
-    expect($method)->not->toContain('"     */\n\n"');
-
-    // Debe documentar el R-PKG-017 BUG-NEW-25 fix.
-    expect($method)->toContain('R-PKG-017 BUG-NEW-25');
+    // Pin reescrito (hallazgo #44): el fragmento ya no abre ni cierra un bloque
+    // propio — son líneas `@property` para el docblock de la clase.
+    expect($method)->not->toContain('"     */\n"');
+    expect($method)->toContain('$docblock = " *\n".$docblock;');
 });
 
-test('BUG-NEW-25: stub auth-user.model.stub separa el placeholder del próximo bloque con blank line', function () {
+test('BUG-NEW-25: stub auth-user.model.stub pone el placeholder de @property antes del cierre del docblock de la clase', function () {
     $stub = stubContentsFase4('auth-user.model.stub');
 
-    // El placeholder debe estar seguido de blank line + `/**` del próximo bloque (no `/**` pegado).
-    // Buscamos: `{{profileFieldsDocblock}}\n\n    /**` (con blank line entre el placeholder y el próximo /**).
-    expect($stub)->toMatch('/\{\{profileFieldsDocblock\}\}\s*\n\s*\n\s*\/\*\*/m');
+    // Pin reescrito (hallazgo #44): antes el placeholder era un bloque propio
+    // DENTRO de la clase, que sin profile fields quedaba huérfano.
+    expect($stub)->toContain("{{profileFieldsDocblock}} */\nclass {{ModuleName}} extends AuthUser");
 });
 
-test('BUG-NEW-25: buildProfileFieldsReplacements mantiene indentación 4/** 5/* (alineada PSR-12)', function () {
+test('BUG-NEW-25: buildProfileFieldsReplacements emite @property con la sangría del docblock de clase', function () {
     $src = pkgFileContentsFase4('src/Console/Commands/MakeAuthUserCommand.php');
 
     $method = extractMethodBody($src, 'buildProfileFieldsReplacements');
 
-    // El `/**` debe tener 4 espacios de indent.
-    expect($method)->toContain('"    /**\\n"');
-
-    // Los `@property` deben tener 5 espacios.
-    expect($method)->toContain('"     * @property');
+    // Pin reescrito (hallazgo #44): docblock de CLASE, así que ` * @property`.
+    expect($method)->toContain('" * @property');
+    expect($method)->not->toContain('"     * @property');
 });
 
 // ─── OBS: pivotExtras() + abilityPivotExtras() documentados en el header ─────

@@ -9,7 +9,7 @@ use Illuminate\Http\Request;
 /**
  * DTO inmutable para filtros de listado de {{ModuleName}} users.
  *
- * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}}`.
  *
  * Usado por `{{ModuleName}}Controller::index()` para parsear query params y
  * pasarlos al Service/Repository. Evita pasar `array` raw.

@@ -7,11 +7,11 @@ namespace App\Modules\{{ModuleName}}\Enums;
 /**
  * CrudAction — enum canónico de las acciones CRUD del scope `{{moduleNameLower}}`.
  *
- * FEEDBACK A8: fuente única de verdad de las acciones, reusable por el
+ * Fuente única de las acciones, reusable por el
  * {{ModuleName}}RolesSeeder, las rutas y mk:discover-abilities. Evita
  * hardcodear `['viewAny','view','create','update','delete']` en varios lugares.
  *
- * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud`.
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}}`.
  */
 enum CrudAction: string
 {

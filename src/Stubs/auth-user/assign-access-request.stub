@@ -12,7 +12,7 @@ use Mk\Director\Auth\Models\Role;
  * Validación para asignar accesos (roles + abilities directas) a un {{ModuleName}}
  * en UNA sola operación.
  *
- * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}}`.
  *
  * Reemplaza el par de endpoints `POST /{{moduleNamePluralLower}}/{id}/roles` +
  * `POST /{{moduleNamePluralLower}}/{id}/abilities` (que forzaban 2 requests y

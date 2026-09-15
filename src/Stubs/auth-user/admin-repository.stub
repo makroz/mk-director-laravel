@@ -16,7 +16,7 @@ use Mk\Director\Auth\Models\Role;
 /**
  * Implementación del Repository de {{ModuleName}} users.
  *
- * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}}`.
  *
  * Encapsula todas las queries + side effects (storage cleanup, sync).
  * El Service es thin, pero el Repository concentra la lógica de persistencia
@@ -87,12 +87,8 @@ class {{ModuleName}}Repository implements {{ModuleName}}RepositoryInterface
     public function delete({{ModuleName}} ${{moduleNameLower}}): bool
     {
         return DB::transaction(function () use (${{moduleNameLower}}) {
-            // FEEDBACK10 F10-B10: limpia del storage el/los file field(s)
-            // REALES del scope (dinámico — ya NO `photo_path` hardcoded,
-            // columna legacy pre-R-PKG-050/052). FileStoragePlugin no limpia
-            // archivos al borrar (afterDelete() es no-op), así que esta
-            // responsabilidad es del Repository. Vacío si el scope no tiene
-            // file fields.
+            // Borra del storage los archivos del usuario: `FileStoragePlugin` no
+            // limpia al borrar la fila, así que lo hace el Repository.
 {{fileFieldsDeleteCleanup}}
             // Limpia tokens + pivots.
             ${{moduleNameLower}}->tokens()->delete();
@@ -107,12 +103,8 @@ class {{ModuleName}}Repository implements {{ModuleName}}RepositoryInterface
     {
         $roles = Role::query()->whereIn('name', $roleNames)->get();
 
-        // R-PKG-017 BUG-NEW-22: el helper público `pivotExtras()` retorna
-        // `['user_type' => static::class]` cuando la pivot `role_user` tiene
-        // la columna `user_type` (caso MME-polimórfico), o `[]` cuando no.
-        // Esto evita que el consumer tenga que hardcodear el FQCN manualmente
-        // en cada sync (DRY + BC-safe). Si la pivot NO tiene `user_type`, el
-        // comportamiento es idéntico al previo (sync con array_indexado).
+        // `pivotExtras()` agrega el `user_type` que la pivot compartida exige
+        // (o nada, si la pivot no tiene esa columna).
         ${{moduleNameLower}}->roles()->sync(
             $roles->pluck('id')
                 ->mapWithKeys(fn ($id) => [$id => ${{moduleNameLower}}->pivotExtras()])
@@ -126,9 +118,7 @@ class {{ModuleName}}Repository implements {{ModuleName}}RepositoryInterface
     {
         $abilities = Ability::query()->whereIn('name', $abilityNames)->get();
 
-        // R-PKG-017 BUG-NEW-22: idem `syncRoles()` — usa el helper público
-        // `abilityPivotExtras()` para emitir el payload correcto de la pivot
-        // `ability_user` sin hardcodear el FQCN.
+        // Idem `syncRoles()`, con `abilityPivotExtras()`.
         ${{moduleNameLower}}->directAbilities()->sync(
             $abilities->pluck('id')
                 ->mapWithKeys(fn ($id) => [$id => ${{moduleNameLower}}->abilityPivotExtras()])

@@ -15,66 +15,16 @@ use Mk\Director\Contracts\MkModuleServiceInterface;
 /**
  * Service de {{ModuleName}} — hook layer del módulo.
  *
- * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}}`.
  *
- * R-PKG-052 T9 v2 (FEEDBACK11, Mario 2026-07-11) — el Service es un **hook
- * layer puro** que delega TODO el trabajo de create/update/delete al
- * CRUDSmart canónico del paquete. NO pine create/update propios,
- * NO pine mutateData con file fields upload pipeline — el FileStoragePlugin
- * se invoca automáticamente desde CRUDSmart via PluginManager.
+ * El CRUD lo hace `CRUDSmart` (store/update/destroy, con los plugins como
+ * `FileStoragePlugin` para las subidas); este Service sólo expone los hooks
+ * `before*`/`after*` que ese flujo invoca, vacíos, para la lógica propia del
+ * módulo: emitir eventos, derivar datos, notificar. No reimplementes
+ * `create()`/`update()` acá: duplicarías el pipeline, y los plugins no
+ * correrían.
  *
- * ## ¿Por qué NO pineamos create/update?
- *
- * El `AdminController extends SmartController` ya hereda
- * `CRUDSmart::store()`/`update()`/`destroy()` canónicos. Esos métodos
- * ya hacen TODO el pipeline (R-PKG-016):
- *
- *   1. Resolve FormRequest (R-PKG-046 F9-B08)
- *   2. `fireBeforeSave($request, $input, 'create'|'update')` ← PluginManager
- *      → `FileStoragePlugin::beforeSave()` procesa uploads (avatar, cover_photo, etc.)
- *   3. `service->beforeCreate($request, $input)` ← ESTE hook (lógica específica)
- *   4. DTO validation (type safety + enum validation)
- *   5. Filter fillable
- *   6. `$model::create($input)` o `$model->update($input)`
- *   7. `service->afterCreate($request, $model, $input)` ← ESTE hook
- *   8. `fireAfterSave($model, $request, 'create'|'update')` ← PluginManager
- *      → `FileStoragePlugin::afterSave()` cleanup o post-processing
- *   9. Cache invalidation
- *  10. `autoTransform` con Resource
- *  11. `fireAfterResponse($data)` ← PluginManager
- *      → `FileStoragePlugin::afterResponse()` logging/audit
- *
- * El `FileStoragePlugin` se invoca automáticamente vía el PluginManager
- * (configurable via `$mkConfig['plugins']['file_storage']` en el controller).
- * Pinear mutateData con file fields upload pipeline en el Service
- * es **duplicar lógica** — el plugin system existe precisamente para esto.
- *
- * ## ¿Qué pineamos entonces?
- *
- * Los hooks `beforeCreate`/`afterCreate`/`beforeUpdate`/`afterUpdate`/
- * `beforeDelete`/`afterDelete` se pinean vacíos (passthrough). El
- * consumer los override con lógica **específica del módulo** (validar
- * dimensiones de un avatar custom, emitir domain events, computar
- * hashes, sincronizar con sistemas externos, etc.).
- *
- * Mantenemos `syncRoleAbilities(Role, array)` que es específico de
- * Admin/Member (query + sync de abilities de un Role, no trivialmente
- * delegable al Repository porque cruza la tabla de roles).
- *
- * ## Trade-offs
- *
- * - Si el consumer pine override custom de `create()`/`update()` en
- *   AdminService (e.g. cross-cutting concern que CRUDSmart no maneja),
- *   debe usar un ServiceProvider / Observer / Event Listener, no el
- *   Service del scaffolder.
- * - El Service se enfoca en **module-specific hooks**, no en orquestación
- *   de CRUD (eso es responsabilidad del paquete, via CRUDSmart + plugins).
- *
- * ## Patrón R-PKG-015 aplicado
- *
- * SSoT del CRUD = CRUDSmart (canónico) + PluginManager (canónico).
- * Service = thin layer de hooks específicos. Repository = thin layer
- * de queries. Controller = thin wrapper que delega a CRUDSmart.
+ * `syncRoleAbilities()` es lo único propio: sincroniza las abilities de un rol.
  */
 class {{ModuleName}}Service implements MkModuleServiceInterface
 {
@@ -112,10 +62,8 @@ class {{ModuleName}}Service implements MkModuleServiceInterface
     public function afterCreate(Request $request, Model $model, array $input): mixed
     {
         // passthrough — override con lógica específica del módulo.
-        // FEEDBACK10 (F10-B04): return explícito requerido — el return type
-        // es `mixed` (MkModuleServiceInterface), no `void`; un cuerpo sin
-        // `return` dispara `TypeError: Return value must be of type mixed,
-        // none returned` apenas el hook dispara (post fix F10-B03).
+        // El `return` es obligatorio: el tipo es `mixed`, no `void`, y un cuerpo
+        // sin `return` tira `TypeError` apenas el hook dispara.
         return null;
     }
 
@@ -142,7 +90,7 @@ class {{ModuleName}}Service implements MkModuleServiceInterface
     public function afterUpdate(Request $request, Model $model, array $input, string|int $id): mixed
     {
         // passthrough — override con lógica específica del módulo.
-        // FEEDBACK10 (F10-B04): ver `afterCreate()` — return explícito requerido.
+        // Ver `afterCreate()`: el `return` es obligatorio.
         return null;
     }
 
@@ -159,8 +107,7 @@ class {{ModuleName}}Service implements MkModuleServiceInterface
      */
     public function afterDelete(Request $request, Model $model, string|int $id): mixed
     {
-        // passthrough.
-        // FEEDBACK10 (F10-B04): ver `afterCreate()` — return explícito requerido.
+        // passthrough. Ver `afterCreate()`: el `return` es obligatorio.
         return null;
     }
 

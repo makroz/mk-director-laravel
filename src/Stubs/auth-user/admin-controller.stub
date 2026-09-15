@@ -21,14 +21,14 @@ use Mk\Director\Controllers\SmartController;
 /**
  * {{ModuleName}}Controller — CRUD estándar del scope `{{moduleNameLower}}`.
  *
- * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}}`.
  * Extiende `SmartController` para el CRUD; los endpoints `assignRoles` /
  * `assignDirectAbilities` son específicos del RBAC del scope (operan sobre
  * las tablas globales del paquete: `roles`, `abilities`, `role_user` con
  * `user_type` polimórfico).
  *
- * **MME (R-MK-001)**: este controller es interno del bounded context
- * `App\Modules\{{ModuleName}}`. NO debe importar modelos de otros módulos.
+ * Es interno del módulo `App\Modules\{{ModuleName}}`: no importa modelos de
+ * otros módulos.
  *
  * **Permisos**: la authorization se delega a `SmartController` vía `$mkConfig`.
  * Si necesitás abilities custom (e.g. `{{moduleNameLower}}.{{moduleNamePluralLower}}.viewAny`),
@@ -41,85 +41,47 @@ class {{ModuleName}}Controller extends SmartController
      */
     protected array $mkConfig = [
         'model'           => {{ModuleName}}::class,
-        // HALLAZGO-NEW-FASE17-03 fix: pinear `resource` explícito como BC
-        // fallback path. R-PKG-044 v2.0.0 canónico es per-model
-        // `public $apiResource` en {{ModuleName}}::class (aplicado por
-        // BaseController::autoTransform, see HALLAZGO-NEW-FASE15-07).
-        // Este `resource` per-controller se mantiene como BC para
-        // `CRUDSmart::autoTransform` (thin wrapper @deprecated).
-        // Sin esto, cuando el wrapper delega al canónico y el modelo
-        // NO pinea `$apiResource`, `autoTransform()` retorna el Model crudo
-        // porque `property_exists()` da false (modelo sin API Resource).
+        // También declarado acá (además de `$apiResource` en el modelo) para
+        // que la respuesta salga por el Resource aunque el modelo no lo tenga.
         'resource'        => \App\Modules\{{ModuleName}}\Http\Resources\{{ModuleName}}Resource::class,
         'service'         => {{ModuleName}}Service::class,
         'store_request'   => Store{{ModuleName}}Request::class,
         'update_request'  => Update{{ModuleName}}Request::class,
-        // HALLAZGO-NEW-FASE17-04 fix: el stub pineaba
-        // `['name', 'full_name', 'email', 'ci']` pero la tabla admins default
-        // solo tiene `name` + `email` → mk:status warning. Si el consumer quiere
-        // searchable extendido, pinear --profile-fields=full_name,ci al scaffolder.
+        // Sólo columnas que existen en la tabla: agregá acá los profile fields
+        // por los que quieras buscar.
         'searchable'      => ['name', 'email'],
         'with'            => ['roles', 'directAbilities'],
         'allowedIncludes' => ['roles', 'roles.abilities', 'directAbilities'],
         'features'        => [
             'auto_cache' => true,
             'remember_state' => true,
-            // R-PKG whitelist de filtros del list endpoint. `ListManager::applyFilters`
-            // IGNORA en silencio cualquier `filter[campo]` que NO esté acá (security
-            // whitelist), y si el array está vacío descarta TODOS los filtros. Todo
-            // AuthUser scaffoldeado trae la columna `status` (ScopeStatus, D2 ON), así
-            // que el filtro `filter[status]=active|inactive|...` — que el front cablea
-            // por default en la pantalla de lista — nace vivo. Agregá más campos acá
-            // (fillable del scope) si querés exponerlos como filtro.
+            // Whitelist de filtros del listado: `ListManager::applyFilters` IGNORA
+            // en silencio cualquier `filter[campo]` que no esté acá, y con el array
+            // vacío descarta TODOS. `status` va porque el front lo filtra por
+            // default. Agregá los campos que quieras exponer como filtro.
             'allowed_filters' => ['status'],
         ],
 
-        // R-PKG-047 D3 — auto-wire FileStoragePlugin via `:file` suffix en
-        // --profile-fields (e.g. `--profile-fields='avatar:file,phone:string'`).
-        //
-        // FEEDBACK10 (RETO pilot, 2026-07-13) — el scaffolder pineaba la config
-        // bajo UNA sola key `plugins` con shape `['file_storage' => [...]]`. Eso
-        // rompía la subida end-to-end por DOS motivos:
-        //   1. `FileStoragePlugin` lee su config vía
-        //      `getConfigValue('plugins_config.file_storage')` — key `plugins_config`,
-        //      NO `plugins`. Bajo `plugins` el `data_get` daba `[]` → el plugin
-        //      no procesaba el file y el tmp path del UploadedFile terminaba
-        //      persistido en la columna.
-        //   2. `CRUDSmart::getPluginManager()` registra `$this->mkConfig['plugins']`
-        //      como LISTA DE CLASES (strings). Un array asociativo de config ahí
-        //      es skippeado por `PluginManager::registerPlugins()` (F10-B16) →
-        //      el plugin no quedaba registrado per-controller.
-        //
-        // Post-fix: dos keys separadas.
-        //   - `plugins`        → lista de clases que CRUDSmart registra per-controller
-        //     (así la subida funciona AUNQUE el auto-register global esté off, e.g.
-        //     `MK_FILE_STORAGE_PLUGIN=false`).
-        //   - `plugins_config` → config por plugin que el plugin lee vía
-        //     `getConfigValue('plugins_config.<name>')`.
-        // Sin file fields en --profile-fields, ambas quedan `[]`.
+        // Subida de archivos (profile fields `:file`). Dos claves distintas:
+        //   - `plugins`        → CLASES que CRUDSmart registra en este controller
+        //     (la subida anda aunque el plugin global esté apagado).
+        //   - `plugins_config` → la config que cada plugin lee de
+        //     `plugins_config.<nombre>`. Bajo `plugins` no la encuentra, y la
+        //     ruta temporal del upload terminaría guardada en la columna.
+        // Sin file fields, ambas quedan vacías.
         'plugins'         => {{pluginsList}},
         'plugins_config'  => {{pluginsConfig}},
     ];
 
     /**
-     * R-PKG-046 F9-B10 — Constructor vacío.
-     *
-     * Pre-fix pineaba `$this->middleware('mk.auth:{{moduleNameLower}}')` que
-     * se aplicaba a TODAS las acciones del controller, incluyendo cuando se
-     * invocaban desde rutas managed (que ya pinean `mk.auth:{{managerNameLower}}`).
-     * Combinado con F9-B09 (loadRoutesFrom acumulado), el efecto se duplicaba
-     * y un admin token intentando `POST /api/admin/members` fallaba con
-     * `ERR_SCOPE_MISMATCH` antes de que `mk.auth:admin` corriera.
-     *
-     * Post-fix: las rutas per-route (pineadas en `Http/Routes/api.php` y
-     * `Http/Routes/managed.php`) ya pinean el middleware correcto per endpoint
-     * (`mk.auth:{scope}` + `mk.ability:{scope}.{resource}.{action}`). Defense-in-depth
-     * per-route es suficiente — el constructor queda vacío para evitar
-     * leak entre controllers reusados cross-scope.
+     * Sin middleware de constructor, a propósito: la autenticación va POR RUTA
+     * (`mk.auth` + `mk.ability` en `Http/Routes/api.php` y `managed.php`). Este
+     * controller lo reusan las rutas de otro scope que administra a éste, y un
+     * `mk.auth:{{moduleNameLower}}` acá rechazaría el token de ese scope.
      */
     public function __construct()
     {
-        // vacío — defense-in-depth cubierta per-route
+        // vacío — la autenticación va por ruta
     }
 
     /**
@@ -136,11 +98,6 @@ class {{ModuleName}}Controller extends SmartController
         $scope = '{{moduleNameLower}}';
 
         return [
-            // N13 fix: la tabla `roles` del paquete NO tiene `description`
-            // (solo id/name/guard/timestamps). Seleccionar `description` acá
-            // reventaba con SQLSTATE 42703 en el primer `GET /?__extraData=1`
-            // que manda `useMkList` en la carga inicial → la pantalla moría
-            // out-of-the-box. Seleccionamos solo las columnas que existen.
             'roles' => Role::query()
                 ->where('guard', $scope)
                 ->orderBy('name')
@@ -196,10 +153,6 @@ class {{ModuleName}}Controller extends SmartController
         /** @var {{ModuleName}} ${{moduleNameLower}} */
         ${{moduleNameLower}} = {{ModuleName}}::findOrFail($id);
 
-        // R-PKG-052 T9: delega directo al Repository (pre-T9 pineaba
-        // un thin wrapper del Service, que era un delegate trivial).
-        // Achicar el Service para que solo contenga lo NO trivialmente
-        // delegable (mutateData hook + syncRoleAbilities específico).
         app({{ModuleName}}Repository::class)->syncRoles(${{moduleNameLower}}, $request->validated('roles'));
 
         return $this->sendResponse(
@@ -219,8 +172,6 @@ class {{ModuleName}}Controller extends SmartController
         /** @var {{ModuleName}} ${{moduleNameLower}} */
         ${{moduleNameLower}} = {{ModuleName}}::findOrFail($id);
 
-        // R-PKG-052 T9: idem rationale que assignRoles() — delega al
-        // Repository directo, sin pasar por el Service.
         app({{ModuleName}}Repository::class)->syncDirectAbilities(${{moduleNameLower}}, $request->validated('abilities'));
 
         return $this->sendResponse(

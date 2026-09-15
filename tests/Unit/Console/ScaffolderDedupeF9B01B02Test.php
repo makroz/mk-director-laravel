@@ -176,9 +176,11 @@ test('R-PKG-046 F9-B02 — admin-resource.stub contiene solo 1 línea con key em
 
     $stub = (string) file_get_contents($stubPath);
 
-    // El stub tiene 1 línea con 'email' hardcoded.
-    $emailLines = substr_count($stub, "'email' => \$this->email");
-    expect($emailLines)->toBe(1);  // BC pineado hardcoded, sin duplicar.
+    // Pin reescrito: la única línea con `'email' => $this->email` era un
+    // COMENTARIO de historia que ya no se genera (hallazgo #44). Lo que importa
+    // es que la clave del login salga una sola vez, desde el placeholder.
+    expect(substr_count($stub, "'{{loginField}}' => \$this->{{loginField}}"))->toBe(1);
+    expect(substr_count($stub, "'email' => \$this->email"))->toBe(0);
 });
 
 test('R-PKG-052 — command signature incluye --multi-tenant opt-in flag', function () {

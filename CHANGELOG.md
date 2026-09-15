@@ -12,6 +12,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — El código que genera `mk:make:auth-user` ya no carga docblocks huérfanos ni la historia del paquete
+
+Hallazgo #44 del piloto NetPizza: su barrido de docblocks huérfanos falló sobre
+el `Operator` recién generado. Sólo cambia **texto de comentarios** en lo que se
+genera; nada de runtime. Detalle en `DEVELOPER_GUIDE.md` § 3.19.7.
+
+### Fixed
+
+- **Docblocks huérfanos en el modelo generado.** «Profile fields per-scope» con
+  sus `@property` flotaba dentro de la clase, sin elemento debajo — fuera del
+  docblock de la clase ningún IDE ni analizador los lee —, y el bloque de los
+  accessors `*_url` salía aunque no hubiera accessors («si no hay file fields,
+  este placeholder queda como whitespace»). Los `@property` van ahora al
+  docblock de la clase (sin `name`, que declara `AuthUser`, ni `status`, que lo
+  tipa su cast) y el docblock de cada accessor sale con su accessor.
+- **Comentarios que mentían.** El de `$casts` decía «queda solo `password`» con
+  `status` adentro; el de la migración, que los profile fields son «string
+  nullable» (son tipados); el de `$fillable`, «se agregan vía ``» (un
+  placeholder expandido a vacío dentro del texto); el Resource mencionaba un
+  `getPhotoUrlAttribute()` que ya no existe; y varios stubs remitían a
+  `--with-crud`, un flag eliminado.
+- **Historia del paquete en el código de cada consumer.** 37 de los 38 stubs
+  `auth-user*` y los fragmentos que arma el comando (`roles()`,
+  `directAbilities()`, la relación con el manager, accessors, `register()`,
+  `updateProfile()`, `api_contract.md`) llevaban ids de tickets (`R-PKG-*`,
+  `FEEDBACK*`, `BUG-NEW-*`, `F10-B*`, `HALLAZGO-*`), fechas, nombres de
+  consumers y relatos «pre-fix/post-fix». Ahora describen qué hace el código y
+  por qué, en corto; la historia queda en este CHANGELOG.
+- Espaciado del modelo generado: una línea en blanco entre métodos (antes
+  `roles()` y `directAbilities()` salían pegados) y sin la línea con espacios
+  sueltos cuando no hay `$apiResource`.
+
+### Added
+
+- `MakeAuthUserGeneratedCodeHygieneTest`: genera siete combinaciones de flags y
+  falla ante un docblock huérfano, un id interno o un PHP que no pasa `php -l`.
+
+### ⚠️ Notas para consumers
+
+- Los módulos ya generados conservan sus comentarios. Sin impacto en runtime.
+
 ## [UNRELEASED] — `mk:make:auth-user`: toda ruta pública con throttle, y CHECK en la columna `status`
 
 Lo encontraron los gates de NetPizza sobre el `Operator` recién generado.

@@ -7,8 +7,7 @@ use Illuminate\Support\Facades\Route;
 
 /**
  * Rutas del scope CONSUMER `{{moduleNameLower}}` — generadas por
- * `php artisan mk:make:auth-user {{ModuleName}} --kind=consumer --managed-by=<Manager>`
- * (F10-B08).
+ * `php artisan mk:make:auth-user {{ModuleName}} --kind=consumer --managed-by=<Manager>`.
  *
  * Un scope `consumer` es un scope "lockdown": el user puede loguearse y
  * editar SU PROPIO perfil, pero NO administra otros users de su propio
@@ -16,35 +15,21 @@ use Illuminate\Support\Facades\Route;
  * `Http/Routes/managed.php` (guard `mk.auth:{manager}`, ver
  * `generateManagedResource()`).
  *
- * Por eso este stub es un subconjunto DELIBERADO de `auth-user.routes.stub`
- * (el stub `manager`, BC): mismas rutas de auth + self-profile, pero SIN
- * las rutas CRUD propias (`/api/{{moduleNamePluralLower}}/*`), SIN
- * `/api/{{moduleNameLower}}/roles`, SIN `/api/{{moduleNameLower}}/abilities`
- * — esas tres familias de rutas viven SOLO del lado del manager para un
- * scope consumer (ver `auth-user/managed-routes.stub`).
+ * Por eso acá están sólo las rutas de auth y del propio perfil: el CRUD de
+ * usuarios, roles y abilities de este scope lo expone el manager.
  *
  * Las rutas protegidas usan `mk.auth:{{moduleNameLower}}` (del paquete) que
  * valida en 3 capas que el token pertenece al scope correcto (ver
  * docs/guides/AUTH.md § "The 4 defense layers against cross-scope mix-up").
  *
- * TODA ruta pública (fuera del grupo `mk.auth`) lleva
- * `throttle:{limit},{minutes},{scope}-{endpoint}`, con o sin `--no-rbac`,
- * configurable por `mk_director.auth.rate_limits.{endpoint}`.
- *
- * Endpoints condicionales:
- *   - `POST /register` — SÓLO con `--with-register` (opt-in: sin CRUD es un
- *     alta PÚBLICA). Throttle `rate_limits.register` con prefijo
- *     `{scope}-register`; con CRUD, además `mk.auth` + ability `create`.
- *     Despacha VerifyEmail si `--verify-email` está activo.
- *   - `GET /email/verify/{id}/{hash}` (signed URL, marca email_verified_at).
- *   - `POST /email/resend` (re-envía notification, throttled 6,1).
- *   - `PATCH /me` (actualiza profile fields del user autenticado — B06,
- *     mapeado a `BaseAuthController::updateProfile()`).
+ * 🔴 TODA ruta pública (fuera del grupo `mk.auth`) lleva un throttle con
+ * prefijo propio: `throttle:{limite},{minutos},{scope}-{endpoint}`. El prefijo
+ * NO es decorado: sin él todos los endpoints comparten un contador por IP. Si
+ * agregás una ruta pública, dale el suyo.
  */
 
-// Prefix includes `api/` because Laravel 11+ `loadRoutesFrom` from a
-// ServiceProvider does NOT inherit the `apiPrefix` configured in
-// `bootstrap/app.php` — that only applies to the central `routes/api.php`.
+// El prefijo incluye `api/`: `loadRoutesFrom` desde un ServiceProvider no hereda
+// el `apiPrefix` de `bootstrap/app.php`, que sólo aplica a `routes/api.php`.
 Route::prefix('api/{{moduleNameLower}}/auth')->group(function () {
     // ── Públicas ────────────────────────────────────────────────────
     Route::post('login', [AuthController::class, 'login']){{rbacLoginThrottle}};

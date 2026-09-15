@@ -120,12 +120,13 @@ describe('R-PKG-053 — api_contract.md stub generation', function () {
         expect($content)->toContain('{{includeRbac}}');
     });
 
-    it('stub documents the auth envelope (R-PKG-024 + R-PKG-032 references)', function () {
+    it('stub documents the auth envelope (single-level + grouped pagination)', function () {
         $content = apiContractStubContent052();
 
-        // Drift history documentado para que futuros devs entiendan el por qué
-        expect($content)->toContain('R-PKG-024');
-        expect($content)->toContain('R-PKG-032');
+        // Pin reescrito: antes pedía los ids de las reglas. El contrato generado
+        // describe la regla, no su id interno (hallazgo #44).
+        expect($content)->toContain('Single-level envelope OBLIGATORIO');
+        expect($content)->toContain('__extraData.pagination');
     });
 
     it('stub warns about tokens being in body.data, NOT in HTTP headers', function () {

@@ -10,7 +10,7 @@ use Mk\Director\Auth\Models\Role;
 /**
  * Validación para asignar roles (por nombre) a un {{ModuleName}}.
  *
- * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}}`.
  *
  * Roles vienen por NOMBRE (no ID) — más portable y friendly para el frontend.
  * Se validan contra los roles existentes en `mk_director`.
@@ -30,7 +30,7 @@ class AssignRolesRequest extends FormRequest
         $existingRoleNames = Role::query()->pluck('name')->all();
 
         return [
-            // BACK-03 (FEEDBACK5): `present` (no `required`) para que `{ "roles": [] }`
+            // `present` (no `required`) para que `{ "roles": [] }`
             // sea válido y se puedan QUITAR todos los roles vía este endpoint.
             // `present` exige la clave en el body pero admite el array vacío;
             // `required` la rechazaba con 422, imposibilitando limpiar.

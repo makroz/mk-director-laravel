@@ -125,12 +125,16 @@ Los 18 comandos que registra el paquete (`php artisan list mk`).
 
 > **Toda ruta pública** que emite el scaffolder (login, refresh, forgot, reset,
 > los del PIN, `email/verify`, `register`) lleva `throttle:` con prefijo propio
-> (`throttle:5,1,{scope}-login`), también con `--no-rbac`. Con `--status` (el
-> default) la migración agrega además un CHECK `{tabla}_status_check` en
-> pgsql/mysql/mariadb. Sin él, `ThrottleRequests` usa la misma clave
-> (IP) para todos: login, forgot, reset y los del PIN —de todos los scopes—
-> comparten un solo contador. Los scopes generados antes de este cambio siguen
-> sin prefijo: agregalo a mano en su `Http/Routes/api.php`.
+> (`throttle:5,1,{scope}-login`), también con `--no-rbac`. Sin prefijo,
+> `ThrottleRequests` usa la misma clave (IP) para todos: login, forgot, reset y
+> los del PIN —de todos los scopes— compartirían un solo contador. Los scopes
+> generados antes de este cambio siguen sin prefijo: agregalo a mano en su
+> `Http/Routes/api.php`. Con `--status` (el default) la migración agrega además
+> un CHECK `{tabla}_status_check` en pgsql/mysql/mariadb.
+>
+> Los comentarios del código generado describen lo que hace ese código: sin ids
+> de tickets internos ni historia del paquete, y sin docblocks sueltos. Los
+> `@property` de los profile fields van al docblock de la clase del modelo.
 
 ## Configuración
 

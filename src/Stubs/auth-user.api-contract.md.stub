@@ -1,14 +1,13 @@
 # {{ModuleName}} — API Contract
 
 > **JSON contract de los endpoints del scope `{{moduleNameLower}}`**, generado automáticamente por
-> `php artisan mk:make:auth-user {{ModuleName}}` (R-PKG-052 — `api_contract.md` stub generation).
+> `php artisan mk:make:auth-user {{ModuleName}}`.
 >
-> ⚠️ **Single-level envelope OBLIGATORIO** (R-PKG-024 v1.7.0 GA — BC break cross-stack) — `data` es
+> ⚠️ **Single-level envelope OBLIGATORIO** — `data` es
 > SIEMPRE array directo para colecciones, metadata de paginación en `__extraData.pagination` top-level.
 > PROHIBIDO `data.data`.
 >
-> ⚠️ **Pagination metadata GROUPED bajo `__extraData.pagination`** (R-PKG-032 v1.8.0 MAJOR — BC break
-> cross-stack) — 5 keys snake_case (LengthAwarePaginator) viven agrupadas, custom keys del consumer
+> ⚠️ **Pagination metadata GROUPED bajo `__extraData.pagination`** — 5 keys snake_case (LengthAwarePaginator) viven agrupadas, custom keys del consumer
 > planas. PROHIBIDO `__extraData.current_page` flat.
 
 ---
@@ -22,17 +21,17 @@
 - **Token format**: `<id>|<plaintext>` (Sanctum v4)
 - **Pagination**: `?per_page=N&page=M` (max 100)
 - **Errors**: `{ "message": "...", "errors": { "field": ["..."] } }`
-- **Envelope estándar (R-PKG-024 v1.7.0 GA — SINGLE-LEVEL)**: `BaseController::sendResponse()` emite
+- **Envelope estándar (SINGLE-LEVEL)**: `BaseController::sendResponse()` emite
   SIEMPRE single-level envelope. Para responses paginadas (e.g. `GET /api/{{moduleNameLower}}/{{moduleNamePluralLower}}`),
   el paginator Laravel se desarma automáticamente — items van a `data` (array directo) y pagination
-  metadata a `__extraData.pagination` GROUPED (R-PKG-032 v1.8.0 MAJOR):
+  metadata a `__extraData.pagination` GROUPED:
   ```json
   {
     "success": true,
     "message": "",
     "data": [...items...],          // ← array directo (NO paginator anidado)
     "__extraData": {                // ← top-level (sibling de `data`)
-      "pagination": {               // ← R-PKG-032: GROUPED pagination metadata
+      "pagination": {               // ← GROUPED pagination metadata
         "current_page": 1,
         "last_page": 5,
         "per_page": 20,
@@ -45,10 +44,9 @@
   }
   ```
   Frontend debe parsear `response.data` (array directo) + `response.__extraData.pagination`
-  (pagination metadata agrupada) — **NO** `response.data.data` (PROHIBIDO per R-PKG-024) ni
-  `response.__extraData.current_page` (PROHIBIDO per R-PKG-032). Patrón canónico
-  `MkListResponse<T> = MkResponse<T[]>.__extraData.pagination` en `@makroz/core` (v1.2+).
-  Consumido por `useMkList` + `useMkInfiniteList` en `@makroz/web` + `@makroz/mobile` (v1.3+).
+  (pagination metadata agrupada) — **NO** `response.data.data` ni
+  `response.__extraData.current_page`. Tipo: `MkListResponse<T>` en `@makroz/core`,
+  consumido por `useMkList` + `useMkInfiniteList` en `@makroz/web` y `@makroz/mobile`.
 
 ---
 
@@ -64,7 +62,7 @@
 }
 ```
 
-**Response 200** — single-level envelope (R-PKG-024 v1.7.0 GA). Payload envuelto en `data`:
+**Response 200** — single-level envelope. Payload envuelto en `data`:
 ```json
 {
   "success": true,
@@ -206,7 +204,7 @@
 - `per_page` (int, default 15, max 100)
 - `page` (int, default 1)
 
-**Response 200** — single-level envelope (R-PKG-024) + pagination grouped (R-PKG-032):
+**Response 200** — single-level envelope + pagination grouped:
 ```json
 {
   "success": true,
@@ -394,12 +392,9 @@ Idempotente: corre múltiples veces sin duplicar.
 ## 7. Referencias
 
 - `docs/guides/AUTH.md` (del paquete) — § "Generating a new scope" para ver cómo se scaffoldea este módulo
-- [R-PKG-024 — Single-level envelope](https://github.com/makroz/mk-director/blob/dev/AGENTS.md#the-single-level-envelope-rule-r-pkg-024--non-negotiable)
-- [R-PKG-032 — Pagination envelope grouped](https://github.com/makroz/mk-director/blob/dev/AGENTS.md#the-pagination-envelope-rule-r-pkg-032--non-negotiable)
-- [R-PKG-027 — Auth user login field / scope](https://github.com/makroz/mk-director/blob/dev/packagist/mk-director-laravel/CHANGELOG.md) — defensa contra register público
-- [R-MK-001 — MME (MVC Modular Encapsulado)](https://github.com/makroz/mk-director/blob/dev/AGENTS.md#the-mme-rule-r-mk-001--non-negotiable)
+- `AGENTS.md` del monorepo `mk-director` — el envelope single-level, la paginación agrupada y la regla de módulos encapsulados
 
 ---
 
-*Generado por `php artisan mk:make:auth-user {{ModuleName}}` (R-PKG-052). Para regenerarlo,
+*Generado por `php artisan mk:make:auth-user {{ModuleName}}`. Para regenerarlo,
 borrá este archivo y volvé a correr el scaffolder — solo se pinea si NO existe.*

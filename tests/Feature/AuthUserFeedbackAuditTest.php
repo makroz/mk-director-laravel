@@ -250,7 +250,7 @@ test('BUG-NEW-10: MakeAuthUserCommand invoca checkSanctumInstalled() y tiene el 
 
 // ─── BUG-NEW-11 — docblock de profile fields con header + indentación ──────
 
-test('BUG-NEW-11: buildProfileFieldsReplacements emite docblock con header e indentación correcta', function () {
+test('BUG-NEW-11: buildProfileFieldsReplacements emite los @property para el docblock de la clase', function () {
     $command = makeAuthUserCommand();
     $reflection = new ReflectionClass($command);
 
@@ -261,17 +261,12 @@ test('BUG-NEW-11: buildProfileFieldsReplacements emite docblock con header e ind
 
     $docblock = $result['{{profileFieldsDocblock}}'];
 
-    // Debe tener el header "Profile fields per-scope".
-    expect($docblock)->toContain('Profile fields per-scope');
-
-    // Las líneas de @property deben estar indentadas con 5 espacios (alineadas con `     *`).
-    expect($docblock)->toMatch('/^     \* @property/sm');
-
-    // El docblock debe estar bien cerrado (con \n antes del */).
-    expect($docblock)->toMatch('/\n     \*\/\n$/s');
-
-    // No debe haber un docblock suelto (otro /**) antes del */.
-    expect(substr_count($docblock, '/**'))->toBe(1);
+    // Pin reescrito: los @property van al docblock de la CLASE (hallazgo #44: el bloque propio dentro de la clase quedaba huérfano). Lo mide sobre archivos generados MakeAuthUserGeneratedCodeHygieneTest.
+    // Son líneas ` * @property` (sangría del docblock de clase), sin abrir ni
+    // cerrar un bloque propio.
+    expect($docblock)->toMatch('/^ \* @property string\|null \$full_name$/m');
+    expect($docblock)->not->toContain('/**');
+    expect($docblock)->not->toContain('*/');
 });
 
 // ─── OBS-NEW-01 — discoverAbilitiesFromMkConfig existe + merge ─────────────
@@ -353,7 +348,7 @@ test('BUG-NEW-13: extendRoutesWithCrud extrae use statements y los inyecta al in
 
 // ─── BUG-NEW-14 — docblock de profile fields sin newline entre docblocks ───────
 
-test('BUG-NEW-14: buildProfileFieldsReplacements emite docblock con newline simple al final (separación vive en el stub)', function () {
+test('BUG-NEW-14: buildProfileFieldsReplacements termina los @property en un solo newline', function () {
     $command = makeAuthUserCommand();
     $reflection = new ReflectionClass($command);
 
@@ -377,10 +372,10 @@ test('BUG-NEW-14: buildProfileFieldsReplacements emite docblock con newline simp
     //    docblocks vive en el STUB (`{{profileFieldsDocblock}}\n\n    /**`).
     //    Esto elimina el drift y mantiene el control de espaciado en UN lugar.
 
-    expect($docblock)->toMatch('/     \*\\/\n$/s');
-
-    // NO debe quedar la versión vieja con doble newline que era drift-prone.
-    expect($docblock)->not->toMatch('/     \*\\/\n\n$/s');
+    // Pin reescrito (hallazgo #44): ya no hay `*/` propio; el fragmento se
+    // inserta antes del cierre del docblock de la clase y termina en `\n`.
+    expect($docblock)->toMatch('/@property [^\n]+\n$/');
+    expect($docblock)->not->toMatch('/\n\n$/');
 });
 
 // ─── BUG-NEW-15 — create-super-admin name autogenerado del email ──────────────
@@ -483,8 +478,9 @@ test('BUG-NEW-18: ability-controller stub tiene with:[] y allowedIncludes:[] (no
     expect($stub)->toMatch("/'with'\\s*=>\\s*\\[\\s*\\]/");
     expect($stub)->toMatch("/'allowedIncludes'\\s*=>\\s*\\[\\s*\\]/");
 
-    // Y debe documentar el bug en el docblock.
-    expect($stub)->toContain('BUG-NEW-18 fix');
+    // Y debe explicar por qué van vacíos. (Pin reescrito: antes pedía el id
+    // del ticket; el código generado ya no lleva ids internos, hallazgo #44.)
+    expect($stub)->toContain('no tiene relación `roles()`');
 });
 
 // ─── BUG-NEW-19 — rutas con { admin } (espacios) → no matchea URL ───────────

@@ -10,7 +10,7 @@ use Mk\Director\Auth\Models\AuthUser;
 /**
  * {{ModuleName}}Policy — autorización por FILA del CRUD de {{ModuleName}}.
  *
- * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud`.
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}}`.
  *
  * ── 🔴 ESTA POLICY NO CORRE HASTA QUE VOS LA PRENDAS ─────────────────────
  *
@@ -49,14 +49,12 @@ use Mk\Director\Auth\Models\AuthUser;
  * hacía que el primer request real muriera con
  * `TypeError: Argument #1 ($user) must be of type {{ModuleName}}` — un 500, no
  * un 403. `AuthUser` es el abstract del paquete del que heredan todos los
- * scopes, así que acepta a cualquiera y no cruza límites de módulo (R-MK-001).
+ * scopes, así que acepta a cualquiera y no cruza límites de módulo.
  *
  * 🔴 EL CHEQUEO ES `canMk()`. `hasAbility()` NO EXISTE en `AuthUser` — es del
  * pack `mk:module --with-rbac`, que usa otro modelo base. Llamarlo acá tira
  * `BadMethodCallException`, y dentro de un `try` mal puesto eso se lee como
  * "no tiene el permiso".
- *
- * Spec: RBAC-004 (R-PKG-008).
  */
 class {{ModuleName}}Policy
 {

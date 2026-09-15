@@ -15,7 +15,7 @@ use Mk\Director\Controllers\SmartController;
 /**
  * AbilityController — CRUD de abilities del scope `{{moduleNameLower}}`.
  *
- * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}}`.
  *
  * Las abilities son GLOBALES del paquete (`Mk\Director\Auth\Models\Ability`)
  * y se crean/gestionan vía:
@@ -26,15 +26,8 @@ use Mk\Director\Controllers\SmartController;
  * override en `App\Modules\{{ModuleName}}\Policies\AbilityPolicy` (si la generás
  * via `mk:module --with-rbac` por separado).
  *
- * **MME (R-MK-001)**: NO usar `Role` o `User` directamente — usar `Ability` del paquete.
- *
- * R-PKG-016 BUG-NEW-18 fix: `with` y `allowedIncludes` ahora son arrays VACÍOS.
- * Antes declaraban `['roles']` asumiendo que el modelo Ability tiene relación
- * `roles()` (como Role tiene `abilities()`). NO la tiene — Ability solo tiene
- * `users()` (vía `ability_user`). Resultado: `GET /api/abilities` crasheaba con
- * `Call to undefined relationship [roles] on model [Mk\Director\Auth\Models\Ability]`.
- * El fix deja `with: []` y `allowedIncludes: []` para este controller; si un
- * consumer custom necesita eager loading, override `$mkConfig` en la subclase.
+ * `with` y `allowedIncludes` van vacíos: `Ability` no tiene relación `roles()`,
+ * y declararla haría fallar el listado.
  */
 class AbilityController extends SmartController
 {
@@ -43,11 +36,7 @@ class AbilityController extends SmartController
      */
     protected array $mkConfig = [
         'model'           => Ability::class,
-        // HALLAZGO-NEW-FASE17-03 fix: pinear `resource` explícito como BC
-        // fallback path. R-PKG-044 v2.0.0 canónico es per-model
-        // `public $apiResource` en Ability::class (aplicado por BaseController::autoTransform,
-        // see HALLAZGO-NEW-FASE15-07). Este `resource` per-controller se mantiene
-        // como BC para `CRUDSmart::autoTransform` (thin wrapper @deprecated).
+        // `Ability` es un modelo del paquete: el Resource del módulo se declara acá.
         'resource'        => \App\Modules\{{ModuleName}}\Http\Resources\AbilityResource::class,
         'service'         => {{ModuleName}}Service::class,
         'searchable'      => ['name', 'description'],

@@ -15,8 +15,7 @@ use Mk\Director\Auth\Models\Role;
  * Seeder de las abilities CROSS-SCOPE que permiten al scope `{{managerNameLower}}`
  * administrar users del scope `{{moduleNameLower}}`.
  *
- * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud --managed-by={{managerName}}`
- * (ARCH-01 / FEEDBACK6).
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}} --managed-by={{managerName}}`.
  *
  * ## Qué siembra (el "quién hace el CRUD" + "qué scope afecta el permiso")
  *
@@ -30,7 +29,7 @@ use Mk\Director\Auth\Models\Role;
  *
  * Correr DESPUÉS del `{{managerName}}RolesSeeder` (los roles del manager deben
  * existir). Idempotente. Match de roles por (name, guard) para no tocar roles
- * de otros scopes (ver F6-03).
+ * de otros scopes que se llamen igual.
  */
 class {{ModuleName}}ManagedBy{{managerName}}Seeder extends Seeder
 {

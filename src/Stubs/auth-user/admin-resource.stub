@@ -10,29 +10,14 @@ use Illuminate\Http\Resources\Json\JsonResource;
 /**
  * Resource del modelo {{ModuleName}} para serialización JSON.
  *
- * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}}`.
  *
- * Solo se incluyen relaciones si están `whenLoaded` para evitar N+1.
- * `photo_url` se calcula via accessor en el modelo (`getPhotoUrlAttribute()`).
+ * Las relaciones sólo se incluyen si están cargadas (`whenLoaded`), para no
+ * disparar N+1.
  *
- * R-PKG-035 HALLAZGO-NEW-FASE15-06 fix: pinear `'abilities' => ...` al
- * top-level con el helper `getEffectiveAbilities()` del trait `HasAbilities`
- * (v1.8.3-rc0+). Esto cumple el contrato cross-stack con
- * `@makroz/web AdminDto.abilities: string[]` que consume
- * `useMkAuth().hasAbility(ability)` y la sidebar permission-gated.
- * Pre-v1.8.3 el consumer debía aplanar manualmente
- * (`$this->roles->flatMap(fn ($r) => $r->abilities->pluck('name'))`).
- *
- * R-PKG-042 FASE18-05 fix: `direct_abilities` se removió del default.
- * El campo duplicaba `abilities` (que ya es la unión efectiva via
- * `getEffectiveAbilities()`) y solo tenía sentido si el admin tenía
- * grants directos distintos a los del role — caso raro. Para el flujo
- * de "ver grants directos" (e.g. pantalla admin de permissions) pineá
- * el método opt-in `permissions()` que genera `mk:make:auth-user` con
- * `--with-permissions-endpoint` (HALLAZGO-NEW-FASE18-05). El endpoint
- * queda en `GET /api/{scope}/auth/me/permissions` y retorna
- * `{direct_abilities, effective_abilities, roles_with_abilities}` —
- * un shape dedicado, no un campo extra en /me.
+ * `abilities` es la lista plana de abilities efectivas (roles + directas) que
+ * consume el front (`useMkAuth().hasAbility()`). El desglose completo por rol
+ * lo da `GET /api/{scope}/auth/me/permissions` (`--with-permissions-endpoint`).
  */
 class {{ModuleName}}Resource extends JsonResource
 {
@@ -44,15 +29,9 @@ class {{ModuleName}}Resource extends JsonResource
         return [
             'id' => $this->id,
             'name' => $this->name,
-            // R-PKG-047 D5 — `loginField` pineado dinámicamente desde el campo
-            // que el scaffolder configuró via `--login-field=<campo>`.
-            // Pre-D5: hardcoded `'email' => $this->email`. Post-D5: cualquier
-            // scope con `--login-field=ci`, `--login-field=phone`, etc.
-            // expone el campo correcto en el Resource.
             '{{loginField}}' => $this->{{loginField}},
 {{fileFieldsResourceEntry}}            'auth_scope' => $this->auth_scope,
-{{statusResourceEntry}}{{profileFieldsResourceEntry}}            // HALLAZGO-NEW-FASE15-06: abilities flat top-level — cross-stack contract.
-            // `abilities` es la UNIÓN efectiva (role-derived + directas) que consume
+{{statusResourceEntry}}{{profileFieldsResourceEntry}}            // `abilities` es la UNIÓN efectiva (role-derived + directas) que consume
             // `hasAbility()`. `direct_abilities` expone SOLO los grants directos
             // (cuando la relación está cargada) para que la UI de gestión de accesos
             // pueda pre-seleccionar exactamente lo directo — sin esto, un modal que

@@ -15,16 +15,12 @@ use Mk\Director\Controllers\SmartController;
 /**
  * RoleController — CRUD de roles del scope `{{moduleNameLower}}`.
  *
- * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}}`.
  *
  * Los roles son GLOBALES del paquete (`Mk\Director\Auth\Models\Role`).
  * El sync de abilities a un role se hace via `syncAbilities()`.
  *
- * **MME (R-MK-001)**: NO importar modelos de otros módulos.
- *
- * R-PKG-027 PKG-NEW-07 fix: `syncAbilities` ahora usa `SyncRoleAbilitiesRequest`
- * (FormRequest dedicado) en vez de validación inline (R-AD-012).
- * Unifica el patrón con `AssignRolesRequest` / `AssignDirectAbilitiesRequest`.
+ * No importa modelos de otros módulos.
  */
 class RoleController extends SmartController
 {
@@ -33,11 +29,7 @@ class RoleController extends SmartController
      */
     protected array $mkConfig = [
         'model'           => Role::class,
-        // HALLAZGO-NEW-FASE17-03 fix: pinear `resource` explícito como BC
-        // fallback path. R-PKG-044 v2.0.0 canónico es per-model
-        // `public $apiResource` en Role::class (aplicado por BaseController::autoTransform,
-        // see HALLAZGO-NEW-FASE15-07). Este `resource` per-controller se mantiene
-        // como BC para `CRUDSmart::autoTransform` (thin wrapper @deprecated).
+        // `Role` es un modelo del paquete: el Resource del módulo se declara acá.
         'resource'        => \App\Modules\{{ModuleName}}\Http\Resources\RoleResource::class,
         'service'         => {{ModuleName}}Service::class,
         'searchable'      => ['name'],

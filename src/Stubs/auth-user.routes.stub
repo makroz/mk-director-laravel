@@ -13,41 +13,16 @@ use Illuminate\Support\Facades\Route;
  * valida en 3 capas que el token pertenece al scope correcto (ver
  * docs/guides/AUTH.md § "The 4 defense layers against cross-scope mix-up").
  *
- * TODA ruta pública (fuera del grupo `mk.auth`) lleva
- * `throttle:{limit},{minutes},{scope}-{endpoint}`, con o sin `--no-rbac`
- * (antes login/forgot/reset colgaban de RBAC y refresh no lo tenía nunca).
- * Los límites salen de `mk_director.auth.rate_limits.{endpoint}`. El prefijo
- * `{scope}-{endpoint}` es lo que separa los contadores: `ThrottleRequests` no
- * mete la ruta en la clave, así que sin él TODOS los endpoints (y todos los
- * scopes) comparten un contador por IP (hallazgo #30 del piloto NetPizza).
- *
- * Endpoints condicionales:
- *   - `POST /register` — SÓLO con `--with-register` (opt-in: sin CRUD es un
- *     alta PÚBLICA). Throttle `rate_limits.register` con prefijo
- *     `{scope}-register`; con CRUD, además `mk.auth` + ability `create`.
- *     Despacha VerifyEmail si `--verify-email` está activo.
- *   - `GET /email/verify/{id}/{hash}` (signed URL, marca email_verified_at).
- *   - `POST /email/resend` (re-envía notification, throttled 6,1).
- *   - `PATCH /me` (actualiza profile fields del user autenticado).
- * Sin `--with-register` no hay register; sin `--verify-email`, no hay verify.
- *
- * FEEDBACK10 F10-B06 (2026-07-13): pre-fix, este stub apuntaba a métodos
- * `forgot`/`reset` que NO EXISTEN en `BaseAuthController` (la clase real
- * expone `forgotPassword`/`resetPassword`) → 500
- * `Call to undefined method AuthController::forgot()` en cualquier scope
- * scaffoldeado. Además faltaban las rutas de `logoutAll()` y
- * `changePassword()` (métodos ya implementados en `BaseAuthController` pero
- * nunca expuestos por el scaffolder). Fix: nombres de método alineados +
- * paths bajo `password/*` (consistentes con el docblock canónico de
- * `BaseAuthController`) + rutas faltantes agregadas.
+ * 🔴 TODA ruta pública (fuera del grupo `mk.auth`) lleva un throttle con
+ * prefijo propio: `throttle:{limite},{minutos},{scope}-{endpoint}`, con los
+ * límites de `mk_director.auth.rate_limits.*`. El prefijo NO es decorado:
+ * `ThrottleRequests` no mete la ruta en la clave, así que sin él todos los
+ * endpoints de todos los scopes comparten un contador por IP. Si agregás una
+ * ruta pública, dale el suyo.
  */
 
-// Prefix includes `api/` because Laravel 11+ `loadRoutesFrom` from a
-// ServiceProvider does NOT inherit the `apiPrefix` configured in
-// `bootstrap/app.php` — that only applies to the central `routes/api.php`.
-// Bug 1.3.0-003: the prefix used to be `{{moduleNameLower}}/auth`, which
-// produced `/admin/auth/login` while the AuthController docblock, the
-// command output, and CHANGELOG 1.3.0 all advertised `/api/admin/auth/login`.
+// El prefijo incluye `api/`: `loadRoutesFrom` desde un ServiceProvider no hereda
+// el `apiPrefix` de `bootstrap/app.php`, que sólo aplica a `routes/api.php`.
 Route::prefix('api/{{moduleNameLower}}/auth')->group(function () {
     // ── Públicas ────────────────────────────────────────────────────
     Route::post('login', [AuthController::class, 'login']){{rbacLoginThrottle}};
@@ -67,10 +42,7 @@ Route::prefix('api/{{moduleNameLower}}/auth')->group(function () {
         Route::post('logout-all', [AuthController::class, 'logoutAll']);
         Route::get('me', [AuthController::class, 'me']);
         Route::post('password/change', [AuthController::class, 'changePassword']);
-        // 2026-07-15-profile-edit-password-otp (ADR-3): unconditional —
-        // every scaffolded scope gets OTP password-change for free (like
-        // logout/me), not gated behind a flag. Both methods live on
-        // BaseAuthController (inherited, zero new command branches).
+        // Cambio de contraseña con código de un solo uso enviado por email.
         Route::post('password/code/request', [AuthController::class, 'requestPasswordCode'])
             ->middleware('throttle:'.config('mk_director.auth.rate_limits.password_code_request', '3,10').',{{moduleNameLower}}-pwd-code-req');
         Route::post('password/code/confirm', [AuthController::class, 'confirmPasswordCode'])

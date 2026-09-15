@@ -16,7 +16,7 @@ use Mk\Director\Auth\Models\Ability;
  * `before()` bypass). Las abilities se gestionan con `mk:discover-abilities` +
  * `RoleController::syncAbilities`.
  *
- * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud`.
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}}`.
  */
 class AbilityPolicy
 {

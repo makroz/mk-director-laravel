@@ -959,12 +959,12 @@ test('FEEDBACK10: buildFileFieldsAccessors() emite get{Name}UrlAttribute dinámi
     // accessor para `avatar` → `getAvatarUrlAttribute`.
     expect($out)->toMatch('/function\s+getAvatarUrlAttribute\s*\(\s*\)\s*:\s*\?string/');
     expect($out)->toContain('Storage::url($this->avatar)');
-    expect($out)->toContain('`avatar_url`');   // backticks en el docblock
+    expect($out)->toContain('URL pública de `avatar`');   // docblock del accessor
 
     // accessor para `cover_photo` → `getCoverPhotoUrlAttribute`.
     expect($out)->toMatch('/function\s+getCoverPhotoUrlAttribute\s*\(\s*\)\s*:\s*\?string/');
     expect($out)->toContain('Storage::url($this->cover_photo)');
-    expect($out)->toContain('`cover_photo_url`');
+    expect($out)->toContain('URL pública de `cover_photo`');
 
     // NO `getPhotoUrlAttribute` hardcoded.
     expect($out)->not->toMatch('/function\s+getPhotoUrlAttribute/');

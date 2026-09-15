@@ -15,7 +15,7 @@ use Mk\Director\Auth\Models\Role;
  * modelo CENTRAL del paquete `Mk\Director\Auth\Models\Role`. Default-deny +
  * super-admin bypass en `before()`.
  *
- * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud`.
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}}`.
  */
 class RolePolicy
 {

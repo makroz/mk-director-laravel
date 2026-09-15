@@ -522,9 +522,8 @@ class MakeAuthUserCommand extends Command
 
 
     /**
-     * Factory que vive DENTRO del módulo (DDD estricto, R-P-009).
-     * Laravel la descubre vía este override. Apunta a
-     * `App\\Modules\\{$scope}\\Database\\Factories\\{$scope}Factory`.
+     * La factory vive dentro del módulo, fuera de donde Laravel la busca por
+     * convención: este override le dice cuál es.
      */
     protected static function newFactory(): {$scope}Factory
     {
@@ -553,7 +552,7 @@ PHP
             //
             // Default: vacío (sin --with-crud). --with-crud: apiResource pineado.
             '{{apiResourceEntry}}' => $withCrud
-                ? "    /**\n     * Resource scaffoldeado por el paquete para responses API.\n     * `BaseController::autoTransform()` lo aplica automáticamente al serializar\n     * este modelo. POST-R-PKG-036: pineado como `public` (instance properties\n     * public son accesibles sin Eloquent __get magic intercept).\n     */\n    public \$apiResource = \\App\\Modules\\{$scope}\\Http\\Resources\\{$scope}Resource::class;\n\n"
+                ? "    /**\n     * Resource con el que `BaseController::autoTransform()` serializa este\n     * modelo en las respuestas. Es `public` porque Eloquent intercepta las\n     * propiedades no públicas y devolvería null.\n     */\n    public \$apiResource = \\App\\Modules\\{$scope}\\Http\\Resources\\{$scope}Resource::class;\n\n"
                 : '',
             // R-PKG-015 BUG-NEW-06: FK override para `roles()`.
             // R-PKG-022 BUG-NEW-33: extended with `->using(MkRoleUserPivot::class)`
@@ -569,25 +568,15 @@ PHP
             // `column role_user.{scope}_id does not exist`.
             '{{rolesRelationOverride}}' => <<<PHP
 
+
     /**
-     * Override de `roles()` del trait HasRoles (R-PKG-015 BUG-NEW-06 + R-PKG-022 BUG-NEW-33).
+     * Roles del usuario, sobre la pivot global `role_user`.
      *
-     * Eloquent infiere la foreign key pivot del nombre del modelo (`{$scopeLower}_id`
-     * para `App\\Modules\\{$scope}\\Models\\{$scope}`), pero la pivot `role_user` del
-     * paquete usa `user_id`. Sin este override, `syncRoles()` y `assignRoles()`
-     * explotan con `no such column: role_user.{$scopeLower}_id`.
-     *
-     * El `wherePivot('user_type', static::class)` mantiene el polimorfismo: la
-     * pivot es global pero cada modelo concreto filtra por su FQCN, respetando
-     * MME (R-MK-001) sin necesidad de tablas separadas por scope.
-     *
-     * R-PKG-022: el `->using(MkRoleUserPivot::class)` registra el custom Pivot
-     * class con listener `creating` que setea `user_type` automáticamente. Y
-     * `MkBelongsToMany::from(\$relation)` promote la relation a nuestra subclass
-     * custom que override `newPivot()` para inyectar `user_type` runtime ANTES
-     * de instanciar la pivot (cubre `attach()`, `sync()`, `toggle()`, etc. directo,
-     * no solo los helpers del trait). Sin esto, `\$admin->roles()->attach([1])`
-     * falla con `SQLSTATE: null value in column "user_type" violates not-null constraint`.
+     * La FK es `user_id`: Eloquent inferiría `{$scopeLower}_id` del nombre del
+     * modelo, que no existe en la pivot. La pivot la comparten todos los scopes,
+     * así que cada modelo filtra por su `user_type`; `MkRoleUserPivot` y
+     * `MkBelongsToMany` completan ese `user_type` en cada escritura (`attach`,
+     * `sync`, `toggle`), que es NOT NULL.
      */
     public function roles(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
     {
@@ -610,15 +599,11 @@ PHP,
             // hacen `loadMissing([..., 'directAbilities'])` incondicionalmente.
             '{{directAbilitiesRelationOverride}}' => <<<PHP
 
+
     /**
-     * Override de `directAbilities()` del trait HasAbilities (R-PKG-015 BUG-NEW-06 + R-PKG-022 BUG-NEW-33).
-     *
-     * Idem rationale que `roles()`: la pivot `ability_user` usa `user_id` pero
-     * Eloquent inferiría `{$scopeLower}_id` del nombre del modelo. Sin este override,
-     * `syncDirectAbilities()` y `assignDirectAbilities()` explotan.
-     *
-     * R-PKG-022: ver `roles()` para explicación de `->using(MkAbilityUserPivot::class)`
-     * + `MkBelongsToMany::from()`. Aplica idéntico para direct abilities.
+     * Abilities asignadas directamente al usuario, sobre la pivot global
+     * `ability_user`. Misma FK (`user_id`) y mismo filtro por `user_type` que
+     * `roles()`.
      */
     public function directAbilities(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
     {
@@ -888,15 +873,10 @@ PHP,
                 '{{managedByColumn}}' => "\$table->foreignUuid('{$managedByLower}_id')->nullable()->constrained('{$managedByPlural}')->nullOnDelete();\n            ",
                 '{{managedByRelation}}' => <<<PHP
 
+
     /**
-     * Relación BelongsTo al manager scope ({$managedBy}) que creó/administra este {$scope}.
-     *
-     * F10-B14 (R-PKG-050): pineada automáticamente por el scaffolder cuando
-     * se pasa --managed-by={$managedBy}. La FK `{$managedByLower}_id` está en
-     * la migration (nullable + onDelete set null). Útil para queries Eloquent
-     * tipo `\$member->admin->name` o para filtrar `whereHas('admin', ...)`.
-     *
-     * @return \Illuminate\Database\Eloquent\Relations\BelongsTo
+     * El {$managedByLower} que administra a este {$scopeLower}. La FK es nullable y
+     * queda en null si ese {$managedByLower} se borra.
      */
     public function {$managedByLower}(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {
@@ -2688,11 +2668,10 @@ PHP;
             $urlKey = $fieldName.'_url';
             $out .= <<<PHP
 
+
     /**
-     * FEEDBACK10: accessor `{$urlKey}` que el {Scope}Resource expone.
-     * Resuelve la URL pública de `{$fieldName}` vía el disk configurado
-     * (`Storage::url`). Devuelve `null` si no hay archivo. Requiere
-     * `storage:link` si usás el disk `public`.
+     * URL pública de `{$fieldName}` (`Storage::url`), o null si no hay archivo.
+     * Con el disk `public` requiere `php artisan storage:link`.
      */
     public function get{$studly}UrlAttribute(): ?string
     {
@@ -2735,10 +2714,8 @@ PHP;
         return <<<PHP
 
     /**
-     * Accessors serializados en cada `toArray()` — y por ende en los payloads
-     * de `/me` y `/login` que hidratan `useMkAuth().user`. Sin este `\$appends`,
-     * los `*_url` solo aparecían cuando el Resource los referenciaba a mano (la
-     * LISTA), pero NO en perfil ni sidemenu → el avatar caía a iniciales.
+     * URLs de archivos que viajan en cada `toArray()`: `/me` y `/login`
+     * serializan el modelo sin pasar por el Resource.
      *
      * @var array<int, string>
      */
@@ -3812,7 +3789,7 @@ PHP;
      *   - Secciones 3 (Roles CRUD) + 4 (Abilities) — SOLO si `--with-auth-rbac` (default ON).
      *   - Sección 5 (Error Codes) — compartida.
      *   - Sección 6 (Discovery Command) — operativa.
-     *   - Sección 7 (Referencias) — links a R-PKG-024, R-PKG-032, R-PKG-027, R-MK-001.
+     *   - Sección 7 (Referencias) — dónde leer las reglas del envelope y de módulos.
      *
      * **BC**: este método SOLO escribe si el archivo NO existe. Si el dev ya customizó
      * el contract (secciones adicionales, ejemplos específicos), se respeta su trabajo.
@@ -3899,7 +3876,7 @@ PHP;
 
 **Ability**: `roles.viewAny`
 
-**Response 200** — single-level envelope + pagination grouped (R-PKG-032):
+**Response 200** — single-level envelope + pagination grouped:
 ```json
 {
   "success": true,
@@ -3992,7 +3969,7 @@ PHP;
 
 ## 4. Abilities
 
-> **Namespace**: `/api/{$scopeLower}/abilities` — mismo namespacing que Roles (R-PKG-027).
+> **Namespace**: `/api/{$scopeLower}/abilities` — mismo namespacing que Roles.
 > La **tabla** `abilities` es global del paquete. Los abilities que este módulo
 > declara se pinean con `php artisan mk:discover-abilities --force` post-scaffold.
 
@@ -4004,7 +3981,7 @@ PHP;
 - `search` (string, optional) — filtra por nombre
 - `per_page` (int, default 50)
 
-**Response 200** — single-level envelope + pagination grouped (R-PKG-032):
+**Response 200** — single-level envelope + pagination grouped:
 ```json
 {
   "success": true,
@@ -4032,7 +4009,7 @@ PHP;
 }
 ```
 
-> ⚠️ Drift documentado (HALLAZGO-NEW-FASE14-02 pineado a R-PKG-027): el campo `module`
+> ⚠️ El campo `module`
 > siempre retorna `null` — el modelo `Ability` del paquete NO tiene columna `module`.
 > El filtro por module se hace via prefijo del nombre en el backend, no via este campo.
 
@@ -4799,8 +4776,12 @@ PHP,
             // (` * @property`) que resultaba en docblock desalineado y confuso
             // para IDEs/PHPStan. También se agregó el header descriptivo
             // "Profile fields per-scope." en el wrapper del docblock.
-            $phpType = $this->profileFieldPhpType($type);
-            $docblock .= "     * @property {$phpType} \${$key}\n";
+            // `name` ya lo declara `AuthUser`, y `status` lo tipa su cast al enum:
+            // un `int|null` acá mentiría. El campo de login es obligatorio.
+            if ($key !== 'name' && $key !== 'status') {
+                $phpType = $key === $loginField ? 'string' : $this->profileFieldPhpType($type);
+                $docblock .= " * @property {$phpType} \${$key}\n";
+            }
 
             // Cast entry (solo si no es null — string/text no necesitan cast).
             //
@@ -4849,12 +4830,13 @@ PHP,
         // newline) — el control de blank line entre docblocks vive en el
         // stub (`{{profileFieldsDocblock}}\n\n    /**` o similar). Esto
         // elimina el drift y mantiene el control de espaciado en UN lugar.
+        //
+        // Los `@property` van al docblock de la CLASE (el placeholder vive justo
+        // antes de su `*/`): es el único que leen el IDE y el análisis estático.
+        // Antes se emitían en un bloque propio dentro de la clase, sin elemento
+        // debajo — un docblock huérfano (hallazgo #44 del piloto NetPizza).
         if (! empty($docblock)) {
-            $docblock = "    /**\n"
-                ."     * Profile fields per-scope (R-PKG-011).\n"
-                ."     *\n"
-                .$docblock
-                ."     */\n";
+            $docblock = " *\n".$docblock;
         }
 
         // Para el método register() y updateProfile(): las reglas se pasan via array.
@@ -4913,7 +4895,7 @@ PHP,
     protected function buildRegisterMethod(string $scope, string $scopeLower, string $loginField, string $rulesPhp, bool $verifyEmail): string
     {
         $verifyDispatch = $verifyEmail
-            ? "\n        // R-PKG-011: dispatch verification notification (queueable).\n        \$user->sendEmailVerificationNotification();"
+            ? "\n        // Notificación de verificación (encolable), fuera de la transacción.\n        \$user->sendEmailVerificationNotification();"
             : '';
         $modelFqcn = "\\App\\Modules\\{$scope}\\Models\\{$scope}";
 
@@ -4923,31 +4905,20 @@ PHP,
     /**
      * POST /api/{$scopeLower}/auth/register
      *
-     * Crea un nuevo {$scope} con los profile fields declarados via
-     * `--profile-fields`. Si el scope se generó con `--verify-email`,
-     * dispatch de `Illuminate\\Auth\\Notifications\\VerifyEmail` queueable.
+     * Alta de un {$scopeLower} con sus profile fields.
      *
-     * R-PKG-011: register solo existe si hay `--profile-fields` o `--verify-email`.
-     * Para custom validation (regex CI, date format, etc.), override este método
-     * en la subclase generada.
+     * ⚠️ Mirá el middleware de la ruta: sin `mk.auth` este endpoint es PÚBLICO y
+     * cualquiera puede crearse una cuenta. Tampoco ancla un tenant: en un
+     * proyecto multi-tenant crearía usuarios sin tenant.
      *
-     * R-PKG-014 (v1.6.0-rc4): `$rulesPhp` incluye `password` por default
-     * (BUG-04 fix). Override via StoreAdminRequest si necesitás custom logic
-     * (e.g. confirmar password, validar contra breached passwords, etc.).
-     *
-     * BC: NO existe en v1.5.0-rc4 (este método es opt-in via flag).
-     *
-     * ⚠️ TENANT: el alta NO ancla ningún tenant. En un proyecto multi-tenant
-     * crearía el usuario sin tenant — por eso con `--multi-tenant` el
-     * scaffolder no emite este método (hallazgo #49 del piloto NetPizza).
+     * Para validación propia (confirmar la contraseña, un formato de
+     * documento), sobreescribí este método.
      */
     public function register(\\Illuminate\\Http\\Request \$request): \\Illuminate\\Http\\JsonResponse
     {
         \$data = \$request->validate({$rulesPhp});
 
-        // FQCN, no el nombre corto: este archivo vive en `...\\Http\\Controllers`
-        // y no importa el modelo, así que el nombre corto `{$scope}` se resolvía como
-        // `...\\Http\\Controllers\\{$scope}` → 500 en TODO register (hallazgo #49).
+        // FQCN: este controller no importa el modelo.
         /** @var {$modelFqcn} \$user */
         \$user = \\Illuminate\\Support\\Facades\\DB::transaction(function () use (\$data) {
             /** @var {$modelFqcn} \$user */
@@ -5080,11 +5051,8 @@ PHP;
             $fileStorageWiring = <<<PHP
 
 
-        // ADR-5/ADR-6 — wire FileStoragePlugin so uploaded files land on disk
-        // and \$data[<field>] receives the persisted path BEFORE \$user->update().
-        // Mirrors the CRUDSmart::store()/update() wiring (PluginManager::fireBeforeSave),
-        // which `updateProfile()` never called pre-ADR-5 (AuthController isn't a
-        // CRUDSmart controller — this endpoint needs its own explicit call).
+        // Sube los archivos y deja en \$data la ruta guardada ANTES del update.
+        // Este controller no es CRUDSmart, así que invoca los plugins a mano.
         \$pluginManager = app(\\Mk\\Director\\Managers\\PluginManager::class);
         \$pluginManager->setControllerConfig([
             'plugins_config' => [
@@ -5095,17 +5063,16 @@ PHP;
                 ],
             ],
         ]);
-        // F11-P03: el modelo actual va como contexto para que FileStoragePlugin
-        // vea el path anterior y pueda borrarlo. Sin esto, cada upload deja el
-        // archivo previo huérfano en disco.
+        // El modelo actual va como contexto para que el plugin vea la ruta
+        // anterior y la borre: si no, cada upload deja el archivo previo en disco.
         \$pluginManager->setContextModel(\$user);
         \$pluginManager->fireBeforeSave(\$request, \$data, 'update');
 PHP;
 
             $fileStorageAfterWiring = <<<'PHP'
 
-        // F11-P03: recién acá (update ya persistido) el plugin borra el archivo
-        // reemplazado. También limpia el context model del manager singleton.
+        // Recién acá (update ya persistido) el plugin borra el archivo
+        // reemplazado y limpia su contexto.
         $pluginManager->fireAfterSave($user, $request, 'update');
 
 PHP;
@@ -5117,15 +5084,12 @@ PHP;
     /**
      * PATCH /api/{$scopeLower}/auth/me
      *
-     * Actualiza los profile fields del {$scope} autenticado.
+     * Actualiza el perfil del {$scopeLower} autenticado.
      *
-     * R-PKG-011: solo existe si el scope fue generado con `--profile-fields`.
-     * ADR-5 (2026-07-15): reglas `sometimes`-guarded — PATCH real, solo lo que
-     * venga en el body se valida/actualiza. `email` valida formato + unicidad
-     * ignorando la fila propia; los file fields (`avatar`, etc.) validan como
-     * archivo real y se suben vía FileStoragePlugin.
-     * Para custom validation (regex CI, date format, etc.), override este método
-     * en la subclase generada.
+     * PATCH real: sólo se valida y actualiza lo que viene en el body. `email`
+     * valida formato y unicidad ignorando la fila propia; los campos de archivo
+     * validan como archivo y se suben con `FileStoragePlugin`. Para validación
+     * propia, sobreescribí este método.
      */
     public function updateProfile(\\Illuminate\\Http\\Request \$request): \\Illuminate\\Http\\JsonResponse
     {

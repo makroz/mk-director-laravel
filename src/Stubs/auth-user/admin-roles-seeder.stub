@@ -14,7 +14,7 @@ use Mk\Director\Auth\Models\Role;
 /**
  * Seeder de roles predefinidos del scope `{{moduleNameLower}}`.
  *
- * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}}`.
  *
  * Crea 4 roles con jerarquía:
  *   - super-admin: ability `*` (bypass total)
@@ -31,7 +31,7 @@ class {{ModuleName}}RolesSeeder extends Seeder
     {
         $scope = '{{moduleNameLower}}';
 
-        // FEEDBACK A7: el scaffolder --with-crud rutea TRES recursos —
+        // El CRUD generado rutea TRES recursos —
         // el propio módulo + `roles` + `abilities` (RoleController /
         // AbilityController), cada uno gateado con `mk.ability:{scope}.{resource}.*`.
         // Si el seeder solo concede `{{moduleNamePluralLower}}`, el rol `admin`
@@ -40,17 +40,12 @@ class {{ModuleName}}RolesSeeder extends Seeder
         $resources = ['{{moduleNamePluralLower}}', 'roles', 'abilities'];
 
         // ── super-admin ─────────────────────────────────────────────────
-        // F6-03 (FEEDBACK6, 🟠 multi-scope): el match de updateOrCreate incluye
-        // `guard` (= scope), NO sólo `name`. Sin esto, correr el seeder de un 2º
-        // scope pisaba el `guard` de las filas del 1er scope (nombres compartidos
-        // super-admin/admin/editor/viewer) → sólo quedaban 4 filas con el guard del
-        // último scope y el picker de roles del otro scope salía vacío. Va de la mano
-        // con el unique compuesto (name, guard) de la migración de `roles`.
+        // El match incluye `guard` (= scope), no sólo `name`: los nombres
+        // (super-admin/admin/editor/viewer) se repiten entre scopes, y matchear
+        // por nombre a secas pisaría el guard de los roles de OTRO scope. Va de
+        // la mano con el unique (name, guard) de la tabla `roles`.
         $superAdmin = Role::query()->updateOrCreate(
             ['name' => 'super-admin', 'guard' => $scope],
-            // R-PKG-015 BUG-NEW-04: la tabla `roles` del paquete solo tiene `id, name,
-            // guard, timestamps`. NO tiene `description`. Quitamos del stub. Si el
-            // consumer quiere `description`, agrega una migration custom al paquete.
             ['is_fixed' => FixedStatus::Fixed->value],
         );
         $this->attachAbility($superAdmin, '*', 'Wildcard: todas las abilities.', true);
@@ -61,7 +56,7 @@ class {{ModuleName}}RolesSeeder extends Seeder
             [],
         );
         foreach ($resources as $resource) {
-            // A8: acciones desde el enum canónico CrudAction (SSoT).
+            // Acciones desde el enum `CrudAction` (fuente única).
             foreach (CrudAction::all() as $action) {
                 $this->attachAbility($admin, "{$scope}.{$resource}.{$action}", ucfirst($action).' '.$resource.'.');
             }
@@ -136,9 +131,6 @@ class {{ModuleName}}RolesSeeder extends Seeder
     {
         $ability = Ability::query()->updateOrCreate(
             ['name' => $name],
-            // R-PKG-015 BUG-NEW-03: la tabla `abilities` del paquete solo tiene
-            // `id, name, description, timestamps`. NO tiene `module`. Quitamos del
-            // stub. Si el consumer quiere `module`, agrega una migration custom.
             ['description' => $description, 'is_fixed' => $isFixed ? FixedStatus::Fixed->value : FixedStatus::Editable->value],
         );
 

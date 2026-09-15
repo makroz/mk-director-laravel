@@ -10,103 +10,25 @@ use Mk\Director\Auth\Controllers\BaseAuthController;
 use Mk\Director\Auth\Models\AuthUser;
 
 /**
- * {{ModuleName}}Controller (thin wrapper) — auth del scope `{{moduleNameLower}}`.
+ * Autenticación del scope `{{moduleNameLower}}`.
  *
- * ============================================================
- *  R-PKG-047 D1 + D2 — Patron BaseAuthController canónico
- * ============================================================
+ * Toda la lógica vive en {@see BaseAuthController}; este controller sólo le dice
+ * qué modelo, scope, campo de login y tabla de reset usar. Para comportamiento
+ * propio, sobreescribí sus hooks acá:
  *
- * Pre-R-PKG-047, este controller era una copia de ~500 LOC del AuthController
- * scaffoldeado (login/refresh/logout/me/forgot/reset/verifyEmail/etc. duplicados
- * 90% entre scopes). Bugs se fijaban per-scope y el scaffolder pineaba
- * placeholders condicionales (`rbacAudit*`, `verifyEmailMethods`) que
- * generaban N variantes.
+ *   - `beforeLogin(Request, array)` — ajustar credenciales antes de buscar al usuario
+ *   - `afterLogin(Request, Authenticatable, array)` — auditoría después de emitir el token
+ *   - `customizeLoginValidationRules()` — reglas extra para el login
+ *   - `customizeMePayload(Authenticatable)` — campos extra en `/me`
+ *   - `shouldSendResetNotification(Authenticatable, string)` — decidir si se manda el mail de reset
  *
- * (Sin llaves a propósito: este docblock pasa por el mismo `str_replace` que el
- * código, y con `--verify-email` el nombre del placeholder escrito con llaves
- * se expandía a los métodos viejos —con su propio cierre de docblock— y cerraba este
- * comentario a la mitad: el controller generado no compilaba.)
- *
- * Post-R-PKG-047 D1, TODA la lógica vive en
- * `Mk\Director\Auth\Controllers\BaseAuthController` (SSoT canónico). Este thin
- * wrapper solo override los 4 abstracts requeridos:
- *
- *   - `authModelClass()` → FQCN del modelo del scope (pine la login field, tabla, etc.)
- *   - `authScope()` → 'admin', 'member', etc. (gate de middleware + ability)
- *   - `loginField()` → 'email', 'ci', 'phone', etc. (validation + lookup key)
- *   - `passwordResetTable()` → '{moduleNameLower}_password_reset_tokens' (D2 default)
- *
- * Total: ~30 LOC (vs ~500 LOC pre-D2). Para custom behaviour, override los
- * hooks provistos por BaseAuthController:
- *
- *   - `beforeLogin(Request, array)` — mod credentials pre-lookup (e.g. E.164 normalize)
- *   - `afterLogin(Request, Authenticatable, array)` — audit / analytics post-token-issue
- *   - `customizeLoginValidationRules()` — añade rules extra al /login (e.g. CI regex)
- *   - `customizeMePayload(Authenticatable)` — merge fields al /me response
- *   - `shouldSendResetNotification(Authenticatable, string)` — gate pre-email send
- *
- * ============================================================
- *  Endpoints expuestos (heredados de BaseAuthController, pineados via routes stub)
- * ============================================================
- *
- *   POST   /api/{{moduleNameLower}}/auth/login              — {{loginField}} + password → tokens
- *   POST   /api/{{moduleNameLower}}/auth/refresh            — refresh_token → access_token
- *   POST   /api/{{moduleNameLower}}/auth/logout             — revoca access token actual
- *   POST   /api/{{moduleNameLower}}/auth/logout-all         — revoca TODOS los tokens
- *   POST   /api/{{moduleNameLower}}/auth/password/forgot    — genera token reset
- *   POST   /api/{{moduleNameLower}}/auth/password/reset     — aplica reset con token
- *   POST   /api/{{moduleNameLower}}/auth/password/change    — cambia con current check
- *   GET    /api/{{moduleNameLower}}/auth/me                 — usuario actual + abilities
- *   GET    /api/{{moduleNameLower}}/auth/email/verify/{id}/{hash} — verify email (si --login-field=email)
- *   POST   /api/{{moduleNameLower}}/auth/email/resend       — reenviar verification (si --login-field=email)
- *
- * Auth + ability pineados PER-ROUTE en `auth-user.routes.stub` (no en constructor
- * per HALLAZGO-NEW-FASE18-C defense-in-depth): cada ruta lleva
- * `mk.auth:{{moduleNameLower}}` + `mk.ability:{{moduleNameLower}}.auth.{action}`.
- *
- * ============================================================
- *  Compat / BC notes
- * ============================================================
- *
- * - **Pre-R-PKG-047 AuthController scaffoldeado (~500 LOC)** sigue funcionando
- *   sin cambios — `extends BaseController` y los métodos heredan via
- *   copy-paste. La diferencia es solo estética: el scaffolder ahora emite
- *   thin wrapper (`extends BaseAuthController`) en vez de código duplicado.
- *   Consumers pre-existentes NO se rompen si regeneran post-R-PKG-047 —
- *   el thin wrapper es BEHAVIORAL EQUIVALENT al código anterior.
- *
- * - **Hooks nuevos (R-PKG-047)**: pre-R-PKG-047 no existen. Consumers que
- *   necesiten lógica custom (e.g. E.164 normalization) override los hooks
- *   en ESTE thin wrapper. Override opcional y BC-safe.
- *
- * - **ScopeStatus enum post-D4** (R-PKG-047 D4): el modelo del scope puede
- *   añadir `use ScopeStatus;` + cast `protected $casts = ['status' => ScopeStatus::class]`
- *   para reemplazar `is_active` boolean. `userHasValidStatus()` en
- *   BaseAuthController chequea el enum via `canAuthenticate()` con BC fallback
- *   a `is_active` boolean para scopes pre-D4.
- *
- * - **--verify-email**: si --login-field=email (default), la verificación está
- *   activa. Si --login-field=ci/phone/documento, los endpoints
- *   `/email/verify/...` retornan 422 ERR_VALIDATION (defense-in-depth contra
- *   pinear verificación sobre un campo que no es email).
- *
- * - **Enforcement de login-field (R-PKG-047 D5)**: BaseAuthController usa
- *   `$this->loginField()` dinámicamente en TODOS los endpoints de auth (no solo
- *   `login()`). Validation rules, lookup columns, Resource exposure, etc.
- *   Cambiar `--login-field=ci` regenera correctamente todos los 9 artifacts
- *   (F5 D5).
- *
- * Generado por `php artisan mk:make:auth-user {{ModuleName}}` post-R-PKG-047 D2.
- * Sin flags `--with-*` requiere (defaults ON: CRUD + RBAC + Status auto-pineados).
+ * Las rutas y su middleware (`mk.auth:{{moduleNameLower}}`, throttles) están en
+ * `Http/Routes/api.php`, no en este controller.
  */
 class AuthController extends BaseAuthController
 {
     /**
-     * R-PKG-047 D1 — FQCN del modelo del scope.
-     *
-     * El scaffolder resuelve esto desde el argumento `{scope}` y pinea el FQCN
-     * en runtime. Post-construcción, el modelo está en
-     * `App\Modules\{{ModuleName}}\Models\{{ModuleName}}.php` extends `AuthUser`.
+     * Modelo del scope.
      *
      * @return class-string<\App\Modules\{{ModuleName}}\Models\{{ModuleName}}>
      */
@@ -116,10 +38,8 @@ class AuthController extends BaseAuthController
     }
 
     /**
-     * R-PKG-047 D1 — scope string para middleware + tokens + abilities.
-     *
-     * Convention: snake_case del scope name. Pineado por el scaffolder desde
-     * `{scope}` argument vía `Str::snake()`. Ej: Member → 'member', CustomerAdmin → 'customer_admin'.
+     * Scope: el guard del middleware, la marca de los tokens y el prefijo de
+     * las abilities.
      */
     protected function authScope(): string
     {
@@ -127,11 +47,7 @@ class AuthController extends BaseAuthController
     }
 
     /**
-     * R-PKG-047 D1 — campo usado para login (validation + lookup).
-     *
-     * Pineado desde `--login-field=` flag (default 'email'). Valores comunes:
-     * 'email', 'ci', 'phone', 'username', 'documento'. BaseAuthController usa
-     * dinámicamente en TODOS los endpoints (no hardcoded).
+     * Campo por el que se valida y se busca al usuario en login y recuperación.
      */
     protected function loginField(): string
     {
@@ -139,12 +55,7 @@ class AuthController extends BaseAuthController
     }
 
     /**
-     * R-PKG-047 D1 — tabla donde se persisten los tokens de password reset.
-     *
-     * Convention: `{moduleNameLower}_password_reset_tokens`. La migration scaffoldeada
-     * crea esta tabla con columnas `{loginField}` (UNIQUE), `token` (bcrypt-hash),
-     * `created_at`. BaseAuthController la referencia via `DB::table($this->passwordResetTable())`
-     * y `Schema::hasTable($table)` runtime check.
+     * Tabla de tokens de reset de contraseña (la crea la migración del scope).
      */
     protected function passwordResetTable(): string
     {

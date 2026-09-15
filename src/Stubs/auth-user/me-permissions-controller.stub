@@ -9,8 +9,7 @@ use Illuminate\Http\Request;
 use Mk\Director\Controllers\BaseController;
 
 /**
- * Endpoint opt-in `GET /api/{{moduleNameLower}}/auth/me/permissions`
- * (R-PKG-042 FASE18-05).
+ * Endpoint opt-in `GET /api/{{moduleNameLower}}/auth/me/permissions`.
  *
  * Retorna el desglose completo de abilities del admin actual:
  *   - `direct_abilities`: grants directos en `ability_user` pivot (sin via role)
@@ -21,15 +20,9 @@ use Mk\Director\Controllers\BaseController;
  * que necesita mostrar el desglose. Si tu UI solo necesita `effective_abilities`
  * (gate de UI, sidebar), el default `/me` ya te las da — no pinees este endpoint.
  *
- * **Por qué es opt-in, no default**: el campo `direct_abilities` se removió
- * del default Resource (R-PKG-042 FASE18-05) porque duplicaba `abilities`
- * cuando un admin tiene grants directos que coinciden con los del role
- * (caso común con super-admin). Mostrar el desglose solo cuando el UI lo
- * pide explícitamente evita over-emission en cada login/me.
- *
- * **BC**: si tu UI dependía del campo `direct_abilities` en /me, override
- * el Resource para agregarlo de nuevo (1 línea), o pineá este endpoint
- * y consumilo. No es BC break — es opt-in.
+ * **Por qué es opt-in**: el desglose es más pesado que `abilities` y sólo lo
+ * necesita una pantalla de gestión de permisos; no tiene sentido pagarlo en
+ * cada login o `/me`.
  */
 class MePermissionsController extends BaseController
 {

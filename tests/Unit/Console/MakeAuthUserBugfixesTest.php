@@ -92,24 +92,19 @@ function migrationStub014(): string
 
 // ── BUG-02 + R-PKG-015 BUG-NEW-11: model docblock completo ─────────────
 
-test('BUG-02 + R-PKG-015 BUG-NEW-11: model docblock se emite como bloque /** ... */ completo con header', function () {
+test('BUG-02 + R-PKG-015 BUG-NEW-11: los @property de profile fields van al docblock de la clase', function () {
     $stub = modelStub014();
 
     // El stub tiene el placeholder {{profileFieldsDocblock}}.
     expect($stub)->toContain('{{profileFieldsDocblock}}');
 
-    // R-PKG-015 BUG-NEW-11: el command ahora emite un bloque docblock con
-    //   - header "Profile fields per-scope (R-PKG-011)."
-    //   - líneas de @property indentadas con 5 espacios (alineadas con `     *`)
-    //   - cierre con `\n     */\n` (newline antes del */)
+    // Pin reescrito (hallazgo #44): el bloque propio con header quedaba
+    // huérfano sin profile fields. Ahora el placeholder cierra el docblock de
+    // la clase y el command emite líneas ` * @property`.
+    expect($stub)->toContain('{{profileFieldsDocblock}} */');
     $command = commandSource014();
-
-    // Header descriptivo agregado.
-    expect($command)->toContain('Profile fields per-scope (R-PKG-011)')
-        // Cierre correcto con `     */` + literal `\n` (2 chars) al final del string.
-        ->and($command)->toContain('     */\\n')
-        // @property lines con 5 espacios de indentación (alineadas con `     *`).
-        ->and($command)->toContain('     * @property');
+    expect($command)->toContain('" * @property')
+        ->and($command)->not->toContain('"     * Profile fields per-scope');
 });
 
 // ── BUG-03: profile fields nullable default + --profile-fields-required ──

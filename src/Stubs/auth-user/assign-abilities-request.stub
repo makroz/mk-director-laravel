@@ -10,7 +10,7 @@ use Mk\Director\Auth\Models\Ability;
 /**
  * Validación para asignar abilities directas (bypass role hierarchy) a un {{ModuleName}}.
  *
- * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}}`.
  *
  * Abilities se validan contra las existentes en `mk_director`. Si la ability
  * no existe, se rechaza (evita typos).

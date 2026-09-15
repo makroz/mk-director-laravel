@@ -10,7 +10,7 @@ use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 /**
  * Contrato del Repository de {{ModuleName}} users.
  *
- * Generado por `php artisan mk:make:auth-user {{ModuleName}} --with-crud` (R-PKG-014).
+ * Generado por `php artisan mk:make:auth-user {{ModuleName}}`.
  *
  * ¿Por qué interface?: permite mockear el Repository en tests sin tocar
  * implementaciones reales. El Service depende de este contrato, NO de la

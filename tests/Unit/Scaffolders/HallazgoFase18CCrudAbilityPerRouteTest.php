@@ -152,14 +152,14 @@ test('HALLAZGO-NEW-FASE18-C — CRUD stub: every Route::xxx carries mk.auth + mk
     expect($verbCount)->toBe($middlewareCount, "Number of verb routes ({$verbCount}) MUST equal number of middleware blocks ({$middlewareCount}).");
 });
 
-test('HALLAZGO-NEW-FASE18-C — CRUD stub: BC break is documented inline (R-G-033 compliance)', function () use ($crudStubPath) {
+test('HALLAZGO-NEW-FASE18-C — CRUD stub documents why each route carries its own ability', function () use ($crudStubPath) {
     $stub = (string) file_get_contents($crudStubPath);
 
-    // The stub MUST document the BC break so that future readers know why
-    // the per-route middleware structure changed. R-G-033 requires
-    // explicit BC break disclosure.
+    // Rewritten pin: the BC-break history now lives in the package CHANGELOG;
+    // generated consumer code describes the contract, without internal ticket
+    // ids (finding #44).
     expect($stub)
-        ->toContain('HALLAZGO-NEW-FASE18-C')
-        ->toContain('BC BREAK')
-        ->toContain('mk:discover-abilities --force');
+        ->toContain('Cada ruta lleva su propio `mk.auth:{{moduleNameLower}}`')
+        ->toContain('index → viewAny')
+        ->not->toContain('HALLAZGO-NEW-FASE18-C');
 });

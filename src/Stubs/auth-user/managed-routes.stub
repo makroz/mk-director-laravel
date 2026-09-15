@@ -9,8 +9,7 @@ use Illuminate\Support\Facades\Route;
  * Rutas MANAGED del scope `{{moduleNameLower}}` — GESTIONADAS POR el scope
  * `{{managerNameLower}}`.
  *
- * Generadas por `php artisan mk:make:auth-user {{ModuleName}} --with-crud --managed-by={{managerName}}`
- * (ARCH-01 / FEEDBACK6).
+ * Generadas por `php artisan mk:make:auth-user {{ModuleName}} --managed-by={{managerName}}`.
  *
  * ## Por qué existe este archivo (el "quién hace el CRUD")
  *
@@ -44,8 +43,8 @@ use Illuminate\Support\Facades\Route;
  * `mk:discover-abilities --module={{ModuleName}}` las descubre automáticamente
  * desde el middleware `mk.ability:` de abajo.
  *
- * MME (R-MK-001): este archivo vive DENTRO del módulo `{{ModuleName}}` y reusa
- * sus propios controllers, así que NO importa modelos de otro módulo — la
+ * Este archivo vive DENTRO del módulo `{{ModuleName}}` y reusa sus propios
+ * controllers, así que NO importa modelos de otro módulo — la
  * excepción cross-scope se resuelve por CONFIG de rutas (guard del manager),
  * no por acoplamiento de código entre módulos.
  */

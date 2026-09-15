@@ -2505,6 +2505,36 @@ if (in_array(\Illuminate\Support\Facades\DB::getDriverName(), ['pgsql', 'mysql',
 - Verificado a mano contra PostgreSQL 18 y MariaDB 11.4: `status = 4` entra,
   `status = 99` lo rechaza el constraint.
 
+
+#### 3.19.7 Comentarios del código generado (hallazgo #44)
+
+El barrido de docblocks huérfanos del piloto NetPizza falló sobre el modelo de un
+scope recién generado. Lo que cambió en todo lo que emite `mk:make:auth-user`:
+
+- **Sin docblocks huérfanos.** Los `@property` de los profile fields van al
+  docblock de la CLASE (antes: un bloque propio dentro de la clase, que ninguna
+  herramienta lee y que sin profile fields quedaba suelto). El docblock de los
+  accessors `*_url` sólo sale junto con los accessors. `@property` omite `name`
+  (lo declara `AuthUser`) y `status` (lo tipa su cast al enum).
+- **Sin historia del paquete.** Los stubs y los fragmentos que arma el comando
+  describen qué hace el código y por qué, sin ids de tickets, fechas, nombres de
+  consumers ni «pre-fix/post-fix»: eso vive en este CHANGELOG. Cambió el texto de
+  37 de los 38 stubs `auth-user*` y de los fragmentos del modelo, `register()`,
+  `updateProfile()`, rutas de verificación y `api_contract.md`.
+- **Sin comentarios que dependan de los flags.** El de `$casts` afirmaba «queda
+  solo `password`» con `status` adentro; ahora no enumera contenidos que la
+  plantilla cambia.
+
+Regla para quien toque un stub: el comentario es para el dev del consumer que lee
+SU módulo. Lo mide `MakeAuthUserGeneratedCodeHygieneTest`, que genera siete
+combinaciones de flags y falla ante un docblock huérfano (mismo criterio que el
+barrido de NetPizza, con autoprueba), un id interno (`R-PKG-*`, `FEEDBACK*`,
+`BUG-NEW-*`, `F10-B*`, `HALLAZGO*`, `ADR-*`, fechas, nombres de consumers) o un
+archivo PHP que no pasa `php -l`.
+
+⚠️ Los módulos ya generados conservan sus comentarios viejos: el cambio es sólo de
+texto y no afecta el runtime.
+
 ---
 
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)
