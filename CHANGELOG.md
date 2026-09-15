@@ -12,6 +12,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Piloto NetPizza: `--plural`, throttles con prefijo, `register` que no daba 500 y `create-super-admin --scope`
+
+Cuatro defectos que salieron al generar un tercer scope en el piloto NetPizza
+(operadores de plataforma, tabla `operadores`). Los tres primeros cambian **lo
+que genera** `mk:make:auth-user` de ahora en más: un scope ya generado no se
+toca. Detalle en `DEVELOPER_GUIDE.md` § 3.19.
+
+### Added
+
+- **`mk:make:auth-user --plural=<snake_case>`**. `Str::plural()` es el inflector
+  inglés (`operador` → `operadors`) y no había forma de pedir otro. El plural se
+  derivaba en **tres** lugares del comando (`handle()`, el provider de rutas
+  managed, el endpoint de permisos); ahora pasa por un solo helper
+  (`scopePlural()`), así que tabla, `$table`, provider de `config/auth.php`,
+  migración, rutas y abilities no pueden divergir. Validado
+  `^[a-z][a-z0-9_]*$`. Sin el flag, el default de siempre.
+- **`mk:auth:create-super-admin --scope=<scope>`** (default `admin`) y
+  **`--no-roles`**. Hallazgo #47: estaba clavado a `App\Modules\Admin\Models\Admin`
+  y `AdminRolesSeeder`. El modelo se resuelve por `config/auth.php`
+  (`guards.{scope}.provider` → `providers.{provider}.model`), el mismo camino
+  que `mk.auth:{scope}`; `--{loginField}` se ofrece para el modelo de cada guard.
+
+### Fixed
+
+- 🔴 **Los throttles generados compartían UN contador (hallazgo #30).** La clave
+  de `ThrottleRequests` es `prefijo + sha1(dominio|ip)`: la ruta no entra, y los
+  stubs no ponían prefijo. Login, forgot, reset, los dos del PIN público, los
+  dos del PIN autenticado y el reenvío de verificación —de **todos** los
+  scopes— escribían en el mismo contador. Medido en el piloto: tres pedidos de
+  código dejaron el login con dos intentos y bloqueado diez minutos. Ahora cada
+  uno lleva `{scope}-{endpoint}` (`throttle:5,1,operador-login`), el formato que
+  el piloto ya había parcheado a mano.
+- 🔴 **El `register` generado daba 500 siempre (hallazgo #49)**: `{Scope}::create()`
+  sin importar el modelo → `Class "App\Modules\Admin\Http\Controllers\Admin"
+  not found`. Usa el FQCN del modelo y de la facade `DB`.
+- **`mk:auth:create-super-admin` no era idempotente con `tenant.fail_closed`
+  (hallazgo #47)**: el "ya existe" pasaba por el scope de tenant, que en consola
+  agrega `where 1 = 0`; la segunda corrida intentaba el insert y reventaba con
+  `SQLSTATE[23505]`. Va con `withoutGlobalScopes()`. Sin tablas de RBAC, además,
+  saltea roles con aviso en vez de reventar con el usuario ya creado.
+- **`--managed-by`**: la FK apunta a la tabla real del manager (su `$table`),
+  no a `Str::plural()` del nombre.
+- **`mk:discover-abilities`**: para un modelo `AuthUser`, el recurso de las
+  abilities CRUD es su `$table`. Con `--plural` escribía `operador.operadors.*`
+  mientras la Policy chequea `operador.operadores.*`. Los modelos que no son
+  `AuthUser` no cambian (un `$table` custom renombraría abilities sembradas).
+- **`AuthUser::preventTableDriftFootgun`** ya no afirma cuál es la tabla (con
+  `--plural` mandaba a pinear la equivocada) ni recomienda `--with-crud --force`,
+  flags que no existen.
+
+### Changed (⚠️ lo generado)
+
+- **Con `--multi-tenant` no se emite `POST /auth/register`** (hallazgo #49). Un
+  alta sin contexto crea el usuario sin tenant y, con el login único global,
+  deja ocupar el identificador de otro cliente. El alta va por el CRUD o por un
+  `register` escrito a mano que ancle el tenant.
+
+### ⚠️ Notas para consumers
+
+- **Nada cambia en código ya generado.** Los scopes existentes siguen con los
+  throttles sin prefijo: agregalo a mano en su `Http/Routes/api.php`.
+- `mk:auth:create-super-admin` sin `--scope` resuelve el admin por
+  `config/auth.php` en vez del FQCN fijo. En RETO y en los dos NetPizza el guard
+  `admin` apunta a `App\Modules\Admin\Models\Admin`: mismo modelo.
+- `mk_director.auth.rate_limits` no declara `refresh`, y el scaffolder no emite
+  throttle en `refresh`: quien lo throttlee a mano pasa su default en `config()`.
+
 ## [UNRELEASED] — Motor de reportes (PDF · XLSX · CSV), y `CRUDSmart` escribe en transacción
 
 ### Added — motor de exportación

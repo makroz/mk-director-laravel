@@ -170,8 +170,10 @@ test('default behavior (sin --profile-fields) preserva BC con v1.5.0-rc4', funct
 test('register() solo se genera si hay --profile-fields o --verify-email', function () {
     $source = commandSource011Pf();
 
-    // handle() tiene la condición explícita.
-    expect($source)->toMatch('/if \(\! empty\(\$profileFields\) \|\| \$verifyEmail\)/');
+    // handle() tiene la condición explícita. Hallazgo #49: además, NO con
+    // --multi-tenant (un alta sin tenant) — el pin cambió por eso.
+    expect($source)->toMatch('/\$emitRegister = \(\! empty\(\$profileFields\) \|\| \$verifyEmail\) && \! \$multiTenant;/');
+    expect($source)->toContain('if ($emitRegister) {');
 });
 
 test('updateProfile() solo se genera si hay --profile-fields', function () {

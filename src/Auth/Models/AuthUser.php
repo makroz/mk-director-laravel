@@ -109,16 +109,19 @@ abstract class AuthUser extends Authenticatable implements AuthenticatableContra
         // Si está heredada de `AuthUser` (default `'auth_users'`),
         // es drift footgun → error explícito.
         if ($property->class !== static::class) {
-            $expectedTable = Str::snake(Str::pluralStudly(class_basename(static::class)));
+            // El plural inglés es sólo el DEFAULT del scaffolder: un scope
+            // generado con `--plural=` (`Operador` → `operadores`) tiene otra
+            // tabla, y desde acá no hay forma de saberla. El mensaje no puede
+            // afirmar "tu tabla es X" — mandaría a pinear `operadors`.
+            $defaultTable = Str::snake(Str::pluralStudly(class_basename(static::class)));
 
             throw new \LogicException(sprintf(
                 '%s extends AuthUser pero NO override protected $table. '.
                 'Si no se sobreescribe, AuthUser usaría la tabla "auth_users" (vacía, no usada). '.
-                'Pineá en tu modelo del scope: protected $table = "%s"; '.
-                'Para regenerar el scaffold completo: php artisan mk:make:auth-user %s --with-crud --force',
+                'Pineá en tu modelo del scope la tabla que crea su migración: protected $table = "<tabla del scope>"; '.
+                '(el scaffolder usa "%s" salvo que se haya generado con --plural=).',
                 static::class,
-                $expectedTable,
-                class_basename(static::class),
+                $defaultTable,
             ));
         }
     }

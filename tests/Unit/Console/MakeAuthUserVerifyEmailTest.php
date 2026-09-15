@@ -136,7 +136,8 @@ test('buildVerifyEmailReplacements genera signed URL para /email/verify/{id}/{ha
 test('buildVerifyEmailReplacements genera throttle 6,1 para /email/resend', function () {
     $source = commandSource011Ve();
 
-    expect($source)->toContain("->middleware('throttle:6,1')");
+    // Hallazgo #30: con prefijo propio, o comparte contador con login/forgot/reset.
+    expect($source)->toContain("->middleware('throttle:6,1,{\$scopeLower}-email-resend')");
     expect($source)->toContain("'email/resend'");
 });
 

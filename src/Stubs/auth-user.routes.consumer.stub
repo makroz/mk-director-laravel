@@ -29,7 +29,7 @@ use Illuminate\Support\Facades\Route;
  *
  * R-PKG-010: cuando el scope se genera con `--with-auth-rbac`, los
  * endpoints públicos (`/login`, `/password/forgot`, `/password/reset`) llevan
- * middleware `throttle:{limit},{minutes}` configurable por
+ * middleware `throttle:{limit},{minutes},{scope}-{endpoint}` configurable por
  * `mk_director.auth.rate_limits.{endpoint}`.
  *
  * R-PKG-011: cuando el scope se genera con `--profile-fields` o

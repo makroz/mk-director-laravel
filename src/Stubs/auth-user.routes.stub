@@ -15,8 +15,11 @@ use Illuminate\Support\Facades\Route;
  *
  * R-PKG-010: cuando el scope se genera con `--with-auth-rbac`, los
  * endpoints públicos (`/login`, `/password/forgot`, `/password/reset`) llevan
- * middleware `throttle:{limit},{minutes}` configurable por
- * `mk_director.auth.rate_limits.{endpoint}`. Default mode (sin flag):
+ * middleware `throttle:{limit},{minutes},{scope}-{endpoint}` configurable por
+ * `mk_director.auth.rate_limits.{endpoint}`. El prefijo `{scope}-{endpoint}`
+ * es lo que separa los contadores: `ThrottleRequests` no mete la ruta en la
+ * clave, así que sin él TODOS los endpoints (y todos los scopes) comparten un
+ * contador por IP (hallazgo #30 del piloto NetPizza). Default mode (sin flag):
  * idéntico a v1.5.0-rc3 (sin rate limit middleware). BC preservada.
  *
  * R-PKG-011: cuando el scope se genera con `--profile-fields` o
@@ -54,9 +57,9 @@ Route::prefix('api/{{moduleNameLower}}/auth')->group(function () {
     // forgot-vía-OTP: variante por PIN de 6 dígitos del reset (públicas, como
     // forgot/reset). Reusan EmailOtpService con purpose='password_reset'.
     Route::post('password/reset/code/request', [AuthController::class, 'requestPasswordResetCode'])
-        ->middleware('throttle:'.config('mk_director.auth.rate_limits.password_reset_code_request', '3,10'));
+        ->middleware('throttle:'.config('mk_director.auth.rate_limits.password_reset_code_request', '3,10').',{{moduleNameLower}}-reset-code-req');
     Route::post('password/reset/code/confirm', [AuthController::class, 'confirmPasswordResetCode'])
-        ->middleware('throttle:'.config('mk_director.auth.rate_limits.password_reset_code_confirm', '5,10'));
+        ->middleware('throttle:'.config('mk_director.auth.rate_limits.password_reset_code_confirm', '5,10').',{{moduleNameLower}}-reset-code-confirm');
 {{emailVerifyRoutes}}
     // ── Protegidas (auth: scope) ────────────────────────────────────
     Route::middleware('mk.auth:{{moduleNameLower}}'){{verifiedMiddleware}}->group(function () {
@@ -69,9 +72,9 @@ Route::prefix('api/{{moduleNameLower}}/auth')->group(function () {
         // logout/me), not gated behind a flag. Both methods live on
         // BaseAuthController (inherited, zero new command branches).
         Route::post('password/code/request', [AuthController::class, 'requestPasswordCode'])
-            ->middleware('throttle:'.config('mk_director.auth.rate_limits.password_code_request', '3,10'));
+            ->middleware('throttle:'.config('mk_director.auth.rate_limits.password_code_request', '3,10').',{{moduleNameLower}}-pwd-code-req');
         Route::post('password/code/confirm', [AuthController::class, 'confirmPasswordCode'])
-            ->middleware('throttle:'.config('mk_director.auth.rate_limits.password_code_confirm', '5,10'));
+            ->middleware('throttle:'.config('mk_director.auth.rate_limits.password_code_confirm', '5,10').',{{moduleNameLower}}-pwd-code-confirm');
         {{updateProfileRoute}}
     });
 });

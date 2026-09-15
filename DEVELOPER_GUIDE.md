@@ -111,7 +111,7 @@ Esta es la tabla resumen de qué endpoints emiten `__extraData` y cuáles no, pi
 | `POST /api/{scope}/auth/login` | NO | `{access_token, refresh_token, token_type, expires_in, admin}` | Login scaffolded |
 | `POST /api/{scope}/auth/refresh` | NO | `{access_token, refresh_token, token_type, expires_in}` | Refresh scaffolded |
 | `POST /api/{scope}/auth/logout` | NO | `true` | Logout scaffolded (usa `AuthUser::safeLogoutCurrentToken()`) |
-| `POST /api/{scope}/auth/register` | NO | subset del user model | Register scaffoldeado |
+| `POST /api/{scope}/auth/register` | NO | subset del user model | Register scaffoldeado (no se emite con `--multi-tenant`) |
 | `POST /api/{scope}/auth/forgot` | NO | `null` | Forgot scaffolded |
 | `POST /api/{scope}/auth/reset` | NO | `true` | Reset scaffolded |
 | `GET /api/{scope}/auth/me` | NO | user model (con `roles[].abilities[]`) | Me endpoint |
@@ -729,12 +729,20 @@ php artisan mk:make:auth-user Admin --login-field=ci --with-auth-rbac
 2. **Rate limit middleware** en endpoints públicos (vía `routes/api.php`):
    ```php
    Route::post('login', [AuthController::class, 'login'])
-       ->middleware('throttle:' . config('mk_director.auth.rate_limits.login', '5,1'));
+       ->middleware('throttle:'.config('mk_director.auth.rate_limits.login', '5,1').',admin-login');
    Route::post('password/forgot', [AuthController::class, 'forgotPassword'])
-       ->middleware('throttle:' . config('mk_director.auth.rate_limits.forgot', '3,1'));
+       ->middleware('throttle:'.config('mk_director.auth.rate_limits.forgot', '3,1').',admin-forgot');
    Route::post('password/reset', [AuthController::class, 'resetPassword'])
-       ->middleware('throttle:' . config('mk_director.auth.rate_limits.reset', '3,1'));
+       ->middleware('throttle:'.config('mk_director.auth.rate_limits.reset', '3,1').',admin-reset');
    ```
+
+   > 🔴 **El tercer parámetro (`,{scope}-{endpoint}`) no es decorado.** La clave
+   > de `ThrottleRequests` es `prefijo + sha1(dominio|ip)`: la ruta NO entra.
+   > Sin prefijo, todos los `throttle:` de todos los scopes escriben en UN
+   > contador por IP, y el TTL lo fija la primera ruta que escribe. Medido en el
+   > piloto NetPizza (hallazgo #30): tres pedidos de código de recuperación
+   > (`3,10`) dejaron el login (`5,1`) con dos intentos y bloqueado diez
+   > minutos — detrás de un NAT, para todo el local. Ver §3.19.
 
    > **F10-B06 (RETO corrida 10)**: el stub llegó a apuntar `forgot`/`reset` a métodos
    > inexistentes en `BaseAuthController` (la clase real expone `forgotPassword()`/
@@ -2348,6 +2356,88 @@ En éxito corre dentro de `DB::transaction`: `setAuthPassword()` (ver §3.18.4) 
 |---|---|---|
 | `rate_limits.password_reset_code_request` | `'3,10'` | `MK_AUTH_RATE_LIMIT_PWD_RESET_CODE_REQ` |
 | `rate_limits.password_reset_code_confirm` | `'5,10'` | `MK_AUTH_RATE_LIMIT_PWD_RESET_CODE_CONFIRM` |
+
+### 3.19 Piloto NetPizza: `--plural`, throttles con prefijo, `register` y `create-super-admin --scope`
+
+Cuatro defectos que encontró el piloto NetPizza al generar un tercer scope
+(operadores de plataforma, tabla `operadores`). Lo que cambia es **lo que se
+genera de ahora en más**: un scope ya generado no se toca.
+
+#### 3.19.1 `mk:make:auth-user --plural=<snake_case>`
+
+`Str::plural()` es el inflector inglés: `operador` → `operadors`. El plural
+se derivaba en tres lugares del comando, y ahora pasa por un solo helper
+(`scopePlural()`), así que tabla, `$table`, provider de `config/auth.php`,
+migración, rutas CRUD, rutas managed y abilities dicen lo mismo.
+
+```bash
+php artisan mk:make:auth-user Operador --plural=operadores --no-crud --no-rbac
+```
+
+- Validación: `^[a-z][a-z0-9_]*$`; otra cosa → error y `FAILURE` sin generar nada.
+- Sin el flag, el default es el de siempre (BC).
+- `--managed-by=<Manager>`: la FK apunta a la tabla **real** del manager (su
+  `$table`), no a `Str::plural()` — un manager generado con `--plural` ya no
+  rompe la migración del administrado.
+- `mk:discover-abilities`: para un modelo `AuthUser`, el recurso de las
+  abilities CRUD es su `$table` (`operador.operadores.*`, lo que chequean la
+  Policy y el RolesSeeder). Los modelos que no son `AuthUser` siguen con el
+  plural del nombre de clase: un `$table` custom renombraría abilities ya
+  sembradas.
+
+#### 3.19.2 Throttles con prefijo `{scope}-{endpoint}` (hallazgo #30)
+
+Todo `throttle:` generado lleva tercer parámetro:
+
+| Endpoint | Prefijo |
+|---|---|
+| `login` / `password/forgot` / `password/reset` (con RBAC) | `{scope}-login` / `{scope}-forgot` / `{scope}-reset` |
+| `password/reset/code/request` / `confirm` | `{scope}-reset-code-req` / `{scope}-reset-code-confirm` |
+| `password/code/request` / `confirm` | `{scope}-pwd-code-req` / `{scope}-pwd-code-confirm` |
+| `email/resend` (`--verify-email`) | `{scope}-email-resend` |
+
+⚠️ **Scopes ya generados**: siguen sin prefijo. Agregalo a mano en su
+`Http/Routes/api.php` con el mismo formato
+(`'throttle:'.config('mk_director.auth.rate_limits.login', '5,1').',admin-login'`).
+
+`refresh` no lleva throttle en lo que genera el scaffolder, y
+`mk_director.auth.rate_limits` no declara una clave `refresh`: un consumer que
+throttlee `refresh` a mano tiene que pasarle su default en el `config()`.
+
+#### 3.19.3 `register` generado (hallazgo #49)
+
+- **Daba 500 siempre**: llamaba `{Scope}::create()` sin importar el modelo, y
+  PHP lo resolvía en el namespace del controller
+  (`Class "App\Modules\Admin\Http\Controllers\Admin" not found`). Ahora usa
+  el FQCN del modelo (y de la facade `DB`).
+- **Con `--multi-tenant` no se emite** (ni método ni ruta) y el comando avisa.
+  Un alta sin contexto crea el usuario sin tenant, y con el login único global
+  deja ocupar el identificador de otro cliente. Anclarlo al tenant de quien
+  crea es una decisión del consumer, no algo que el scaffolder pueda adivinar:
+  el alta va por el CRUD, o por un `register` escrito a mano. Se prefirió no
+  emitirlo antes que agregar un flag para pedir un endpoint inseguro.
+
+#### 3.19.4 `mk:auth:create-super-admin --scope=<scope>` (hallazgo #47)
+
+```bash
+php artisan mk:auth:create-super-admin --scope=operador --email=ops@example.com --name=Ops --password=... --no-roles --no-interaction
+```
+
+- **Modelo**: `auth.guards.{scope}.provider` → `auth.providers.{provider}.model`,
+  el mismo camino por el que `mk.auth:{scope}` resuelve al usuario. Si el guard
+  no está cableado, la convención `App\Modules\{Scope}\Models\{Scope}`.
+  Default `--scope=admin` (BC).
+- **Login field**: `--{loginField}` se ofrece para el modelo de cada guard de
+  `config/auth.php` (antes, sólo el del Admin).
+- **Idempotencia**: el "ya existe" va con `withoutGlobalScopes()`. En consola no
+  hay tenant, y con `tenant.fail_closed` el scope agrega `where 1 = 0`: el
+  usuario existía, el chequeo no lo veía y el insert reventaba contra el unique.
+  Se apagan todos los scopes, no sólo el de tenant: el unique es de la tabla, y
+  una fila soft-deleted con ese login también choca.
+- **Roles**: rol `super-admin` con guard = scope + ability `*`, y el
+  `{Scope}RolesSeeder` si existe. `--no-roles` crea sólo el usuario. Sin las
+  tablas `roles`/`role_user` también se saltean, con aviso, en vez de reventar
+  con el usuario ya creado.
 
 ---
 

@@ -87,7 +87,7 @@ Los 18 comandos que registra el paquete (`php artisan list mk`).
 | `mk:module {Name} --with-rbac` | Módulo con trío RBAC propio (User + Role + Ability + 2 pivots + 3 Policies + RbacService + ServiceProvider con Gate bindings). ⚠️ Su modelo define `hasAbility()` — **no** `canMk()`, que es el del pack `mk:make:auth-user`. |
 | `mk:discover-abilities [--module=*] [--force] [--dry-run] [--json]` | Puebla `abilities` desde el `discoverAbilities()` del provider (**fuente única si existe**), o si no desde atributos `#[Ability]` + docblocks `@mk-ability`. UPSERT idempotente. |
 | `mk:prune-abilities` | Saca de la tabla las abilities que el código ya no declara. Complemento del anterior. |
-| `mk:auth:create-super-admin` | El primer usuario (`auth_scope`, rol `super-admin`, ability `*`). Corre el `{Scope}RolesSeeder` solo. Interactivo, o con `--email/--name/--password`. |
+| `mk:auth:create-super-admin [--scope=admin] [--no-roles]` | El primer usuario de **cualquier scope** (`auth_scope`, rol `super-admin`, ability `*`). El modelo sale de `config/auth.php` (guard `{scope}` → provider → model); default `admin`. Corre el `{Scope}RolesSeeder` si existe. `--no-roles` crea sólo el usuario (scopes sin RBAC). Idempotente también con `tenant.fail_closed`. Interactivo, o con `--email`/`--{loginField}`, `--name`, `--password`. |
 | `mk:fix:sanctum-uuids [--dry-run]` | Parchea la migración de Sanctum a `uuidMorphs()`. `mk:make:auth-user` ya lo invoca solo. |
 | `mk:status` | Diagnóstico de los controllers MK y su configuración. |
 | `mk:reports-clean [--dry-run]` | Borra los reportes vencidos **y sus archivos**. Programalo con `Schedule::command('mk:reports-clean')->hourly()`. ⚠️ Sin él el disco crece para siempre con archivos que ya nadie puede pedir. |
@@ -108,6 +108,7 @@ Los 18 comandos que registra el paquete (`php artisan list mk`).
 | Flag | Qué hace |
 |---|---|
 | `--login-field=<campo>` | Campo de login. Default `email`; casos comunes `ci`, `phone`, `username`. |
+| `--plural=<snake_case>` | Plural del scope: tabla, `$table`, provider de `config/auth.php`, migración, rutas CRUD y abilities (`{scope}.{plural}.*`). Default `Str::plural()`, que es el inflector **inglés**: `Operador` → `operadors`. Ej: `mk:make:auth-user Operador --plural=operadores`. |
 | `--profile-fields=<csv>` | Columnas extra del scope. Sintaxis `key[:type]` con 8 tipos (`string` default, `text`, `int`, `decimal`, `bool`, `date`, `datetime`, `json`); prefijo `!` = `unique`; sufijo `:file` = auto-wire de `FileStoragePlugin`. |
 | `--profile-fields-required=<csv>` | Pasa esos fields de `nullable` a `required` en la validación. |
 | `--kind=manager\|consumer` | `manager` (default) = scope completo. `consumer` = self-profile-only, administrado por otro scope. **Requiere `--managed-by`.** ⚠️ El consumer **pierde los 4 endpoints de OTP**. |
@@ -119,7 +120,13 @@ Los 18 comandos que registra el paquete (`php artisan list mk`).
 | `--skip-policies` | No generar las Policies default-deny. |
 | `--setup-sanctum` / `--migrate` / `--seed` / `--discover` | Pasos post-scaffold. Sanctum ya se auto-invoca. |
 | `--force-cors` | Re-escribir `config/cors.php` aunque exista. |
-| `--multi-tenant` | Emite `client_id` en la migración y el `$fillable`. ⚠️ El global scope filtra por **`tenant_id`**: hay que alinearlos. Ver `docs/guides/MULTI_TENANT.md`. |
+| `--multi-tenant` | Emite `client_id` en la migración y el `$fillable`, y **NO emite `POST /auth/register`** (un alta sin tenant crearía el usuario sin tenant). ⚠️ El global scope filtra por **`tenant_id`**: hay que alinearlos. Ver `docs/guides/MULTI_TENANT.md`. |
+
+> Los `throttle:` que emite el scaffolder llevan prefijo propio
+> (`throttle:5,1,{scope}-login`). Sin él, `ThrottleRequests` usa la misma clave
+> (IP) para todos: login, forgot, reset y los del PIN —de todos los scopes—
+> comparten un solo contador. Los scopes generados antes de este cambio siguen
+> sin prefijo: agregalo a mano en su `Http/Routes/api.php`.
 
 ## Configuración
 

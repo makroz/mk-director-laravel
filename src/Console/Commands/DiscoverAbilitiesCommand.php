@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
 use Mk\Director\Auth\Attributes\Ability;
+use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Controllers\SmartController;
 use ReflectionClass;
 use Symfony\Component\Finder\Finder;
@@ -502,7 +503,7 @@ class DiscoverAbilitiesCommand extends Command
 
         $now = now();
         $rows = array_map(static function (array $a) use ($now, $conBaseline): array {
-            $fila = [
+            $row = [
                 'name' => $a['name'],
                 'description' => $a['description'],
                 'created_at' => $now,
@@ -510,10 +511,10 @@ class DiscoverAbilitiesCommand extends Command
             ];
 
             if ($conBaseline) {
-                $fila['is_baseline'] = (bool) ($a['baseline'] ?? false);
+                $row['is_baseline'] = (bool) ($a['baseline'] ?? false);
             }
 
-            return $fila;
+            return $row;
         }, $abilities);
 
         // 🔴 `is_baseline` VA EN LA LISTA DE UPDATE, y esa es la mitad del valor.
@@ -1095,7 +1096,16 @@ class DiscoverAbilitiesCommand extends Command
 
             try {
                 $modelReflection = new ReflectionClass($modelClass);
-                $resource = Str::snake(Str::plural($modelReflection->getShortName()));
+                // Un scope de auth tiene el plural en su `$table`, que es lo que
+                // pinea `mk:make:auth-user --plural=` y lo que chequean su Policy
+                // y su RolesSeeder (`operador.operadores.*`). El inflector inglés
+                // daría `operadors`: abilities que nadie mira. Sólo para AuthUser:
+                // los scopes scaffoldeados sin `--plural` tienen `$table` igual a
+                // este mismo plural (BC), y en un modelo de dominio un `$table`
+                // custom renombraría abilities ya sembradas.
+                $resource = $modelReflection->isSubclassOf(AuthUser::class)
+                    ? $modelReflection->newInstanceWithoutConstructor()->getTable()
+                    : Str::snake(Str::plural($modelReflection->getShortName()));
             } catch (Throwable) {
                 continue;
             }

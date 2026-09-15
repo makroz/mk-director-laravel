@@ -164,6 +164,7 @@ class MakeAuthUserCommand extends Command
         {--skip-policies : (A1/A3) NO generar las Policies default-deny en el pack CRUD (default ON). Por default, CRUD ON genera <Scope>Policy/RolePolicy/AbilityPolicy (default-deny + super-admin bypass) y las registra vía Gate::policy.}
         {--managed-by= : (ARCH-01/FEEDBACK6) Genera un recurso admin-scoped para que OTRO scope administre users de ESTE scope. Ej: `mk:make:auth-user Member --managed-by=Admin` expone `/api/admin/members` gateado con mk.auth:admin + mk.ability:admin.members.* (reusa los controllers del scope, registra las rutas managed en el ServiceProvider y genera el seeder de abilities cross-scope para los roles del manager). Requiere CRUD ON. El manager (StudlyCase) debe ser un scope existente. Default BC: sin managed resource.}
         {--kind=manager : (F10-B08) Tipo de scope: `manager` (default, BC) o `consumer`. `manager` es el scope completo de siempre (CRUD propio + Role/AbilityController + rutas propias). `consumer` es un scope administrado: su Http/Routes/api.php queda reducido a solo auth + self-profile (login/refresh/logout/me/PATCH me/forgot/reset) — SIN las rutas CRUD propias, SIN /roles, SIN /abilities — porque es administrado por OTRO scope via --managed-by (el manager expone `/api/<manager>/<consumers>` + gestiona roles/abilities del consumer con SU token). `--kind=consumer` REQUIERE `--managed-by=<Scope>` (falla si se omite) y el manager DEBE scaffoldearse PRIMERO (orden: `mk:make:auth-user Admin` antes de `mk:make:auth-user Member --kind=consumer --managed-by=Admin`).}
+        {--plural= : Plural snake_case del scope, usado como nombre de tabla, provider de config/auth.php, migración, rutas CRUD y abilities (ej: `mk:make:auth-user Operador --plural=operadores`). Default: `Str::plural()` del scope en snake_case, que es el inflector INGLÉS (`operador` → `operadors`). Debe matchear ^[a-z][a-z0-9_]*$.}
         {--multi-tenant : (R-PKG-052, FEEDBACK11) Genera el scope con soporte multi-tenant: pine `client_id` en \$fillable del modelo + columna `client_id` en la migration. Default: single-tenant (RETO es single-tenant — pinear `client_id` por default provocaba `column not found: client_id` en INSERT). Opt-in explícito: pinearlo solo si el consumer tiene tenant isolation (ver docs/guides/MULTI_TENANT.md).}
 
         **BC BREAK (R-PKG-047 D2)**: Flags eliminados — `--with-crud`, `--with-auth-rbac`, `--with-status`, `--status-values`. Estos son ahora defaults ON. Para opt-out, usar `--no-crud`, `--no-rbac`, `--no-status`. Consumers que pinean los flags viejos en scripts CI/tutores deben actualizar a los `--no-*` correspondientes. La simplificación pinea el principio R-G-033 "maximo default + minimo custom" (Mario feedback 2026-07-09 22:12).';
@@ -179,7 +180,7 @@ class MakeAuthUserCommand extends Command
     {
         $scope = Str::studly($this->argument('scope'));
         $scopeLower = Str::snake($scope);
-        $scopePlural = Str::plural($scopeLower);
+        $scopePlural = $this->scopePlural($scope);
         $loginField = $this->resolveLoginField((string) $this->option('login-field'));
 
         // R-PKG-047 D2 — defaults ON + opt-out via --no-* flags.
@@ -279,6 +280,17 @@ class MakeAuthUserCommand extends Command
 
         if ($scope === '') {
             $this->error('El nombre del scope no puede estar vacío.');
+
+            return self::FAILURE;
+        }
+
+        // `--plural=` va a nombres de tabla, de provider y de migración, y a
+        // `unique:{plural},...` dentro de reglas de validación: cualquier cosa
+        // fuera de snake_case rompe alguno de esos en silencio (un guión, por
+        // ejemplo, deja un `Schema::create` válido y una regla `unique` rota).
+        $pluralRaw = $this->option('plural');
+        if ($pluralRaw !== null && ! preg_match('/^[a-z][a-z0-9_]*$/', trim((string) $pluralRaw))) {
+            $this->error("--plural debe ser snake_case no vacío (^[a-z][a-z0-9_]*$), ej: --plural=operadores (recibido: '{$pluralRaw}').");
 
             return self::FAILURE;
         }
@@ -684,7 +696,20 @@ PHP,
         // next `Route::post(...)` in the stub starts on a new line.
         $registerRoute .= ";\n";
 
-        if (! empty($profileFields) || $verifyEmail) {
+        // Hallazgo #49 (piloto NetPizza): en un scope multi-tenant el register
+        // NO se emite. Es un alta sin contexto de tenant: crea el usuario con
+        // `client_id` nulo, y con el identificador de login único global deja
+        // ocupar el email de otro cliente. Anclarlo al tenant de quien crea es
+        // una decisión del consumer (¿quién puede dar de alta? ¿en qué tenant?),
+        // no algo que el scaffolder pueda adivinar: el alta va por el CRUD, o
+        // un register escrito a mano. Se prefirió no emitirlo antes que agregar
+        // un flag para pedir, explícitamente, un endpoint inseguro.
+        $emitRegister = (! empty($profileFields) || $verifyEmail) && ! $multiTenant;
+        if ((! empty($profileFields) || $verifyEmail) && $multiTenant) {
+            $this->warn('⚠️  --multi-tenant: NO se genera POST /auth/register — un alta sin contexto de tenant crearía el usuario sin tenant. Dá de alta por el CRUD del scope o escribí un register que ancle el tenant.');
+        }
+
+        if ($emitRegister) {
             $profileFieldsReplacements['{{registerMethod}}'] = $this->buildRegisterMethod(
                 $scope,
                 $scopeLower,
@@ -788,7 +813,15 @@ PHP,
         $managedByReplacements = [];
         if ($managedBy !== null) {
             $managedByLower = Str::snake($managedBy);
-            $managedByPlural = Str::plural($managedByLower);
+            // La FK apunta a la tabla REAL del manager, no a la que el inflector
+            // inglés le adivina: si el manager se generó con `--plural=`
+            // (`Operador` → `operadores`), `Str::plural()` daría `operadors` y la
+            // migración reventaría al correr. El modelo del manager ya existe
+            // (se scaffoldea primero); si todavía no, cae al default de siempre.
+            $managerModel = "App\\Modules\\{$managedBy}\\Models\\{$managedBy}";
+            $managedByPlural = class_exists($managerModel)
+                ? (new $managerModel)->getTable()
+                : Str::plural($managedByLower);
 
             $managedByReplacements = [
                 '{{managedByColumn}}' => "\$table->foreignUuid('{$managedByLower}_id')->nullable()->constrained('{$managedByPlural}')->nullOnDelete();\n            ",
@@ -1094,6 +1127,27 @@ PHP,
         $this->runPostScaffoldSteps($scope, $scopeLower, $withCrud, $setupSanctum, $migrate, $seed, $discover);
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Plural snake_case del scope: tabla, provider de `config/auth.php`,
+     * migración, rutas CRUD y el recurso de las abilities (`{scope}.{plural}.*`).
+     *
+     * 🔴 ÚNICO lugar donde se deriva. Antes había TRES `Str::plural()` sueltos
+     * (`handle()`, el provider de rutas managed y el endpoint de permisos): un
+     * `--plural=` que tocara sólo uno dejaba a los otros escribiendo el plural
+     * inglés (`operadors`) en archivos que nadie revisa hasta que revientan.
+     *
+     * Sin `--plural=`, el default es el de siempre (BC). `isset($this->input)`
+     * porque los tests invocan métodos sueltos por Reflection sin input.
+     */
+    protected function scopePlural(string $scope): string
+    {
+        $chosen = isset($this->input) && $this->input->hasOption('plural')
+            ? trim((string) $this->option('plural'))
+            : '';
+
+        return $chosen !== '' ? $chosen : Str::plural(Str::snake($scope));
     }
 
     /**
@@ -3413,7 +3467,7 @@ PHP;
         $this->generateStub(
             $scope,
             Str::snake($scope),
-            Str::plural(Str::snake($scope)),
+            $this->scopePlural($scope),
             'email',
             'auth-user.managed-routes-service-provider.stub',
             'Providers',
@@ -4130,13 +4184,21 @@ PHP,
             // ── Routes: rate limit en /login ─────────────────────────────
             // Inline placeholder: el stub tiene `Route::post('login', ...){{rbacLoginThrottle}};`.
             // Default: vacío (sin throttle). RBAC: `->middleware('throttle:...')`.
-            '{{rbacLoginThrottle}}' => "->middleware('throttle:' . config('mk_director.auth.rate_limits.login', '5,1'))",
+            //
+            // 🔴 El TERCER parámetro (`,{scope}-login`) NO es decorado. La clave de
+            // `ThrottleRequests` es `$prefix.sha1(dominio|ip)`: la ruta no entra.
+            // Sin prefijo, login/forgot/reset y los del PIN —de TODOS los scopes—
+            // escriben en UN contador por IP, y el TTL lo fija el primero que
+            // escribe. Medido en el piloto NetPizza (hallazgo #30): 3 pedidos de
+            // código dejaron el login con 2 intentos y bloqueado 10 minutos.
+            // Mismo formato que el piloto ya parcheó a mano (`admin-login`).
+            '{{rbacLoginThrottle}}' => "->middleware('throttle:'.config('mk_director.auth.rate_limits.login', '5,1').',{$scopeLower}-login')",
 
             // ── Routes: rate limit en /forgot ────────────────────────────
-            '{{rbacForgotThrottle}}' => "->middleware('throttle:' . config('mk_director.auth.rate_limits.forgot', '3,1'))",
+            '{{rbacForgotThrottle}}' => "->middleware('throttle:'.config('mk_director.auth.rate_limits.forgot', '3,1').',{$scopeLower}-forgot')",
 
             // ── Routes: rate limit en /reset ─────────────────────────────
-            '{{rbacResetThrottle}}' => "->middleware('throttle:' . config('mk_director.auth.rate_limits.reset', '3,1'))",
+            '{{rbacResetThrottle}}' => "->middleware('throttle:'.config('mk_director.auth.rate_limits.reset', '3,1').',{$scopeLower}-reset')",
         ];
     }
 
@@ -4734,6 +4796,7 @@ PHP,
         $verifyDispatch = $verifyEmail
             ? "\n        // R-PKG-011: dispatch verification notification (queueable).\n        \$user->sendEmailVerificationNotification();"
             : '';
+        $modelFqcn = "\\App\\Modules\\{$scope}\\Models\\{$scope}";
 
         // Render inline (no nowdoc) para que las variables se interpoleen.
         $code = <<<PHP
@@ -4754,15 +4817,22 @@ PHP,
      * (e.g. confirmar password, validar contra breached passwords, etc.).
      *
      * BC: NO existe en v1.5.0-rc4 (este método es opt-in via flag).
+     *
+     * ⚠️ TENANT: el alta NO ancla ningún tenant. En un proyecto multi-tenant
+     * crearía el usuario sin tenant — por eso con `--multi-tenant` el
+     * scaffolder no emite este método (hallazgo #49 del piloto NetPizza).
      */
     public function register(\\Illuminate\\Http\\Request \$request): \\Illuminate\\Http\\JsonResponse
     {
         \$data = \$request->validate({$rulesPhp});
 
-        /** @var {$scope} \$user */
-        \$user = \\DB::transaction(function () use (\$data) {
-            /** @var {$scope} \$user */
-            \$user = {$scope}::create(\$data);
+        // FQCN, no el nombre corto: este archivo vive en `...\\Http\\Controllers`
+        // y no importa el modelo, así que el nombre corto `{$scope}` se resolvía como
+        // `...\\Http\\Controllers\\{$scope}` → 500 en TODO register (hallazgo #49).
+        /** @var {$modelFqcn} \$user */
+        \$user = \\Illuminate\\Support\\Facades\\DB::transaction(function () use (\$data) {
+            /** @var {$modelFqcn} \$user */
+            \$user = {$modelFqcn}::create(\$data);
             \$user->setAuthScope('{$scopeLower}');
             return \$user;
         });{$verifyDispatch}
@@ -5010,7 +5080,7 @@ PHP;
         ->middleware('signed')
         ->name('{$scopeLower}.auth.verify');
     Route::post('email/resend', [AuthController::class, 'resendVerification'])
-        ->middleware('throttle:6,1')
+        ->middleware('throttle:6,1,{$scopeLower}-email-resend')
         ->middleware('mk.auth:{$scopeLower}');
 PHP,
             // Middleware 'verified' en el grupo protegido (opcional). Default vacío = sin verificación.
@@ -5273,7 +5343,7 @@ PHP,
         $this->generateStub(
             $scope,
             $scopeLower,
-            Str::plural($scopeLower),
+            $this->scopePlural($scope),
             (string) $this->option('login-field'),
             'auth-user/me-permissions-controller.stub',
             'Http/Controllers',

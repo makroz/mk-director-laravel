@@ -673,6 +673,37 @@ PHP;
     (new Filesystem)->deleteDirectory($tempDir);
 });
 
+test('mkConfig de un modelo AuthUser: el recurso es su $table (el `--plural=` del scaffolder), no el plural inglés', function () {
+    // `mk:make:auth-user Operador --plural=operadores` pinea `$table = 'operadores'`
+    // y la Policy/el RolesSeeder chequean `operador.operadores.*`. Si el discovery
+    // siguiera con `Str::plural('Operador')` escribiría `operador.operadors.*`:
+    // permisos que ninguna Policy mira, y los que sí mira sin descubrir.
+    $moduleName = 'Operador'.uniqid();
+    $uid = str_replace('.', '', uniqid('', true));
+    $ns = "TestNs\\{$moduleName}_{$uid}";
+    $modelFqn = "{$ns}\\Models\\Operador";
+    $controllerFqn = "{$ns}\\Http\\Controllers\\OperadorController";
+
+    eval("namespace {$ns}\\Models; class Operador extends \\Mk\\Director\\Auth\\Models\\AuthUser { protected \$table = 'operadores'; }");
+    eval("namespace {$ns}\\Http\\Controllers; class OperadorController extends \\Mk\\Director\\Controllers\\SmartController { protected array \$mkConfig = ['model' => \\{$modelFqn}::class]; }");
+
+    $tempDir = sys_get_temp_dir()."/mk-discover-{$uid}";
+    mkdir("{$tempDir}/{$moduleName}/Http/Controllers", 0755, true);
+    $command = makeTestCommand($tempDir);
+    $command->setOutput(new OutputStyle(new \Symfony\Component\Console\Input\StringInput(''), new NullOutput()));
+
+    $names = array_column(invokeProtected($command, 'discoverAbilitiesFromMkConfig', [
+        ['path' => "{$tempDir}/{$moduleName}", 'classes' => [$controllerFqn, $modelFqn]],
+        $moduleName,
+    ]), 'name');
+
+    $scope = Str::snake($moduleName);
+    expect($names)->toContain("{$scope}.operadores.viewAny");
+    expect(implode(',', $names))->not->toContain('operadors');
+
+    (new Filesystem)->deleteDirectory($tempDir);
+});
+
 test('end-to-end: R-PKG-018 OBS-NEW-01 — non-SmartController is silently skipped', function () {
     $moduleName = 'Plain'.uniqid();
 
