@@ -12,6 +12,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — 🔴 `mk:make:auth-user` generaba un alta PÚBLICA en todo scope: `register` pasa a `--with-register`
+
+Encontrado generando `php artisan mk:make:auth-user Operator --no-crud` en el
+piloto NetPizza. Cambia **lo que se genera** de ahora en más; un scope ya
+generado no se toca. Detalle en `DEVELOPER_GUIDE.md` § 3.19.3 y § 3.19.5.
+
+### Changed (BREAKING para generaciones NUEVAS)
+
+- 🔴 **`POST /auth/register` + `register()` sólo con `--with-register`.** La
+  condición era `profile fields || --verify-email`, y los profile fields de base
+  nunca están vacíos: todo scope nacía con un alta. Sin CRUD esa alta es
+  pública, sin auth y sin throttle — un backoffice de admins u operadores donde
+  cualquiera en internet se creaba una cuenta. **Para mantener la salida vieja,
+  pasá `--with-register`.**
+- **`--with-register` + `--multi-tenant` falla** con error y `FAILURE` antes de
+  generar nada (antes `--multi-tenant` lo omitía con un aviso).
+
+### Added
+
+- **`mk_director.auth.rate_limits.register`** (`MK_AUTH_RATE_LIMIT_REGISTER`,
+  default `3,1`). El register generado lleva throttle con prefijo
+  `{scope}-register`, también cuando lo gatea el CRUD.
+
+### Fixed
+
+- 🔴 **`--verify-email` generaba un `AuthController` que no compilaba.** El
+  docblock del stub nombraba con llaves el placeholder viejo de los métodos de
+  verificación; el `str_replace` lo expandía a esos métodos, con su propio cierre
+  de docblock, y el comentario se cerraba a la mitad (`Parse error … unexpected
+  token "public"`). Los métodos viven en `BaseAuthController`.
+- **`$casts` generado con `status` duplicado** (`'integer'` y el enum). PHP se
+  quedaba con el enum sin avisar; ahora sólo se emite el enum.
+- `Docs/api_contract.md` afirmaba siempre que register estaba gateado; ahora
+  describe lo que se generó (nada / público / gateado).
+- Sangría de las columnas de profile fields en la migración y de la ruta
+  `password/forgot` con register.
+
+### ⚠️ Notas para consumers
+
+- **Nada cambia en código ya generado.** RETO tiene un `register` generado en
+  `Admin` (gateado por `mk.auth:admin` + `admin.admins.create`); sigue igual. Si
+  se regenera un scope que lo usa, hay que pasar `--with-register`.
+- `--verify-email` sin `--with-register` es válido: el primer email de
+  verificación sale por `POST /email/resend`.
+
 ## [UNRELEASED] — Piloto NetPizza: `--plural`, throttles con prefijo, `register` que no daba 500 y `create-super-admin --scope`
 
 Cuatro defectos que salieron al generar un tercer scope en el piloto NetPizza

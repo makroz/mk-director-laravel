@@ -28,7 +28,7 @@ use Mk\Director\Auth\Models\AuthUser;
  * Profile fields: declarados via `--profile-fields=<csv>` (R-PKG-011). Cada
  * field se agrega como columna string nullable en la tabla del scope y como
  * entry en $fillable. Exposición: /me (GET read), PATCH /me (update),
- * /register (create). Ver docs/API_REFERENCE_LARAVEL.md § mk:make:auth-user
+ * /register (create, sólo con `--with-register`). Ver docs/API_REFERENCE_LARAVEL.md § mk:make:auth-user
  * --profile-fields.
  *
  * Email verification: opt-in via `--verify-email` (R-PKG-011). Si está activo,

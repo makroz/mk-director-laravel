@@ -110,10 +110,15 @@ test('auth-user.routes.stub tiene placeholder para verified middleware', functio
     expect($stub)->toContain('{{verifiedMiddleware}}');
 });
 
-test('auth-user.auth-controller.stub tiene placeholder para verifyEmail methods', function () {
+test('auth-user.auth-controller.stub NO tiene el placeholder de verifyEmail methods (los hereda de BaseAuthController)', function () {
     $stub = stubSource011Ve('auth-user.auth-controller.stub');
 
-    expect($stub)->toContain('{{verifyEmailMethods}}');
+    // Este pin afirmaba lo contrario, y el único lugar donde estaba el
+    // placeholder era un DOCBLOCK: con --verify-email se expandía a métodos con
+    // su propio cierre de comentario y el controller generado no compilaba.
+    // verifyEmail()/resendVerification() viven en BaseAuthController.
+    expect($stub)->not->toContain('{{verifyEmailMethods}}');
+    expect(method_exists('Mk\Director\Auth\Controllers\BaseAuthController', 'verifyEmail'))->toBeTrue();
 });
 
 // ── Verification routes details ─────────────────────────────────────────

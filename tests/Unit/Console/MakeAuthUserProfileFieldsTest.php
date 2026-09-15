@@ -172,7 +172,11 @@ test('register() solo se genera si hay --profile-fields o --verify-email', funct
 
     // handle() tiene la condición explícita. Hallazgo #49: además, NO con
     // --multi-tenant (un alta sin tenant) — el pin cambió por eso.
-    expect($source)->toMatch('/\$emitRegister = \(\! empty\(\$profileFields\) \|\| \$verifyEmail\) && \! \$multiTenant;/');
+    // Y desde el scaffold de `Operator --no-crud` en NetPizza: OPT-IN. Los profile
+    // fields de base nunca están vacíos, así que la condición vieja lo emitía
+    // siempre — un alta pública en todo scope. El comportamiento lo mide
+    // MakeAuthUserRegisterTest; `--multi-tenant` + `--with-register` falla antes.
+    expect($source)->toContain('$emitRegister = $withRegister;');
     expect($source)->toContain('if ($emitRegister) {');
 });
 

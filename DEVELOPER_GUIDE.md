@@ -789,6 +789,7 @@ php artisan mk:make:auth-user Admin --login-field=ci --with-auth-rbac
         'login' => env('MK_AUTH_RATE_LIMIT_LOGIN', '5,1'),
         'forgot' => env('MK_AUTH_RATE_LIMIT_FORGOT', '3,1'),
         'reset' => env('MK_AUTH_RATE_LIMIT_RESET', '3,1'),
+        'register' => env('MK_AUTH_RATE_LIMIT_REGISTER', '3,1'), // sólo con --with-register
     ],
     // v1.6.0-rc4 (R-PKG-014 BUG-07 fix): rotación de refresh tokens.
     'refresh' => [
@@ -1187,8 +1188,11 @@ imprime warning explícito. ADR-009.
 4. **Routes**:
    - `GET /api/admin/auth/email/verify/{id}/{hash}` (signed URL, marca verificado).
    - `POST /api/admin/auth/email/resend` (throttle 6,1, auth:admin required).
-5. **Register dispatch**: `register()` envía `Illuminate\Auth\Notifications\VerifyEmail`
-   queueable al crear el user.
+5. **Register dispatch**: sólo si además pasás `--with-register` (§3.19.3):
+   `register()` envía `Illuminate\Auth\Notifications\VerifyEmail` queueable al
+   crear el user. Sin `--with-register` el flujo sigue siendo coherente: el
+   usuario lo crea el CRUD o `mk:auth:create-super-admin`, y el primer email
+   sale por `POST /email/resend` (autenticado).
 
 #### Flujo de verificación
 
@@ -2395,6 +2399,7 @@ Todo `throttle:` generado lleva tercer parámetro:
 | `password/reset/code/request` / `confirm` | `{scope}-reset-code-req` / `{scope}-reset-code-confirm` |
 | `password/code/request` / `confirm` | `{scope}-pwd-code-req` / `{scope}-pwd-code-confirm` |
 | `email/resend` (`--verify-email`) | `{scope}-email-resend` |
+| `register` (`--with-register`) | `{scope}-register` (clave `rate_limits.register`, default `3,1`) |
 
 ⚠️ **Scopes ya generados**: siguen sin prefijo. Agregalo a mano en su
 `Http/Routes/api.php` con el mismo formato
@@ -2404,18 +2409,45 @@ Todo `throttle:` generado lleva tercer parámetro:
 `mk_director.auth.rate_limits` no declara una clave `refresh`: un consumer que
 throttlee `refresh` a mano tiene que pasarle su default en el `config()`.
 
-#### 3.19.3 `register` generado (hallazgo #49)
+#### 3.19.3 `register` generado: opt-in con `--with-register` (hallazgo #49)
 
+- 🔴 **Salía SIEMPRE.** La condición era `profile fields || --verify-email`, y
+  los profile fields de base (`name`, `email`, `phone`, `status`) nunca están
+  vacíos. Sin CRUD la ruta es pública, sin auth y sin throttle: generando
+  `Operator --no-crud` en NetPizza, un backoffice de operadores de plataforma
+  nacía con un alta abierta a internet. **Ahora sólo con `--with-register`.**
+- **Throttle**: la ruta lleva `rate_limits.register` (default `3,1`) con prefijo
+  `{scope}-register`. Con CRUD, además `mk.auth:{scope}` +
+  `mk.ability:{scope}.{plural}.create`.
 - **Daba 500 siempre**: llamaba `{Scope}::create()` sin importar el modelo, y
   PHP lo resolvía en el namespace del controller
   (`Class "App\Modules\Admin\Http\Controllers\Admin" not found`). Ahora usa
   el FQCN del modelo (y de la facade `DB`).
-- **Con `--multi-tenant` no se emite** (ni método ni ruta) y el comando avisa.
-  Un alta sin contexto crea el usuario sin tenant, y con el login único global
-  deja ocupar el identificador de otro cliente. Anclarlo al tenant de quien
-  crea es una decisión del consumer, no algo que el scaffolder pueda adivinar:
-  el alta va por el CRUD, o por un `register` escrito a mano. Se prefirió no
-  emitirlo antes que agregar un flag para pedir un endpoint inseguro.
+- **`--with-register` + `--multi-tenant` → error y `FAILURE`**, sin generar
+  nada. Un alta sin contexto crea el usuario sin tenant, y con el login único
+  global deja ocupar el identificador de otro cliente. Anclarlo al tenant de
+  quien crea es una decisión del consumer: el alta va por el CRUD, o por un
+  `register` escrito a mano.
+- **`--verify-email` no requiere `--with-register`**: verify y resend no
+  dependen del register (ver §3.10). Con los dos, `register()` despacha la
+  verificación.
+- El `Docs/api_contract.md` generado dice lo que se generó: nada, "PÚBLICO" o
+  "gateado". Antes afirmaba siempre que estaba gateado.
+- 🔴 **`--verify-email` generaba un controller que no compilaba**: el docblock
+  del stub nombraba el placeholder viejo de los métodos de verificación con
+  llaves, el `str_replace` lo expandía a métodos con su propio cierre de
+  docblock, y el comentario se cerraba a la mitad (`Parse error … unexpected
+  token "public"`). Los métodos viven en `BaseAuthController`; el docblock ya no
+  usa la sintaxis de placeholder.
+
+#### 3.19.5 Modelo, migración y rutas generadas
+
+- `$casts` tenía **dos** claves `status` (`'integer'` del profile field de base y
+  el enum `{Scope}Status`). PHP se queda con la última sin avisar: el enum
+  ganaba, y el `'integer'` quedaba como código muerto que se lee como cierto.
+  Ahora sólo el enum; con `--no-status`, ninguna.
+- Sangrías: las columnas de profile fields de la migración (`phone`) salían a 20
+  espacios, y la ruta `password/forgot` a columna 0 cuando había register.
 
 #### 3.19.4 `mk:auth:create-super-admin --scope=<scope>` (hallazgo #47)
 

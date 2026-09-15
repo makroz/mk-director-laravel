@@ -84,7 +84,9 @@ describe('PKG-NEW-17 — registerRoute uses PHP interpolation, not literal place
         // between them. The fix adds a trailing `\n` after the `;` so
         // the next `Route::post(...)` starts on a new line.
 
-        expect($source)->toContain('$registerRoute .= ";\n";');
+        // Y ahora la sangría de la ruta que sigue (`    Route::post('password/forgot'`):
+        // el placeholder vive después de 4 espacios en el stub.
+        expect($source)->toContain('$registerRoute .= ";\n    ";');
     });
 
     test('PKG-NEW-17 reference is documented in source comments (drift trazable per R-G-032)', function () use ($source): void {

@@ -19,8 +19,13 @@ use Mk\Director\Auth\Models\AuthUser;
  * Pre-R-PKG-047, este controller era una copia de ~500 LOC del AuthController
  * scaffoldeado (login/refresh/logout/me/forgot/reset/verifyEmail/etc. duplicados
  * 90% entre scopes). Bugs se fijaban per-scope y el scaffolder pineaba
- * placeholders condicionales `{{rbacAudit*}}`, `{{verifyEmailMethods}}` que
+ * placeholders condicionales (`rbacAudit*`, `verifyEmailMethods`) que
  * generaban N variantes.
+ *
+ * (Sin llaves a propósito: este docblock pasa por el mismo `str_replace` que el
+ * código, y con `--verify-email` el nombre del placeholder escrito con llaves
+ * se expandía a los métodos viejos —con su propio cierre de docblock— y cerraba este
+ * comentario a la mitad: el controller generado no compilaba.)
  *
  * Post-R-PKG-047 D1, TODA la lógica vive en
  * `Mk\Director\Auth\Controllers\BaseAuthController` (SSoT canónico). Este thin

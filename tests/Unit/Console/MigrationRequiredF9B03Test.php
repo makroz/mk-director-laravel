@@ -55,7 +55,7 @@ test('R-PKG-046 F9-B03 — JSDoc explica el bug pineado', function () {
     $src = makeAuthUserCommandSourceF9B03();
 
     // JSDoc en el foreach que genera columns debe mencionar F9-B03.
-    $columnsPos = strpos($src, '$columns .= "        \$table->');
+    $columnsPos = strpos($src, '$columns .= "\$table->');
     expect($columnsPos)->not->toBeFalse();
 
     // Buscar el docblock inmediatamente anterior.

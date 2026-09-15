@@ -152,7 +152,8 @@ class MakeAuthUserCommand extends Command
         {--no-crud : (D2 opt-out) NO generar el CRUD pack completo del scope. Default: CRUD ON (AdminController + RoleController + AbilityController + DTOs + Repository + Service + Factory + Seeder + Requests + Resources + ServiceProvider). Si el scope no necesita CRUD (login-only flows), pinear este flag.}
         {--no-rbac : (D2 opt-out) NO integrar RBAC (ability checks en /me y /logout, rate limiting en /login, /forgot, /reset, audit log via AuthEvent). Default: RBAC ON. Pinear solo si tu app no usa roles/abilities (e.g. trivial login-only).}
         {--no-status : (D2 opt-out) NO generar el enum <Scope>Status ni la columna `status` en la migración. Default: status ON (enum de 4 estados post-D4: Active/Inactive/Blocked/Pending). Pinear solo si tu scope no necesita status (e.g. login-only sin admin gating).}
-        {--verify-email : Habilita verificación por email: columna email_verified_at, endpoints /email/verify/<id>/<hash> y /email/resend, dispatch de Illuminate\Auth\Notifications\VerifyEmail en /register. Default BC: false. Aplican cuando --login-field=email. Se ignora con warning si --login-field≠email.}
+        {--with-register : Genera POST /api/<scope>/auth/register + AuthController::register() (alta de usuarios, throttle `rate_limits.register` con prefijo propio). OPT-IN: sin CRUD el endpoint es PÚBLICO — cualquiera se crea una cuenta. Con CRUD queda gateado por mk.auth + ability create. Incompatible con --multi-tenant (sería un alta sin tenant).}
+        {--verify-email : Habilita verificación por email: columna email_verified_at, endpoints /email/verify/<id>/<hash> y /email/resend, y dispatch de Illuminate\Auth\Notifications\VerifyEmail en /register si además se pasa --with-register (sin él, el primer email sale por /email/resend). Default BC: false. Aplican cuando --login-field=email. Se ignora con warning si --login-field≠email.}
         {--with-permissions-endpoint : Genera endpoint opt-in `GET /api/<scope>/auth/me/permissions` (MePermissionsController) que retorna el desglose de abilities (direct + via roles). Opt-in porque pinea un controller extra; pinearlo solo si tu UI tiene pantalla de "Manage permissions". Default BC: false. (R-PKG-042 FASE18-05).}
         {--force-cors : Re-pinear `config/cors.php` aunque ya exista. Default: skip si ya existe (BC). (R-PKG-042 FASE18-07).}
         {--profile-fields-required= : Override del validation default a `required` para profile fields específicos (CSV). Default: ninguno (todos nullable). Ej: --profile-fields-required=full_name,email. Solo aplica si el field está en --profile-fields. (R-PKG-014 BUG-03 fix)}
@@ -291,6 +292,18 @@ class MakeAuthUserCommand extends Command
         $pluralRaw = $this->option('plural');
         if ($pluralRaw !== null && ! preg_match('/^[a-z][a-z0-9_]*$/', trim((string) $pluralRaw))) {
             $this->error("--plural debe ser snake_case no vacío (^[a-z][a-z0-9_]*$), ej: --plural=operadores (recibido: '{$pluralRaw}').");
+
+            return self::FAILURE;
+        }
+
+        // `--with-register` + `--multi-tenant` no tiene salida segura: el alta no
+        // tiene contexto de tenant, así que crearía el usuario con `client_id`
+        // nulo y, con el login único global, dejaría ocupar el email de otro
+        // cliente (hallazgo #49). Anclarlo al tenant de quien crea es decisión
+        // del consumer. Falla ANTES de tocar el filesystem.
+        $withRegister = (bool) $this->option('with-register');
+        if ($withRegister && $multiTenant) {
+            $this->error('--with-register no se puede combinar con --multi-tenant: el register generado no ancla tenant y crearía usuarios sin tenant. Dá de alta por el CRUD del scope o escribí un register que ancle el tenant de quien crea.');
 
             return self::FAILURE;
         }
@@ -670,7 +683,19 @@ PHP,
         //
         // Reportado en feedback RETO fase 11 (2026-06-28) — C-01 workaround del
         // consumer pineado en routes/api.php antes de este fix.
-        $registerRoute = "\n    Route::post('register', [AuthController::class, 'register'])";
+        //
+        // 🔴 Throttle con prefijo propio SIEMPRE (no sólo con RBAC como login):
+        // sin CRUD el register es un endpoint PÚBLICO que escribe, y sin prefijo
+        // compartiría el contador por IP con login/forgot/reset (hallazgo #30).
+        //
+        // El string arranca sin salto y termina en "\n    ": el placeholder vive
+        // en `    {{registerRoute}}Route::post('password/forgot'…`, así que así
+        // la ruta de forgot queda con su sangría con y sin register.
+        $registerThrottle = "'throttle:'.config('mk_director.auth.rate_limits.register', '3,1').',{$scopeLower}-register'";
+        $registerRoute = "Route::post('register', [AuthController::class, 'register'])";
+        if (! $withCrud) {
+            $registerRoute .= "\n        ->middleware({$registerThrottle})";
+        }
         if ($withCrud) {
             // R-PKG-031 PKG-NEW-17 fix (2026-06-28, RETO fase 12 feedback):
             // interpolate $scopeLower and $scopePlural PHP-side instead of
@@ -690,24 +715,37 @@ PHP,
             // seguido por `Route::post('forgot', ...)` sin newline — antes
             // quedaba `...);Route::post('forgot', ...)` que PHP acepta pero
             // queda feo + confunde al linter).
-            $registerRoute .= "\n        ->middleware(['mk.auth:{$scopeLower}', 'mk.ability:{$scopeLower}.{$scopePlural}.create'])";
+            $registerRoute .= "\n        ->middleware([{$registerThrottle}, 'mk.auth:{$scopeLower}', 'mk.ability:{$scopeLower}.{$scopePlural}.create'])";
         }
         // R-PKG-031 PKG-NEW-17 (cosmético): trailing newline post-`;` so the
         // next `Route::post(...)` in the stub starts on a new line.
-        $registerRoute .= ";\n";
+        $registerRoute .= ";\n    ";
 
-        // Hallazgo #49 (piloto NetPizza): en un scope multi-tenant el register
-        // NO se emite. Es un alta sin contexto de tenant: crea el usuario con
-        // `client_id` nulo, y con el identificador de login único global deja
-        // ocupar el email de otro cliente. Anclarlo al tenant de quien crea es
-        // una decisión del consumer (¿quién puede dar de alta? ¿en qué tenant?),
-        // no algo que el scaffolder pueda adivinar: el alta va por el CRUD, o
-        // un register escrito a mano. Se prefirió no emitirlo antes que agregar
-        // un flag para pedir, explícitamente, un endpoint inseguro.
-        $emitRegister = (! empty($profileFields) || $verifyEmail) && ! $multiTenant;
-        if ((! empty($profileFields) || $verifyEmail) && $multiTenant) {
-            $this->warn('⚠️  --multi-tenant: NO se genera POST /auth/register — un alta sin contexto de tenant crearía el usuario sin tenant. Dá de alta por el CRUD del scope o escribí un register que ancle el tenant.');
-        }
+        // 🔴 register es OPT-IN (`--with-register`). Antes la condición era
+        // `profile fields || verify-email`, y los profile fields de base (name,
+        // email, phone, status) nunca están vacíos: TODO scope nuevo nacía con
+        // un alta, y sin CRUD esa alta es PÚBLICA — un backoffice de admins u
+        // operadores de plataforma donde cualquiera en internet se creaba una
+        // cuenta. Encontrado generando `Operator --no-crud` en NetPizza.
+        //
+        // `--verify-email` sin `--with-register` sigue siendo coherente: verify
+        // y resend no dependen del register (el usuario lo da de alta el CRUD o
+        // `mk:auth:create-super-admin`, y el primer email sale por /email/resend).
+        // Con `--multi-tenant` ya se cortó arriba (hallazgo #49).
+        $emitRegister = $withRegister;
+
+        // La nota del api_contract.md tiene que decir lo que se generó: antes
+        // afirmaba "gateado con mk.auth + ability" SIEMPRE, también cuando no
+        // había register o cuando era público (sin CRUD).
+        $profileFieldsReplacements['{{registerContractNote}}'] = match (true) {
+            ! $emitRegister => '',
+            $withCrud => "> ⚠️ El endpoint `POST /api/{$scopeLower}/auth/register` (`--with-register`) está pineado con\n"
+                ."> `mk.auth:{$scopeLower}` + `mk.ability:{$scopeLower}.{$scopePlural}.create` y throttle `{$scopeLower}-register`.\n"
+                ."> NO es público — para invocarlo necesitás un token de {$scopeLower} con ability `{$scopePlural}.create`.\n",
+            default => "> 🔴 El endpoint `POST /api/{$scopeLower}/auth/register` (`--with-register`, sin CRUD) es PÚBLICO:\n"
+                ."> cualquiera puede crearse una cuenta. Sólo lo frena el throttle `{$scopeLower}-register`\n"
+                ."> (`mk_director.auth.rate_limits.register`).\n",
+        };
 
         if ($emitRegister) {
             $profileFieldsReplacements['{{registerMethod}}'] = $this->buildRegisterMethod(
@@ -4672,8 +4710,14 @@ PHP,
             // `email_verified_at`, `password`, `auth_scope`, `remember_token`).
             // Sin este skip, la columna se pineaba DOS veces → SQLSTATE
             // `column "X" specified more than once` al `migrate:fresh`.
+            //
+            // Sangría: el placeholder ya está a 12 espacios en el stub
+            // (`            {{profileFieldsColumns}}…`). La primera columna NO
+            // lleva espacios propios y cada una deja la sangría de la siguiente
+            // — igual que `{{statusColumn}}`. Antes llevaba 8 de más y la
+            // columna salía a 20.
             if (! $isCore) {
-                $columns .= "        \$table->{$config['column_method']}('{$key}'{$args}){$chain};\n            ";
+                $columns .= "\$table->{$config['column_method']}('{$key}'{$args}){$chain};\n            ";
             }
 
             // Docblock @property typed (phpstan-style hint).
@@ -4690,7 +4734,13 @@ PHP,
             $docblock .= "     * @property {$phpType} \${$key}\n";
 
             // Cast entry (solo si no es null — string/text no necesitan cast).
-            if ($config['cast'] !== null) {
+            //
+            // 🔴 `status` NO: su cast es el enum del scope y lo pinea
+            // `{{statusCastEntry}}`. Emitirlo acá dejaba la clave DOS veces en
+            // `$casts` (`'integer'` y el enum); PHP se queda con la última sin
+            // avisar, y el `'integer'` quedaba como código muerto que se lee
+            // como cierto. Con `--no-status` `status` no es profile field.
+            if ($config['cast'] !== null && $key !== 'status') {
                 $castEntries .= "        '{$key}' => '{$config['cast']}',\n";
             }
 

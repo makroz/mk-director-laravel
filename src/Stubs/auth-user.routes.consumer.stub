@@ -32,10 +32,11 @@ use Illuminate\Support\Facades\Route;
  * middleware `throttle:{limit},{minutes},{scope}-{endpoint}` configurable por
  * `mk_director.auth.rate_limits.{endpoint}`.
  *
- * R-PKG-011: cuando el scope se genera con `--profile-fields` o
- * `--verify-email`, se agregan endpoints condicionales:
- *   - `POST /register` (crea user con profile fields, opcionalmente dispatch
- *     de VerifyEmail notification si `--verify-email` activo).
+ * Endpoints condicionales:
+ *   - `POST /register` — SÓLO con `--with-register` (opt-in: sin CRUD es un
+ *     alta PÚBLICA). Throttle `rate_limits.register` con prefijo
+ *     `{scope}-register`; con CRUD, además `mk.auth` + ability `create`.
+ *     Despacha VerifyEmail si `--verify-email` está activo.
  *   - `GET /email/verify/{id}/{hash}` (signed URL, marca email_verified_at).
  *   - `POST /email/resend` (re-envía notification, throttled 6,1).
  *   - `PATCH /me` (actualiza profile fields del user autenticado — B06,

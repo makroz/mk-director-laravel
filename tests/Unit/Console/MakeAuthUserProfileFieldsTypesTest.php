@@ -186,7 +186,9 @@ test('buildProfileFieldsReplacements genera cast entry por tipo (skip si null)',
     $source = commandSource012Pft();
 
     // Cast se incluye solo si no es null (string/text son default Laravel, sin cast).
-    expect($source)->toMatch('/if\s*\(\s*\$config\[[\'"]cast[\'"]\]\s*!==\s*null\s*\)/');
+    // `status` se excluye: su cast es el enum (`{{statusCastEntry}}`); emitirlo
+    // también acá duplicaba la clave en `$casts` (MakeAuthUserGeneratedModelTest).
+    expect($source)->toMatch('/if\s*\(\s*\$config\[[\'"]cast[\'"]\]\s*!==\s*null && \$key !== \'status\'\s*\)/');
     // Y $config['cast'] se interpola en el output del cast entry.
     expect($source)->toContain("\$config['cast']");
 });

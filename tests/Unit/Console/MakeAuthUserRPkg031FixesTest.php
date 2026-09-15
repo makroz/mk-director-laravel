@@ -103,7 +103,8 @@ describe('PKG-NEW-09 — register() scaffoldeado pinea middleware cuando --with-
         //
         // Adaptado al v1.7.1+ PKG-NEW-17 (PHP interpolation en lugar de literal).
 
-        expect($command)->toMatch('/\$registerRoute\s*=\s*"\s*\\\\n\s+Route::post\(\'register\'/s');
+        // Sin "\n" inicial: el string termina en "\n    " (sangría de la ruta siguiente).
+        expect($command)->toMatch('/\$registerRoute\s*=\s*"Route::post\(\'register\'/s');
 
         // Verificar que el bloque del middleware está dentro de un `if ($withCrud)`.
         // Usa [\s\S] para match multi-línea (la versión `[^}]*` original fallaba

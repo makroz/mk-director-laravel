@@ -354,6 +354,10 @@ return [
             'login' => env('MK_AUTH_RATE_LIMIT_LOGIN', '5,1'),
             'forgot' => env('MK_AUTH_RATE_LIMIT_FORGOT', '3,1'),
             'reset' => env('MK_AUTH_RATE_LIMIT_RESET', '3,1'),
+            // `POST /auth/register`, sólo si el scope se generó con
+            // `--with-register`. Sin CRUD es un alta PÚBLICA: mismo corte
+            // anti-abuso que forgot/reset.
+            'register' => env('MK_AUTH_RATE_LIMIT_REGISTER', '3,1'),
 
             // 2026-07-15-profile-edit-password-otp (ADR-3): route-level
             // throttle for the two authenticated OTP password-change

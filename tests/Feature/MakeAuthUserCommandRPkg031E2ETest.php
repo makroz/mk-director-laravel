@@ -129,7 +129,10 @@ test('PKG-NEW-09 e2e: handle() pinea middleware mk.auth + mk.ability en register
     // `{\$scopeLower}` / `{\$scopePlural}` (escaped below para que PHP no interpole
     // al ejecutar el test) en vez de `{{moduleNameLower}}` literal.
     expect($commandSource)->toMatch(
-        "/\\\$registerRoute\s*=\s*[\"']\\\\n\s*Route::post\\('register'.*?if\s*\\(\\\$withCrud\\).*?->middleware\\(\\['mk\\.auth:.*?\\.create'.*?\\]\\).*?;/s"
+        // El string ya no arranca con "\n": termina en "\n    " para que la ruta
+        // de forgot conserve su sangría (y el throttle `{scope}-register` va
+        // primero en el middleware). Por eso cambió este pin.
+        "/\\\$registerRoute\s*=\s*[\"']Route::post\\('register'.*?if\s*\\(\\\$withCrud\\).*?->middleware\\(\\[.*?'mk\\.auth:.*?\\.create'.*?\\]\\).*?;/s"
     );
 
     // El middleware pineado debe ser consistente con el workaround del consumer

@@ -192,11 +192,7 @@
 
 **Response 422** (token inválido o expirado > 60min).
 
-> ⚠️ El endpoint `POST /api/{{moduleNameLower}}/auth/register` (R-PKG-027) está pineado con
-> `mk.auth:{{moduleNameLower}}` + `mk.ability:{{moduleNameLower}}.{{moduleNamePluralLower}}.create`
-> (defense-in-depth per HALLAZGO-NEW-FASE18-C). NO es público por default — para invocarlo
-> necesitás un token de admin/{{moduleNameLower}} con ability `{{moduleNamePluralLower}}.create`.
-
+{{registerContractNote}}
 ---
 
 ## 2. {{ModuleName}} CRUD

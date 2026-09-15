@@ -113,14 +113,15 @@ Los 18 comandos que registra el paquete (`php artisan list mk`).
 | `--profile-fields-required=<csv>` | Pasa esos fields de `nullable` a `required` en la validación. |
 | `--kind=manager\|consumer` | `manager` (default) = scope completo. `consumer` = self-profile-only, administrado por otro scope. **Requiere `--managed-by`.** ⚠️ El consumer **pierde los 4 endpoints de OTP**. |
 | `--managed-by=<Manager>` | Publica `/api/{manager}/{scopePlural}` gateado con `mk.auth:{manager}`. ⚠️ **No valida que el manager exista**: con un nombre inventado genera 21 rutas que responden `500 Auth guard [x] is not defined`. El manager va **primero**. |
-| `--verify-email` | `email_verified_at` + `/email/verify/{id}/{hash}` (URL firmada) + `/email/resend`. Sólo con `--login-field=email`. |
+| `--verify-email` | `email_verified_at` + `/email/verify/{id}/{hash}` (URL firmada) + `/email/resend`. Sólo con `--login-field=email`. Con `--with-register`, además despacha la verificación al registrar; sin él, el primer email sale por `/email/resend`. |
 | `--with-permissions-endpoint` | `GET /api/{scope}/auth/me/permissions` con el desglose de abilities. |
 | `--no-crud` / `--no-rbac` / `--no-status` | Los opt-out de los tres defaults. |
 | `--skip-auth-wire` | No editar `config/auth.php` (sólo imprimir los snippets). |
 | `--skip-policies` | No generar las Policies default-deny. |
 | `--setup-sanctum` / `--migrate` / `--seed` / `--discover` | Pasos post-scaffold. Sanctum ya se auto-invoca. |
 | `--force-cors` | Re-escribir `config/cors.php` aunque exista. |
-| `--multi-tenant` | Emite `client_id` en la migración y el `$fillable`, y **NO emite `POST /auth/register`** (un alta sin tenant crearía el usuario sin tenant). ⚠️ El global scope filtra por **`tenant_id`**: hay que alinearlos. Ver `docs/guides/MULTI_TENANT.md`. |
+| `--with-register` | **Opt-in.** Genera `POST /api/{scope}/auth/register` + `register()`, con throttle `rate_limits.register` (prefijo `{scope}-register`). 🔴 Sin CRUD es un alta **pública**: cualquiera se crea una cuenta. Con CRUD queda gateado por `mk.auth` + ability `create`. Falla combinado con `--multi-tenant`. |
+| `--multi-tenant` | Emite `client_id` en la migración y el `$fillable`. Rechaza `--with-register` (un alta sin tenant crearía el usuario sin tenant). ⚠️ El global scope filtra por **`tenant_id`**: hay que alinearlos. Ver `docs/guides/MULTI_TENANT.md`. |
 
 > Los `throttle:` que emite el scaffolder llevan prefijo propio
 > (`throttle:5,1,{scope}-login`). Sin él, `ThrottleRequests` usa la misma clave
