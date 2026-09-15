@@ -44,8 +44,9 @@ test('R-PKG-046 F9-B05 — command detecta $admin->getLoginField() dinámicament
     $src = authCreateSuperAdminSourceF9B05();
 
     // handle() debe leer el loginField del modelo Admin via getLoginField().
+    // Hallazgo #47: el modelo es el del `--scope`, no Admin fijo.
     expect($src)->toContain(
-        "\$this->loginField = (new \$adminModel)->getLoginField()",
+        "\$this->loginField = (new \$modelClass)->getLoginField()",
     );
 });
 
@@ -58,7 +59,7 @@ test('R-PKG-046 F9-B05 — configure() agrega --{loginField} dinámicamente via 
     expect($src)->toContain('Symfony\\Component\\Console\\Input\\InputOption');
 
     // Solo agregar el flag si loginField != email (BC fallback).
-    expect($src)->toContain("if (\$loginField !== 'email')");
+    expect($src)->toContain("if (\$loginField !== 'email' && ! \$this->getDefinition()->hasOption(\$loginField))");
 });
 
 test('R-PKG-046 F9-B05 — resolveLoginFieldValue() fallback chain dinámico', function () {
@@ -67,7 +68,8 @@ test('R-PKG-046 F9-B05 — resolveLoginFieldValue() fallback chain dinámico', f
     expect($src)->toContain('protected function resolveLoginFieldValue(): string');
 
     // Helper debe buscar --{loginField} primero.
-    expect($src)->toContain("\$dynamicFlag = \$this->option(\$this->loginField)");
+    // `hasOption` antes: `configure()` sólo agrega la opción si el modelo existía.
+    expect($src)->toContain("\$dynamicFlag = \$this->hasOption(\$this->loginField) ? \$this->option(\$this->loginField) : null");
 
     // BC fallback para --email cuando loginField='email'.
     expect($src)->toContain("if (\$this->loginField === 'email')");
@@ -84,7 +86,7 @@ test('R-PKG-046 F9-B05 — where() dinámico respeta loginField', function () {
     );
 
     // Y la advertencia de idempotencia usa el nombre del field correcto.
-    expect($src)->toContain('Ya existe un admin con {$this->loginField}');
+    expect($src)->toContain('Ya existe un {$this->scope} con {$this->loginField}');
 });
 
 test('R-PKG-046 F9-B05 — create() pine el loginField value dinámicamente (no email hardcoded)', function () {

@@ -25,12 +25,13 @@ uses(MkLaravelTestCase::class);
 
 test('AuthCreateSuperAdminCommand has seedAdminRolesIfAvailable helper', function () {
     $source = file_get_contents(__DIR__.'/../../../src/Console/Commands/AuthCreateSuperAdminCommand.php');
-    expect($source)->toContain('private function seedAdminRolesIfAvailable(): void');
+    // Hallazgo #47: el seeder es el del `--scope`, no AdminRolesSeeder fijo.
+    expect($source)->toContain('private function seedScopeRolesIfAvailable(): void');
 });
 
 test('AuthCreateSuperAdminCommand uses DDD namespace for seeder (R-P-009)', function () {
     $source = file_get_contents(__DIR__.'/../../../src/Console/Commands/AuthCreateSuperAdminCommand.php');
-    expect($source)->toContain('App\\\\Modules\\\\Admin\\\\Database\\\\Seeders\\\\AdminRolesSeeder');
+    expect($source)->toContain('App\\\\Modules\\\\{$studly}\\\\Database\\\\Seeders\\\\{$studly}RolesSeeder');
 });
 
 test('AuthCreateSuperAdminCommand uses class_exists() to detect seeder', function () {
@@ -42,7 +43,9 @@ test('AuthCreateSuperAdminCommand emits actionable warning when seeder is missin
     $source = file_get_contents(__DIR__.'/../../../src/Console/Commands/AuthCreateSuperAdminCommand.php');
     expect($source)->toContain("Seeder DDD '{\$seederClass}' no existe");
     expect($source)->toContain('ability_role');
-    expect($source)->toContain('mk:make:auth-user Admin --with-crud');
+    // El comando de la advertencia es el del scope pedido (el viejo pineaba
+    // `--with-crud`, un flag que ya no existe, y este pin lo matcheaba en un docblock).
+    expect($source)->toContain('php artisan mk:make:auth-user {$studly}');
 });
 
 test('AuthCreateSuperAdminCommand invokes seeder via app() container (not global class name)', function () {
@@ -55,5 +58,5 @@ test('AuthCreateSuperAdminCommand invokes seeder via app() container (not global
 test('AuthCreateSuperAdminCommand: handle() calls seedAdminRolesIfAvailable after role/ability assignment', function () {
     $source = file_get_contents(__DIR__.'/../../../src/Console/Commands/AuthCreateSuperAdminCommand.php');
     // Buscar el patrón: asignación de roles+abilities → llamada al seeder.
-    expect($source)->toContain('$this->seedAdminRolesIfAvailable()');
+    expect($source)->toContain('$this->seedScopeRolesIfAvailable()');
 });

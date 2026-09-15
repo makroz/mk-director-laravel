@@ -44,14 +44,16 @@ test('mk:auth:create-super-admin command exists with the expected signature', fu
     expect($source)->toContain('--password=');
 });
 
-test('mk:auth:create-super-admin fails when App\\Modules\\Admin\\Models\\Admin does not exist', function () {
+test('mk:auth:create-super-admin fails when the scope model does not exist', function () {
     $source = createSuperAdminSource();
 
-    expect($source)->toContain("'App\\\\Modules\\\\Admin\\\\Models\\\\Admin'");
-    expect($source)->toContain('class_exists($adminModel)');
+    // Hallazgo #47: ya no está clavado a Admin — resuelve el modelo de `--scope`
+    // (default admin). El comportamiento lo mide AuthCreateSuperAdminScopeTest.
+    expect($source)->toContain('$modelClass = $this->resolveScopeModel($this->scope);');
+    expect($source)->toContain('class_exists($modelClass)');
     // The error message points to mk:make:auth-user so the dev knows
     // exactly what to run.
-    expect($source)->toContain('mk:make:auth-user Admin');
+    expect($source)->toContain('php artisan mk:make:auth-user {$studly}');
 });
 
 test('mk:auth:create-super-admin validates email format', function () {
@@ -74,7 +76,8 @@ test('mk:auth:create-super-admin is idempotent on duplicate email', function () 
     $source = createSuperAdminSource();
 
     // R-PKG-046 F9-B05: where() dinámico según loginField (no hardcoded 'email').
-    expect($source)->toContain('where($this->loginField, $loginFieldValue)->exists()');
+    // Hallazgo #47: sin global scopes, o el fail-closed de tenant lo esconde.
+    expect($source)->toContain('withoutGlobalScopes()->where($this->loginField, $loginFieldValue)->exists()');
     expect($source)->toContain('No se creó nada');
 });
 

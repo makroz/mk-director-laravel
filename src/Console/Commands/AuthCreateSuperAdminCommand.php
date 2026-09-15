@@ -8,6 +8,7 @@ use Illuminate\Console\Command;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 use Mk\Director\Auth\Concerns\HasAbilities;
 use Mk\Director\Auth\Concerns\HasRoles;
 use Mk\Director\Auth\Enums\FixedStatus;
@@ -17,18 +18,32 @@ use Mk\Director\Auth\Models\Role;
 
 /**
  * `php artisan mk:auth:create-super-admin` — crea el primer usuario
- * super-admin del scope "admin".
+ * super-admin de un scope de auth (default: "admin").
+ *
+ * **`--scope=` (hallazgo #47 del piloto NetPizza)**: antes estaba clavado a
+ * `App\Modules\Admin\Models\Admin` y a `AdminRolesSeeder`, así que un scope
+ * que no fuera admin (los operadores de plataforma del piloto) no tenía cómo
+ * crear su primer usuario salvo tinker. El modelo se resuelve por el mismo
+ * camino por el que `mk.auth:{scope}` resuelve al usuario autenticado:
+ * `auth.guards.{scope}.provider` → `auth.providers.{provider}.model` (el
+ * scaffolder cablea exactamente eso en `config/auth.php`). Si el guard no está
+ * cableado, cae a la convención `App\Modules\{Scope}\Models\{Scope}`. Sin
+ * `--scope` es `admin`, como siempre.
  *
  * El command es **no-invasivo** (sprint 2026-06-24):
  *
- *   - Solo crea el usuario si la clase App\Modules\Admin\Models\Admin
- *     existe (asumimos que el consumer ya corrió `mk:make:auth-user
- *     Admin`). Si no, falla con un mensaje accionable.
- *   - Asigna el rol "super-admin" con guard "admin" (crea la fila en
+ *   - Solo crea el usuario si el modelo del scope existe (asumimos que el
+ *     consumer ya corrió `mk:make:auth-user {Scope}`). Si no, falla con un
+ *     mensaje accionable.
+ *   - Es idempotente: si ya hay un usuario con ese login, no hace nada. El
+ *     chequeo va SIN global scopes (ver handle()).
+ *   - Asigna el rol "super-admin" con guard = el scope (crea la fila en
  *     `roles` si no existe).
  *   - Asigna la ability "*" como grant directo (path `ability_user`).
  *     Esto evita requerir un seeder adicional; el `*` es el wildcard
  *     que mk-director trata como super-admin.
+ *   - Roles y abilities se saltean con `--no-roles` (scope sin RBAC) o si
+ *     el proyecto no tiene las tablas `roles`/`role_user`.
  *
  * Por qué existe: `docs/GETTING_STARTED.md` documentaba este command
  * desde 1.0.0 pero nunca se implementó. El audit 2026-06-24 lo detectó
@@ -66,6 +81,8 @@ class AuthCreateSuperAdminCommand extends Command
      * @var string
      */
     protected $signature = 'mk:auth:create-super-admin
+        {--scope=admin : Scope de auth del usuario (snake_case). El modelo sale de config/auth.php: el provider del guard del scope y el model de ese provider. Default: admin (BC).}
+        {--no-roles : Crea SOLO el usuario, sin roles ni abilities. Para scopes que no usan RBAC (ej: generados con --no-rbac).}
         {--email= : Email del super-admin (omite el prompt; BC para login field=email)}
         {--name= : Nombre (omite el prompt)}
         {--password= : Password en texto plano (omite el prompt; preferir prompt o env en CI)}
@@ -76,7 +93,7 @@ class AuthCreateSuperAdminCommand extends Command
      *
      * @var string
      */
-    protected $description = 'Crea el primer usuario super-admin (scope=admin, role=super-admin, ability=*). Use --roles=super-admin,admin,editor,viewer para sembrar los 4 roles predefinidos. Soporta login field custom (e.g. --ci, --username) pineado por el scaffolder.';
+    protected $description = 'Crea el primer usuario super-admin de un scope (default --scope=admin; role=super-admin, ability=*). Use --roles=super-admin,admin,editor,viewer para sembrar los 4 roles predefinidos. Soporta login field custom (e.g. --ci, --username) pineado por el scaffolder.';
 
     /**
      * R-PKG-046 F9-B05 — Login field dinámico.
@@ -94,33 +111,82 @@ class AuthCreateSuperAdminCommand extends Command
     {
         parent::configure();
 
-        $adminModel = 'App\\Modules\\Admin\\Models\\Admin';
+        // `configure()` corre ANTES de parsear el input: no se sabe qué `--scope`
+        // van a pedir. Se agrega `--{loginField}` para el modelo de CADA guard
+        // de config/auth.php (antes sólo el de Admin), así `--scope=mesero --ci=`
+        // funciona igual que `--ci=` para el admin.
+        foreach ($this->candidateScopeModels() as $modelClass) {
+            if (! class_exists($modelClass) || ! is_subclass_of($modelClass, AuthUser::class)) {
+                // BC: modelo que no existe todavía → loginField='email'.
+                // El handle() hace la verificación estricta y falla limpio.
+                continue;
+            }
 
-        // BC: si el modelo Admin NO existe todavía, asumimos loginField='email'
-        // (default). El handle() hace la verificación estricta y falla limpio.
-        if (! class_exists($adminModel)) {
-            return;
+            try {
+                $loginField = (new $modelClass)->getLoginField();
+            } catch (\Throwable $e) {
+                // Si getLoginField() falla (model sin la prop, etc.), BC fallback.
+                continue;
+            }
+
+            // Solo agregar el flag dinámico si difiere del BC `--email`.
+            if ($loginField !== 'email' && ! $this->getDefinition()->hasOption($loginField)) {
+                $this->getDefinition()->addOption(
+                    new \Symfony\Component\Console\Input\InputOption(
+                        name: $loginField,
+                        shortcut: null,
+                        mode: \Symfony\Component\Console\Input\InputOption::VALUE_OPTIONAL,
+                        description: "Valor del login field `{$loginField}` del super-admin (omite el prompt)",
+                        default: null,
+                    ),
+                );
+            }
         }
+    }
+
+    /**
+     * Modelos de todos los guards cableados + el Admin por convención (BC).
+     *
+     * @return array<int, string>
+     */
+    private function candidateScopeModels(): array
+    {
+        $models = ['App\\Modules\\Admin\\Models\\Admin'];
 
         try {
-            $loginField = (new $adminModel)->getLoginField();
-        } catch (\Throwable $e) {
-            // Si getLoginField() falla (model sin la prop, etc.), BC fallback.
-            return;
+            $guards = function_exists('config') ? (array) config('auth.guards', []) : [];
+        } catch (\Throwable) {
+            $guards = [];
         }
 
-        // Solo agregar el flag dinámico si difiere del BC `--email`.
-        if ($loginField !== 'email') {
-            $this->getDefinition()->addOption(
-                new \Symfony\Component\Console\Input\InputOption(
-                    name: $loginField,
-                    shortcut: null,
-                    mode: \Symfony\Component\Console\Input\InputOption::VALUE_OPTIONAL,
-                    description: "Valor del login field `{$loginField}` del super-admin (omite el prompt)",
-                    default: null,
-                ),
-            );
+        foreach (array_keys($guards) as $guard) {
+            $models[] = $this->resolveScopeModel((string) $guard);
         }
+
+        return array_values(array_unique($models));
+    }
+
+    /**
+     * FQCN del modelo de un scope, por el mismo camino que usa `mk.auth:{scope}`
+     * (`Auth::guard($scope)` → provider → model). Cae a la convención del
+     * scaffolder si el guard no está cableado en config/auth.php.
+     */
+    private function resolveScopeModel(string $scope): string
+    {
+        try {
+            $provider = function_exists('config') ? config("auth.guards.{$scope}.provider") : null;
+            $model = is_string($provider) ? config("auth.providers.{$provider}.model") : null;
+        } catch (\Throwable) {
+            $model = null;
+        }
+
+        if (is_string($model) && $model !== '') {
+            return $model;
+        }
+
+        $studly = Str::studly($scope);
+
+        return "App\\Modules\\{$studly}\\Models\\{$studly}";
     }
 
     /**
@@ -130,6 +196,15 @@ class AuthCreateSuperAdminCommand extends Command
      * @var string
      */
     protected string $loginField = 'email';
+
+    /**
+     * Scope pedido con `--scope` y tabla de su modelo. Los lee
+     * {@see roleAbilitiesMap()}; default admin/admins para subclases que lo
+     * llamen antes de `handle()`.
+     */
+    protected string $scope = 'admin';
+
+    protected string $scopeTable = 'admins';
 
     /**
      * Definición de los roles predefinidos (R-PKG-014 MEJORA-04).
@@ -144,8 +219,8 @@ class AuthCreateSuperAdminCommand extends Command
      */
     protected function roleAbilitiesMap(): array
     {
-        $scope = 'admin';
-        $resource = 'admins';
+        $scope = $this->scope;
+        $resource = $this->scopeTable;
 
         return [
             'super-admin' => ['*'],
@@ -170,23 +245,33 @@ class AuthCreateSuperAdminCommand extends Command
 
     public function handle(): int
     {
-        $adminModel = 'App\\Modules\\Admin\\Models\\Admin';
-        if (! class_exists($adminModel)) {
-            $this->error("No se encontró la clase {$adminModel}.");
-            $this->newLine();
-            $this->line('Antes de crear un super-admin, generá el scope "admin" con:');
-            $this->line('  php artisan mk:make:auth-user Admin');
-            $this->newLine();
-            $this->line('Eso crea app/Modules/Admin/Models/Admin.php + la migration + el ServiceProvider.');
+        $this->scope = trim((string) $this->option('scope'));
+        if (! preg_match('/^[a-z][a-z0-9_]*$/', $this->scope)) {
+            $this->error("--scope debe ser un scope en snake_case (ej: admin, operador). Recibido: '{$this->scope}'.");
 
             return self::FAILURE;
         }
+
+        $modelClass = $this->resolveScopeModel($this->scope);
+        if (! class_exists($modelClass) || ! is_subclass_of($modelClass, AuthUser::class)) {
+            $studly = Str::studly($this->scope);
+            $this->error("No se encontró el modelo del scope '{$this->scope}' ({$modelClass}).");
+            $this->newLine();
+            $this->line("Antes de crear un super-admin, generá el scope \"{$this->scope}\" con:");
+            $this->line("  php artisan mk:make:auth-user {$studly}");
+            $this->newLine();
+            $this->line("Eso crea app/Modules/{$studly}/Models/{$studly}.php + la migration + el ServiceProvider, y cablea el guard en config/auth.php.");
+
+            return self::FAILURE;
+        }
+
+        $this->scopeTable = (new $modelClass)->getTable();
 
         // R-PKG-046 F9-B05 — Detectar login field del modelo (override per scope).
         // El scaffolder pinea `protected string $loginField = 'ci'` (o 'email', etc.)
         // en el modelo scaffoldeado. Leemos vía `getLoginField()` que ya existe
         // en `AuthUser` desde R-PKG-009 D6.
-        $this->loginField = (new $adminModel)->getLoginField();
+        $this->loginField = (new $modelClass)->getLoginField();
 
         // ── Resolver roles a sembrar (R-PKG-014 MEJORA-04) ──
         // Default BC: solo super-admin.
@@ -279,10 +364,18 @@ class AuthCreateSuperAdminCommand extends Command
             return self::FAILURE;
         }
 
-        // 2. Idempotencia: si ya existe un admin con ese login field value, salir limpio.
+        // 2. Idempotencia: si ya existe un usuario con ese login field value, salir limpio.
         // R-PKG-046 F9-B05 — where() dinámico según loginField.
-        if ($adminModel::where($this->loginField, $loginFieldValue)->exists()) {
-            $this->warn("Ya existe un admin con {$this->loginField} {$loginFieldValue}. No se creó nada.");
+        //
+        // 🔴 SIN global scopes (hallazgo #47). En consola no hay tenant, y con
+        // `tenant.fail_closed` el scope agrega `where 1 = 0`: el usuario existe,
+        // este chequeo no lo veía, y el insert reventaba contra el unique
+        // (`SQLSTATE[23505] admins_email_unique`). La pregunta es "¿esta fila
+        // chocaría con el unique del login?", y el unique es de la TABLA: no
+        // sabe de tenants ni de soft-deletes. Por eso se apagan TODOS, no sólo
+        // el de tenant — una fila soft-deleted con ese email también choca.
+        if ($modelClass::withoutGlobalScopes()->where($this->loginField, $loginFieldValue)->exists()) {
+            $this->warn("Ya existe un {$this->scope} con {$this->loginField} {$loginFieldValue}. No se creó nada.");
 
             return self::SUCCESS;
         }
@@ -305,14 +398,12 @@ class AuthCreateSuperAdminCommand extends Command
         // R-PKG-016 BUG-NEW-15 fix pineado por BC: pinear `auth_scope` si está en fillable.
         // Defense-in-depth: `Schema::hasColumn()` check evita SQLSTATE si la
         // columna no existe (versiones pre-R-PKG-022 del schema).
-        if (Schema::hasColumn((new $adminModel)->getTable(), 'auth_scope')) {
-            $createAttrs['auth_scope'] = $adminModel === 'App\\Modules\\Admin\\Models\\Admin'
-                ? 'admin'
-                : (new $adminModel)->getAuthScope() ?? 'admin';
+        if (Schema::hasColumn($this->scopeTable, 'auth_scope')) {
+            $createAttrs['auth_scope'] = (new $modelClass)->getAuthScope() ?? $this->scope;
         }
 
         /** @var AuthUser $admin */
-        $admin = $adminModel::create($createAttrs);
+        $admin = $modelClass::create($createAttrs);
 
         // OBS-02 fix (R-PKG-031 pineado 2026-06-28, defense-in-depth): pinear
         // `is_active => true` explícitamente al crear el admin. Sin esto, si
@@ -333,12 +424,26 @@ class AuthCreateSuperAdminCommand extends Command
         // Follow-up opcional: pinear `is_active` en `$fillable` del stub del
         // modelo scaffoldeado (defense-in-depth adicional, pero no requerido
         // para este fix).
-        if (Schema::hasColumn((new $adminModel)->getTable(), 'is_active')) {
+        if (Schema::hasColumn($this->scopeTable, 'is_active')) {
             $admin->is_active = true;
             $admin->save();
         }
 
         // 4. Asignar roles + abilities a cada uno.
+        //
+        // Se saltea si lo piden (`--no-roles`: un scope sin RBAC no necesita un
+        // `super-admin` con guard propio ensuciando la tabla `roles`) o si el
+        // proyecto no tiene las tablas de RBAC — antes eso era un SQLSTATE a
+        // mitad de camino, con el usuario ya creado y el comando en rojo.
+        $withRoles = ! (bool) $this->option('no-roles');
+        if ($withRoles && ! (Schema::hasTable('roles') && Schema::hasTable('role_user'))) {
+            $this->warn('   ⚠️  No existen las tablas de RBAC (roles/role_user): se creó el usuario SIN roles ni abilities.');
+            $withRoles = false;
+        }
+        if (! $withRoles) {
+            $rolesToSeed = [];
+        }
+
         foreach ($rolesToSeed as $roleName) {
             $admin->assignRole($roleName);
 
@@ -364,7 +469,9 @@ class AuthCreateSuperAdminCommand extends Command
         //    Fix: `class_exists()` chequea el namespace DDD correcto. Si no
         //    existe, warning explícito (no error fatal) para que el consumer
         //    sepa que necesita scaffoldear el seeder.
-        $this->seedAdminRolesIfAvailable();
+        if ($withRoles) {
+            $this->seedScopeRolesIfAvailable();
+        }
 
         // Pin el flag `is_fixed` en las filas de sistema que NUNCA deben
         // editarse/eliminarse desde el CRUD: el role `super-admin` y la
@@ -376,7 +483,11 @@ class AuthCreateSuperAdminCommand extends Command
         }
 
         $this->newLine();
-        $infoVerb = count($rolesToSeed) > 1 ? 'Roles sembrados.' : 'Super-admin creado.';
+        $infoVerb = match (true) {
+            count($rolesToSeed) > 1 => 'Roles sembrados.',
+            $rolesToSeed === [] => 'Usuario creado (sin roles).',
+            default => 'Super-admin creado.',
+        };
         $this->info('✅ '.$infoVerb);
         $this->table(
             ['Campo', 'Valor'],
@@ -384,14 +495,15 @@ class AuthCreateSuperAdminCommand extends Command
                 ['id',          (string) $admin->getKey()],
                 ['name',        $admin->name],
                 [$this->loginField, $admin->{$this->loginField}],
-                ['auth_scope',  $admin->getAuthScope() ?? 'admin'],
-                ['roles',       $admin->roles->pluck('name')->implode(', ') ?: '—'],
-                ['canMk(*)',    $admin->canMk('*') ? 'yes (super-admin)' : 'no'],
+                ['auth_scope',  $admin->getAuthScope() ?? $this->scope],
+                // Sin RBAC no se consultan: sin las tablas, leerlas es otro SQLSTATE.
+                ['roles',       $withRoles ? ($admin->roles->pluck('name')->implode(', ') ?: '—') : '—'],
+                ['canMk(*)',    $withRoles && $admin->canMk('*') ? 'yes (super-admin)' : 'no'],
             ],
         );
         $this->newLine();
         $this->line('Login:');
-        $this->line("  POST /api/admin/auth/login");
+        $this->line("  POST /api/{$this->scope}/auth/login");
         $this->line('  { "'.$this->loginField.'": "'.$loginFieldValue.'", "password": "<el que tipeaste>" }');
 
         return self::SUCCESS;
@@ -409,8 +521,9 @@ class AuthCreateSuperAdminCommand extends Command
      */
     protected function resolveLoginFieldValue(): string
     {
-        // Strategy 1: --{loginField} flag.
-        $dynamicFlag = $this->option($this->loginField);
+        // Strategy 1: --{loginField} flag. `hasOption` porque `configure()` sólo
+        // pudo agregarla si el modelo del scope ya existía al construir el comando.
+        $dynamicFlag = $this->hasOption($this->loginField) ? $this->option($this->loginField) : null;
         if (! empty($dynamicFlag)) {
             return (string) $dynamicFlag;
         }
@@ -428,11 +541,12 @@ class AuthCreateSuperAdminCommand extends Command
     }
 
     /**
-     * Invoca el `AdminRolesSeeder` scaffoldeado (namespace DDD, R-P-009) si existe.
+     * Invoca el `{Scope}RolesSeeder` scaffoldeado (namespace DDD, R-P-009) si existe.
      *
      * R-PKG-021 BUG-NEW-30 (MEDIUM):
-     *  - El seeder scaffoldeado por `mk:make:auth-user Admin --with-crud` vive en
-     *    `App\Modules\Admin\Database\Seeders\AdminRolesSeeder` (DDD estricto).
+     *  - El seeder scaffoldeado por `mk:make:auth-user {Scope}` (CRUD ON, el
+     *    default) vive en `App\Modules\{Scope}\Database\Seeders\{Scope}RolesSeeder`
+     *    (DDD estricto). Con `--scope=` es el del scope pedido (hallazgo #47).
      *  - El namespace NO es `Database\Seeders\AdminRolesSeeder` (eso era un
      *    bug previo silencioso — el comando asumía el namespace global).
      *  - Si el seeder existe, lo invoca. Si no, warning explícito indicando
@@ -441,15 +555,18 @@ class AuthCreateSuperAdminCommand extends Command
      * Defense-in-depth: el seeder es idempotente (usa `firstOrCreate` y `sync`
      * sin detach), así que múltiples invocaciones no duplican filas.
      */
-    private function seedAdminRolesIfAvailable(): void
+    private function seedScopeRolesIfAvailable(): void
     {
-        $seederClass = 'App\\Modules\\Admin\\Database\\Seeders\\AdminRolesSeeder';
+        $studly = Str::studly($this->scope);
+        $seederClass = "App\\Modules\\{$studly}\\Database\\Seeders\\{$studly}RolesSeeder";
 
         if (! class_exists($seederClass)) {
+            // Un scope scaffoldeado con --no-crud no tiene RolesSeeder: es normal,
+            // no un error. Se avisa qué quedó sembrado y qué no.
             $this->warn("   ⚠️  Seeder DDD '{$seederClass}' no existe.");
             $this->warn('   Las abilities del role (`ability_role`) NO fueron sembradas — solo los grants directos al user (`ability_user`).');
-            $this->warn('   Si querés las abilities asignadas a los roles, scaffoldeá con:');
-            $this->warn('     php artisan mk:make:auth-user Admin --with-crud --with-auth-rbac');
+            $this->warn('   Si querés las abilities asignadas a los roles, scaffoldeá el scope con CRUD:');
+            $this->warn("     php artisan mk:make:auth-user {$studly}");
 
             return;
         }
@@ -458,9 +575,9 @@ class AuthCreateSuperAdminCommand extends Command
             /** @var Seeder $seeder */
             $seeder = app($seederClass);
             $seeder->run();
-            $this->info('   → AdminRolesSeeder corrió OK (ability_role + roles re-poblados).');
+            $this->info("   → {$studly}RolesSeeder corrió OK (ability_role + roles re-poblados).");
         } catch (\Throwable $e) {
-            $this->warn("   ⚠️  AdminRolesSeeder falló: {$e->getMessage()}");
+            $this->warn("   ⚠️  {$studly}RolesSeeder falló: {$e->getMessage()}");
         }
     }
 }
