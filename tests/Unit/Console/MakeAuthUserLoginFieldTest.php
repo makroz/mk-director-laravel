@@ -71,7 +71,7 @@ test('command passes loginField to generateStub via $extraReplacements', functio
 
     // handle() construye el array con los 5 placeholders condicionales.
     expect($source)->toContain('$extraReplacements');
-    expect($source)->toContain("'{{emailVerifiedAtColumn}}'");
+    // (`{{emailVerifiedAtColumn}}` se borró: la migración crea la columna siempre.)
     expect($source)->toContain("'{{emailVerifiedAtCastEntry}}'");
     expect($source)->toContain("'{{mustVerifyEmailUse}}'");
     expect($source)->toContain("'{{loginFieldValidationRule}}'");

@@ -18,7 +18,6 @@ final readonly class {{ModuleName}}FilterData
 {
     public function __construct(
         public ?string $search = null,
-        public ?bool $isActive = null,
         /** @var array<int, int>|null */
         public ?array $roleIds = null,
         public int $perPage = 15,
@@ -34,7 +33,6 @@ final readonly class {{ModuleName}}FilterData
 
         return new self(
             search: $data['search'] ?? null,
-            isActive: isset($data['is_active']) ? filter_var($data['is_active'], FILTER_VALIDATE_BOOLEAN) : null,
             roleIds: $roleIds,
             perPage: min(max((int) ($data['per_page'] ?? 15), 1), 100),
             page: max((int) ($data['page'] ?? 1), 1),

@@ -101,7 +101,7 @@ test('autoprueba del detector: ve un huérfano y no marca un docblock sano con a
     expect($orphans[1])->toStartWith('línea 12:');
 });
 
-test('generado: sin docblocks huérfanos, sin ids internos, y todo el PHP compila', function (array $args) {
+test('generado: sin docblocks huérfanos, sin ids internos, sin clases propias faltantes, y todo el PHP compila', function (array $args) {
     [$exit, $output, $base] = $this->runScaffolderInTempDir($args);
     expect($exit)->toBe(0, $output);
 
@@ -120,6 +120,17 @@ test('generado: sin docblocks huérfanos, sin ids internos, y todo el PHP compil
 
         foreach (orphanDocblocks($path) as $orphan) {
             $problems[] = "{$relative}: {$orphan}";
+        }
+
+        // Toda clase del PROPIO módulo que un archivo importa o nombra con
+        // `::class` tiene que haberse generado: si no, el endpoint que la usa es
+        // un 500 «Class not found» (pasó con `AssignAccessRequest`).
+        $scope = $args['scope'];
+        preg_match_all('/(?:^use\s+|\\\\)App\\\\Modules\\\\'.$scope.'\\\\([\\w\\\\]+?)(?:;|::class)/m', $file->getContents(), $refs);
+        foreach (array_unique($refs[1]) as $classPath) {
+            if (! is_file($base."/app/Modules/{$scope}/".str_replace('\\', '/', $classPath).'.php')) {
+                $problems[] = "{$relative}: referencia `App\\Modules\\{$scope}\\{$classPath}`, que no se generó";
+            }
         }
 
         exec('php -l '.escapeshellarg($path).' 2>&1', $lint, $code);

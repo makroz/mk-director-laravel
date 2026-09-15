@@ -47,9 +47,10 @@ class {{ModuleName}}Controller extends SmartController
         'service'         => {{ModuleName}}Service::class,
         'store_request'   => Store{{ModuleName}}Request::class,
         'update_request'  => Update{{ModuleName}}Request::class,
-        // Sólo columnas que existen en la tabla: agregá acá los profile fields
-        // por los que quieras buscar.
-        'searchable'      => ['name', 'email'],
+        // Columnas de texto del scope (nombre, login y profile fields de texto).
+        // Si agregás una, que exista en la tabla: una columna inexistente es un
+        // 500 de SQL con la primera búsqueda.
+        'searchable'      => {{searchableColumns}},
         'with'            => ['roles', 'directAbilities'],
         'allowedIncludes' => ['roles', 'roles.abilities', 'directAbilities'],
         'features'        => [

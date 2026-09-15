@@ -23,7 +23,6 @@ interface {{ModuleName}}RepositoryInterface
      *
      * @param  array{
      *     search?: string|null,
-     *     is_active?: bool|null,
      *     role_ids?: array<int, int>|null,
      *     per_page?: int,
      *     page?: int,

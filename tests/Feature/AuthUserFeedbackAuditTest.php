@@ -88,20 +88,9 @@ function makeAuthUserCommand(): MakeAuthUserCommand
 //
 // Pineamos el nuevo comportamiento + documentamos el histórico.
 
-test('R-PKG-047 D1: buildLoginResponseArray retorna $user literal (helper post-D1)', function () {
-    $command = makeAuthUserCommand();
-    $reflection = new ReflectionClass($command);
-    $method = $reflection->getMethod('buildLoginResponseArray');
-
-    // Post-D1, el helper retorna literal '$user' (shape canónico lo aplica
-    // BaseController::autoTransform() via apiResource del modelo). El stub
-    // es thin wrapper — NO contiene el return literal `$user` (eso vive
-    // en BaseAuthController::login()).
-    $resultEmpty = $method->invoke($command, [], 'email');
-    expect($resultEmpty)->toBe('$user');
-
-    $resultWith = $method->invoke($command, ['full_name' => ['type' => 'string', 'unique' => false]], 'email');
-    expect($resultWith)->toBe('$user');
+test('R-PKG-047 D1: el shape del login vive en BaseAuthController, no en el stub', function () {
+    // Pin reescrito: fijaba un reemplazo MUERTO del comando (ningún stub usaba su placeholder) y se borró junto con él. Que no vuelvan los mide MakeAuthUserPlaceholderSyncTest.
+    // (`buildLoginResponseArray()` alimentaba `{{loginResponseArray}}`.)
 
     // El stub NO contiene el array_merge legacy (pineado pre-D1).
     $stub = stubContents('auth-user.auth-controller.stub');
@@ -112,17 +101,7 @@ test('R-PKG-047 D1: buildLoginResponseArray retorna $user literal (helper post-D
 // ─── R-PKG-047 D1/D5: loginField resuelto en el thin wrapper override ───────
 
 test('R-PKG-047 D5: thin wrapper override loginField() retorna {{loginField}} (post-D5)', function () {
-    $command = makeAuthUserCommand();
-    $reflection = new ReflectionClass($command);
-
-    $method = $reflection->getMethod('buildLoginResponseArray');
-
-    // Cualquier loginField (email, ci, phone, etc.) → mismo retorno (D1: $user literal).
-    $emailResult = $method->invoke($command, [], 'email');
-    expect($emailResult)->toBe('$user');
-
-    $ciResult = $method->invoke($command, ['full_name' => ['type' => 'string', 'unique' => false]], 'ci');
-    expect($ciResult)->toBe('$user');
+    // (La parte que invocaba `buildLoginResponseArray()` se sacó: Pin reescrito: fijaba un reemplazo MUERTO del comando (ningún stub usaba su placeholder) y se borró junto con él. Que no vuelvan los mide MakeAuthUserPlaceholderSyncTest.)
 
     // D5: el loginField se resuelve dinámicamente via `loginField()` override
     // del thin wrapper. Pineamos que el stub override ese método.
@@ -286,22 +265,8 @@ test('OBS-NEW-01: DiscoverAbilitiesCommand incluye discoverAbilitiesFromMkConfig
         ->and($src)->toContain("'delete'");
 });
 
-// ─── OBS-NEW-02 — authorizeAbility() indentación correcta en logout ────────
-
-test('OBS-NEW-02: placeholders rbacAbilityCheck* tienen indentación correcta (8 espacios)', function () {
-    $src = pkgFileContents('src/Console/Commands/MakeAuthUserCommand.php');
-
-    // El bug era 4 espacios extra. Después del fix, deben ser 8 espacios exactos
-    // (no 4 que sumaba al stub que ya tenía 4 = 8 total → 12 = 4 de más).
-    //
-    // El código tiene escapes `\$this` en strings PHP (no se interpreta como variable).
-    // Para testear, buscamos el código fuente directamente con substrings literales.
-    $me = "'{{rbacAbilityCheckMe}}' => \"        ";
-    $logout = "'{{rbacAbilityCheckLogout}}' => \"        ";
-
-    expect($src)->toContain($me)
-        ->and($src)->toContain($logout);
-});
+// ─── OBS-NEW-02 — (borrado) ───────────────────────────────────────────────
+// Fijaba la sangría de `{{rbacAbilityCheck*}}`. Pin reescrito: fijaba un reemplazo MUERTO del comando (ningún stub usaba su placeholder) y se borró junto con él. Que no vuelvan los mide MakeAuthUserPlaceholderSyncTest.
 // ════════════════════════════════════════════════════════════════════════════
 // R-PKG-016 — RETO fase 3 feedback fixes (v1.6.0-rc5 → rc6)
 // ════════════════════════════════════════════════════════════════════════════

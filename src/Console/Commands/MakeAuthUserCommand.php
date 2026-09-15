@@ -412,43 +412,17 @@ class MakeAuthUserCommand extends Command
         // (R-PKG-011 ADR-009). Antes (R-PKG-009) dependía solo de `$isEmail` —
         // refactor para que sea opt-in via flag.
 
-        // Placeholders condicionales (R-PKG-010) para `--with-auth-rbac`.
-        //
-        // Default mode (sin flag): todos los placeholders RBAC son string vacío
-        // → BC preservada con v1.5.0-rc3 (idéntico a la versión sin RBAC).
-        //
-        // Con `--with-auth-rbac`: cada placeholder se popula con el código
-        // correspondiente (ability checks, audit events, rate limit).
-        $rbacReplacements = $withAuthRbac
-            ? $this->buildRbacReplacements($scopeLower, $loginField)
-            : array_fill_keys([
-                '{{rbacImports}}',
-                '{{rbacConstructor}}',
-                '{{rbacAbilityCheckMe}}',
-                '{{rbacAbilityCheckLogout}}',
-                '{{rbacAuditLoginSuccess}}',
-                '{{rbacAuditLoginFailed}}',
-                '{{rbacAuditRefreshTodo}}',
-                '{{rbacAuditLogout}}',
-                '{{rbacAuditForgot}}',
-                '{{rbacAuditResetTodo}}',
-                '{{rbacAuthorizeAbilityMethod}}',
-            ], '');
-
-        // 🔴 Los throttles de las rutas PÚBLICAS no dependen de `--no-rbac`.
-        // Colgaban de ese flag, así que un scope sin RBAC nacía con login,
-        // forgot y reset sin límite (fuerza bruta abierta), y `refresh` no lo
-        // tuvo nunca. Lo encontró el gate de NetPizza «toda ruta pública tiene
-        // rate limit» sobre el `Operator` recién generado.
-        $rbacReplacements = array_merge($rbacReplacements, $this->buildPublicRouteThrottles($scopeLower));
+        // Throttles de las rutas PÚBLICAS, con o sin `--no-rbac`: un scope sin
+        // RBAC nacía con login, forgot y reset sin límite, y `refresh` no lo
+        // tuvo nunca (gate de NetPizza «toda ruta pública tiene rate limit»).
+        $rbacReplacements = $this->buildPublicRouteThrottles($scopeLower);
 
         $loginFieldReplacements = [
             // R-PKG-011: `email_verified_at` column/cast/import ahora depende de
             // --verify-email (no solo de $isEmail). R-PKG-009 los activaba siempre
             // que loginField=email; refactor para opt-in via flag.
-            '{{emailVerifiedAtColumn}}' => $verifyEmail
-                ? "\$table->timestamp('email_verified_at')->nullable();\n            "
-                : '',
+            // (La columna `email_verified_at` la crea SIEMPRE el stub de la
+            // migración: el modelo base la castea.)
             // Cast entry SIN trailing whitespace. El stub del model tiene el
             // `\n        'password'` después. Si --verify-email, queda
             // `[\n        'email_verified_at' => 'datetime',\n        'password'...`.
@@ -475,13 +449,6 @@ class MakeAuthUserCommand extends Command
             '{{loginFieldValidationRuleUpdate}}' => $loginField === 'email'
                 ? "'email', 'max:255'"
                 : "'string', 'max:255'",
-            // R-PKG-014 BUG-05: login() response incluye profile fields + roles + abilities.
-            // Construido dinámicamente según si hay o no --profile-fields.
-            // R-PKG-015 BUG-NEW-01+02: pasar $loginField resuelto (no el placeholder
-            // {{loginField}}) y armar la estructura de array_merge correctamente para
-            // que las keys 'roles'/'abilities' queden DENTRO de 'admin', no como
-            // siblings con key numérica.
-            '{{loginResponseArray}}' => $this->buildLoginResponseArray($profileFieldsRaw, $loginField),
         ];
 
         // Placeholders condicionales R-PKG-011: profile fields per-scope + email verification opt-in.
@@ -1197,6 +1164,26 @@ PHP;
     }
 
     /**
+     * Columnas de texto libre del scope, como literal PHP: `name`, el campo de
+     * login y los profile fields `string`/`text`. Fuera: los de archivo (una
+     * ruta no se busca), los numéricos/fechas y `status` (es un enum: se filtra,
+     * no se busca por texto).
+     *
+     * @param  array<string, array{type: string, unique: bool}>  $profileFields
+     */
+    protected function buildSearchableColumns(array $profileFields, string $loginField): string
+    {
+        $columns = ['name', $loginField];
+        foreach ($profileFields as $key => $meta) {
+            if (in_array($meta['type'] ?? '', ['string', 'text'], true) && $key !== 'status') {
+                $columns[] = $key;
+            }
+        }
+
+        return "['".implode("', '", array_values(array_unique($columns)))."']";
+    }
+
+    /**
      * Plural snake_case del scope: tabla, provider de `config/auth.php`,
      * migración, rutas CRUD y el recurso de las abilities (`{scope}.{plural}.*`).
      *
@@ -1901,6 +1888,12 @@ PHP;
         $fileFieldNames = $this->detectFileFields($profileFields);
         $fieldRules = $this->buildProfileFieldRules($profileFields, $requiredFields, $scopePlural, $loginField, $fileFieldNames);
         $crudReplacements = array_merge([
+            // Columnas de la búsqueda de texto libre (el `searchable` del
+            // controller y el `paginate()` del Repository). Salen de las
+            // columnas que la migración CREA: el Repository buscaba en
+            // `full_name` y `ci` fijos, y en un scope sin esas columnas la
+            // búsqueda era un 500 de SQL.
+            '{{searchableColumns}}' => $this->buildSearchableColumns($profileFields, $loginField),
             /*
              * Prefijo de las abilities que consulta `{Scope}Policy`.
              *
@@ -1919,7 +1912,6 @@ PHP;
             '{{policyAbilityScope}}' => $managedBy !== null
                 ? Str::lower($managedBy)
                 : $scopeLower,
-            '{{profileFieldsList}}' => $this->buildProfileFieldsList($profileFields),
             // F10-B05 (R-PKG-050): pasar `$loginField` a los 3 helpers DTO
             // para que su dedup de core fields (name, $loginField, password,
             // status) matchee el valor real (e.g. `email` default, `ci` para
@@ -2064,6 +2056,9 @@ PHP;
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/store-admin-request.stub', 'Http/Requests', "Store{$scope}Request.php", $crudReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/update-admin-request.stub', 'Http/Requests', "Update{$scope}Request.php", $crudReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/assign-roles-request.stub', 'Http/Requests', 'AssignRolesRequest.php', $crudReplacements);
+        // El controller importa `AssignAccessRequest` para `POST /{id}/access`. El
+        // stub existía y no se generaba: ese endpoint moría con «Class not found».
+        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/assign-access-request.stub', 'Http/Requests', 'AssignAccessRequest.php', $crudReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/assign-abilities-request.stub', 'Http/Requests', 'AssignDirectAbilitiesRequest.php', $crudReplacements);
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user/sync-role-abilities-request.stub', 'Http/Requests', 'SyncRoleAbilitiesRequest.php', $crudReplacements);
 
@@ -2275,18 +2270,6 @@ PHP;
 
         File::put($providerPath, $content);
         $this->line('   ✅ Providers/'.$scope.'ServiceProvider.php (Policies registradas via Gate::policy)');
-    }
-
-    /**
-     * Helper: genera la lista CSV de profile field keys (sin tipos) para inyectar
-     * en stubs que necesitan solo los nombres (e.g. AdminData constructor).
-     */
-    protected function buildProfileFieldsList(array $profileFields): string
-    {
-        return implode(', ', array_map(
-            static fn ($key) => "'{$key}'",
-            array_keys($profileFields),
-        ));
     }
 
     /**
@@ -3632,44 +3615,6 @@ PHP;
     }
 
     /**
-     * Construye el response del `login()` scaffoldeado (PKG-NEW-15 fix, 2026-06-28).
-     *
-     * **Antes (v1.6.0 → v1.6.1)**: retornaba un `array_merge` ad-hoc con
-     *   `id`/`name`/`login` + profile fields + `roles` (mapeados a `[id, name]`) +
-     *   `abilities` (top-level combinadas de roles + directAbilities).
-     *
-     * **Problema**: drift cross-stack con `me()` (que retorna el modelo completo
-     *   con abilities anidadas por role). Frontend que consume ambos endpoints
-     *   debía parsear 2 shapes distintos. `api_contract.md` documentaba solo el
-     *   formato top-level (drift con `me()` real).
-     *
-     * **Fix (v1.6.2+)**: retornamos `$user` (modelo completo) — `autoTransform()`
-     *   en `BaseController::sendResponse()` aplica el `apiResource` del modelo
-     *   (típicamente `AdminResource`, `MemberResource`, etc.), produciendo el
-     *   MISMO shape canónico que `me()`. Frontend parsea 1 formato.
-     *
-     * Requisitos del consumer (canónico, ya documentado en R-PKG-014):
-     *   - El modelo del scope debe declarar `protected $apiResource = {Resource}::class;`
-     *   - El Resource define el shape (incluyendo abilities, photo_url, etc.)
-     *   - Para customizar, override `login()` completo.
-     *
-     * BC: este cambio SOLO afecta el contenido dentro de `data.{scope}` — los
-     * headers `access_token` / `refresh_token` / `token_type` / `expires_in` siguen
-     * iguales. Consumers que dependían del shape top-level DEBEN migrar a un
-     * Resource (es el patrón canónico del paquete desde 1.4.0).
-     *
-     * @param  array<string, array{type: string, unique: bool}>  $profileFieldsRaw  Metadata de profile fields (no se usa aquí — preservado por signature).
-     * @param  string  $loginField  Nombre del login field (no se usa aquí — preservado por signature).
-     * @return string PHP literal `$user` listo para inyectar en el stub.
-     */
-    protected function buildLoginResponseArray(array $profileFieldsRaw, string $loginField): string
-    {
-        // PKG-NEW-15: retornar el modelo completo — autoTransform() se encarga del shape.
-        // Ver docblock para justificación completa.
-        return '$user';
-    }
-
-    /**
      * Helper: merge de dos arrays de rules PHP en formato string.
      *
      * Input: ambos strings como `'field' => ['rule'],...` arrays.
@@ -3746,7 +3691,6 @@ PHP;
         $content = str_replace('{{moduleNameLower}}', $scopeLower, $content);
         $content = str_replace('{{moduleNamePluralLower}}', $scopePlural, $content);
         $content = str_replace('{{loginField}}', $loginField, $content);
-        $content = str_replace('{{migrationDate}}', now()->format('Y_m_d_His'), $content);
 
         // Placeholders condicionales (R-PKG-009 + R-PKG-010). Si el stub no usa alguno,
         // el str_replace no hace nada (string vacío o key ausente).
@@ -4125,164 +4069,6 @@ MD;
             // Público: el refresh token viaja en el body. Default más holgado
             // (20,1) porque un front lo llama solo, en cada expiración.
             '{{refreshThrottle}}' => "->middleware('throttle:'.config('mk_director.auth.rate_limits.refresh', '20,1').',{$scopeLower}-refresh')",
-        ];
-    }
-
-    /**
-     * Construye los placeholders RBAC (R-PKG-010) cuando `--with-auth-rbac` está activo.
-     *
-     * Cada placeholder se reemplaza por el bloque de código correspondiente:
-     *   - imports adicionales (AbilityResolver, AuthEvent, AuthorizationException)
-     *   - constructor con AbilityResolver inyectado (opcional via container)
-     *   - ability checks en /me y /logout (configurables por endpoint)
-     *   - audit events (AuthEvent::dispatch) en login success/fail, logout, forgot
-     *   - helper method `authorizeAbility()` que delega a AbilityResolver
-     *
-     * Default values se leen de `config('mk_director.auth.*')` con fallback
-     * seguro (idempotente con valores del package default).
-     *
-     * @return array<string, string>
-     */
-    protected function buildRbacReplacements(string $scopeLower, string $loginField): array
-    {
-        // Login field key for audit event payloads.
-        $loginFieldKey = $loginField; // 'email', 'ci', etc.
-
-        return [
-            // ── Imports adicionales ─────────────────────────────────────
-            '{{rbacImports}}' => "use Illuminate\\Auth\\Access\\AuthorizationException;\n".
-                                 "use Mk\\Director\\Auth\\Events\\AuthEvent;\n".
-                                 "use Mk\\Director\\Auth\\Services\\AbilityResolver;\n",
-
-            // ── Constructor con AbilityResolver inyectado ───────────────
-            '{{rbacConstructor}}' => <<<'PHP'
-    /**
-     * Resolver de abilities (cache + Sanctum short-circuit). Se inyecta
-     * por container o se resuelve via `app()` para mantener compatibilidad
-     * con tests que no bootean Laravel completo.
-     */
-    protected ?AbilityResolver $abilityResolver = null;
-
-    public function __construct(?AbilityResolver $abilityResolver = null)
-    {
-        $this->abilityResolver = $abilityResolver
-            ?? (function_exists('app') ? app(AbilityResolver::class) : null);
-    }
-
-PHP,
-
-            // ── Ability check en /me ────────────────────────────────────
-            // R-PKG-015 OBS-NEW-02: indentación correcta (8 espacios, no 4).
-            // El stub ya provee 8 espacios antes del placeholder; emitimos 0
-            // adicionales para que el código quede alineado con el resto del método.
-            '{{rbacAbilityCheckMe}}' => "        \$this->authorizeAbility('me', \$request->user());\n",
-
-            // ── Ability check en /logout ────────────────────────────────
-            // R-PKG-015 OBS-NEW-02: idem.
-            '{{rbacAbilityCheckLogout}}' => "        \$this->authorizeAbility('logout', \$user);\n",
-
-            // ── Audit event: login success ──────────────────────────────
-            '{{rbacAuditLoginSuccess}}' => <<<'PHP'
-        AuthEvent::dispatch('auth.login.success', [
-            'user_id' => $user->id,
-            'ip' => $request->ip(),
-            'user_agent' => $request->userAgent(),
-            'scope' => $user->getAuthScope(),
-        ]);
-
-PHP,
-
-            // ── Audit event: login failed ───────────────────────────────
-            '{{rbacAuditLoginFailed}}' => <<<PHP
-        AuthEvent::dispatch('auth.login.failed', [
-            'login_field_value' => \$credentials['{$loginFieldKey}'] ?? null,
-            'ip' => \$request->ip(),
-            'user_agent' => \$request->userAgent(),
-        ]);
-
-PHP,
-
-            // ── Audit event: refresh (todo marker) ──────────────────────
-            '{{rbacAuditRefreshTodo}}' => "        // TODO(R-PKG-010): emitir auth.refresh.success cuando la impl del consumer esté lista.\n",
-
-            // ── Audit event: logout ─────────────────────────────────────
-            // PKG-NEW-12 fix (feedback RETO fase 10b 2026-06-28): el evento
-            // referenciaba `$token?->id` pero `$token` no estaba definido en
-            // el scope del método `logout()` scaffoldeado. El stub usa
-            // `$user->safeLogoutCurrentToken()` (helper null-safe de
-            // R-PKG-027 PKG-NEW-08) que no expone el token al consumer.
-            //
-            // Fix: usar `$user->currentAccessToken()?->id` que es null-safe
-            // (Sanctum v4 retorna null si no hay token o si fue revocado).
-            // En la práctica, esto SIEMPRE tendrá un valor en el flow normal
-            // de logout (porque `/logout` requiere middleware `auth:`), pero
-            // el null-safe es defensivo y consistente con el helper.
-            //
-            // Side note: el fix del consumer RETO era
-            // `$tokenId = $user->currentAccessToken()?->id;` ANTES del
-            // dispatch — ahora el scaffolder emite el patrón completo.
-            '{{rbacAuditLogout}}' => <<<'PHP'
-        AuthEvent::dispatch('auth.logout', [
-            'user_id' => $user->id,
-            'token_id' => $user->currentAccessToken()?->id,
-        ]);
-
-PHP,
-
-            // ── Audit event: forgot ─────────────────────────────────────
-            '{{rbacAuditForgot}}' => <<<PHP
-        AuthEvent::dispatch('auth.password_reset.requested', [
-            'login_field_value' => \$credentials['{$loginFieldKey}'] ?? null,
-            'ip' => \$request->ip(),
-        ]);
-
-PHP,
-
-            // ── Audit event: reset (todo marker) ────────────────────────
-            '{{rbacAuditResetTodo}}' => "        // TODO(R-PKG-010): emitir auth.password_reset.success cuando la impl del consumer esté lista.\n",
-
-            // ── authorizeAbility() helper method ────────────────────────
-            '{{rbacAuthorizeAbilityMethod}}' => <<<'PHP'
-
-    /**
-     * Verifica que `$user` tenga la ability configurada para `$endpoint`.
-     *
-     * Config: `mk_director.auth.abilities.{endpoint}`.
-     *   - `null` (default) → no check (modo BC).
-     *   - string (`'auth.me.read'`) → check via AbilityResolver.
-     *
-     * Si la ability es requerida y el user no la tiene, lanza
-     * `AuthorizationException` (HTTP 403 via exception handler de Laravel).
-     *
-     * R-PKG-010 ACR-002.
-     */
-    protected function authorizeAbility(string $endpoint, mixed $user): void
-    {
-        $ability = config("mk_director.auth.abilities.{$endpoint}");
-
-        if ($ability === null || $ability === '') {
-            return; // BC mode: no check.
-        }
-
-        if ($user === null) {
-            throw new AuthorizationException("Missing user for ability check: {$ability}");
-        }
-
-        if ($this->abilityResolver !== null) {
-            if (! $this->abilityResolver->can($user, $ability)) {
-                throw new AuthorizationException("Missing ability: {$ability}");
-            }
-
-            return;
-        }
-
-        // Fallback sin container (unit tests). HasAbilities trait expone
-        // canMk() que también funciona sin AbilityResolver (legacy inline).
-        if (is_callable([$user, 'canMk']) && ! (bool) $user->canMk($ability)) {
-            throw new AuthorizationException("Missing ability: {$ability}");
-        }
-    }
-PHP,
         ];
     }
 
@@ -5130,8 +4916,6 @@ PHP;
             return [
                 '{{emailVerifyRoutes}}' => '',
                 '{{verifiedMiddleware}}' => '',
-                '{{verifyEmailMethods}}' => '',
-                '{{registerVerifyEmailDispatch}}' => '',
             ];
         }
 
@@ -5170,60 +4954,6 @@ PHP,
             // Para activarlo, el consumer puede setear MK_AUTH_VERIFIED_MIDDLEWARE=true en .env.
             // Por simplicidad v1.5.0-rc5: NO se aplica automáticamente. Consumer override.
             '{{verifiedMiddleware}}' => '',
-            // Métodos verifyEmail() + resendVerification() en el AuthController.
-            '{{verifyEmailMethods}}' => <<<'PHP'
-
-    /**
-     * GET /api/{{moduleNameLower}}/auth/email/verify/{id}/{hash}
-     *
-     * Marca el email como verificado si la signed URL es válida.
-     *
-     * R-PKG-011: solo existe si el scope fue generado con `--verify-email`.
-     */
-    public function verifyEmail(\Illuminate\Http\Request $request, string $id, string $hash): \Illuminate\Http\JsonResponse
-    {
-        if (! hash_equals((string) $id, (string) $request->user()->getKey())) {
-            return $this->sendError('Invalid verification link.', [], 403);
-        }
-
-        if (! hash_equals(sha1($request->user()->getEmailForVerification()), (string) $hash)) {
-            return $this->sendError('Invalid verification link.', [], 403);
-        }
-
-        if ($request->user()->hasVerifiedEmail()) {
-            return $this->sendResponse(true, 'Email ya verificado.');
-        }
-
-        $request->user()->markEmailAsVerified();
-
-        return $this->sendResponse(true, 'Email verificado exitosamente.');
-    }
-
-    /**
-     * POST /api/{{moduleNameLower}}/auth/email/resend
-     *
-     * Re-envía el email de verificación. Throttled 6,1 por route middleware.
-     *
-     * R-PKG-011: solo existe si el scope fue generado con `--verify-email`.
-     */
-    public function resendVerification(\Illuminate\Http\Request $request): \Illuminate\Http\JsonResponse
-    {
-        if ($request->user()->hasVerifiedEmail()) {
-            return $this->sendError('Email ya verificado.', [], 400);
-        }
-
-        $request->user()->sendEmailVerificationNotification();
-
-        return $this->sendResponse(true, 'Email de verificación re-enviado.');
-    }
-PHP,
-            // Dispatch de VerifyEmail notification en register() (si register existe).
-            // Si no hay register() (default mode), esto queda como string vacío sin efecto.
-            '{{registerVerifyEmailDispatch}}' => <<<'PHP'
-
-        // R-PKG-011: dispatch verification notification (queueable).
-        $user->sendEmailVerificationNotification();
-PHP,
         ];
     }
 

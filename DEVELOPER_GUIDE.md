@@ -2535,6 +2535,36 @@ archivo PHP que no pasa `php -l`.
 ⚠️ Los módulos ya generados conservan sus comentarios viejos: el cambio es sólo de
 texto y no afecta el runtime.
 
+
+#### 3.19.8 Búsqueda del CRUD generado y placeholders sincronizados
+
+- **La búsqueda sólo mira columnas que la tabla tiene.** El `paginate()` del
+  Repository generado buscaba en `full_name` y `ci` fijos y filtraba por
+  `is_active`: en un scope por default (name, email, phone, status) la primera
+  búsqueda era un 500 de SQL en Postgres/MySQL. Y el `searchable` del controller
+  —el que usa el listado, vía `ListManager`— estaba fijo en `['name', 'email']`,
+  así que con `--login-field=ci` no se buscaba por CI. Ahora los dos salen de las
+  columnas reales: `name`, el campo de login y los profile fields `string`/`text`.
+  Quedan afuera los de archivo, los numéricos/fechas y `status` (es un enum: se
+  filtra con `filter[status]`, no se busca por texto). El filtro `is_active` del
+  Repository y de `{Scope}FilterData` se sacó.
+  ⚠️ sqlite no ve este bug: toma `"columna_inexistente"` como un string literal.
+  `MakeAuthUserSearchableColumnsTest` corre la migración generada, busca, y además
+  exige que toda columna citada en el SQL exista.
+- **`AssignAccessRequest` no se generaba.** El controller generado lo importa para
+  `POST /api/{plural}/{id}/access`, el stub existía, y el comando nunca lo
+  emitía: el endpoint moría con «Class not found». Ahora se genera.
+- **Placeholders.** Se borraron los reemplazos que el comando seguía armando sin
+  que ningún stub los usara (`rbacImports`, `rbacConstructor`,
+  `rbacAbilityCheck*`, `rbacAudit*`, `rbacAuthorizeAbilityMethod`,
+  `verifyEmailMethods`, `registerVerifyEmailDispatch`, `loginResponseArray`,
+  `profileFieldsList`, `emailVerifiedAtColumn`, `migrationDate`) y sus builders.
+  `MakeAuthUserPlaceholderSyncTest` deriva los dos conjuntos —strings
+  `'{{x}}'` del comando y `{{x}}` de los stubs que el comando nombra— y falla ante
+  un reemplazo muerto, un placeholder sin reemplazo o un stub que el comando
+  nunca genera. `MakeAuthUserGeneratedCodeHygieneTest` además falla si un archivo
+  generado importa una clase del propio módulo que no se generó.
+
 ---
 
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)

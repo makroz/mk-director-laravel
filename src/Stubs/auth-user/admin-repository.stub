@@ -30,16 +30,13 @@ class {{ModuleName}}Repository implements {{ModuleName}}RepositoryInterface
 
         if (! empty($filters['search'])) {
             $search = (string) $filters['search'];
+            // Las mismas columnas que el `searchable` del controller: sólo las
+            // de texto que la tabla tiene.
             $query->where(function (Builder $q) use ($search) {
-                $q->where('name', 'like', "%{$search}%")
-                    ->orWhere('full_name', 'like', "%{$search}%")
-                    ->orWhere('email', 'like', "%{$search}%")
-                    ->orWhere('ci', 'like', "%{$search}%");
+                foreach ({{searchableColumns}} as $column) {
+                    $q->orWhere($column, 'like', "%{$search}%");
+                }
             });
-        }
-
-        if (isset($filters['is_active'])) {
-            $query->where('is_active', (bool) $filters['is_active']);
         }
 
         if (! empty($filters['role_ids'])) {

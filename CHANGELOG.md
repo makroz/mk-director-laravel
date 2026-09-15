@@ -12,6 +12,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — CRUD generado: la búsqueda no cita columnas que el scope no tiene, y `/access` ya no da «Class not found»
+
+Cambia **lo que se genera** de ahora en más. Detalle en `DEVELOPER_GUIDE.md`
+§ 3.19.8.
+
+### Fixed
+
+- 🔴 **La búsqueda del Repository generado era un 500 de SQL.** `paginate()`
+  buscaba en `full_name` y `ci` fijos y filtraba por `is_active`, columnas que un
+  scope por default no tiene. Ahora busca en las columnas de texto reales del
+  scope (`name`, el campo de login y los profile fields `string`/`text`) y el
+  filtro `is_active` se sacó del Repository, de `{Scope}FilterData` y del
+  contrato del Repository.
+- **El listado no buscaba por el campo de login.** El `searchable` del controller
+  generado estaba fijo en `['name', 'email']`; sale de la misma lista que el
+  Repository (con `--login-field=ci`, busca por CI).
+- 🔴 **`POST /api/{plural}/{id}/access` daba «Class not found».** El controller
+  generado importa `AssignAccessRequest` y el comando nunca generaba ese archivo,
+  aunque el stub existía. Ahora se genera.
+
+### Removed
+
+- Reemplazos muertos de `MakeAuthUserCommand` (ningún stub usaba sus
+  placeholders): `rbacImports`, `rbacConstructor`, `rbacAbilityCheckMe/Logout`,
+  `rbacAudit*`, `rbacAuthorizeAbilityMethod`, `verifyEmailMethods`,
+  `registerVerifyEmailDispatch`, `loginResponseArray`, `profileFieldsList`,
+  `emailVerifiedAtColumn`, `migrationDate`; y los métodos
+  `buildRbacReplacements()`, `buildLoginResponseArray()` y
+  `buildProfileFieldsList()`. Sin efecto en lo generado.
+
+### Added
+
+- `MakeAuthUserPlaceholderSyncTest`: reemplazo muerto, placeholder sin reemplazo o
+  stub nunca generado → rojo. La lista sale del código, no está escrita a mano.
+- `MakeAuthUserSearchableColumnsTest`: genera, migra, busca, y exige que el SQL no
+  cite columnas inexistentes (sqlite toma un identificador inexistente entre
+  comillas como string literal y esconde el bug).
+
+### ⚠️ Notas para consumers
+
+- **Código ya generado**: el Repository de cada scope sigue buscando en
+  `full_name`/`ci`. El listado del CRUD no lo usa (va por `ListManager` con el
+  `searchable` del controller), así que sólo rompe si algo llama a
+  `paginate()` del Repository con `search`. RETO y el piloto NetPizza escribieron
+  `AssignAccessRequest` a mano. Un scope generado antes, sin ese archivo, tiene
+  `POST /{id}/access` roto hoy: es el caso de `Admin` y `Mesero` en el
+  `netpizza-api` viejo — copiar el request desde un scope nuevo lo arregla.
+
 ## [UNRELEASED] — El código que genera `mk:make:auth-user` ya no carga docblocks huérfanos ni la historia del paquete
 
 Hallazgo #44 del piloto NetPizza: su barrido de docblocks huérfanos falló sobre

@@ -47,14 +47,8 @@ function readCommandRPkg029(): string
 describe('PKG-NEW-12 — logout() scaffoldeado: $user->currentAccessToken()?->id (no $token?->id)', function (): void {
     $command = readCommandRPkg029();
 
-    test('MakeAuthUserCommand genera logout event con $user->currentAccessToken()?->id', function () use ($command): void {
-        // El evento `auth.logout` debe usar el patrón null-safe sobre `$user`,
-        // NO una variable `$token` que no existe en el scope del método logout()
-        // scaffoldeado (el stub usa `$user->safeLogoutCurrentToken()` que no
-        // expone el token al consumer).
-
-        expect($command)->toContain("'token_id' => \$user->currentAccessToken()?->id");
-    });
+    // (El test positivo que buscaba `'token_id' => $user->currentAccessToken()?->id`
+    // se sacó: Pin reescrito: fijaba un reemplazo MUERTO del comando (ningún stub usaba su placeholder) y se borró junto con él. Que no vuelvan los mide MakeAuthUserPlaceholderSyncTest. Queda el negativo.)
 
     test('MakeAuthUserCommand NO genera logout event con $token?->id (variable indefinida)', function () use ($command): void {
         // El bug original era:
@@ -139,12 +133,5 @@ describe('PKG-NEW-15 — login() y me() retornan el mismo shape canónico ($user
         expect($base)->toContain('public function me(');
     });
 
-    test('buildLoginResponseArray() helper existe (BC compat con stubs que pinean {{loginResponseArray}})', function () {
-        $command = readCommandRPkg029();
-
-        // El helper se mantiene por BC (lo llama `$this->buildLoginResponseArray()`
-        // en el command). Pinea el array de profile fields que se inyecta via
-        // `customizeMePayload()` override en BaseAuthController.
-        expect($command)->toContain('protected function buildLoginResponseArray(');
-    });
+    // (`buildLoginResponseArray()` se borró: Pin reescrito: fijaba un reemplazo MUERTO del comando (ningún stub usaba su placeholder) y se borró junto con él. Que no vuelvan los mide MakeAuthUserPlaceholderSyncTest.)
 });

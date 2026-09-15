@@ -66,17 +66,16 @@ test('handle() construye buildVerifyEmailReplacements condicionalmente', functio
     // Los placeholders de verification.
     expect($source)->toContain('{{emailVerifyRoutes}}');
     expect($source)->toContain('{{verifiedMiddleware}}');
-    expect($source)->toContain('{{verifyEmailMethods}}');
-    expect($source)->toContain('{{registerVerifyEmailDispatch}}');
+    // (`{{verifyEmailMethods}}` y `{{registerVerifyEmailDispatch}}` se borraron: Pin reescrito: fijaba un reemplazo MUERTO del comando (ningún stub usaba su placeholder) y se borró junto con él. Que no vuelvan los mide MakeAuthUserPlaceholderSyncTest.)
 });
 
 // ── Refactor: email_verified_at ahora depende de --verify-email, no de $isEmail ──
 
-test('{{emailVerifiedAtColumn}} depende de --verify-email (no de login-field=email)', function () {
-    $source = commandSource011Ve();
-
-    // En loginFieldReplacements, emailVerifiedAtColumn usa $verifyEmail, no $isEmail.
-    expect($source)->toMatch("/'\\{\\{emailVerifiedAtColumn\\}\\}' => \\\$verifyEmail/");
+test('la columna email_verified_at la crea siempre la migración (el modelo base la castea)', function () {
+    // Pin reescrito: fijaba `{{emailVerifiedAtColumn}}`, un reemplazo muerto —
+    // ningún stub lo usaba desde que la migración crea la columna siempre.
+    $stub = (string) file_get_contents(dirname(__DIR__, 3).'/src/Stubs/auth-user.migration.stub');
+    expect($stub)->toContain("\$table->timestamp('email_verified_at')->nullable();");
 });
 
 test('{{emailVerifiedAtCastEntry}} depende de --verify-email', function () {
@@ -150,16 +149,19 @@ test('buildVerifyEmailReplacements genera throttle 6,1 para /email/resend', func
 // ── verifyEmail() method details ────────────────────────────────────────
 
 test('verifyEmail() valida firma con hash_equals (timing-safe)', function () {
-    $source = commandSource011Ve();
+    // Pin reescrito: miraba los métodos que armaba `{{verifyEmailMethods}}`, un
+    // reemplazo muerto. Los que corren son los de BaseAuthController.
+    $source = (string) file_get_contents(dirname(__DIR__, 3).'/src/Auth/Controllers/BaseAuthController.php');
 
     expect($source)->toContain('hash_equals');
-    expect($source)->toContain('getKey');
+    expect($source)->toContain('hasValidSignature');
     expect($source)->toContain('getEmailForVerification');
     expect($source)->toContain('markEmailAsVerified');
 });
 
 test('resendVerification() valida si ya verificado y dispatch notification', function () {
-    $source = commandSource011Ve();
+    // Pin reescrito: idem verifyEmail() — BaseAuthController.
+    $source = (string) file_get_contents(dirname(__DIR__, 3).'/src/Auth/Controllers/BaseAuthController.php');
 
     expect($source)->toContain('hasVerifiedEmail');
     expect($source)->toContain('sendEmailVerificationNotification');
@@ -173,6 +175,4 @@ test('default mode (sin --verify-email) tiene verify placeholders como string va
     // buildVerifyEmailReplacements retorna array con strings vacíos si !enabled.
     expect($source)->toContain("'{{emailVerifyRoutes}}' => ''");
     expect($source)->toContain("'{{verifiedMiddleware}}' => ''");
-    expect($source)->toContain("'{{verifyEmailMethods}}' => ''");
-    expect($source)->toContain("'{{registerVerifyEmailDispatch}}' => ''");
 });

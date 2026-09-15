@@ -77,13 +77,12 @@ test('R-PKG-047 D2: --with-auth-rbac flag está ELIMINADO (default ON, --no-rbac
     expect($source)->toMatch('/--no-rbac\s*:/');
 });
 
-test('command has buildRbacReplacements() method (legacy BC for stub placeholders)', function () {
+test('command builds the public-route throttles; the dead buildRbacReplacements() is gone', function () {
     $source = commandSource010();
 
-    // El método se mantiene por BC con stubs viejos que aún pinean los
-    // placeholders {{rbac*}}. Post-D1 todos resuelven a string vacío (la
-    // lógica RBAC vive en BaseAuthController ahora).
-    expect($source)->toContain('protected function buildRbacReplacements');
+    // Pin reescrito: fijaba un reemplazo MUERTO del comando (ningún stub usaba su placeholder) y se borró junto con él. Que no vuelvan los mide MakeAuthUserPlaceholderSyncTest.
+    expect($source)->toContain('protected function buildPublicRouteThrottles');
+    expect($source)->not->toContain('function buildRbacReplacements');
 });
 
 test('command merges rbacReplacements with loginFieldReplacements via $extraReplacements', function () {
@@ -100,19 +99,9 @@ test('command merges rbacReplacements with loginFieldReplacements via $extraRepl
 test('default mode (sin --with-auth-rbac) preserva BC con v1.5.0-rc3', function () {
     $source = commandSource010();
 
-    // El command, sin flag, debe pasar placeholders RBAC como string vacío
-    // via array_fill_keys con lista completa de placeholders.
-    expect($source)->toMatch("/\\\$withAuthRbac\\s*\\?\\s*\\\$this->buildRbacReplacements/");
-    expect($source)->toContain("array_fill_keys([");
-    expect($source)->toContain("'{{rbacImports}}'");
-    expect($source)->toContain("'{{rbacConstructor}}'");
-    expect($source)->toContain("'{{rbacAbilityCheckMe}}'");
-    expect($source)->toContain("'{{rbacAbilityCheckLogout}}'");
-    expect($source)->toContain("'{{rbacAuditLoginSuccess}}'");
-    expect($source)->toContain("'{{rbacAuditLoginFailed}}'");
-    expect($source)->toContain("'{{rbacAuditLogout}}'");
-    expect($source)->toContain("'{{rbacAuditForgot}}'");
-    expect($source)->toContain("'{{rbacAuthorizeAbilityMethod}}'");
+    // Con o sin RBAC, los throttles de las rutas públicas se emiten iguales.
+    // (Los `{{rbacImports}}`/`{{rbacAudit*}}`/... se borraron: Pin reescrito: fijaba un reemplazo MUERTO del comando (ningún stub usaba su placeholder) y se borró junto con él. Que no vuelvan los mide MakeAuthUserPlaceholderSyncTest.)
+    expect($source)->toContain('$rbacReplacements = $this->buildPublicRouteThrottles($scopeLower);');
     expect($source)->toContain("'{{rbacLoginThrottle}}'");
     expect($source)->toContain("'{{rbacForgotThrottle}}'");
     expect($source)->toContain("'{{rbacResetThrottle}}'");
@@ -120,46 +109,14 @@ test('default mode (sin --with-auth-rbac) preserva BC con v1.5.0-rc3', function 
 
 // ── RBAC mode ──────────────────────────────────────────────────────────
 
-test('buildRbacReplacements populates all conditional placeholders with content', function () {
+test('the public-route throttles read their limits from mk_director.auth.rate_limits', function () {
     $source = commandSource010();
 
-    // Imports adicionales (PHP source usa "\\" para escapar — single-quoted en el test
-    // necesita "\\\\" para matchear dos backslash chars reales en disco).
-    expect($source)->toContain('Mk\\\\Director\\\\Auth\\\\Events\\\\AuthEvent');
-    expect($source)->toContain('Mk\\\\Director\\\\Auth\\\\Services\\\\AbilityResolver');
-    expect($source)->toContain('Illuminate\\\\Auth\\\\Access\\\\AuthorizationException');
-
-    // Constructor con AbilityResolver
-    expect($source)->toContain('public function __construct(?AbilityResolver $abilityResolver = null)');
-
-    // Ability checks en /me y /logout (PHP source usa \$ dentro de double-quoted,
-    // por eso single-quoted en el test preserva el backslash literal).
-    expect($source)->toContain('\$this->authorizeAbility(\'me\', \$request->user())');
-    expect($source)->toContain('\$this->authorizeAbility(\'logout\', \$user)');
-
-    // Audit events
-    expect($source)->toContain("AuthEvent::dispatch('auth.login.success'");
-    expect($source)->toContain("AuthEvent::dispatch('auth.login.failed'");
-    expect($source)->toContain("AuthEvent::dispatch('auth.logout'");
-    expect($source)->toContain("AuthEvent::dispatch('auth.password_reset.requested'");
-
-    // authorizeAbility() helper method
-    expect($source)->toContain('protected function authorizeAbility(string $endpoint, mixed $user): void');
-    expect($source)->toContain('config("mk_director.auth.abilities.{$endpoint}")');
-
-    // Rate limit middleware
+    // (Los chequeos de imports, constructor, audit events y `authorizeAbility()`
+    // se sacaron: Pin reescrito: fijaba un reemplazo MUERTO del comando (ningún stub usaba su placeholder) y se borró junto con él. Que no vuelvan los mide MakeAuthUserPlaceholderSyncTest.)
     expect($source)->toContain("config('mk_director.auth.rate_limits.login', '5,1')");
     expect($source)->toContain("config('mk_director.auth.rate_limits.forgot', '3,1')");
     expect($source)->toContain("config('mk_director.auth.rate_limits.reset', '3,1')");
-});
-
-test('buildRbacReplacements uses AbilityResolver with HasAbilities fallback', function () {
-    $source = commandSource010();
-
-    // El helper authorizeAbility usa AbilityResolver si está disponible,
-    // fallback a canMk() del HasAbilities trait.
-    expect($source)->toContain('$this->abilityResolver->can($user, $ability)');
-    expect($source)->toContain('$user->canMk($ability)');
 });
 
 test('buildRbacReplacements never logs passwords in audit events', function () {
