@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -108,7 +109,15 @@ final class AdminDeSiempre extends AuthUser
     }
 }
 
-/** Tabla de un scope de auth con el unique del login, como la migración generada. */
+/**
+ * Tabla de un scope de auth SIN columna de tenant, con el unique del login,
+ * como la migración que genera el scaffolder sin `--multi-tenant`.
+ *
+ * 🔴 Antes esta tabla traía `client_id` aunque ninguno de estos tests mirara el
+ * tenant. Desde que el comando EXIGE `--tenant` cuando la columna existe, tener
+ * la columna acá hacía que todos estos tests midieran el camino multi-tenant
+ * sin quererlo. La forma con tenant vive en {@see scopeTableConClientId()}.
+ */
 function scopeTableName(string $tabla): void
 {
     Schema::create($tabla, function ($t) {
@@ -117,7 +126,30 @@ function scopeTableName(string $tabla): void
         $t->string('email')->unique();
         $t->string('password');
         $t->string('auth_scope')->nullable();
-        $t->string('client_id')->nullable();
+        $t->rememberToken();
+        $t->timestamps();
+    });
+}
+
+/**
+ * La misma tabla, pero con la columna de tenant que emite `--multi-tenant`
+ * (`client_id`, que es el default de `HasTenantMembership::getTenantColumn()`).
+ *
+ * `$nullable = false` reproduce la forma del consumidor que endureció la
+ * columna (NetPizza, etapa 2 de la consola de plataforma).
+ */
+function scopeTableConClientId(string $tabla, bool $nullable = true): void
+{
+    Schema::create($tabla, function ($t) use ($nullable) {
+        $t->uuid('id')->primary();
+        $t->string('name');
+        $t->string('email')->unique();
+        $t->string('password');
+        $t->string('auth_scope')->nullable();
+        $column = $t->string('client_id');
+        if ($nullable) {
+            $column->nullable();
+        }
         $t->rememberToken();
         $t->timestamps();
     });
@@ -270,6 +302,200 @@ final class MeseroPorCi extends AuthUser
     }
 }
 
+/**
+ * ── El tenant del primer usuario ────────────────────────────────────────────
+ *
+ * El comando creaba el usuario SIN tocar la columna de tenant. En un scope
+ * generado con `--multi-tenant` la columna sale `nullable`, así que la fila
+ * quedaba con tenant nulo y NADIE se enteraba: es el caso que el
+ * `TenantMembershipGate` deja pasar con CUALQUIER `X-Tenant-ID`
+ * (`$userTenantId !== null && ...` — con null no compara nada y devuelve
+ * `null`, o sea "seguí"). Y en cuanto el consumidor endurece la columna a
+ * `NOT NULL`, el mismo comando muere con un `23502` crudo que no dice qué
+ * falta.
+ */
+final class TenantDePrueba extends Model
+{
+    protected $table = 'tenants';
+
+    protected $keyType = 'string';
+
+    public $incrementing = false;
+
+    protected $fillable = ['id', 'slug', 'name'];
+
+    public $timestamps = false;
+}
+
+function tenantsTable(): void
+{
+    Schema::create('tenants', function ($t) {
+        $t->string('id')->primary();
+        $t->string('slug')->unique();
+        $t->string('name');
+    });
+
+    TenantDePrueba::create(['id' => 'tnt-norte', 'slug' => 'norte', 'name' => 'Sucursal Norte']);
+    TenantDePrueba::create(['id' => 'tnt-sur', 'slug' => 'sur', 'name' => 'Sucursal Sur']);
+}
+
+/** @param  array<string,mixed>  $mkDirector */
+function bootConTenantModel(array $mkDirector = []): void
+{
+    config(['mk_director.tenant.model' => TenantDePrueba::class]);
+    foreach ($mkDirector as $clave => $valor) {
+        config(["mk_director.tenant.{$clave}" => $valor]);
+    }
+}
+
+test('scope CON columna de tenant: sin --tenant se niega, nombra la opción y no escribe nada', function () {
+    $this->bootHttpApp(AdminDeSiempre::class);
+    configureOperatorScope();
+    scopeTableConClientId('operadores');
+    tenantsTable();
+    bootConTenantModel();
+
+    [$exit, $output] = createSuperAdmin(['--scope' => 'operador', '--email' => 'ops@example.com']);
+
+    expect($exit)->toBe(1, $output);
+    expect($output)->toContain('--tenant');
+    expect(DB::table('operadores')->count())->toBe(0);
+});
+
+test('--tenant por id ancla la fila al tenant', function () {
+    $this->bootHttpApp(AdminDeSiempre::class);
+    configureOperatorScope();
+    scopeTableConClientId('operadores');
+    tenantsTable();
+    bootConTenantModel();
+
+    [$exit, $output] = createSuperAdmin([
+        '--scope' => 'operador', '--email' => 'ops@example.com', '--tenant' => 'tnt-norte', '--no-roles' => true,
+    ]);
+
+    expect($exit)->toBe(0, $output);
+    expect(DB::table('operadores')->where('email', 'ops@example.com')->value('client_id'))->toBe('tnt-norte');
+});
+
+test('--tenant por slug resuelve al id por el mismo camino que TenantResolver', function () {
+    $this->bootHttpApp(AdminDeSiempre::class);
+    configureOperatorScope();
+    scopeTableConClientId('operadores');
+    tenantsTable();
+    bootConTenantModel();
+
+    [$exit, $output] = createSuperAdmin([
+        '--scope' => 'operador', '--email' => 'ops@example.com', '--tenant' => 'sur', '--no-roles' => true,
+    ]);
+
+    expect($exit)->toBe(0, $output);
+    expect(DB::table('operadores')->where('email', 'ops@example.com')->value('client_id'))->toBe('tnt-sur');
+});
+
+test('--tenant que no existe se niega antes de escribir', function () {
+    $this->bootHttpApp(AdminDeSiempre::class);
+    configureOperatorScope();
+    scopeTableConClientId('operadores');
+    tenantsTable();
+    bootConTenantModel();
+
+    [$exit, $output] = createSuperAdmin([
+        '--scope' => 'operador', '--email' => 'ops@example.com', '--tenant' => 'fantasma', '--no-roles' => true,
+    ]);
+
+    expect($exit)->toBe(1, $output);
+    expect($output)->toContain('fantasma');
+    expect(DB::table('operadores')->count())->toBe(0);
+});
+
+test('columna de tenant NOT NULL: --without-tenant se niega en vez de tirar el 23502 crudo', function () {
+    $this->bootHttpApp(AdminDeSiempre::class);
+    configureOperatorScope();
+    scopeTableConClientId('operadores', nullable: false);
+    tenantsTable();
+    bootConTenantModel();
+
+    [$exit, $output] = createSuperAdmin([
+        '--scope' => 'operador', '--email' => 'ops@example.com', '--without-tenant' => true, '--no-roles' => true,
+    ]);
+
+    expect($exit)->toBe(1, $output);
+    expect($output)->toContain('--tenant');
+    expect(DB::table('operadores')->count())->toBe(0);
+});
+
+test('--without-tenant con columna nullable crea el usuario sin tenant Y avisa del riesgo', function () {
+    $this->bootHttpApp(AdminDeSiempre::class);
+    configureOperatorScope();
+    scopeTableConClientId('operadores');
+    tenantsTable();
+    bootConTenantModel();
+
+    [$exit, $output] = createSuperAdmin([
+        '--scope' => 'operador', '--email' => 'ops@example.com', '--without-tenant' => true, '--no-roles' => true,
+    ]);
+
+    expect($exit)->toBe(0, $output);
+    expect(DB::table('operadores')->where('email', 'ops@example.com')->value('client_id'))->toBeNull();
+    expect($output)->toContain('X-Tenant-ID');
+});
+
+test('idempotente: la segunda corrida con el MISMO tenant no duplica', function () {
+    $this->bootHttpApp(AdminDeSiempre::class);
+    configureOperatorScope();
+    scopeTableConClientId('operadores');
+    tenantsTable();
+    bootConTenantModel();
+
+    $args = ['--scope' => 'operador', '--email' => 'ops@example.com', '--tenant' => 'tnt-norte', '--no-roles' => true];
+
+    [$exit1, $out1] = createSuperAdmin($args);
+    expect($exit1)->toBe(0, $out1);
+
+    [$exit2, $out2] = createSuperAdmin($args);
+
+    expect($exit2)->toBe(0, $out2);
+    expect($out2)->toContain('No se creó nada');
+    expect(DB::table('operadores')->count())->toBe(1);
+});
+
+test('un usuario existente NO se muda de tenant: la corrida con otro tenant se niega y la fila no cambia', function () {
+    $this->bootHttpApp(AdminDeSiempre::class);
+    configureOperatorScope();
+    scopeTableConClientId('operadores');
+    tenantsTable();
+    bootConTenantModel();
+
+    [$exit1, $out1] = createSuperAdmin([
+        '--scope' => 'operador', '--email' => 'ops@example.com', '--tenant' => 'tnt-norte', '--no-roles' => true,
+    ]);
+    expect($exit1)->toBe(0, $out1);
+
+    [$exit2, $out2] = createSuperAdmin([
+        '--scope' => 'operador', '--email' => 'ops@example.com', '--tenant' => 'tnt-sur', '--no-roles' => true,
+    ]);
+
+    expect($exit2)->toBe(1, $out2);
+    expect($out2)->toContain('tnt-norte');
+    expect(DB::table('operadores')->count())->toBe(1);
+    expect(DB::table('operadores')->value('client_id'))->toBe('tnt-norte');
+});
+
+test('scope SIN columna de tenant: --tenant se niega en vez de descartarse en silencio', function () {
+    $this->bootHttpApp(AdminDeSiempre::class);
+    configureOperatorScope();
+    scopeTableName('operadores');
+    tenantsTable();
+    bootConTenantModel();
+
+    [$exit, $output] = createSuperAdmin([
+        '--scope' => 'operador', '--email' => 'ops@example.com', '--tenant' => 'tnt-norte', '--no-roles' => true,
+    ]);
+
+    expect($exit)->toBe(1, $output);
+    expect(DB::table('operadores')->count())->toBe(0);
+});
+
 test('--scope con login field propio: acepta --{loginField} (antes sólo se leía del modelo Admin)', function () {
     $this->bootHttpApp(AdminDeSiempre::class);
     config([
@@ -289,4 +515,34 @@ test('--scope con login field propio: acepta --{loginField} (antes sólo se leí
 
     expect($exit)->toBe(0, $output);
     expect(DB::table('meseros')->where('ci', '1234567')->value('auth_scope'))->toBe('mesero');
+});
+
+test('el tenant se escribe aunque el $fillable del modelo no lo declare', function () {
+    // `MeseroPorCi::$fillable` es `['name','ci','password','auth_scope']`: sin
+    // la columna de tenant. Con `create()` el mass assignment la descarta SIN
+    // ERROR y la fila vuelve a quedar con tenant nulo — el defecto original,
+    // por otra puerta.
+    $this->bootHttpApp(AdminDeSiempre::class);
+    config([
+        'auth.guards.mesero' => ['driver' => 'sanctum', 'provider' => 'meseros'],
+        'auth.providers.meseros' => ['driver' => 'eloquent', 'model' => MeseroPorCi::class],
+    ]);
+    Schema::create('meseros', function ($t) {
+        $t->uuid('id')->primary();
+        $t->string('name');
+        $t->string('ci')->unique();
+        $t->string('password');
+        $t->string('auth_scope')->nullable();
+        $t->string('client_id')->nullable();
+        $t->timestamps();
+    });
+    tenantsTable();
+    bootConTenantModel();
+
+    [$exit, $output] = createSuperAdmin([
+        '--scope' => 'mesero', '--ci' => '1234567', '--tenant' => 'tnt-sur', '--no-roles' => true,
+    ]);
+
+    expect($exit)->toBe(0, $output);
+    expect(DB::table('meseros')->where('ci', '1234567')->value('client_id'))->toBe('tnt-sur');
 });

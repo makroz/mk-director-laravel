@@ -12,6 +12,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — 🔴 `mk:auth:create-super-admin` ya no crea el primer usuario SIN tenant
+
+El comando escribía la fila sin tocar la columna de tenant. En un scope generado
+con `--multi-tenant` esa columna sale `nullable`, así que el primer usuario —el
+que tiene la ability `*`— quedaba con tenant **nulo** y nadie se enteraba. Y un
+usuario sin tenant es justo el que `TenantMembershipGate` deja pasar con
+**cualquier** `X-Tenant-ID`: el gate sólo compara cuando `getTenantId()` no es
+null, así que con null devuelve "seguí". Un super-admin que ve todos los tenants,
+por omisión.
+
+Del otro lado, en cuanto un consumidor endurece la columna a `NOT NULL` (es lo
+que hizo el piloto NetPizza al mover la operación "por encima de los
+restaurantes" a un scope aparte), el mismo comando muere con un
+`SQLSTATE[23502]` crudo que no dice qué falta.
+
+### Added
+
+- **`mk:auth:create-super-admin --tenant=<id|slug>`**. Obligatorio cuando la
+  tabla del scope tiene columna de tenant (`HasTenantMembership::getTenantColumn()`,
+  default `client_id` — el mismo que emite `mk:make:auth-user --multi-tenant`).
+  El valor se valida contra `mk_director.tenant.model`: por clave primaria
+  primero y por `slug` después, el mismo camino que `TenantResolver::resolveSlugToId()`,
+  y con `withoutGlobalScopes()` porque en consola no hay contexto de tenant. Sin
+  `tenant.model` cableado no hay contra qué validar: se usa el valor tal cual,
+  avisando que no se pudo verificar.
+- **`--without-tenant`**: el opt-in EXPLÍCITO al usuario sin tenant, y sólo si la
+  columna admite null. Sale con un aviso que nombra el riesgo concreto
+  (`X-Tenant-ID`), no con un "ojo" genérico.
+
+### Changed (⚠️ BC break para scopes `--multi-tenant`)
+
+- **Con columna de tenant, el comando ya no corre sin `--tenant` ni
+  `--without-tenant`**: se niega, nombra las dos opciones y **no escribe nada**.
+  Un scope SIN columna de tenant no cambia en nada.
+- **`--tenant` / `--without-tenant` sobre un scope sin columna de tenant también
+  son un error**, en vez de descartarse en silencio.
+- **Idempotencia, precisada**: la segunda corrida con el MISMO tenant sigue
+  diciendo "No se creó nada". Con OTRO tenant se **niega** — el login es único
+  global, así que "el mismo email en otro tenant" no es un usuario nuevo: es el
+  mismo usuario cambiando de dueño, y eso no es idempotencia.
+- El "ya existe" pasó de `->exists()` a `->first()` (necesita la fila para
+  comparar su tenant), y el `create()` a `forceFill()->save()`: el `$fillable`
+  del modelo del scope puede no declarar la columna de tenant, y el mass
+  assignment la descartaría **sin error**, dejando la fila con tenant nulo por
+  otra puerta.
+
+### ⚠️ Notas para consumers
+
+- **La línea que hay que correr ahora** en un scope multi-tenant:
+
+  ```bash
+  php artisan mk:auth:create-super-admin --scope=admin --tenant=<id|slug> \
+      --email=... --name=... --password=... --no-interaction
+  ```
+
+- Scripts de CI o de seed que llamaban al comando en un scope con columna de
+  tenant **fallan hasta que agreguen `--tenant=`**. Es el punto: antes pasaban
+  creando un usuario sin tenant.
+- Los usuarios ya creados con tenant nulo **no se tocan**. Revisalos:
+  `select id, email from <tabla> where <columna_tenant> is null`.
+- `mk:make:auth-user --multi-tenant` sigue emitiendo la columna `nullable`: no
+  se cambió acá para no alterar migraciones ya generadas.
+
 ## [UNRELEASED] — Verificación en dos pasos (TOTP), opt-in por scope
 
 El piloto NetPizza la necesita para su consola de plataforma (scope `operator`),

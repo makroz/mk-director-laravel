@@ -2525,6 +2525,59 @@ php artisan mk:auth:create-super-admin --scope=operador --email=ops@example.com 
   tablas `roles`/`role_user` también se saltean, con aviso, en vez de reventar
   con el usuario ya creado.
 
+##### El tenant del primer usuario (`--tenant=`)
+
+```bash
+php artisan mk:auth:create-super-admin --scope=admin --tenant=<id|slug> \
+    --email=root@example.com --name=Root --password=... --no-interaction
+```
+
+🔴 **El comando escribía la fila sin tocar la columna de tenant.** En un scope
+generado con `--multi-tenant` esa columna sale `nullable`, así que el primer
+usuario —el que tiene la ability `*`— quedaba con tenant **nulo** y nadie se
+enteraba. Y un usuario sin tenant es exactamente el que `TenantMembershipGate`
+deja pasar con **cualquier** `X-Tenant-ID`: el gate sólo compara cuando
+`getTenantId()` no es null, con null devuelve "seguí". Del otro lado, en cuanto
+el consumidor endurece la columna a `NOT NULL`, el comando muere con un
+`SQLSTATE[23502]` crudo que no dice qué falta.
+
+La forma manda: **la columna existe o no existe**.
+
+| Tabla del scope | Qué hace el comando |
+|---|---|
+| **sin** columna de tenant | Igual que siempre. `--tenant` / `--without-tenant` ahí son un **error**, no una opción que se descarta en silencio. |
+| **con** columna de tenant | Exige `--tenant=<id|slug>` o `--without-tenant`. Sin ninguno de los dos se niega, nombra las dos opciones y **no escribe nada**. |
+
+- **Qué columna**: `HasTenantMembership::getTenantColumn()` del modelo del
+  scope — default `client_id`, el mismo que emite `mk:make:auth-user
+  --multi-tenant`. Un consumidor que la llame distinto (NetPizza: `tenant_id`)
+  la sobreescribe en el modelo y el comando lo sigue. Después se confirma contra
+  el esquema con `Schema::hasColumn()`: **manda la base, no el modelo**.
+- **Validación**: el valor de `--tenant` se busca en `mk_director.tenant.model`,
+  por clave primaria primero y por `slug` después — el mismo camino que
+  `TenantResolver::resolveSlugToId()`, y con `withoutGlobalScopes()` porque en
+  consola no hay contexto de tenant (misma razón que la idempotencia). Sin
+  `tenant.model` cableado no hay contra qué validar: se usa el valor tal cual,
+  **avisando** que no se pudo verificar.
+- **`--without-tenant`**: opt-in explícito al usuario sin tenant, y **sólo si la
+  columna admite null**. Con `NOT NULL` se niega apuntando a `--tenant`, en vez
+  de dejar que la base tire el `23502`. Cuando procede, el aviso nombra el
+  riesgo concreto: ese usuario pasa el `TenantMembershipGate` con cualquier
+  `X-Tenant-ID`.
+- **Idempotencia**: segunda corrida con el MISMO tenant → "No se creó nada",
+  como siempre. Con OTRO tenant → se **niega**. El login es único global, así
+  que "el mismo email en otro tenant" no es un usuario nuevo: es el mismo
+  usuario cambiando de dueño, y eso no es idempotencia. Si el cambio es
+  intencional, va por el CRUD del scope.
+- La fila se escribe con `forceFill()`: el `$fillable` del modelo puede no
+  declarar la columna de tenant, y el mass assignment la descartaría **sin
+  error** — el mismo defecto, por otra puerta.
+
+⚠️ **BC**: un script de CI o de seed que llamaba al comando sobre un scope con
+columna de tenant falla hasta que agregue `--tenant=`. Es el punto: antes pasaba
+creando un usuario sin tenant. Y los usuarios ya creados así no se tocan —
+revisalos con `select id, <loginField> from <tabla> where <columna> is null`.
+
 
 #### 3.19.5 Modelo, migración y rutas generadas
 

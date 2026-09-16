@@ -15,6 +15,9 @@ use Mk\Director\Auth\Enums\FixedStatus;
 use Mk\Director\Auth\Models\Ability;
 use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Auth\Models\Role;
+use Mk\Director\Tenancy\Concerns\HasTenantMembership;
+use Mk\Director\Tenancy\TenantMembershipGate;
+use Symfony\Component\Console\Input\InputOption;
 
 /**
  * `php artisan mk:auth:create-super-admin` — crea el primer usuario
@@ -44,6 +47,30 @@ use Mk\Director\Auth\Models\Role;
  *     que mk-director trata como super-admin.
  *   - Roles y abilities se saltean con `--no-roles` (scope sin RBAC) o si
  *     el proyecto no tiene las tablas `roles`/`role_user`.
+ *
+ * **`--tenant=` (el tenant del primer usuario)**: el comando escribía la fila
+ * sin tocar la columna de tenant. En un scope generado con `--multi-tenant` esa
+ * columna sale `nullable`, así que el super-admin quedaba con tenant NULO y
+ * nadie se enteraba — y un usuario sin tenant es justo el que
+ * {@see TenantMembershipGate} deja pasar con CUALQUIER
+ * `X-Tenant-ID` (sólo compara si `getTenantId()` no es null). En cuanto el
+ * consumidor endurece la columna a `NOT NULL`, el mismo comando muere con un
+ * `23502` crudo que no dice qué falta.
+ *
+ * Por eso, cuando la tabla del scope TIENE columna de tenant
+ * ({@see HasTenantMembership::getTenantColumn()},
+ * default `client_id`, el mismo que emite `mk:make:auth-user --multi-tenant`):
+ *
+ *   - `--tenant=<id|slug>` es obligatorio. El valor se valida contra
+ *     `mk_director.tenant.model` — por clave primaria primero y por `slug`
+ *     después, el mismo camino que usa `TenantResolver::resolveSlugToId()`.
+ *   - `--without-tenant` es el opt-in EXPLÍCITO al usuario sin tenant, y sólo
+ *     si la columna es nullable. Sale con un aviso que explica el riesgo.
+ *   - Si el usuario ya existe con OTRO tenant, el comando se niega: mover a
+ *     alguien de tenant no es idempotencia, es un cambio de dueño silencioso.
+ *
+ * Un scope SIN columna de tenant no cambia en nada (y ahí `--tenant` es un
+ * error, no una opción que se descarta en silencio).
  *
  * Por qué existe: `docs/GETTING_STARTED.md` documentaba este command
  * desde 1.0.0 pero nunca se implementó. El audit 2026-06-24 lo detectó
@@ -83,6 +110,8 @@ class AuthCreateSuperAdminCommand extends Command
     protected $signature = 'mk:auth:create-super-admin
         {--scope=admin : Scope de auth del usuario (snake_case). El modelo sale de config/auth.php: el provider del guard del scope y el model de ese provider. Default: admin (BC).}
         {--no-roles : Crea SOLO el usuario, sin roles ni abilities. Para scopes que no usan RBAC (ej: generados con --no-rbac).}
+        {--tenant= : Id (o slug, vía `mk_director.tenant.model`) del tenant dueño del usuario. OBLIGATORIO cuando la tabla del scope tiene columna de tenant.}
+        {--without-tenant : Crea el usuario SIN tenant. Sólo si la columna lo admite, y con aviso: un usuario sin tenant pasa el TenantMembershipGate con CUALQUIER X-Tenant-ID.}
         {--email= : Email del super-admin (omite el prompt; BC para login field=email)}
         {--name= : Nombre (omite el prompt)}
         {--password= : Password en texto plano (omite el prompt; preferir prompt o env en CI)}
@@ -132,10 +161,10 @@ class AuthCreateSuperAdminCommand extends Command
             // Solo agregar el flag dinámico si difiere del BC `--email`.
             if ($loginField !== 'email' && ! $this->getDefinition()->hasOption($loginField)) {
                 $this->getDefinition()->addOption(
-                    new \Symfony\Component\Console\Input\InputOption(
+                    new InputOption(
                         name: $loginField,
                         shortcut: null,
-                        mode: \Symfony\Component\Console\Input\InputOption::VALUE_OPTIONAL,
+                        mode: InputOption::VALUE_OPTIONAL,
                         description: "Valor del login field `{$loginField}` del super-admin (omite el prompt)",
                         default: null,
                     ),
@@ -192,8 +221,6 @@ class AuthCreateSuperAdminCommand extends Command
     /**
      * Login field detectado del modelo Admin (R-PKG-046 F9-B05).
      * Default: 'email'. Se sobrescribe en handle() si el modelo override.
-     *
-     * @var string
      */
     protected string $loginField = 'email';
 
@@ -272,6 +299,15 @@ class AuthCreateSuperAdminCommand extends Command
         // en el modelo scaffoldeado. Leemos vía `getLoginField()` que ya existe
         // en `AuthUser` desde R-PKG-009 D6.
         $this->loginField = (new $modelClass)->getLoginField();
+
+        // ── El tenant dueño del usuario ──
+        // Se resuelve ANTES de pedir el password: si falta el tenant, que se
+        // sepa antes de tipear nada, y sin haber escrito una sola fila.
+        $tenantColumn = $this->resolveTenantColumn($modelClass);
+        $tenantId = $this->resolveTenantId($tenantColumn);
+        if ($tenantId === false) {
+            return self::FAILURE;
+        }
 
         // ── Resolver roles a sembrar (R-PKG-014 MEJORA-04) ──
         // Default BC: solo super-admin.
@@ -374,7 +410,23 @@ class AuthCreateSuperAdminCommand extends Command
         // chocaría con el unique del login?", y el unique es de la TABLA: no
         // sabe de tenants ni de soft-deletes. Por eso se apagan TODOS, no sólo
         // el de tenant — una fila soft-deleted con ese email también choca.
-        if ($modelClass::withoutGlobalScopes()->where($this->loginField, $loginFieldValue)->exists()) {
+        $existing = $modelClass::withoutGlobalScopes()->where($this->loginField, $loginFieldValue)->first();
+        if ($existing !== null) {
+            // Idempotencia SÍ; cambio de dueño NO. Si la fila que ya está es de
+            // otro tenant, re-correr el comando la movería en silencio — y el
+            // login es único global, así que "el mismo email en otro tenant" no
+            // es un usuario nuevo: es el mismo usuario cambiando de dueño.
+            if ($tenantColumn !== null) {
+                $existingTenant = $existing->getAttribute($tenantColumn);
+
+                if ((string) $existingTenant !== (string) $tenantId) {
+                    $this->error("Ya existe un {$this->scope} con {$this->loginField} {$loginFieldValue}, y su {$tenantColumn} es '".($existingTenant ?? '—')."'.");
+                    $this->line("Pediste '".($tenantId ?? '—')."'. El comando NO mueve un usuario de un tenant a otro: si el cambio es intencional, hacelo por el CRUD del scope.");
+
+                    return self::FAILURE;
+                }
+            }
+
             $this->warn("Ya existe un {$this->scope} con {$this->loginField} {$loginFieldValue}. No se creó nada.");
 
             return self::SUCCESS;
@@ -402,8 +454,21 @@ class AuthCreateSuperAdminCommand extends Command
             $createAttrs['auth_scope'] = (new $modelClass)->getAuthScope() ?? $this->scope;
         }
 
+        if ($tenantColumn !== null) {
+            $createAttrs[$tenantColumn] = $tenantId;
+        }
+
         /** @var AuthUser $admin */
-        $admin = $modelClass::create($createAttrs);
+        $admin = new $modelClass;
+
+        // `forceFill` y no `create()`: el `$fillable` del modelo del scope puede
+        // no declarar la columna de tenant (el scaffolder sólo la agrega con
+        // `--multi-tenant`, y un consumidor que la agregó a mano a la migración
+        // puede habérsela olvidado en el modelo). El mass assignment la
+        // descartaría SIN ERROR y la fila volvería a quedar con tenant nulo —
+        // exactamente el defecto que este comando ahora impide. Acá los valores
+        // no vienen de un request: los arma el propio comando.
+        $admin->forceFill($createAttrs)->save();
 
         // OBS-02 fix (R-PKG-031 pineado 2026-06-28, defense-in-depth): pinear
         // `is_active => true` explícitamente al crear el admin. Sin esto, si
@@ -496,6 +561,10 @@ class AuthCreateSuperAdminCommand extends Command
                 ['name',        $admin->name],
                 [$this->loginField, $admin->{$this->loginField}],
                 ['auth_scope',  $admin->getAuthScope() ?? $this->scope],
+                // El tenant sólo se muestra si el scope lo tiene: en un scope
+                // single-tenant la fila sería ruido, y un "—" se leería como
+                // "quedó sin tenant".
+                ...($tenantColumn !== null ? [[$tenantColumn, (string) ($tenantId ?? 'null — SIN TENANT')]] : []),
                 // Sin RBAC no se consultan: sin las tablas, leerlas es otro SQLSTATE.
                 ['roles',       $withRoles ? ($admin->roles->pluck('name')->implode(', ') ?: '—') : '—'],
                 ['canMk(*)',    $withRoles && $admin->canMk('*') ? 'yes (super-admin)' : 'no'],
@@ -507,6 +576,142 @@ class AuthCreateSuperAdminCommand extends Command
         $this->line('  { "'.$this->loginField.'": "'.$loginFieldValue.'", "password": "<el que tipeaste>" }');
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Columna de tenant de la tabla del scope, o `null` si el scope no tiene.
+     *
+     * El nombre sale del modelo (`HasTenantMembership::getTenantColumn()`,
+     * default `client_id`) y NO se asume que exista: manda el esquema. Un scope
+     * generado sin `--multi-tenant` no tiene la columna y este comando no
+     * cambia en nada para él.
+     *
+     * @param  class-string  $modelClass
+     */
+    private function resolveTenantColumn(string $modelClass): ?string
+    {
+        $model = new $modelClass;
+
+        if (! method_exists($model, 'getTenantColumn')) {
+            return null;
+        }
+
+        $column = (string) $model->getTenantColumn();
+
+        return $column !== '' && Schema::hasColumn($this->scopeTable, $column)
+            ? $column
+            : null;
+    }
+
+    /**
+     * Valor a escribir en la columna de tenant, o `false` cuando el comando
+     * tiene que abortar (el llamador devuelve FAILURE).
+     *
+     * Reglas, en orden:
+     *  - Sin columna de tenant: `--tenant`/`--without-tenant` son un error
+     *    (una opción que no puede aplicarse no se descarta en silencio).
+     *  - Con columna: `--tenant` y `--without-tenant` son excluyentes, y falta
+     *    alguno de los dos es un error que NOMBRA la opción.
+     *  - `--without-tenant` sólo si la columna admite null.
+     */
+    private function resolveTenantId(?string $tenantColumn): string|int|false|null
+    {
+        $tenantOption = trim((string) $this->option('tenant'));
+        $withoutTenant = (bool) $this->option('without-tenant');
+
+        if ($tenantColumn === null) {
+            if ($tenantOption !== '' || $withoutTenant) {
+                $this->error("El scope '{$this->scope}' no tiene columna de tenant en la tabla `{$this->scopeTable}`: --tenant / --without-tenant no aplican.");
+                $this->line('Si el scope tiene que ser multi-tenant, generalo con `mk:make:auth-user --multi-tenant` (o agregá la columna) antes de anclar a nadie.');
+
+                return false;
+            }
+
+            return null;
+        }
+
+        if ($tenantOption !== '' && $withoutTenant) {
+            $this->error('--tenant y --without-tenant son excluyentes: elegí uno.');
+
+            return false;
+        }
+
+        if ($tenantOption === '' && ! $withoutTenant) {
+            $this->error("La tabla `{$this->scopeTable}` tiene la columna de tenant `{$tenantColumn}`: hay que decir de qué tenant es este usuario.");
+            $this->newLine();
+            $this->line('  --tenant=<id|slug>   el tenant dueño del usuario');
+            $this->line('  --without-tenant     usuario SIN tenant (sólo si la columna lo admite, y es riesgoso)');
+
+            return false;
+        }
+
+        if ($withoutTenant) {
+            if (! $this->tenantColumnIsNullable($tenantColumn)) {
+                $this->error("`{$this->scopeTable}.{$tenantColumn}` es NOT NULL: no se puede crear un usuario sin tenant. Usá --tenant=<id|slug>.");
+
+                return false;
+            }
+
+            $this->warn("⚠️  Se creará el {$this->scope} SIN tenant (`{$tenantColumn}` = null).");
+            $this->warn('   Un usuario sin tenant pasa el TenantMembershipGate con CUALQUIER X-Tenant-ID:');
+            $this->warn('   el gate sólo compara cuando el usuario TIENE tenant. Es un usuario que ve todos los tenants.');
+
+            return null;
+        }
+
+        return $this->lookupTenant($tenantOption);
+    }
+
+    /**
+     * Resuelve `--tenant` a la clave del tenant: por clave primaria primero y
+     * por `slug` después, el mismo camino que `TenantResolver::resolveSlugToId()`.
+     *
+     * Sin `mk_director.tenant.model` cableado no hay contra qué validar: se usa
+     * el valor tal cual, avisando que no se pudo verificar (mejor eso que
+     * rechazar a un consumidor que todavía no configuró el modelo).
+     *
+     * `withoutGlobalScopes()` por la misma razón que el chequeo de idempotencia:
+     * en consola no hay contexto de tenant, y un modelo de tenant con scope
+     * propio devolvería "no existe" para todos.
+     */
+    private function lookupTenant(string $value): string|int|false
+    {
+        $tenantModel = config('mk_director.tenant.model');
+
+        if (! is_string($tenantModel) || ! class_exists($tenantModel)) {
+            $this->warn("⚠️  `mk_director.tenant.model` no está configurado: no se pudo verificar que el tenant '{$value}' exista. Se usa tal cual.");
+
+            return $value;
+        }
+
+        $row = $tenantModel::withoutGlobalScopes()->whereKey($value)->first();
+
+        if ($row === null && Schema::hasColumn((new $tenantModel)->getTable(), 'slug')) {
+            $row = $tenantModel::withoutGlobalScopes()->where('slug', $value)->first();
+        }
+
+        if ($row === null) {
+            $this->error("No existe el tenant '{$value}' en {$tenantModel} (se buscó por clave primaria y por slug).");
+
+            return false;
+        }
+
+        return $row->getKey();
+    }
+
+    /**
+     * ¿La columna de tenant admite null? Si el driver no sabe contestarlo, se
+     * asume que sí: el freno duro lo pone igual la base con su NOT NULL.
+     */
+    private function tenantColumnIsNullable(string $tenantColumn): bool
+    {
+        foreach (Schema::getColumns($this->scopeTable) as $column) {
+            if (($column['name'] ?? null) === $tenantColumn) {
+                return (bool) ($column['nullable'] ?? true);
+            }
+        }
+
+        return true;
     }
 
     /**

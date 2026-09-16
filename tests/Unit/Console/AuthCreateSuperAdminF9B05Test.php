@@ -46,7 +46,7 @@ test('R-PKG-046 F9-B05 — command detecta $admin->getLoginField() dinámicament
     // handle() debe leer el loginField del modelo Admin via getLoginField().
     // Hallazgo #47: el modelo es el del `--scope`, no Admin fijo.
     expect($src)->toContain(
-        "\$this->loginField = (new \$modelClass)->getLoginField()",
+        '$this->loginField = (new $modelClass)->getLoginField()',
     );
 });
 
@@ -69,7 +69,7 @@ test('R-PKG-046 F9-B05 — resolveLoginFieldValue() fallback chain dinámico', f
 
     // Helper debe buscar --{loginField} primero.
     // `hasOption` antes: `configure()` sólo agrega la opción si el modelo existía.
-    expect($src)->toContain("\$dynamicFlag = \$this->hasOption(\$this->loginField) ? \$this->option(\$this->loginField) : null");
+    expect($src)->toContain('$dynamicFlag = $this->hasOption($this->loginField) ? $this->option($this->loginField) : null');
 
     // BC fallback para --email cuando loginField='email'.
     expect($src)->toContain("if (\$this->loginField === 'email')");
@@ -82,7 +82,9 @@ test('R-PKG-046 F9-B05 — where() dinámico respeta loginField', function () {
     $src = authCreateSuperAdminSourceF9B05();
 
     expect($src)->toContain(
-        'where($this->loginField, $loginFieldValue)->exists()',
+        // `first()` desde que el chequeo también compara el tenant de la fila
+        // existente contra el `--tenant` pedido.
+        'where($this->loginField, $loginFieldValue)->first()',
     );
 
     // Y la advertencia de idempotencia usa el nombre del field correcto.
@@ -93,12 +95,12 @@ test('R-PKG-046 F9-B05 — create() pine el loginField value dinámicamente (no 
     $src = authCreateSuperAdminSourceF9B05();
 
     expect($src)->toContain(
-        "\$createAttrs = [",
+        '$createAttrs = [',
     );
 
     // Solo pine el loginField value, NO 'email' hardcoded.
     expect($src)->toContain(
-        "\$this->loginField => \$loginFieldValue,",
+        '$this->loginField => $loginFieldValue,',
     );
 });
 
@@ -119,7 +121,7 @@ test('R-PKG-046 F9-B05 — output de tabla + Login: usa loginField dinámico', f
     $src = authCreateSuperAdminSourceF9B05();
 
     // Tabla final muestra el field name correcto.
-    expect($src)->toContain("\$admin->{\$this->loginField}");
+    expect($src)->toContain('$admin->{$this->loginField}');
 
     // Output de Login: usa loginField dinámico en el body del JSON.
     // Source contiene: '  { "'.$this->loginField.'": "'.$loginFieldValue.'", ...'

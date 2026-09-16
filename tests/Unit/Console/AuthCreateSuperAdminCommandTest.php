@@ -77,7 +77,10 @@ test('mk:auth:create-super-admin is idempotent on duplicate email', function () 
 
     // R-PKG-046 F9-B05: where() dinámico según loginField (no hardcoded 'email').
     // Hallazgo #47: sin global scopes, o el fail-closed de tenant lo esconde.
-    expect($source)->toContain('withoutGlobalScopes()->where($this->loginField, $loginFieldValue)->exists()');
+    // `first()` y no `exists()`: la fila que ya está se necesita entera para
+    // comparar su tenant contra el `--tenant` pedido (un usuario existente de
+    // OTRO tenant no es idempotencia, es un cambio de dueño).
+    expect($source)->toContain('withoutGlobalScopes()->where($this->loginField, $loginFieldValue)->first()');
     expect($source)->toContain('No se creó nada');
 });
 
