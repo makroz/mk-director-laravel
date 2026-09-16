@@ -65,17 +65,17 @@ uses(MkLaravelTestCase::class);
 
 function f18StubPath(): string
 {
-    return dirname(__DIR__, 2) . '/src/Stubs/auth-user.auth-controller.stub';
+    return dirname(__DIR__, 2).'/src/Stubs/auth-user.auth-controller.stub';
 }
 
 function f18MigrationStubPath(): string
 {
-    return dirname(__DIR__, 2) . '/src/Stubs/auth-user.migration.stub';
+    return dirname(__DIR__, 2).'/src/Stubs/auth-user.migration.stub';
 }
 
 function f18ListManagerPath(): string
 {
-    return dirname(__DIR__, 2) . '/src/Managers/ListManager.php';
+    return dirname(__DIR__, 2).'/src/Managers/ListManager.php';
 }
 
 function readF18File(string $path): string
@@ -93,8 +93,11 @@ describe('LAR-12 — BaseAuthController uses null-safe access for $user->is_acti
         // D1: el is_active check se movió al SSoT (BaseAuthController::login).
         // Defense-in-depth: null-safe operator para evitar "Attempt to read
         // property 'is_active' on null" cuando user lookup retorna null.
+        // La regla vive en `AccountStatus` (compartida con mk.auth y refresh),
+        // que lee `is_active` de los atributos cargados — cubierto en
+        // `tests/Unit/Auth/AccountStatusTest.php`.
         expect($base)->toMatch('/public function login\(/');
-        expect($base)->toContain('Schema::hasColumn(');
+        expect($base)->toContain('AccountStatus::allowsAuthentication(');
     });
 
     test('R-PKG-047 D1: BaseAuthController does NOT access $user->is_active non-null-safe (regression guard)', function () use ($base): void {
@@ -209,7 +212,7 @@ describe('LAR-14 — migration stub documents email/loginField semantics', funct
         // This test pins the regression guard (the scaffolder MUST keep
         // this guard — a refactor that drops it would silently emit
         // duplicate column definitions).
-        $command = readF18File(dirname(__DIR__, 2) . '/src/Console/Commands/MakeAuthUserCommand.php');
+        $command = readF18File(dirname(__DIR__, 2).'/src/Console/Commands/MakeAuthUserCommand.php');
         $hasReservedList = (bool) preg_match(
             '/\$reserved\s*=\s*\[[\s\S]{0,500}\$loginField/s',
             $command

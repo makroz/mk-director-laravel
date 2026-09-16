@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\Rule;
 use Mk\Director\Auth\Attributes\Ability;
 use Mk\Director\Auth\Events\AuthEvent;
+use Mk\Director\Auth\Services\AccountStatus;
 use Mk\Director\Auth\Services\EmailOtpService;
 use Mk\Director\Auth\Services\InvalidRefreshTokenException;
 use Mk\Director\Auth\Services\OtpVerifyResult;
@@ -118,8 +119,9 @@ use Mk\Director\Controllers\BaseController;
  *   controller es invocado desde un managed-routes provider.
  *
  * - **`is_active` deprecated** (R-PKG-047 D4): pre-D4 `is_active` boolean se
- *   chequeaba via `Schema::hasColumn`. Post-D4 se prefiere `ScopeStatus` enum.
- *   `userHasValidStatus()` fallback a `true` si ni enum ni column existen
+ *   se chequeaba via `Schema::hasColumn`. Post-D4 se prefiere `ScopeStatus` enum.
+ *   `userHasValidStatus()` delega en `AccountStatus` (la misma regla que
+ *   aplican `mk.auth` y el refresh); sin enum ni `is_active`, deja pasar
  *   (BC para scopes que aún no migraron).
  *
  * - **No BC bridge for AuthController scaffoldeado**: el scaffolder emite
@@ -278,7 +280,7 @@ abstract class BaseAuthController extends BaseController
      *   4. Defense-in-depth: `getAuthScope() === authScope()`.
      *   5. `userHasValidStatus()` check (enum ScopeStatus o `is_active` legacy).
      *   6. `Hash::check(password, user->password)`.
-     *   7. TokenIssuer::issueAccessToken + issueRefreshToken.
+     *   7. TokenIssuer::issueTokenPair (access ligado a su refresh, para que logout revoque ambos).
      *   8. `afterLogin()` hook.
      *   9. Return envelope canónico con tokens + user payload (incl. abilities, F7-B02).
      */
@@ -334,9 +336,7 @@ abstract class BaseAuthController extends BaseController
             $user->loadMissing(['roles', 'directAbilities']);
         }
 
-        $tokenIssuer = $this->tokenIssuer();
-        $accessToken = $tokenIssuer->issueAccessToken($user);
-        $refreshToken = $tokenIssuer->issueRefreshToken($user);
+        ['access' => $accessToken, 'refresh' => $refreshToken] = $this->tokenIssuer()->issueTokenPair($user);
 
         $expiresIn = (int) config('mk_director.auth.ttl.access_seconds', 15 * 60);
 
@@ -382,6 +382,10 @@ abstract class BaseAuthController extends BaseController
      *
      * Sanctum v4 parsing + SHA256 hash (R-PKG-014 BUG-07 + R-PKG-018 BUG-NEW-26).
      * Anti scope-escalation: TokenIssuer::rotateRefreshToken($token, $scope).
+     *
+     * 401 `ERR_UNAUTHENTICATED` si el token no es un refresh token (un access
+     * token no refresca) o es inválido; 401 `ERR_ACCOUNT_DISABLED` si la
+     * cuenta ya no puede autenticarse (el refresh token queda revocado).
      */
     #[Ability('{scope}.auth.refresh', 'Rotar refresh token en el scope {scope}')]
     public function refresh(Request $request): JsonResponse
@@ -406,7 +410,7 @@ abstract class BaseAuthController extends BaseController
                 'reason' => $e->getMessage(),
             ]);
 
-            return $this->sendError($e->getMessage(), [], 401, 'ERR_UNAUTHENTICATED');
+            return $this->sendError($e->getMessage(), [], 401, $e->errorCode);
         }
 
         $this->dispatchAuthEventSafe('auth.refresh.success', [
@@ -465,8 +469,9 @@ abstract class BaseAuthController extends BaseController
      * Auth: `mk.auth:{scope}` (per-route).
      * Ability: `mk.ability:{scope}.auth.logout` (per-route).
      *
-     * Revoca SOLO el access token actual (`safeLogoutCurrentToken()` con
-     * null-safety, R-PKG-027 PKG-NEW-08 + R-PKG-014 BUG-01).
+     * Revoca el access token actual y el refresh token de ESA sesión
+     * (`safeLogoutCurrentToken()` con null-safety, R-PKG-027 PKG-NEW-08 +
+     * R-PKG-014 BUG-01). Las otras sesiones del user siguen vivas.
      */
     #[Ability('{scope}.auth.logout', 'Cerrar sesión actual en el scope {scope}')]
     public function logout(Request $request): JsonResponse
@@ -1142,36 +1147,16 @@ abstract class BaseAuthController extends BaseController
     }
 
     /**
-     * Valida que el user tenga status válido para autenticarse.
+     * ¿Este user puede autenticarse? Delega en {@see AccountStatus}, la regla
+     * única que también aplican `mk.auth` y `TokenIssuer::rotateRefreshToken()`.
      *
-     * Pre-R-PKG-047 D4: chequea `is_active` boolean vía `Schema::hasColumn`.
-     * Post-R-PKG-047 D4: chequea `ScopeStatus` enum (Active/Inactive/Suspended/
-     * Pending). Si `$user` tiene `ScopeStatus` castable, usa `canAuthenticate()`.
-     *
-     * Defense-in-depth: si no hay enum ni column, retorna true (BC para
-     * scopes que aún no migraron).
+     * Se conserva como método protegido por BC. Override acá sólo afecta a
+     * login/forgot/reset: para cambiar qué estados autentican en TODAS las
+     * puertas, override `canAuthenticate()` en el enum del scope.
      */
     protected function userHasValidStatus(Authenticatable $user): bool
     {
-        // Post-D4: ScopeStatus enum (R-PKG-047). Si el modelo pinea el cast,
-        // `$user->status` retorna ScopeStatus enum con `canAuthenticate()`.
-        if (isset($user->status) && is_object($user->status) && method_exists($user->status, 'canAuthenticate')) {
-            return (bool) $user->status->canAuthenticate();
-        }
-
-        // Pre-D4 BC: `is_active` boolean column.
-        if (method_exists($user, 'getTable') && Schema::hasColumn((string) $user->getTable(), 'is_active')) {
-            $isActive = $user->getAttribute('is_active');
-            if ($isActive === false || $isActive === 0 || $isActive === '0') {
-                return false;
-            }
-
-            // null o true = permitido (compat con datos preexistentes).
-            return true;
-        }
-
-        // Default: sin columna ni enum, asumir permitido.
-        return true;
+        return AccountStatus::allowsAuthentication($user);
     }
 
     /**

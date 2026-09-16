@@ -7,6 +7,7 @@ namespace Mk\Director\Tests\Unit\Auth;
 use Illuminate\Config\Repository as ConfigRepository;
 use Illuminate\Container\Container;
 use Illuminate\Database\Capsule\Manager as Capsule;
+use Illuminate\Events\Dispatcher;
 use Illuminate\Hashing\HashManager;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Facade;
@@ -31,7 +32,7 @@ uses(MkLaravelTestCase::class);
 
 function bootEmailOtpServiceContainer(array $otpConfig = []): Capsule
 {
-    $capsule = new Capsule();
+    $capsule = new Capsule;
     $capsule->addConnection([
         'driver' => 'sqlite',
         'database' => ':memory:',
@@ -40,7 +41,7 @@ function bootEmailOtpServiceContainer(array $otpConfig = []): Capsule
     $capsule->setAsGlobal();
     $capsule->bootEloquent();
 
-    $container = new Container();
+    $container = new Container;
     Container::setInstance($container);
 
     $container->instance('db', $capsule->getDatabaseManager());
@@ -88,7 +89,7 @@ function bootEmailOtpServiceContainer(array $otpConfig = []): Capsule
 
 it('issues a code, storing only its HASH — never the plaintext (SECURITY)', function () {
     bootEmailOtpServiceContainer();
-    $service = new EmailOtpService();
+    $service = new EmailOtpService;
 
     $result = $service->issue('member', 'password_change', 'jane@example.com');
 
@@ -110,7 +111,7 @@ it('issues a code, storing only its HASH — never the plaintext (SECURITY)', fu
 
 it('a re-request invalidates the prior code (concurrent requests invalidate prior codes)', function () {
     bootEmailOtpServiceContainer();
-    $service = new EmailOtpService();
+    $service = new EmailOtpService;
 
     $first = $service->issue('member', 'password_change', 'jane@example.com');
     // Force the throttle window to be already elapsed so a second issue() is allowed.
@@ -127,7 +128,7 @@ it('a re-request invalidates the prior code (concurrent requests invalidate prio
 
 it('verify() returns Confirmed for the correct PIN within expiry + attempts, and consumes the code', function () {
     bootEmailOtpServiceContainer();
-    $service = new EmailOtpService();
+    $service = new EmailOtpService;
 
     $result = $service->issue('member', 'password_change', 'jane@example.com');
 
@@ -143,7 +144,7 @@ it('verify() returns Confirmed for the correct PIN within expiry + attempts, and
 
 it('verify() rejects an expired code even with the correct PIN', function () {
     bootEmailOtpServiceContainer();
-    $service = new EmailOtpService();
+    $service = new EmailOtpService;
 
     $result = $service->issue('member', 'password_change', 'jane@example.com');
     DB::table('verification_codes')
@@ -159,7 +160,7 @@ it('verify() rejects an expired code even with the correct PIN', function () {
 
 it('verify() rejects a code that was already consumed (single-use)', function () {
     bootEmailOtpServiceContainer();
-    $service = new EmailOtpService();
+    $service = new EmailOtpService;
 
     $result = $service->issue('member', 'password_change', 'jane@example.com');
     expect($service->verify('member', 'password_change', 'jane@example.com', $result->plainCode))
@@ -175,7 +176,7 @@ it('verify() rejects a code that was already consumed (single-use)', function ()
 
 it('verify() locks the code once attempts reach max_attempts, blocking further tries even with the correct PIN', function () {
     bootEmailOtpServiceContainer(['max_attempts' => 3]);
-    $service = new EmailOtpService();
+    $service = new EmailOtpService;
 
     $result = $service->issue('member', 'password_change', 'jane@example.com');
 
@@ -192,7 +193,7 @@ it('verify() locks the code once attempts reach max_attempts, blocking further t
 
 it('verify() increments attempts on a wrong PIN without leaking any hint', function () {
     bootEmailOtpServiceContainer();
-    $service = new EmailOtpService();
+    $service = new EmailOtpService;
 
     $service->issue('member', 'password_change', 'jane@example.com');
 
@@ -204,11 +205,63 @@ it('verify() increments attempts on a wrong PIN without leaking any hint', funct
     expect($row->attempts)->toBe(1);
 });
 
+// ── verify() — concurrent submissions (read-then-write race) ─────────────────
+
+/**
+ * Runs `$concurrentWrite` once, right after verify() executes the first query
+ * whose SQL contains `$sqlFragment` — i.e. inside the window a parallel HTTP
+ * submission shares with this one. A query listener is the seam: it fires
+ * synchronously after the query, before verify() runs its next statement.
+ */
+function runOnceAfterOtpQuery(string $sqlFragment, callable $concurrentWrite): void
+{
+    $connection = DB::connection();
+    $connection->setEventDispatcher(new Dispatcher(new Container));
+
+    $done = false;
+    $connection->listen(function ($query) use (&$done, $sqlFragment, $concurrentWrite) {
+        if ($done || ! str_contains(strtolower($query->sql), $sqlFragment)) {
+            return;
+        }
+        $done = true;
+        $concurrentWrite();
+    });
+}
+
+it('verify() lets only ONE of two concurrent submissions of the correct PIN win (SECURITY)', function () {
+    bootEmailOtpServiceContainer();
+    $service = new EmailOtpService;
+    $result = $service->issue('member', 'password_change', 'jane@example.com');
+
+    // Both submissions read the row and reserved an attempt; the other one
+    // consumed the code first.
+    runOnceAfterOtpQuery('"attempts" + 1', fn () => DB::table('verification_codes')->update(['consumed_at' => now()]));
+
+    $verdict = $service->verify('member', 'password_change', 'jane@example.com', $result->plainCode);
+
+    expect($verdict)->not->toBe(OtpVerifyResult::Confirmed);
+});
+
+it('verify() does not let parallel guesses go past max_attempts (SECURITY)', function () {
+    bootEmailOtpServiceContainer(['max_attempts' => 3]);
+    $service = new EmailOtpService;
+    $result = $service->issue('member', 'password_change', 'jane@example.com');
+
+    // Parallel wrong guesses used up the cap after this one read `attempts = 0`.
+    runOnceAfterOtpQuery('select', fn () => DB::table('verification_codes')->update(['attempts' => 3]));
+
+    $verdict = $service->verify('member', 'password_change', 'jane@example.com', $result->plainCode);
+
+    expect($verdict)->not->toBe(OtpVerifyResult::Confirmed);
+    expect(DB::table('verification_codes')->value('consumed_at'))->toBeNull();
+    expect((int) DB::table('verification_codes')->value('attempts'))->toBe(3);
+});
+
 // ── isRequestThrottled() ────────────────────────────────────────────────────
 
 it('isRequestThrottled() blocks a rapid re-request within the throttle window', function () {
     bootEmailOtpServiceContainer(['throttle' => ['max' => 3, 'window_seconds' => 600]]);
-    $service = new EmailOtpService();
+    $service = new EmailOtpService;
 
     expect($service->isRequestThrottled('member', 'password_change', 'jane@example.com'))->toBeFalse();
 
@@ -219,7 +272,7 @@ it('isRequestThrottled() blocks a rapid re-request within the throttle window', 
 
 it('isRequestThrottled() allows a new request once the throttle window has elapsed', function () {
     bootEmailOtpServiceContainer(['throttle' => ['max' => 3, 'window_seconds' => 600]]);
-    $service = new EmailOtpService();
+    $service = new EmailOtpService;
 
     $service->issue('member', 'password_change', 'jane@example.com');
     DB::table('verification_codes')->update(['created_at' => now()->subMinutes(20)]);
@@ -231,7 +284,7 @@ it('isRequestThrottled() allows a new request once the throttle window has elaps
 
 it('prune() removes expired and consumed rows', function () {
     bootEmailOtpServiceContainer();
-    $service = new EmailOtpService();
+    $service = new EmailOtpService;
 
     $result = $service->issue('member', 'password_change', 'jane@example.com');
     $service->verify('member', 'password_change', 'jane@example.com', $result->plainCode); // consumes it

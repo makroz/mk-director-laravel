@@ -5,8 +5,9 @@ declare(strict_types=1);
 namespace Mk\Director\Auth\Services;
 
 use Illuminate\Contracts\Auth\Authenticatable;
-use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Config;
 use Laravel\Sanctum\NewAccessToken;
+use Laravel\Sanctum\PersonalAccessToken;
 
 /**
  * TokenIssuer — emite access + refresh tokens Sanctum.
@@ -22,6 +23,12 @@ use Laravel\Sanctum\NewAccessToken;
  *   usuario en su lista de abilities (JSON serializable) más las
  *   abilities explícitas que se quieran sumar.
  * - Refresh token: TTL largo (7 días por defecto), ability `refresh`.
+ *   🔴 Sólo sirve para `/auth/refresh`: `mk.auth` lo rechaza como Bearer, y
+ *   `rotateRefreshToken()` rechaza cualquier token sin la ability `refresh`.
+ *   Si no, el refresh es una sesión de 7 días y el access se encadena para
+ *   siempre (medido en el piloto NetPizza).
+ * - Sesión: `issueTokenPair()` liga el access a su refresh con la ability
+ *   `refresh_token_id:{id}`, para que logout revoque los dos.
  *
  * Configuración de TTLs (vía `mk_director.auth.ttl.*`):
  *  - `access_seconds`  → default 15 * 60
@@ -45,11 +52,16 @@ class TokenIssuer
      */
     public const REFRESH_ABILITY = 'refresh';
 
+    /**
+     * Ability del access token que apunta al refresh token de su sesión
+     * (`refresh_token_id:42`). La lee `AuthUser::safeLogoutCurrentToken()`.
+     */
+    public const REFRESH_LINK_PREFIX = 'refresh_token_id:';
+
     public function __construct(
         private readonly ?int $accessTtlSeconds = null,
         private readonly ?int $refreshTtlSeconds = null,
-    ) {
-    }
+    ) {}
 
     /**
      * Emite un access token (TTL corto) con `auth_scope` + abilities explícitas.
@@ -65,6 +77,21 @@ class TokenIssuer
             abilities: $payloadAbilities,
             expiresAt: now()->addSeconds($this->accessTtl()),
         );
+    }
+
+    /**
+     * Emite una sesión: refresh token + access token ligado a él.
+     *
+     * @return array{access: NewAccessToken, refresh: string}
+     */
+    public function issueTokenPair(Authenticatable $user): array
+    {
+        $refresh = $this->issueRefreshToken($user);
+
+        return [
+            'access' => $this->issueAccessToken($user, [self::refreshLinkAbility($refresh)]),
+            'refresh' => $refresh,
+        ];
     }
 
     /**
@@ -84,7 +111,8 @@ class TokenIssuer
 
     /**
      * Compone la lista final de abilities del access token.
-     * `auth_scope` siempre presente, deduplicado.
+     * `auth_scope` siempre presente, deduplicado. La ability `refresh` se
+     * descarta: un access token nunca puede pasar por refresh token.
      *
      * @param  array<int,string>  $abilities
      * @return array<int,string>
@@ -92,6 +120,8 @@ class TokenIssuer
     public function buildAccessAbilities(Authenticatable $user, array $abilities): array
     {
         $scopeAbility = $this->scopeAbilityFor($user);
+
+        $abilities = array_filter($abilities, static fn ($ability) => $ability !== self::REFRESH_ABILITY);
 
         return array_values(array_unique(array_merge([$scopeAbility], $abilities)));
     }
@@ -114,7 +144,7 @@ class TokenIssuer
             $scope = 'unknown';
         }
 
-        return self::SCOPE_ABILITY_PREFIX . $scope;
+        return self::SCOPE_ABILITY_PREFIX.$scope;
     }
 
     /**
@@ -141,12 +171,68 @@ class TokenIssuer
      */
     public static function extractScopeFromAbilities(array $abilities): ?string
     {
-        // R-PKG-046 F9-B06 — Normalizar {key: bool} a flat list de strings.
+        foreach (self::flattenAbilities($abilities) as $ability) {
+            if (is_string($ability) && str_starts_with($ability, self::SCOPE_ABILITY_PREFIX)) {
+                $value = substr($ability, strlen(self::SCOPE_ABILITY_PREFIX));
+
+                return $value !== '' ? $value : null;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * ¿Es un refresh token? Por la ability `refresh` O por el nombre
+     * `refresh`: cualquiera de las dos marcas alcanza para que `mk.auth` lo
+     * rechace como Bearer.
+     */
+    public static function isRefreshToken(PersonalAccessToken $token): bool
+    {
+        return $token->name === 'refresh'
+            || in_array(self::REFRESH_ABILITY, self::flattenAbilities($token->abilities ?? []), true);
+    }
+
+    /**
+     * Id del refresh token ligado a un access token, o null si el access se
+     * emitió sin sesión (tokens anteriores a `issueTokenPair()`).
+     *
+     * @param  array<int|string,mixed>  $abilities
+     */
+    public static function linkedRefreshTokenId(array $abilities): ?int
+    {
+        foreach (self::flattenAbilities($abilities) as $ability) {
+            if (str_starts_with($ability, self::REFRESH_LINK_PREFIX)) {
+                $id = substr($ability, strlen(self::REFRESH_LINK_PREFIX));
+
+                return ctype_digit($id) ? (int) $id : null;
+            }
+        }
+
+        return null;
+    }
+
+    /** `refresh_token_id:{id}` a partir del `<id>|<plaintext>` del refresh. */
+    private static function refreshLinkAbility(string $refreshPlainText): string
+    {
+        return self::REFRESH_LINK_PREFIX.explode('|', $refreshPlainText, 2)[0];
+    }
+
+    /**
+     * R-PKG-046 F9-B06 — normaliza `{key: bool}` (Sanctum 4.x) y la lista
+     * plana de strings a una lista plana de strings.
+     *
+     * @param  array<int|string,mixed>  $abilities
+     * @return array<int,string>
+     */
+    private static function flattenAbilities(array $abilities): array
+    {
         $flat = [];
         foreach ($abilities as $key => $value) {
             // Si key es string (assoc array / Sanctum 4.x), tomar la key.
             if (is_string($key)) {
                 $flat[] = $key;
+
                 continue;
             }
 
@@ -156,14 +242,7 @@ class TokenIssuer
             }
         }
 
-        foreach ($flat as $ability) {
-            if (is_string($ability) && str_starts_with($ability, self::SCOPE_ABILITY_PREFIX)) {
-                $value = substr($ability, strlen(self::SCOPE_ABILITY_PREFIX));
-                return $value !== '' ? $value : null;
-            }
-        }
-
-        return null;
+        return $flat;
     }
 
     /**
@@ -179,27 +258,32 @@ class TokenIssuer
      *   3. Hash comparar `plaintext` contra `token` (Sanctum v4.3.2 usa SHA256).
      *      Ver `vendor/laravel/sanctum/src/HasApiTokens.php:66` y
      *      `PersonalAccessToken.php:61,67`.
+     *   3b. Validar que ES un refresh token (ability `refresh`): un access
+     *       token no refresca.
      *   4. Validar que el token no expiró.
      *   5. Validar que el scope del token coincide con `$expectedScope` (defense-in-depth).
      *   6. Cargar el `tokenable` (user).
-     *   7. Emitir nuevo access token con abilities del user.
-     *   8. Si `mk_director.auth.refresh.rotate_on_refresh` es true, invalidar el viejo
+     *   6b. Re-chequear `AccountStatus`: si la cuenta ya no autentica, revocar
+     *       este refresh token y rechazar (`ERR_ACCOUNT_DISABLED`).
+     *   7. Si `mk_director.auth.refresh.rotate_on_refresh` es true, invalidar el viejo
      *      refresh token y emitir uno nuevo. Si no, mantener el viejo.
+     *   8. Emitir nuevo access token ligado al refresh vigente.
      *
      * @param  string  $refreshToken  El `<id>|<plaintext>` recibido del cliente.
      * @param  string  $expectedScope  Scope que el AuthController declara para esta ruta
-     *                                  (e.g. `admin`). Previene escalación de scope vía refresh.
+     *                                 (e.g. `admin`). Previene escalación de scope vía refresh.
      * @return array{access_token: string, refresh_token: string, user_id: string}
      *
-     * @throws InvalidRefreshTokenException Si el token es malformado, no existe, expiró,
-     *                                      o el scope no coincide.
+     * @throws InvalidRefreshTokenException Si el token es malformado, no existe, no es
+     *                                      refresh, expiró, el scope no coincide o la
+     *                                      cuenta ya no puede autenticarse.
      */
     public function rotateRefreshToken(string $refreshToken, string $expectedScope): array
     {
-        $parser = new RefreshTokenParser();
+        $parser = new RefreshTokenParser;
         [$tokenId, $plaintext] = $parser->parse($refreshToken);
 
-        $tokenModel = \Laravel\Sanctum\PersonalAccessToken::query()->find($tokenId);
+        $tokenModel = PersonalAccessToken::query()->find($tokenId);
         if (! $tokenModel) {
             throw InvalidRefreshTokenException::notFound();
         }
@@ -242,6 +326,10 @@ class TokenIssuer
             throw InvalidRefreshTokenException::hashMismatch();
         }
 
+        if (! in_array(self::REFRESH_ABILITY, self::flattenAbilities($tokenModel->abilities ?? []), true)) {
+            throw InvalidRefreshTokenException::notARefreshToken();
+        }
+
         // Validar expiración.
         if ($tokenModel->expires_at !== null && $tokenModel->expires_at->isPast()) {
             throw InvalidRefreshTokenException::expired();
@@ -259,8 +347,11 @@ class TokenIssuer
             throw InvalidRefreshTokenException::notFound();
         }
 
-        // Emitir nuevo access token.
-        $newAccess = $this->issueAccessToken($user);
+        if (! AccountStatus::allowsAuthentication($user)) {
+            $tokenModel->delete();
+
+            throw InvalidRefreshTokenException::accountDisabled();
+        }
 
         // Decidir rotación del refresh token.
         $rotateOnRefresh = (bool) $this->readConfigInt(
@@ -276,6 +367,9 @@ class TokenIssuer
             // Mantener el viejo (BC default).
             $newRefreshPlaintext = $refreshToken;
         }
+
+        // Emitir nuevo access token, ligado al refresh vigente (logout revoca los dos).
+        $newAccess = $this->issueAccessToken($user, [self::refreshLinkAbility($newRefreshPlaintext)]);
 
         return [
             'access_token' => $newAccess->plainTextToken,
@@ -304,8 +398,8 @@ class TokenIssuer
 
     private function readConfigInt(string $key, int $default): int
     {
-        if (class_exists(\Illuminate\Support\Facades\Config::class) && function_exists('app') && $this->containerHasConfig()) {
-            $value = \Illuminate\Support\Facades\Config::get($key);
+        if (class_exists(Config::class) && function_exists('app') && $this->containerHasConfig()) {
+            $value = Config::get($key);
             if (is_int($value)) {
                 return $value;
             }

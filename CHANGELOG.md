@@ -12,6 +12,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — 🔴 Seguridad: el refresh token ya no es una sesión, y bloquear a un usuario corta sus sesiones vivas
+
+Afecta a **todo consumer** con `mk.auth` y `BaseAuthController`, sin regenerar
+nada. Detalle en `DEVELOPER_GUIDE.md` § 3.8.2. Los cuatro primeros, medidos en el
+piloto NetPizza con la cadena HTTP real.
+
+### Security
+
+- 🔴 **El refresh token funcionaba como Bearer.** Lleva `auth_scope:{scope}` y
+  `mk.auth` sólo miraba eso: un refresh de 7 días era una sesión completa. Ahora
+  `mk.auth` rechaza todo token con la ability o el nombre `refresh` →
+  `401 ERR_UNAUTHENTICATED`.
+- 🔴 **Un access token refrescaba.** `rotateRefreshToken()` no miraba qué token
+  recibía: el access se encadenaba para siempre. Ahora exige la ability
+  `refresh` → `401 ERR_UNAUTHENTICATED`, y `buildAccessAbilities()` descarta
+  `refresh` aunque el caller la pida.
+- 🔴 **Un usuario bloqueado seguía adentro.** El estado sólo se miraba al
+  emitir tokens. Ahora `mk.auth` lo re-chequea en cada request →
+  `401 ERR_ACCOUNT_DISABLED` (código nuevo), y el refresh → `401
+  ERR_ACCOUNT_DISABLED` borrando ese refresh token. La regla es una sola,
+  `AccountStatus::allowsAuthentication()`, para login, refresh y `mk.auth`.
+- **`logout` dejaba vivo el refresh token.** Login emite con
+  `TokenIssuer::issueTokenPair()`: el access lleva `refresh_token_id:{id}` y
+  `safeLogoutCurrentToken()` revoca los dos. Las otras sesiones siguen vivas.
+- **El PIN de un solo uso no era de un solo uso bajo concurrencia.**
+  `EmailOtpService::verify()` leía y escribía en dos pasos: dos submissions
+  paralelas del código correcto ganaban las dos, y N adivinanzas paralelas
+  pasaban `max_attempts`. Ahora reserva el intento y consume con `UPDATE`
+  condicional contando filas afectadas.
+
+### Changed — impacto en consumers
+
+- **Un usuario bloqueado/inactivo/pendiente pierde sus sesiones vivas** en el
+  próximo request. El front tiene que tratar `ERR_ACCOUNT_DISABLED` como cerrar
+  sesión, no reintentar el refresh.
+- **Un cliente que mandaba el refresh token como Bearer se rompe** con 401.
+  Intencional.
+- `is_active` se lee de los atributos cargados del modelo, ya no con
+  `Schema::hasColumn()` (corre en cada request).
+- Override de `userHasValidStatus()` en un controller sólo afecta a
+  login/forgot/reset. Para todas las puertas: `canAuthenticate()` en el enum
+  del scope.
+- Un intento correcto de PIN también suma en `attempts`.
+- Access tokens emitidos antes de esta versión no traen el vínculo a su refresh:
+  su logout revoca sólo el access, como antes.
+
 ## [UNRELEASED] — CRUD generado: la búsqueda no cita columnas que el scope no tiene, y `/access` ya no da «Class not found»
 
 Cambia **lo que se genera** de ahora en más. Detalle en `DEVELOPER_GUIDE.md`

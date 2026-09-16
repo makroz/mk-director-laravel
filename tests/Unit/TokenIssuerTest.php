@@ -5,11 +5,12 @@ declare(strict_types=1);
 namespace Mk\Director\Tests\Unit;
 
 use Illuminate\Contracts\Auth\Authenticatable;
+use Mk\Director\Auth\Services\TokenIssuer;
+use Mk\Director\Tests\TestCase;
 use Mockery;
 use Mockery\MockInterface;
-use Mk\Director\Auth\Services\TokenIssuer;
 
-uses(\Mk\Director\Tests\TestCase::class);
+uses(TestCase::class);
 
 afterEach(function () {
     Mockery::close();
@@ -27,7 +28,7 @@ function fakeAuthUser(?string $scope = 'admin'): Authenticatable|MockInterface
 }
 
 test('issueAccessToken includes auth_scope ability and explicit abilities are deduplicated', function () {
-    $issuer = new TokenIssuer();
+    $issuer = new TokenIssuer;
     $user = fakeAuthUser('admin');
 
     // No podemos invocar createToken sin app Laravel, pero podemos verificar
@@ -50,8 +51,22 @@ test('issueAccessToken includes auth_scope ability and explicit abilities are de
     expect($abilities[0])->toBe('auth_scope:admin');
 });
 
+test('[SECURITY] an access token never carries the `refresh` ability, even if a caller asks for it', function () {
+    $abilities = (new TokenIssuer)->buildAccessAbilities(fakeAuthUser('admin'), ['refresh', 'users.edit']);
+
+    // With it, the access token would pass `/auth/refresh` and be chained forever.
+    expect($abilities)->not->toContain(TokenIssuer::REFRESH_ABILITY)->toContain('users.edit');
+});
+
+test('linkedRefreshTokenId reads the session link from both ability formats', function () {
+    expect(TokenIssuer::linkedRefreshTokenId(['auth_scope:admin', 'refresh_token_id:42']))->toBe(42);
+    expect(TokenIssuer::linkedRefreshTokenId(['refresh_token_id:42' => true]))->toBe(42);
+    expect(TokenIssuer::linkedRefreshTokenId(['auth_scope:admin']))->toBeNull();
+    expect(TokenIssuer::linkedRefreshTokenId(['refresh_token_id:x']))->toBeNull();
+});
+
 test('issueRefreshToken composes refresh ability plus scope ability', function () {
-    $issuer = new TokenIssuer();
+    $issuer = new TokenIssuer;
     $user = fakeAuthUser('member');
 
     $scopeAbility = $issuer->scopeAbilityFor($user);
@@ -70,7 +85,7 @@ test('issueRefreshToken composes refresh ability plus scope ability', function (
 });
 
 test('access token abilities payload contains the expected auth_scope value', function () {
-    $issuer = new TokenIssuer();
+    $issuer = new TokenIssuer;
     $user = fakeAuthUser('admin');
 
     $abilities = $issuer->buildAccessAbilities($user, ['users.view']);
@@ -85,14 +100,14 @@ test('access token abilities payload contains the expected auth_scope value', fu
 });
 
 test('scopeAbilityFor returns auth_scope:unknown when user has no scope', function () {
-    $issuer = new TokenIssuer();
+    $issuer = new TokenIssuer;
     $user = fakeAuthUser(null);
 
     expect($issuer->scopeAbilityFor($user))->toBe('auth_scope:unknown');
 });
 
 test('scopeAbilityFor returns auth_scope:unknown when method returns empty string', function () {
-    $issuer = new TokenIssuer();
+    $issuer = new TokenIssuer;
     $user = fakeAuthUser('');
 
     expect($issuer->scopeAbilityFor($user))->toBe('auth_scope:unknown');

@@ -65,7 +65,7 @@ describe('HALLAZGO-NEW-FASE14-03 — safeLogoutCurrentToken() guard reset', func
         // same process doesn't see the user via cached state.
 
         expect($src)->toContain('$token->delete();');
-        expect($src)->toContain('\Auth::forgetGuards()');
+        expect($src)->toContain('Auth::forgetGuards()');
     });
 
     test('forgetGuards() is called AFTER the delete, BEFORE the return true (correct ordering)', function () use ($src): void {
@@ -82,7 +82,7 @@ describe('HALLAZGO-NEW-FASE14-03 — safeLogoutCurrentToken() guard reset', func
         $methodBody = substr($src, $methodStart);
 
         $deletePos = strpos($methodBody, '$token->delete();');
-        $forgetPos = strpos($methodBody, '\Auth::forgetGuards()');
+        $forgetPos = strpos($methodBody, 'Auth::forgetGuards()');
         $returnPos = strrpos($methodBody, 'return true;');
 
         expect($deletePos)->toBeGreaterThan(0, '$token->delete(); must be present');

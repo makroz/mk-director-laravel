@@ -151,6 +151,26 @@ trait BootsHttpApp
      */
     public function httpGet(string $uri, array $headers = []): Response
     {
+        return $this->httpSend('GET', $uri, [], $headers);
+    }
+
+    /**
+     * Igual que {@see httpGet()}, con body JSON-like en `$data`.
+     *
+     * @param  array<string,mixed>  $data
+     * @param  array<string,string>  $headers
+     */
+    public function httpPost(string $uri, array $data = [], array $headers = []): Response
+    {
+        return $this->httpSend('POST', $uri, $data, $headers);
+    }
+
+    /**
+     * @param  array<string,mixed>  $data
+     * @param  array<string,string>  $headers
+     */
+    private function httpSend(string $method, string $uri, array $data, array $headers): Response
+    {
         // 🔴 EL SEGUNDO REQUEST DE UN TEST SE AUTENTICABA COMO EL PRIMERO.
         //
         // Los guards viven en el container y `RequestGuard::user()` MEMOIZA el
@@ -171,7 +191,7 @@ trait BootsHttpApp
         // vuelve a resolver del token, que es justo lo que se quiere medir.
         $this->httpApp?->make('auth')->forgetGuards();
 
-        $request = Request::create($uri, 'GET', server: array_merge(
+        $request = Request::create($uri, $method, $data, server: array_merge(
             ['HTTP_ACCEPT' => 'application/json'],
             $headers,
         ));

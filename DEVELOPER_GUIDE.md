@@ -918,35 +918,53 @@ $reuse = $this->withHeaders(['Authorization' => "Bearer {$accessToken}"])->getJs
 $reuse->assertStatus(401);
 ```
 
-**Spec**: HALLAZGO-NEW-FASE14-03, feedback RETO fase 14 (2026-06-29). Cross-ref: §3.8.2 (is_active check).
+**Revoca también el refresh token de la sesión**: el access token emitido por login/refresh lleva `refresh_token_id:{id}`, y el helper borra ese refresh junto con el access. Ver §3.8.2.
 
-#### 3.8.2. `is_active` check en el flow de auth (R-PKG-027, rc14)
+**Spec**: HALLAZGO-NEW-FASE14-03, feedback RETO fase 14 (2026-06-29). Cross-ref: §3.8.2 (tokens y estado de la cuenta).
 
-Desde rc14, el `AuthController` scaffoldeado consulta `is_active` por default en `login`/`forgot`/`reset` cuando la columna existe en la tabla del scope:
+#### 3.8.2. Tokens, estado de la cuenta y qué acepta `mk.auth`
 
-```php
-// login() — bloquea usuarios inactivos
-$isActiveCheck = Schema::hasColumn($user?->getTable() ?? '{{moduleNamePluralLower}}', 'is_active')
-    && $user->is_active === false;
+🔴 **Cambio de comportamiento (seguridad).** Hasta esta versión, `mk.auth` y
+`/auth/refresh` no distinguían qué token les llegaba ni volvían a mirar el
+estado de la cuenta. Medido en el piloto NetPizza, con la cadena HTTP real:
 
-if (! $user
-    || ! Hash::check($credentials['password'], $user->password)
-    || $user->getAuthScope() !== '{{moduleNameLower}}'
-    || $isActiveCheck
-) {
-    return $this->sendError('Credenciales inválidas.', [...], 422);
-}
-```
+- el **refresh token** servía como Bearer (`GET /me` → 200): una sesión de 7 días;
+- un **access token** mandado a `/auth/refresh` devolvía tokens nuevos: el TTL de 15 min no significaba nada;
+- un usuario **bloqueado** seguía refrescando y usando su access token: bloquearlo no cortaba nada;
+- después de `logout`, el refresh token de esa sesión seguía vivo.
 
-**Semántica**:
+**Los dos tokens** (los emite `TokenIssuer`):
 
-- `is_active = true` → puede loguearse / recibir reset / resetear password.
-- `is_active = false` → 401 (login bloqueado, sin email de reset, reset denegado).
-- `is_active = null` → permitido (compat con datos preexistentes sin la columna).
+| Token | Nombre | Abilities | TTL | Sirve para |
+|---|---|---|---|---|
+| Access | `access` | `auth_scope:{scope}` + `refresh_token_id:{id}` (+ las que pase el caller) | `ttl.access_seconds` (15 min) | Bearer en rutas con `mk.auth:{scope}` |
+| Refresh | `refresh` | `refresh` + `auth_scope:{scope}` | `ttl.refresh_seconds` (7 días) | **Sólo** el body de `POST /auth/refresh` |
 
-El check usa `Schema::hasColumn()` (cacheado en memoria), así que es zero-cost en runtime para consumers que NO usan la columna.
+- `mk.auth` rechaza un token con la ability `refresh` **o** el nombre `refresh` → `401 ERR_UNAUTHENTICATED`. El chequeo vive en `AuthScopeResolver`, así que aplica a todos los scopes.
+- `TokenIssuer::rotateRefreshToken()` exige la ability `refresh` → un access token da `401 ERR_UNAUTHENTICATED` y no emite nada.
+- `buildAccessAbilities()` descarta la ability `refresh` aunque el caller la pida: un access token nunca pasa por refresh.
+- Login emite la sesión con `TokenIssuer::issueTokenPair()`: el access lleva `refresh_token_id:{id}` apuntando a su refresh. `AuthUser::safeLogoutCurrentToken()` (el que usa `logout`) revoca los dos; las otras sesiones del usuario siguen vivas. Un access token emitido **antes** de esta versión no trae el vínculo: su logout revoca sólo el access, como antes.
 
-**Si override `login()`/`forgotPassword()`/`resetPassword()` manualmente** en tu consumer, mantené la misma lógica de `Schema::hasColumn` + `=== false` para no romper el patrón.
+**Estado de la cuenta — una sola regla, tres puertas.** `Mk\Director\Auth\Services\AccountStatus::allowsAuthentication()` la aplican login (y forgot/reset), el refresh y `mk.auth` **en cada request**:
+
+1. `status` casteado a un enum con `canAuthenticate()` (`ScopeStatus`: sólo `Active`) → manda el enum.
+2. Columna legacy `is_active` → `false`/`0`/`'0'` bloquea; `true`/`null` pasa.
+3. Sin ninguna de las dos → pasa (BC: scopes sin estado siguen como siempre).
+
+`is_active` se lee de los atributos ya cargados del modelo, no con `Schema::hasColumn()`: corre en cada request y el chequeo de esquema sería una query por request.
+
+| Puerta | Cuenta que ya no autentica |
+|---|---|
+| `POST /auth/login` | `422 ERR_VALIDATION` "Credenciales inválidas." (sin cambios: no revela que la cuenta existe) |
+| Ruta con `mk.auth:{scope}` | **`401 ERR_ACCOUNT_DISABLED`** |
+| `POST /auth/refresh` | **`401 ERR_ACCOUNT_DISABLED`**, y ese refresh token queda **borrado** |
+
+Para cambiar qué estados autentican, override `canAuthenticate()` en el enum del scope. `BaseAuthController::userHasValidStatus()` sigue existiendo por BC y delega en `AccountStatus`, pero **un override ahí sólo afecta a login/forgot/reset**: `mk.auth` y el refresh no lo ven.
+
+**Impacto en consumers:**
+
+- Un usuario bloqueado/inactivo/pendiente **pierde sus sesiones vivas** en el próximo request. El front tiene que tratar `ERR_ACCOUNT_DISABLED` como "cerrar sesión", no como "reintentar refresh".
+- Un cliente que (mal) mandaba el refresh token como Bearer **se rompe** con 401. Es intencional.
 
 #### 3.8.3. Ability checks — `canMk()` vs `can()` vs `hasAbility()` (HALLAZGO-NEW-FASE14-06)
 
@@ -2274,7 +2292,7 @@ En éxito, el confirm corre dentro de `DB::transaction`: `setAuthPassword()` (ve
 
 #### 3.18.3 Store: tabla genérica `verification_codes`
 
-Nueva tabla `verification_codes` (la migration hace no-op si ya existe vía `Schema::hasTable`). Es **genérica y reusable** — la columna `purpose` la hace apta para futuros 2FA / verificación de email, NO es password-change-specific. Columnas relevantes: `purpose`, `attempts`, `consumed_at`, `code_hash` (bcrypt). El servicio garantiza **single-use + expiry + attempt-lock**.
+Nueva tabla `verification_codes` (la migration hace no-op si ya existe vía `Schema::hasTable`). Es **genérica y reusable** — la columna `purpose` la hace apta para futuros 2FA / verificación de email, NO es password-change-specific. Columnas relevantes: `purpose`, `attempts`, `consumed_at`, `code_hash` (bcrypt). El servicio garantiza **single-use + expiry + attempt-lock**, también bajo concurrencia: `verify()` reserva el intento con un `UPDATE ... WHERE consumed_at IS NULL AND attempts < max_attempts` antes de comparar el hash, y consume con `WHERE consumed_at IS NULL`, contando filas afectadas. De dos submissions paralelas del código correcto gana una (la otra recibe `NotFound`), y N adivinanzas paralelas no pasan el tope (la que llega tarde recibe `Locked`). Un intento correcto también suma en `attempts`.
 
 #### 3.18.4 `AuthUser::setAuthPassword()` — fix del `BadMethodCallException`
 

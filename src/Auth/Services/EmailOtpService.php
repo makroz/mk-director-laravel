@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Mk\Director\Auth\Services;
 
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
@@ -75,9 +76,13 @@ class EmailOtpService
      *      distinguish "never existed" from "already used" — anti-oracle).
      *   2. Expired → Expired, even if the submitted code is correct.
      *   3. Attempts already at/over cap → Locked, even if correct.
-     *   4. Hash mismatch → increments `attempts`, returns Invalid
-     *      (generic — no hint about the correct value).
-     *   5. Match → marks `consumed_at`, returns Confirmed (single-use).
+     *   4. Atomically reserves one attempt (`attempts + 1` only while not
+     *      consumed and under the cap); if no row was updated, a concurrent
+     *      submission took the last attempt → Locked.
+     *   5. Hash mismatch → Invalid (generic — no hint about the correct value).
+     *   6. Match → marks `consumed_at` only if still unconsumed; Confirmed only
+     *      if THIS call updated the row, else NotFound (single-use under
+     *      concurrency: of two parallel correct submissions, one wins).
      */
     public function verify(string $scope, string $purpose, string $identifier, string $code): OtpVerifyResult
     {
@@ -100,15 +105,34 @@ class EmailOtpService
             return OtpVerifyResult::Locked;
         }
 
-        if (! Hash::check($code, (string) $row->code_hash)) {
-            DB::table($this->table)->where('id', $row->id)->increment('attempts');
+        // 🔴 Las lecturas de arriba sólo CLASIFICAN; no autorizan. Entre el
+        // SELECT y la escritura corre cualquier submission paralela, así que
+        // cada escritura re-exige su condición en el WHERE y se cuenta cuántas
+        // filas tocó: con 0, otra request ganó la carrera.
+        //
+        // El intento se reserva ANTES de comparar el hash. Si se incrementara
+        // recién al fallar, N adivinanzas paralelas leerían todas
+        // `attempts < max` y el tope no limitaría nada.
+        $reserved = DB::table($this->table)
+            ->where('id', $row->id)
+            ->whereNull('consumed_at')
+            ->where('attempts', '<', (int) $row->max_attempts)
+            ->increment('attempts');
 
+        if ($reserved === 0) {
+            return OtpVerifyResult::Locked;
+        }
+
+        if (! Hash::check($code, (string) $row->code_hash)) {
             return OtpVerifyResult::Invalid;
         }
 
-        DB::table($this->table)->where('id', $row->id)->update(['consumed_at' => now()]);
+        $consumed = DB::table($this->table)
+            ->where('id', $row->id)
+            ->whereNull('consumed_at')
+            ->update(['consumed_at' => now()]);
 
-        return OtpVerifyResult::Confirmed;
+        return $consumed === 1 ? OtpVerifyResult::Confirmed : OtpVerifyResult::NotFound;
     }
 
     /**
@@ -139,7 +163,7 @@ class EmailOtpService
         }
 
         return now()->lessThan(
-            \Illuminate\Support\Carbon::parse($row->created_at)->addSeconds($windowSeconds),
+            Carbon::parse($row->created_at)->addSeconds($windowSeconds),
         );
     }
 

@@ -10,6 +10,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Mk\Director\Auth\Exceptions\ScopeMismatchException;
+use Mk\Director\Auth\Services\AccountStatus;
 use Mk\Director\Auth\Services\AuthScopeResolver;
 use Mk\Director\Tenancy\TenantMembershipGate;
 use Symfony\Component\HttpFoundation\Response;
@@ -27,6 +28,11 @@ use Symfony\Component\HttpFoundation\Response;
  *
  * Validates the current Sanctum token and ensures its `auth_scope`
  * matches the parameter. Mismatches → 401 ScopeMismatchException.
+ *
+ * Only ACCESS tokens authenticate: a refresh token as Bearer → 401
+ * `ERR_UNAUTHENTICATED`. The account status is re-checked on every request
+ * (`AccountStatus`, same rule as login/refresh): a blocked/inactive/pending
+ * user → 401 `ERR_ACCOUNT_DISABLED`.
  *
  * **Envelope (R-PKG-042 FASE17-02 fix)**: el response 401 ahora usa el
  * envelope canónico R-PKG-024 (`{success, message, data, debugMsg}`) cuando
@@ -122,6 +128,13 @@ class MkAuthenticate
             );
         } catch (AuthenticationException $e) {
             return $this->unauthorizedResponse($request, $scope, $e->getMessage());
+        }
+
+        // 🔴 El estado de la cuenta se re-chequea en CADA request, no sólo al
+        // emitir tokens. Si no, bloquear a un usuario no corta su access token
+        // vivo. Misma regla que login y refresh: `AccountStatus`.
+        if (! AccountStatus::allowsAuthentication($user)) {
+            return $this->unauthorizedResponse($request, $scope, 'Account disabled.', 'ERR_ACCOUNT_DISABLED');
         }
 
         // 🔴 AISLAMIENTO MULTI-TENANT — acá y no en otro lado.

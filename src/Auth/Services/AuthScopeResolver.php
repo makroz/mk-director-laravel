@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Mk\Director\Auth\Services;
 
+use Illuminate\Auth\AuthenticationException;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -21,16 +22,19 @@ use Mk\Director\Auth\Exceptions\ScopeMismatchException;
  * resolver chequea `auth_scope` desde la ability `auth_scope:X` que
  * viene en el payload del access token. Si no matchea, lanza
  * ScopeMismatchException (401) y loggea intento.
+ *
+ * Además rechaza el refresh token usado como Bearer (`AuthenticationException`
+ * → 401 `ERR_UNAUTHENTICATED` en `mk.auth`).
  */
 class AuthScopeResolver
 {
     public function __construct(
         private readonly ?Request $request = null,
-    ) {
-    }
+    ) {}
 
     /**
      * @throws ScopeMismatchException
+     * @throws AuthenticationException si el token es un refresh token
      */
     public function resolve(string $expectedScope): ?Authenticatable
     {
@@ -52,6 +56,15 @@ class AuthScopeResolver
                 expectedScope: $expectedScope,
                 actualScope: $this->safeScope($user),
             );
+        }
+
+        // 🔴 Sólo el ACCESS token autentica. El refresh token también lleva
+        // `auth_scope:X`, así que sin esto pasaba el chequeo de scope y un
+        // refresh de 7 días funcionaba como sesión completa (medido en el
+        // piloto NetPizza: `GET /me` con el refresh como Bearer → 200).
+        if (TokenIssuer::isRefreshToken($currentToken)) {
+            $this->logMismatch($expectedScope, $this->safeScope($user), 'refresh_token_as_bearer');
+            throw new AuthenticationException('Refresh tokens cannot be used as bearer tokens.', [$expectedScope]);
         }
 
         $actualScope = TokenIssuer::extractScopeFromAbilities($currentToken->abilities);
@@ -79,6 +92,7 @@ class AuthScopeResolver
     {
         if (method_exists($user, 'getAuthScope')) {
             $scope = $user->getAuthScope();
+
             return is_string($scope) ? $scope : null;
         }
 

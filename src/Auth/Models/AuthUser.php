@@ -10,10 +10,13 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\HasApiTokens;
+use Laravel\Sanctum\PersonalAccessToken;
 use Mk\Director\Auth\Concerns\HasAbilities;
 use Mk\Director\Auth\Concerns\HasRoles;
+use Mk\Director\Auth\Services\TokenIssuer;
 use Mk\Director\Tenancy\Concerns\HasTenantMembership;
 
 /**
@@ -273,7 +276,8 @@ abstract class AuthUser extends Authenticatable implements AuthenticatableContra
     }
 
     /**
-     * Revoca el access token actual con null-safety.
+     * Revoca el access token actual —y el refresh token de su sesión— con
+     * null-safety.
      *
      * R-PKG-027 PKG-NEW-08 helper: el patrón naive
      *
@@ -313,12 +317,23 @@ abstract class AuthUser extends Authenticatable implements AuthenticatableContra
             return false;
         }
 
+        // Logout cierra la SESIÓN: también el refresh token al que apunta este
+        // access (`TokenIssuer::issueTokenPair()`). Si no, el refresh seguía
+        // vivo 7 días después del logout. Access tokens emitidos sin sesión
+        // (anteriores a este cambio) no traen el vínculo: sólo se revoca el access.
+        $refreshId = $token instanceof PersonalAccessToken
+            ? TokenIssuer::linkedRefreshTokenId($token->abilities ?? [])
+            : null;
+        if ($refreshId !== null) {
+            $this->tokens()->whereKey($refreshId)->delete();
+        }
+
         $token->delete();
 
         // HALLAZGO-NEW-FASE14-03: invalidate cached auth state so subsequent
         // requests in the same process don't see the now-revoked token via
         // the cached user on the AuthManager guard. See method docblock.
-        \Auth::forgetGuards();
+        Auth::forgetGuards();
 
         return true;
     }
