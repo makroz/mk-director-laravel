@@ -112,8 +112,11 @@ test('ADR-5: buildUpdateProfileMethod() widens email to sometimes/required/email
     // Real email format check + uniqueness ignoring the current row — closes
     // the gap where a duplicate email on update caused a 500 DB integrity
     // violation instead of a 422 ValidationException.
+    // Rewritten pin: `email` is the LOGIN field here, so it is `required` when
+    // present, not `nullable` — measured in the NetPizza pilot, a nullable login
+    // field let a user lock themselves out. Behaviour: MakeAuthUserUpdateProfileRulesTest.
     expect($out)->toContain(
-        "'email' => ['sometimes', 'nullable', 'email', 'max:255', \\Illuminate\\Validation\\Rule::unique('admins', 'email')->ignore(\$user->getKey())]"
+        "'email' => ['sometimes', 'required', 'email', 'max:255', \\Illuminate\\Validation\\Rule::unique('admins', 'email')->ignore(\$user->getKey())]"
     );
 });
 
@@ -171,13 +174,14 @@ test('ADR-6 regression guard: source calls buildUpdateProfileMethod() with the w
     $source = wideCommandSource();
 
     expect($source)->toMatch(
-        '/protected function buildUpdateProfileMethod\(\s*string \$scope,\s*string \$scopeLower,\s*string \$loginField,\s*array \$profileFields,\s*array \$requiredFields,\s*array \$fileFieldNames,\s*string \$scopePlural,?\s*\): string/'
+        // (+ `?string $managedByColumn`, so the manager FK is never self-editable.)
+        '/protected function buildUpdateProfileMethod\(\s*string \$scope,\s*string \$scopeLower,\s*string \$loginField,\s*array \$profileFields,\s*array \$requiredFields,\s*array \$fileFieldNames,\s*string \$scopePlural,\s*\?string \$managedByColumn = null,?\s*\): string/'
     );
 
     // Call site passes $profileFieldsRaw (meta arrays), NOT the exported
     // rules string — register() keeps using $profileRulesPhp untouched.
     expect($source)->toMatch(
-        '/\$this->buildUpdateProfileMethod\(\s*\$scope,\s*\$scopeLower,\s*\$loginField,\s*\$profileFieldsRaw,\s*\$requiredFields,\s*\$fileFieldNames,\s*\$scopePlural,?\s*\)/'
+        '/\$this->buildUpdateProfileMethod\(\s*\$scope,\s*\$scopeLower,\s*\$loginField,\s*\$profileFieldsRaw,\s*\$requiredFields,\s*\$fileFieldNames,\s*\$scopePlural,\s*\$managedBy !== null[^)]*\)[^)]*,?\s*\)/'
     );
 });
 

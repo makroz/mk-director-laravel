@@ -12,6 +12,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — 🔴 Seguridad: nadie se da permisos a sí mismo por el CRUD de usuarios
+
+El piloto NetPizza lo midió por la cadena HTTP real: un encargado cuya única
+ability era `admin.admins.update` se dio `admin.branches.viewAll` y
+`admin.admins.delete` sobre su propio id. El comentario de la ruta generada ya
+advertía «puede escalar privilegios si no se gatea explícitamente», y nada lo
+gateaba.
+
+### Security
+- 🔴 **Escalada de privilegios por `/{id}/access`, `/roles` y `/abilities`.** Nuevo
+  `AccessGrantGuard`: nadie cambia su propio acceso ni su estado
+  (`ERR_SELF_ACCESS_CHANGE`), nadie actúa sobre quien tiene más acceso
+  (`ERR_TARGET_OUTRANKS_ACTOR`) y sólo se concede o quita lo que el actor tiene
+  (`ERR_ACCESS_NOT_HELD`). Ver `DEVELOPER_GUIDE.md` § 3.8.2-bis.
+- 🔴 **El `updateProfile()` generado dejaba al usuario cambiarse el `status`**
+  (un bloqueado con su token vivo se reactivaba solo) y **vaciar su credencial de
+  login**; con un login field que no fuera `email`, tampoco validaba unicidad, así
+  que tomar el de otro salía como error de base. Ahora `status` es `prohibited` y
+  el campo de login va `required` + `unique` ignorando la fila propia.
+
+### Changed — impacto en consumers
+- Los scopes **ya generados** no reciben ninguna de las dos cosas: el paquete no
+  reescribe código emitido. Hay que agregar las llamadas a la guarda y corregir
+  las reglas a mano, o regenerar el scope.
+- Un front que mandaba el `status` en `PATCH me` ahora recibe 422.
+
 ## [UNRELEASED] — 🔴 Seguridad: el refresh token ya no es una sesión, y bloquear a un usuario corta sus sesiones vivas
 
 Afecta a **todo consumer** con `mk.auth` y `BaseAuthController`, sin regenerar

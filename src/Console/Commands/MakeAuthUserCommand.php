@@ -79,6 +79,20 @@ class MakeAuthUserCommand extends Command
      * (e.g. `--profile-fields=full_name,!ci,phone` → `ci` queda `->unique()->nullable()`).
      * Esto se resuelve en `resolveProfileFields()` + `buildProfileFieldsReplacements()`.
      */
+    /**
+     * Columnas que `PATCH me` nunca acepta, aunque se hayan declarado como
+     * profile fields: identidad, tenant, credenciales y verificación. `status`
+     * se trata aparte (regla `prohibited` explícita).
+     */
+    public const SELF_PROFILE_FORBIDDEN_FIELDS = [
+        'auth_scope',
+        'client_id',
+        'tenant_id',
+        'password',
+        'email_verified_at',
+        'remember_token',
+    ];
+
     public const PROFILE_FIELD_TYPES = [
         'string' => [
             'column_method' => 'string',
@@ -735,6 +749,7 @@ PHP,
                 $requiredFields,
                 $fileFieldNames,
                 $scopePlural,
+                $managedBy !== null ? Str::snake($managedBy).'_id' : null,
             );
             $profileFieldsReplacements['{{updateProfileRoute}}'] = "\n        Route::patch('me', [AuthController::class, 'updateProfile']);";
         } else {
@@ -4782,9 +4797,40 @@ PHP;
         array $requiredFields,
         array $fileFieldNames,
         string $scopePlural,
+        ?string $managedByColumn = null,
     ): string {
         $rulesLines = '';
         foreach ($profileFields as $key => $meta) {
+            // 🔴 Columnas de CONTROL: el usuario no se las edita a sí mismo. Medido
+            // en el piloto NetPizza: un admin BLOQUEADO con token vivo hizo
+            // `PATCH me {status: 1}` y quedó Activo. `validate()` sólo devuelve
+            // las claves con regla, así que omitir la regla ya las descarta.
+            if (in_array($key, self::SELF_PROFILE_FORBIDDEN_FIELDS, true)
+                || str_starts_with($key, 'two_factor_')
+                || $key === $managedByColumn) {
+                continue;
+            }
+
+            if ($key === 'status') {
+                // Explícito en vez de omitido: un 422 le dice al front qué pasó;
+                // un campo ignorado en silencio parece un guardado exitoso.
+                $rulesLines .= "            // El estado lo cambia quien administra usuarios (el CRUD), nunca el\n"
+                    ."            // propio usuario: un bloqueado con token vivo se desbloquearía.\n"
+                    ."            '{$key}' => ['prohibited'],\n";
+
+                continue;
+            }
+
+            if ($key === $loginField) {
+                // Obligatorio si viene (sin login no puede volver a entrar) y único
+                // ignorando la fila propia, para CUALQUIER campo de login: con `ci`
+                // el de otro usuario era una violación de unique en la base (500).
+                $typeRule = $loginField === 'email' ? 'email' : 'string';
+                $rulesLines .= "            '{$key}' => ['sometimes', 'required', '{$typeRule}', 'max:255', \\Illuminate\\Validation\\Rule::unique('{$scopePlural}', '{$key}')->ignore(\$user->getKey())],\n";
+
+                continue;
+            }
+
             if (in_array($key, $fileFieldNames, true)) {
                 // File fields: real upload validation. The generic
                 // `PROFILE_FIELD_TYPES['file']['validation']` (`['nullable','string']`)

@@ -8,6 +8,7 @@ use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
 use App\Modules\{{ModuleName}}\Repositories\Contracts\{{ModuleName}}RepositoryInterface;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
+use Mk\Director\Auth\Access\AccessGrantGuard;
 use Mk\Director\Auth\Models\Ability;
 use Mk\Director\Auth\Models\Role;
 use Mk\Director\Contracts\MkModuleServiceInterface;
@@ -78,6 +79,14 @@ class {{ModuleName}}Service implements MkModuleServiceInterface
      */
     public function beforeUpdate(Request $request, string|int $id, array $input): array
     {
+        // Nadie cambia su propio `status`, ni edita a quien tiene más acceso que
+        // él (un encargado bloqueando al dueño). Si sobreescribís este hook,
+        // conservá esta línea.
+        $target = {{ModuleName}}::query()->find($id);
+        if ($target !== null) {
+            app(AccessGrantGuard::class)->assertCanUpdate($request->user(), $target, $input);
+        }
+
         return $input;
     }
 
@@ -99,6 +108,12 @@ class {{ModuleName}}Service implements MkModuleServiceInterface
      */
     public function beforeDelete(Request $request, Model $model, string|int $id): bool
     {
+        // Nadie borra a quien tiene más acceso que él. Si sobreescribís este
+        // hook, conservá esta línea.
+        if ($model instanceof {{ModuleName}}) {
+            app(AccessGrantGuard::class)->assertCanDelete($request->user(), $model);
+        }
+
         return true;
     }
 

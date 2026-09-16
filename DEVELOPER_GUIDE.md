@@ -966,6 +966,43 @@ Para cambiar qué estados autentican, override `canAuthenticate()` en el enum de
 - Un usuario bloqueado/inactivo/pendiente **pierde sus sesiones vivas** en el próximo request. El front tiene que tratar `ERR_ACCOUNT_DISABLED` como "cerrar sesión", no como "reintentar refresh".
 - Un cliente que (mal) mandaba el refresh token como Bearer **se rompe** con 401. Es intencional.
 
+#### 3.8.2-bis. `AccessGrantGuard` — nadie se sube solo por el CRUD de usuarios
+
+🔴 **Medido en el piloto NetPizza, por la cadena HTTP real:** un encargado cuya
+única ability era `admin.admins.update` hizo
+`POST /api/admins/{su propio id}/abilities {abilities: ['admin.branches.viewAll', 'admin.admins.delete']}`
+→ **200**, y las tuvo. Las rutas de acceso generadas sólo exigían `update`.
+Tener `update` sobre usuarios no puede significar poder darse cualquier permiso.
+
+`Mk\Director\Auth\Access\AccessGrantGuard` es la regla, y el scaffolder ya la
+cablea en el controller y el Service que genera. Aplica cuando actor y objetivo
+son del **mismo** scope de auth:
+
+| Regla | Código |
+|---|---|
+| Nadie cambia su **propio** acceso: roles, abilities directas ni `status` (mandar el propio `status` sin cambiarlo sí vale: un formulario manda el objeto entero) | `ERR_SELF_ACCESS_CHANGE` |
+| Nadie edita, bloquea, borra ni cambia el acceso de un usuario con **más** acceso que él | `ERR_TARGET_OUTRANKS_ACTOR` |
+| Sólo se concede **y quita** lo que el actor tiene, ability por ability, y por cada rol que entra o sale. Quitar también cuenta: si no, un encargado desarma al dueño. `*` cubre todo | `ERR_ACCESS_NOT_HELD` |
+
+Los tres se renderizan como **403** con el sobre del paquete. «Cubierta» es la
+misma semántica de `canMk()` (`*`, exacta, `recurso.*`) y se mira lo que el actor
+tiene por roles y grants directos, **no** las abilities de su token.
+
+Fuera de la regla a propósito: un actor de **otro** scope (un admin
+administrando meseros — otro espacio de nombres, lo decide `mk.ability` en la
+ruta) y sin actor autenticado (consola, seeders).
+
+Tres métodos, en el orden en que se usan:
+
+```php
+app(AccessGrantGuard::class)->assertCanChangeAccess($request->user(), $target, $roleNames, $abilityNames);
+app(AccessGrantGuard::class)->assertCanUpdate($request->user(), $target, $input);
+app(AccessGrantGuard::class)->assertCanDelete($request->user(), $target);
+```
+
+⚠️ **Los scopes ya generados no la tienen**: el paquete no reescribe código
+emitido. Agregar las tres llamadas a mano, o regenerar el scope.
+
 #### 3.8.3. Ability checks — `canMk()` vs `can()` vs `hasAbility()` (HALLAZGO-NEW-FASE14-06)
 
 El trait `HasAbilities` (en `Mk\Director\Auth\Concerns\HasAbilities`) expone **`canMk(string $ability): bool`** como método canónico para chequear abilities. **NO expone `can()` ni `hasAbility()`**.

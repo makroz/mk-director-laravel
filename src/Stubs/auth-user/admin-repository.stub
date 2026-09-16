@@ -98,7 +98,9 @@ class {{ModuleName}}Repository implements {{ModuleName}}RepositoryInterface
 
     public function syncRoles({{ModuleName}} ${{moduleNameLower}}, array $roleNames): {{ModuleName}}
     {
-        $roles = Role::query()->whereIn('name', $roleNames)->get();
+        // Sólo los roles de ESTE scope: la tabla `roles` es compartida y otro
+        // scope puede tener un rol con el mismo nombre.
+        $roles = Role::query()->where('guard', '{{moduleNameLower}}')->whereIn('name', $roleNames)->get();
 
         // `pivotExtras()` agrega el `user_type` que la pivot compartida exige
         // (o nada, si la pivot no tiene esa columna).

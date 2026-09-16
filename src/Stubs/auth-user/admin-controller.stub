@@ -15,6 +15,7 @@ use App\Modules\{{ModuleName}}\Services\{{ModuleName}}Service;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Mk\Director\Auth\Access\AccessGrantGuard;
 use Mk\Director\Auth\Models\Role;
 use Mk\Director\Controllers\SmartController;
 
@@ -126,6 +127,10 @@ class {{ModuleName}}Controller extends SmartController
         /** @var {{ModuleName}} ${{moduleNameLower}} */
         ${{moduleNameLower}} = {{ModuleName}}::findOrFail($id);
 
+        // `update` sobre usuarios no alcanza para cambiar accesos: nadie cambia el
+        // suyo, ni da o quita lo que no tiene, ni toca a quien tiene más (403).
+        app(AccessGrantGuard::class)->assertCanChangeAccess($request->user(), ${{moduleNameLower}}, $request->validated('roles'), $request->validated('abilities') ?? []);
+
         $repository = app({{ModuleName}}Repository::class);
 
         DB::transaction(function () use ($repository, ${{moduleNameLower}}, $request): void {
@@ -154,6 +159,9 @@ class {{ModuleName}}Controller extends SmartController
         /** @var {{ModuleName}} ${{moduleNameLower}} */
         ${{moduleNameLower}} = {{ModuleName}}::findOrFail($id);
 
+        // Mismo control que `assignAccess()`.
+        app(AccessGrantGuard::class)->assertCanChangeAccess($request->user(), ${{moduleNameLower}}, $request->validated('roles'), null);
+
         app({{ModuleName}}Repository::class)->syncRoles(${{moduleNameLower}}, $request->validated('roles'));
 
         return $this->sendResponse(
@@ -172,6 +180,9 @@ class {{ModuleName}}Controller extends SmartController
     {
         /** @var {{ModuleName}} ${{moduleNameLower}} */
         ${{moduleNameLower}} = {{ModuleName}}::findOrFail($id);
+
+        // Mismo control que `assignAccess()`.
+        app(AccessGrantGuard::class)->assertCanChangeAccess($request->user(), ${{moduleNameLower}}, null, $request->validated('abilities'));
 
         app({{ModuleName}}Repository::class)->syncDirectAbilities(${{moduleNameLower}}, $request->validated('abilities'));
 
