@@ -68,7 +68,7 @@ class {{ModuleName}} extends AuthUser
      * @var array<string, string>
      */
     protected $casts = [
-{{emailVerifiedAtCastEntry}}{{profileFieldsCastEntries}}{{statusCastEntry}}        'password' => 'hashed',
+{{emailVerifiedAtCastEntry}}{{profileFieldsCastEntries}}{{statusCastEntry}}{{twoFactorCastEntries}}        'password' => 'hashed',
     ];
 {{fileFieldsAppends}}
     /**

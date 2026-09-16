@@ -148,6 +148,7 @@ test('generado: sin docblocks huérfanos, sin ids internos, sin clases propias f
     'consumer' => [['scope' => 'Mesero', '--kind' => 'consumer', '--managed-by' => 'Admin']],
     'profile field :file + login ci' => [['scope' => 'Operator', '--profile-fields' => 'avatar:file,!dni', '--login-field' => 'ci']],
     '--verify-email --with-register --with-permissions-endpoint' => [['scope' => 'Operator', '--verify-email' => true, '--with-register' => true, '--with-permissions-endpoint' => true]],
+    '--two-factor=required' => [['scope' => 'Operator', '--two-factor' => 'required']],
     '--multi-tenant --no-crud' => [['scope' => 'Operator', '--multi-tenant' => true, '--no-crud' => true]],
 ]);
 

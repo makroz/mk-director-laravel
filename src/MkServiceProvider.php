@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\ServiceProvider;
 use Mk\Director\Auth\AuthServiceProvider;
 use Mk\Director\Console\Commands\AuthCreateSuperAdminCommand;
+use Mk\Director\Console\Commands\AuthTwoFactorResetCommand;
 use Mk\Director\Console\Commands\CleanReportsCommand;
 use Mk\Director\Console\Commands\DiscoverAbilitiesCommand;
 use Mk\Director\Console\Commands\FixSanctumUuidsCommand;
@@ -256,6 +257,7 @@ class MkServiceProvider extends ServiceProvider
                 MkSkillListCommand::class,
                 MkSkillDeployCommand::class,
                 AuthCreateSuperAdminCommand::class,
+                AuthTwoFactorResetCommand::class,
                 DiscoverAbilitiesCommand::class,
                 PruneAbilitiesCommand::class,
                 // R-PKG-015 BUG-NEW-09: helper command para parche de Sanctum UUIDs.

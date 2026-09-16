@@ -22,7 +22,7 @@ return new class extends Migration
             $table->uuid('id')->primary();
             $table->string('name');
             $table->string('{{loginField}}')->unique();
-            {{profileFieldsColumns}}{{statusColumn}}{{managedByColumn}}$table->timestamp('email_verified_at')->nullable();
+            {{profileFieldsColumns}}{{statusColumn}}{{managedByColumn}}{{twoFactorColumns}}$table->timestamp('email_verified_at')->nullable();
             $table->string('password');
             $table->string('auth_scope')->default('{{moduleNameLower}}')->index();
             {{clientIdColumn}}

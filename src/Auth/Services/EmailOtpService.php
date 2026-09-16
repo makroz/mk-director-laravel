@@ -37,14 +37,34 @@ class EmailOtpService
      * Generates a numeric PIN, hashes + persists it (replacing any live
      * code for the same `(auth_scope, purpose, identifier)` tuple), and
      * returns the PLAINTEXT once.
+     *
+     * Los tres parámetros opcionales existen para las credenciales de un solo
+     * uso que NO son un PIN para leer por email (hoy: el desafío y el
+     * enrolamiento de dos factores, `purpose` `login_2fa*`):
+     *
+     *  - `$plainCode`: un valor que arma el caller. Un desafío de login viaja
+     *    en el body de una request, no lo tipea una persona, así que son 32
+     *    bytes al azar en hexa y no seis dígitos adivinables.
+     *  - `$ttlSeconds` / `$maxAttempts`: el TTL de 10 minutos y el tope de 5
+     *    del bloque `otp.*` son los del PIN de email. Un desafío de login vive
+     *    minutos, no diez, y su tope cuenta intentos de OTRA credencial (el
+     *    código del autenticador).
+     *
+     * Sin parámetros, el comportamiento es exactamente el de antes.
      */
-    public function issue(string $scope, string $purpose, string $identifier): OtpIssueResult
-    {
+    public function issue(
+        string $scope,
+        string $purpose,
+        string $identifier,
+        ?string $plainCode = null,
+        ?int $ttlSeconds = null,
+        ?int $maxAttempts = null,
+    ): OtpIssueResult {
         $length = $this->configInt('mk_director.auth.otp.length', 6);
-        $ttlSeconds = $this->configInt('mk_director.auth.otp.ttl_seconds', 600);
-        $maxAttempts = $this->configInt('mk_director.auth.otp.max_attempts', 5);
+        $ttlSeconds ??= $this->configInt('mk_director.auth.otp.ttl_seconds', 600);
+        $maxAttempts ??= $this->configInt('mk_director.auth.otp.max_attempts', 5);
 
-        $plainCode = $this->generatePin($length);
+        $plainCode ??= $this->generatePin($length);
         $expiresAt = now()->addSeconds($ttlSeconds);
 
         DB::table($this->table)->updateOrInsert(
@@ -83,8 +103,46 @@ class EmailOtpService
      *   6. Match → marks `consumed_at` only if still unconsumed; Confirmed only
      *      if THIS call updated the row, else NotFound (single-use under
      *      concurrency: of two parallel correct submissions, one wins).
+     *
+     * Los pasos 1..5 son {@see reserveAttempt()} y el 6 es {@see consume()};
+     * este método es la composición de los dos, que es lo que necesita un PIN
+     * de email (el PIN *es* la prueba, así que validarlo y gastarlo es un solo
+     * acto). El flujo de dos factores los llama por separado — ver el docblock
+     * de `reserveAttempt()`.
      */
     public function verify(string $scope, string $purpose, string $identifier, string $code): OtpVerifyResult
+    {
+        $verdict = $this->reserveAttempt($scope, $purpose, $identifier, $code);
+
+        if ($verdict !== OtpVerifyResult::Confirmed) {
+            return $verdict;
+        }
+
+        return $this->consume($scope, $purpose, $identifier, $code)
+            ? OtpVerifyResult::Confirmed
+            : OtpVerifyResult::NotFound;
+    }
+
+    /**
+     * Los pasos 1..5 de {@see verify()} SIN consumir la fila: clasifica,
+     * reserva un intento y compara el hash.
+     *
+     * 🔴 POR QUÉ ESTÁ PARTIDO EN DOS.
+     *
+     * `verify()` acopla «la credencial coincide» con «la credencial se gastó», y
+     * eso es exactamente lo que necesita un PIN de email: el PIN *es* la prueba.
+     * El desafío de dos factores no: la credencial que se valida acá es el
+     * TICKET del login, y la prueba real es el código del autenticador, que se
+     * mira después. Si el ticket se consumiera en la primera llamada, un dígito
+     * mal tipeado mandaría al usuario a loguearse de nuevo — y el tope de
+     * intentos no contaría nada, porque cada intento arrancaría con un ticket
+     * nuevo.
+     *
+     * El intento se reserva ACÁ igual (el WHERE atómico de `verify()`), así que
+     * el tope cuenta los intentos del código del autenticador, que es lo que
+     * hay que limitar.
+     */
+    public function reserveAttempt(string $scope, string $purpose, string $identifier, string $code): OtpVerifyResult
     {
         $row = DB::table($this->table)
             ->where('auth_scope', $scope)
@@ -127,12 +185,41 @@ class EmailOtpService
             return OtpVerifyResult::Invalid;
         }
 
-        $consumed = DB::table($this->table)
+        return OtpVerifyResult::Confirmed;
+    }
+
+    /**
+     * Gasta la credencial: marca `consumed_at` en la fila viva de la tupla.
+     * `false` si no hay fila viva, si el código no es el de esa fila, o si otra
+     * request ganó la carrera.
+     *
+     * El uso único se decide con el `WHERE consumed_at IS NULL` y la cuenta de
+     * filas afectadas, no con la lectura previa: entre el SELECT y el UPDATE
+     * corre cualquier submission paralela.
+     *
+     * 🔴 Pide el código y lo vuelve a comparar. Sin eso hay una ventana real:
+     * `issue()` reemplaza la fila de la tupla y le pone un `id` NUEVO, así que
+     * un consume que busque «la fila viva de la tupla» a secas puede quemar una
+     * credencial recién emitida en vez de la que se validó.
+     */
+    public function consume(string $scope, string $purpose, string $identifier, string $code): bool
+    {
+        $row = DB::table($this->table)
+            ->where('auth_scope', $scope)
+            ->where('purpose', $purpose)
+            ->where('identifier', $identifier)
+            ->whereNull('consumed_at')
+            ->orderByDesc('created_at')
+            ->first();
+
+        if (! $row || ! Hash::check($code, (string) $row->code_hash)) {
+            return false;
+        }
+
+        return DB::table($this->table)
             ->where('id', $row->id)
             ->whereNull('consumed_at')
-            ->update(['consumed_at' => now()]);
-
-        return $consumed === 1 ? OtpVerifyResult::Confirmed : OtpVerifyResult::NotFound;
+            ->update(['consumed_at' => now()]) === 1;
     }
 
     /**

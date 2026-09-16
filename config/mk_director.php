@@ -375,6 +375,49 @@ return [
             // (endpoint público) → protege sin filtrar qué cuentas existen.
             'password_reset_code_request' => env('MK_AUTH_RATE_LIMIT_PWD_RESET_CODE_REQ', '3,10'),
             'password_reset_code_confirm' => env('MK_AUTH_RATE_LIMIT_PWD_RESET_CODE_CONFIRM', '5,10'),
+
+            // Verificación en dos pasos (§ 3.20). Las dos primeras son PÚBLICAS
+            // (llevan la credencial que emitió el login, no un token), así que
+            // el corte es por IP; `two_factor_manage` cubre los cuatro endpoints
+            // autenticados, que adivinan códigos de seis dígitos.
+            //
+            // Cada ruta generada usa un prefijo propio (`{scope}-2fa-*`): sin
+            // él, quemar el desafío le come los intentos al login.
+            'two_factor_challenge' => env('MK_AUTH_RATE_LIMIT_2FA_CHALLENGE', '10,10'),
+            'two_factor_setup' => env('MK_AUTH_RATE_LIMIT_2FA_SETUP', '10,10'),
+            'two_factor_manage' => env('MK_AUTH_RATE_LIMIT_2FA_MANAGE', '10,10'),
+        ],
+
+        // Verificación en dos pasos por TOTP (DEVELOPER_GUIDE § 3.20).
+        //
+        // 🔴 LA POLÍTICA NO ESTÁ ACÁ. Qué exige cada scope (`off` | `optional` |
+        // `required`) lo dice su propio controller
+        // (`BaseAuthController::twoFactorPolicy()`), igual que `loginField()`:
+        // un mapa global obligaría al paquete a conocer los nombres de los
+        // scopes del consumer, y dejaría el comportamiento del login en un
+        // archivo que ningún test del scope lee.
+        //
+        // Acá va SÓLO lo que es global de verdad. Los parámetros del algoritmo
+        // (SHA1, 6 dígitos, paso de 30 s, ventana de ±1) son constantes de
+        // `TotpService`: un valor distinto no se ve como una opción mal puesta,
+        // se ve como «el código no es válido».
+        'two_factor' => [
+            // Nombre con el que la cuenta aparece en la app del usuario. Vacío =
+            // `config('app.name')`.
+            'issuer' => env('MK_AUTH_2FA_ISSUER'),
+
+            // Vida del DESAFÍO que devuelve el login: el rato que tarda alguien
+            // en abrir su autenticador y tipear seis dígitos.
+            'challenge_ttl_seconds' => (int) env('MK_AUTH_2FA_CHALLENGE_TTL_SECONDS', 300),
+
+            // Vida de la credencial de ENROLAMIENTO (política `required`, usuario
+            // sin segundo factor): más larga, porque incluye instalar la app.
+            'setup_ttl_seconds' => (int) env('MK_AUTH_2FA_SETUP_TTL_SECONDS', 900),
+
+            // Intentos por credencial antes de bloquearla (423). Cuenta los
+            // intentos del CÓDIGO, no del desafío: el desafío sobrevive a un
+            // dígito mal tipeado.
+            'max_attempts' => (int) env('MK_AUTH_2FA_MAX_ATTEMPTS', 5),
         ],
 
         // 2026-07-15-profile-edit-password-otp (ADR-2 + ADR-3): config

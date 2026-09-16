@@ -12,6 +12,101 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Verificación en dos pasos (TOTP), opt-in por scope
+
+El piloto NetPizza la necesita para su consola de plataforma (scope `operator`),
+donde es obligatoria. Lo que necesita cualquier backoffice va en el paquete.
+
+**Apagada por defecto**: un scope ya generado no cambia en NADA hasta que su
+controller declare otra política — ni siquiera si su tabla ya tuviera las
+columnas cargadas. Detalle completo en `DEVELOPER_GUIDE.md` § 3.20.
+
+### Added
+
+- **`TotpService`** (RFC 6238, HMAC-SHA1, 6 dígitos, paso de 30 s, ventana de ±1,
+  secreto de 20 bytes en base32) **sin agregar una sola dependencia**: `hash_hmac`
+  y `pack()` vienen con PHP. Verificado contra los vectores del apéndice B de la
+  RFC, no contra sí mismo. Anti-replay por `two_factor_last_step`: un paso ya
+  aceptado no vuelve a entrar.
+- **`TwoFactorPolicy`** (`Off` | `Optional` | `Required`, enteros desde 1). Se
+  declara sobreescribiendo `BaseAuthController::twoFactorPolicy()` en el
+  controller del scope, como `loginField()` — no hay mapa global de config.
+- **Seis endpoints** en `BaseAuthController`, que hereda todo scope:
+  `two-factor/challenge` y `two-factor/setup/confirm` (públicos, con la credencial
+  que emitió el login) y `two-factor/enable`, `two-factor/confirm`,
+  `two-factor/recovery-codes` y `two-factor/disable` (bajo `mk.auth:{scope}`).
+- **`GET auth/me`** suma `two_factor_enabled` y `two_factor_confirmed_at`. El
+  secreto y los códigos de recuperación no salen por ningún endpoint: las cuatro
+  columnas están en `$hidden` del modelo base.
+- **`mk:make:auth-user --two-factor[=optional|required]`**: emite las 4 columnas,
+  sus casts **en el modelo del scope** (que sobreescribe `$casts` entero), las 6
+  rutas con su throttle de prefijo propio (`{scope}-2fa-*`) y el override de la
+  política. Un valor mal escrito FALLA — caer en `off` dejaría un scope que pidió
+  2FA obligatorio logueando sin segundo factor y sin un solo error.
+- **`php artisan mk:auth:two-factor-reset {scope} {login}`**: la única salida de
+  un usuario que perdió el teléfono en un scope `required`. Limpia las cuatro
+  columnas y cierra todas sus sesiones. Idempotente, con confirmación (`--force`
+  para scripts).
+- **Cinco eventos `AuthEvent`**: `auth.two_factor.enabled`, `.disabled`,
+  `.challenge_failed`, `.recovery_code_used` (con `remaining`) y `.reset`.
+- Config nueva bajo `mk_director.auth`: `two_factor.{issuer, challenge_ttl_seconds,
+  setup_ttl_seconds, max_attempts}` y `rate_limits.{two_factor_challenge,
+  two_factor_setup, two_factor_manage}`. **Sólo lo global**: la política es del
+  scope y los parámetros del algoritmo son constantes.
+
+### Security
+
+- 🔴 **El desafío NO es un token.** Cualquier token con `auth_scope:{scope}` es una
+  sesión completa (§ 3.8.2), así que el segundo paso no podía resolverse
+  emitiendo «un token limitado». Las dos credenciales viven en la tabla
+  `verification_codes` (§ 3.18.3) con `purpose` `login_2fa` / `login_2fa_setup`:
+  `mk.auth` las rechaza como Bearer y `/auth/refresh` no las acepta.
+- 🔴 **El desafío sobrevive a un código equivocado, pero cada intento se cuenta.**
+  Consumirlo en el primer error mandaría a loguearse de nuevo por un dígito mal
+  tipeado, y el tope de intentos no limitaría nada porque cada intento arrancaría
+  con un desafío nuevo. Al tope, `423` y a empezar de vuelta.
+- 🔴 **Enrolar, confirmar y apagar cierran las otras sesiones del usuario.**
+- 🔴 **`disable` responde 403 con la política `required`**, y **`enable` responde
+  403 con la política `off`**: prender un segundo factor que el login va a ignorar
+  es peor que no poder prenderlo — el usuario cree que su cuenta está protegida.
+- El estado de la cuenta se re-mira en el segundo paso: bloquear a alguien entre
+  el login y el desafío corta el segundo paso.
+- Los códigos de recuperación se guardan hasheados (SHA-256 — son 40 bits al azar,
+  no una contraseña elegida por una persona) y se gastan de a uno, sacándolos de
+  la lista antes de emitir la sesión.
+
+### Changed
+
+- `EmailOtpService::verify()` es ahora la composición de dos métodos públicos:
+  `reserveAttempt()` (clasifica, reserva el intento de forma atómica y compara el
+  hash) y `consume()` (lo gasta). **Mismo comportamiento y misma firma para todo
+  lo que ya existía**; el flujo de dos factores los llama por separado porque ahí
+  la credencial que se valida es el TICKET y la prueba real es el código del
+  autenticador. `consume()` recibe el código y lo vuelve a comparar: `issue()`
+  reemplaza la fila de la tupla con un `id` NUEVO, así que un consume que buscara
+  «la fila viva de la tupla» a secas podía quemar una credencial recién emitida.
+- `EmailOtpService::issue()` acepta tres parámetros opcionales (`plainCode`,
+  `ttlSeconds`, `maxAttempts`). Sin ellos el comportamiento es idéntico al de
+  antes.
+- `BaseAuthController::login()` delega el armado del sobre en un
+  `issueSessionResponse()` nuevo, y entre «las credenciales son buenas» y «se
+  emiten tokens» hay ahora un seam (`twoFactorGate()`). Con la política `off`
+  devuelve `null` y el login sigue exactamente igual.
+- `AuthUser` suma `hasConfirmedTwoFactor()`, `forgetTwoFactor()` y la constante
+  `TWO_FACTOR_COLUMNS`, y las cuatro columnas a `$hidden` (ocultar una columna que
+  no existe es un no-op).
+
+### Changed — impacto en consumers
+
+- **Ninguno mientras la política sea `off`**, que es el default de todo scope ya
+  generado: mismo login, mismos tokens, mismo sobre. `/me` suma dos claves
+  (`two_factor_enabled: false`, `two_factor_confirmed_at: null`), que es aditivo.
+- Los scopes **ya generados** no reciben nada automáticamente: el paquete no
+  reescribe código emitido. La receta de los cuatro pasos —migración, casts,
+  política y rutas— está en `DEVELOPER_GUIDE.md` § 3.20.7. ⚠️ Van **juntos**:
+  emitir la política sin las rutas deja el scope con un desafío que no tiene dónde
+  contestarse, y con `required` la cuenta queda inaccesible.
+
 ## [UNRELEASED] — 🔴 Seguridad: nadie se da permisos a sí mismo por el CRUD de usuarios
 
 El piloto NetPizza lo midió por la cadena HTTP real: un encargado cuya única

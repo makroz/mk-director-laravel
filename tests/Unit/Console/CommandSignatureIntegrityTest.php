@@ -41,6 +41,9 @@ function mkExpectedCommandArguments(): array
 {
     return [
         'mk:auth:create-super-admin' => [],
+        // Le saca el segundo factor a un usuario que perdió su dispositivo.
+        // Los dos argumentos son el scope y el valor de su campo de login.
+        'mk:auth:two-factor-reset' => ['scope', 'login'],
         'mk:discover-abilities' => [],
         'mk:dto' => ['name'],
         'mk:fix:sanctum-uuids' => [],

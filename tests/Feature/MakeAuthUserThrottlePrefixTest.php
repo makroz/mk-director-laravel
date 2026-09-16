@@ -209,6 +209,10 @@ test('toda ruta pública generada lleva throttle con prefijo {scope}- único', f
     'manager sin RBAC, con register y verify' => [['scope' => 'Operator', '--no-crud' => true, '--no-rbac' => true, '--with-register' => true, '--verify-email' => true], 'operator'],
     'manager default (CRUD + RBAC)' => [['scope' => 'Operator', '--verify-email' => true], 'operator'],
     'consumer sin RBAC' => [['scope' => 'Mesero', '--kind' => 'consumer', '--managed-by' => 'Admin', '--no-rbac' => true, '--verify-email' => true], 'mesero'],
+    // Las dos rutas públicas del segundo factor llevan la credencial que emitió
+    // el login, no un token: sin prefijo propio, quemar el desafío le come los
+    // intentos al login.
+    'con segundo factor obligatorio' => [['scope' => 'Operator', '--two-factor' => 'required', '--verify-email' => true], 'operator'],
 ]);
 
 test('refresh: throttle leído de rate_limits.refresh (default 20,1) y la clave existe en la config', function () {

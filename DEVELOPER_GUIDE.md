@@ -2620,6 +2620,302 @@ texto y no afecta el runtime.
   nunca genera. `MakeAuthUserGeneratedCodeHygieneTest` además falla si un archivo
   generado importa una clase del propio módulo que no se generó.
 
+
+### 3.20 Verificación en dos pasos por TOTP (`--two-factor[=optional|required]`)
+
+> Segundo factor por app de autenticación (Google Authenticator, Authy,
+> 1Password, Aegis…), **opt-in por scope** y **apagado por defecto**. Un scope
+> ya generado no cambia en nada hasta que su controller declare otra política.
+> Nace del piloto NetPizza: su consola de plataforma (scope `operator`) la
+> exige, y lo que necesita cualquier backoffice va en el paquete.
+
+#### 3.20.1 La política es del SCOPE, no de un mapa de config
+
+`Mk\Director\Auth\Enums\TwoFactorPolicy` tiene tres casos (enteros desde 1, como
+el resto de los enums del paquete) y se declara sobreescribiendo **un método del
+controller del scope**, igual que `loginField()`:
+
+```php
+use Mk\Director\Auth\Enums\TwoFactorPolicy;
+
+protected function twoFactorPolicy(): TwoFactorPolicy
+{
+    return TwoFactorPolicy::Required;
+}
+```
+
+Un mapa global (`mk_director.auth.two_factor.scopes.operator`) obligaría al
+paquete a conocer los nombres de los scopes del consumer y dejaría el
+comportamiento del login en un archivo que ningún test del scope lee.
+
+La decisión del login son dos preguntas, y **nunca son las dos «sí»**:
+
+| política | ¿usuario enrolado? | qué devuelve `POST auth/login` |
+|---|---|---|
+| `off` (default) | no importa | **los dos tokens de siempre** |
+| `optional` | no | los dos tokens de siempre |
+| `optional` | sí | un **desafío**, sin ningún token |
+| `required` | no | una credencial de **enrolamiento**, sin ningún token |
+| `required` | sí | un **desafío**, sin ningún token |
+
+🔴 **`off` no mira si el usuario está enrolado.** Un scope que no pidió segundo
+factor loguea exactamente como antes aunque su tabla tenga las cuatro columnas
+cargadas y confirmadas — pasa cuando se apaga la política sin borrar los datos.
+
+«Enrolado» significa las dos cosas juntas: hay secreto **y** hay
+`two_factor_confirmed_at`. Un secreto sin confirmar es un enrolamiento que el
+usuario abandonó a mitad de camino; si eso trabara el login, quedaría afuera de
+su propia cuenta.
+
+#### 3.20.2 El desafío NO es un token
+
+Las dos credenciales que emite el login —el desafío y la de enrolamiento— viven
+en la tabla genérica `verification_codes` (§ 3.18.3) con `purpose` `login_2fa` y
+`login_2fa_setup`, su vencimiento y su tope de intentos. **No son tokens
+Sanctum**: no llevan `auth_scope:{scope}`, así que `mk.auth` no las mira, y no
+llevan la ability `refresh`, así que `/auth/refresh` tampoco. Cualquier token con
+`auth_scope:{scope}` ES una sesión completa (§ 3.8.2) — por eso el segundo paso
+no podía resolverse emitiendo «un token limitado».
+
+Viajan como `{id del usuario}.{secreto}`: el cliente no está autenticado, así que
+sin el identificador no hay forma de saber de qué fila se habla. El id es el
+mismo que devuelve el login exitoso en su sobre.
+
+```jsonc
+// POST /api/operator/auth/login  → 200, y NINGÚN token
+{
+  "success": true,
+  "message": "Ingresá el código de tu app de autenticación.",
+  "data": { "two_factor": "challenge", "challenge": "9f2c…:a1b2…", "expires_in": 300 },
+  "__extraData": { "code": "TWO_FACTOR_REQUIRED" }
+}
+```
+
+🔴 **El desafío sobrevive a un código equivocado, pero cada intento se cuenta.**
+Si se consumiera en el primer error, un dígito mal tipeado mandaría a loguearse
+de nuevo — y el tope de intentos no limitaría nada, porque cada intento
+arrancaría con un desafío nuevo. Al llegar al tope (`max_attempts`, 5) el desafío
+queda bloqueado con `423` y hay que volver a empezar.
+
+#### 3.20.3 Los seis endpoints
+
+Públicos (llevan la credencial del login; cada uno con su prefijo de throttle):
+
+| Endpoint | Body | Éxito |
+|---|---|---|
+| `POST two-factor/challenge` | `{challenge, code}` o `{challenge, recovery_code}` | **Exactamente** el sobre del login: `access_token`, `refresh_token`, `token_type`, `expires_in`, `{scope}` |
+| `POST two-factor/setup/confirm` | `{setup, code}` | El sobre del login **+ `recovery_codes`** |
+
+Autenticados, bajo `mk.auth:{scope}`:
+
+| Endpoint | Body | Éxito |
+|---|---|---|
+| `POST two-factor/enable` | `{current_password}` si la política es `optional` | `{secret, otpauth_uri}` |
+| `POST two-factor/confirm` | `{code}` | `{recovery_codes}` |
+| `POST two-factor/recovery-codes` | `{code}` | `{recovery_codes}` (tanda nueva) |
+| `POST two-factor/disable` | `{current_password, code}` | `true` · **403** si la política es `required` |
+
+`recovery_codes` es siempre un `string[]` de ocho: la deduplicación no puede
+usar el código como clave de un array porque PHP convierte a entero toda clave
+que sea un string numérico, y un código de 10 caracteres hexa sale todo en
+dígitos ~1 vez de cada 100 (lo encontró un rojo intermitente del test).
+
+Y `GET auth/me` suma dos claves: `two_factor_enabled` (bool) y
+`two_factor_confirmed_at` (ISO-8601 o `null`). **El secreto y los códigos de
+recuperación nunca salen** por ningún endpoint: las cuatro columnas están en
+`$hidden` del modelo base.
+
+**Enrolar, confirmar y apagar cierran las OTRAS sesiones del usuario** (la que
+hizo el cambio sigue viva). Si alguien más estaba adentro con esa cuenta, prender
+el segundo factor no puede dejarlo adentro.
+
+La contraseña actual se pide para `enable` **sólo con `optional`**: ahí el usuario
+ya tiene sesión, y sin esa prueba un token robado enrolaría el dispositivo del
+atacante. Con `required` el enrolamiento sale del login mismo, sin sesión, y la
+prueba de identidad fue la contraseña que el usuario acaba de tipear.
+
+#### 3.20.4 Códigos de error
+
+| Código | HTTP | Cuándo |
+|---|---|---|
+| `TWO_FACTOR_REQUIRED` | 200 | El login pide el segundo factor. **No es un error**: viaja en `__extraData.code` de un 200 para que el front ramifique por donde ya ramifica |
+| `TWO_FACTOR_SETUP_REQUIRED` | 200 | El login exige enrolarse primero |
+| `ERR_VALIDATION` | 422 | Código equivocado, desafío inventado, vencido o ya usado, usuario inexistente o bloqueado — **todo colapsa al mismo mensaje** (anti-oracle, igual que § 3.18) |
+| `ERR_CODE_EXPIRED` | 410 | El desafío venció. Volver a loguearse |
+| `ERR_CODE_LOCKED` | 423 | Se agotaron los intentos del desafío. Volver a loguearse |
+| `ERR_2FA_ALREADY_ENABLED` | 422 | `enable`/`confirm` con el segundo factor ya activo |
+| `ERR_2FA_NOT_ENABLED` | 422 | `confirm` sin enrolamiento en curso, o `recovery-codes`/`disable` sin segundo factor activo |
+| `ERR_2FA_REQUIRED_BY_SCOPE` | 403 | `disable` con la política `required` |
+| `ERR_2FA_DISABLED_BY_SCOPE` | 403 | `enable` con la política `off`. Prender algo que el login va a ignorar es peor que no poder prenderlo: el usuario cree que su cuenta está protegida |
+
+#### 3.20.5 La aritmética: `TotpService`, sin dependencias nuevas
+
+`Mk\Director\Auth\Services\TotpService` implementa RFC 6238 con `hash_hmac` y
+`pack()`, que vienen con PHP: HMAC-SHA1, 6 dígitos, paso de 30 s, ventana de ±1
+paso, secreto de 20 bytes en base32. Se verifica contra los **vectores del
+apéndice B de la RFC** (`TotpServiceTest`) y no contra sí mismo: un test que
+genera el código y después lo valida pasa en verde con el contador armado mal,
+porque las dos mitades se equivocan igual.
+
+Los parámetros son **constantes, no configuración**: son los que generan todas
+las apps por defecto, y un valor distinto no se ve como una opción mal puesta,
+se ve como «el código no es válido».
+
+🔴 **Anti-replay.** El servicio no guarda estado: `verify()` recibe el último
+paso aceptado (`two_factor_last_step`) y rechaza cualquier paso **menor o igual**.
+Sin eso, un código interceptado sirve los segundos que le quedan de vida —hasta
+90 con la ventana—, que es justo lo que necesita quien lo leyó de un log o de un
+hombro. El sellado del paso va en la misma función que valida el código, no del
+lado del caller: un endpoint nuevo que se olvidara dejaría el mismo código
+sirviendo toda su ventana.
+
+**Códigos de recuperación**: ocho, de 10 caracteres hexa (40 bits), guardados con
+SHA-256 y **no** con bcrypt. No son contraseñas elegidas por una persona: no hay
+diccionario contra el que un hash lento proteja, y con bcrypt cada intento
+costaría hasta ocho comparaciones lentas (hay que probar contra toda la lista) en
+un endpoint público. Lo que corta la fuerza bruta acá es el tope de intentos.
+Cada código se gasta una vez y sale de la lista **antes** de emitir la sesión.
+
+#### 3.20.6 Las cuatro columnas — y por qué los casts van en el modelo del scope
+
+| Columna | Tipo | Cast |
+|---|---|---|
+| `two_factor_secret` | `text` nullable | `encrypted` |
+| `two_factor_recovery_codes` | `text` nullable | `array` (lista de hashes) |
+| `two_factor_confirmed_at` | `timestamp` nullable | `datetime` |
+| `two_factor_last_step` | `unsignedBigInteger` nullable | `integer` |
+
+🔴 **Los casts tienen que estar en el modelo GENERADO, no sólo en `AuthUser`.**
+El modelo del scope sobreescribe `$casts` **entero**: lo que no esté ahí no se
+castea. Sin `encrypted` el secreto queda en claro en la base; sin `array` los
+códigos de recuperación salen como el string JSON y ninguno matchea. Es la misma
+trampa que ya mordió con `status`.
+
+Las cuatro están en `$hidden` del modelo base, incluidas `two_factor_last_step` y
+`two_factor_confirmed_at`, que no son credenciales: `toArray()` sale en el `data`
+de `/me` y de cada CRUD de usuarios, y ahí no significan nada — `/me` expone
+`two_factor_enabled` y `two_factor_confirmed_at` explícitamente, con el nombre
+que consume el front. Ocultar una columna que no existe es un no-op.
+
+#### 3.20.7 Receta para un scope YA generado (el `operator` de NetPizza)
+
+El paquete **no reescribe código emitido**. Para sumarle el segundo factor a un
+scope que ya existe, cuatro pasos:
+
+**1. La migración** (el paquete no puede emitirla: no conoce la tabla del scope):
+
+```php
+// database/migrations/2026_09_15_000001_add_two_factor_to_operators_table.php
+Schema::table('operators', function (Blueprint $table): void {
+    $table->text('two_factor_secret')->nullable();
+    $table->text('two_factor_recovery_codes')->nullable();
+    $table->timestamp('two_factor_confirmed_at')->nullable();
+    $table->unsignedBigInteger('two_factor_last_step')->nullable();
+});
+```
+
+**2. Los casts, en el modelo del scope** (`app/Modules/Operator/Models/Operator.php`):
+
+```php
+protected $casts = [
+    // …lo que ya tenía…
+    'two_factor_secret' => 'encrypted',
+    'two_factor_recovery_codes' => 'array',
+    'two_factor_confirmed_at' => 'datetime',
+    'two_factor_last_step' => 'integer',
+];
+```
+
+**3. La política, en el `AuthController` del scope** (§ 3.20.1).
+
+**4. Las seis rutas**, en `Http/Routes/api.php`. Las dos públicas van fuera del
+grupo `mk.auth`, con su throttle de prefijo propio; las cuatro autenticadas van
+adentro:
+
+```php
+Route::post('two-factor/challenge', [AuthController::class, 'confirmTwoFactorChallenge'])
+    ->middleware('throttle:'.config('mk_director.auth.rate_limits.two_factor_challenge', '10,10').',operator-2fa-challenge');
+Route::post('two-factor/setup/confirm', [AuthController::class, 'confirmTwoFactorSetup'])
+    ->middleware('throttle:'.config('mk_director.auth.rate_limits.two_factor_setup', '10,10').',operator-2fa-setup');
+
+// dentro de Route::middleware('mk.auth:operator')->group(...):
+Route::post('two-factor/enable', [AuthController::class, 'enableTwoFactor'])
+    ->middleware('throttle:'.config('mk_director.auth.rate_limits.two_factor_manage', '10,10').',operator-2fa-enable');
+Route::post('two-factor/confirm', [AuthController::class, 'confirmTwoFactor'])
+    ->middleware('throttle:'.config('mk_director.auth.rate_limits.two_factor_manage', '10,10').',operator-2fa-confirm');
+Route::post('two-factor/recovery-codes', [AuthController::class, 'regenerateTwoFactorRecoveryCodes'])
+    ->middleware('throttle:'.config('mk_director.auth.rate_limits.two_factor_manage', '10,10').',operator-2fa-codes');
+Route::post('two-factor/disable', [AuthController::class, 'disableTwoFactor'])
+    ->middleware('throttle:'.config('mk_director.auth.rate_limits.two_factor_manage', '10,10').',operator-2fa-disable');
+```
+
+⚠️ **Emitir la política sin las rutas deja el scope inaccesible**: el login
+devuelve un desafío y no hay dónde contestarlo. Con `required` la cuenta queda
+afuera del todo. Los cuatro pasos van juntos.
+
+🔴 **Cada ruta pública lleva su propio prefijo de throttle.**
+`ThrottleRequests` arma la clave como `$prefix.sha1(dominio|ip)` — la ruta no
+entra. Sin prefijo, quemar el desafío le come los intentos al login (§ 3.19.2).
+
+#### 3.20.8 Dispositivo perdido: `mk:auth:two-factor-reset`
+
+Con `required`, un usuario que perdió el teléfono **y** se quedó sin códigos de
+recuperación no tiene salida por la API: el login le devuelve un desafío que no
+puede contestar, y `disable` responde 403. La salida es un comando:
+
+```bash
+php artisan mk:auth:two-factor-reset operator ops@netpizza.test
+# --force          → no preguntar (scripts, CI)
+# --keep-sessions  → no cerrar las sesiones vivas del usuario
+```
+
+Limpia las cuatro columnas y **cierra todas las sesiones** del usuario: sacarle
+el enrolamiento y dejarle el token vivo no le saca nada — quien tenga el
+dispositivo perdido sigue adentro hasta que expire el access, y su refresh,
+siete días. Es idempotente y despacha `auth.two_factor.reset`.
+
+#### 3.20.9 Eventos
+
+Cinco, con el patrón de § 3.8 (`AuthEvent`): `auth.two_factor.enabled`,
+`auth.two_factor.disabled`, `auth.two_factor.challenge_failed`
+(`via`: `totp` | `recovery_code` | `setup`), `auth.two_factor.recovery_code_used`
+(con `remaining`) y `auth.two_factor.reset`. Existen para que el consumer avise:
+un `recovery_code_used` con `remaining` bajo es el momento de mandar un email, y
+un `challenge_failed` repetido es lo que alimenta una alerta.
+
+⚠️ **Ninguno lleva el secreto ni los códigos de recuperación.** Los códigos en
+claro viajan UNA vez, en el body del response del enrolamiento.
+
+#### 3.20.10 Config (`mk_director.auth.*`) — sólo lo global
+
+| Clave | Default | Env |
+|---|---|---|
+| `two_factor.issuer` | `config('app.name')` | `MK_AUTH_2FA_ISSUER` |
+| `two_factor.challenge_ttl_seconds` | `300` | `MK_AUTH_2FA_CHALLENGE_TTL_SECONDS` |
+| `two_factor.setup_ttl_seconds` | `900` | `MK_AUTH_2FA_SETUP_TTL_SECONDS` |
+| `two_factor.max_attempts` | `5` | `MK_AUTH_2FA_MAX_ATTEMPTS` |
+| `rate_limits.two_factor_challenge` | `'10,10'` | `MK_AUTH_RATE_LIMIT_2FA_CHALLENGE` |
+| `rate_limits.two_factor_setup` | `'10,10'` | `MK_AUTH_RATE_LIMIT_2FA_SETUP` |
+| `rate_limits.two_factor_manage` | `'10,10'` | `MK_AUTH_RATE_LIMIT_2FA_MANAGE` |
+
+La **política no está acá** (§ 3.20.1), y los parámetros del algoritmo tampoco
+(§ 3.20.5).
+
+#### 3.20.11 Qué se mide, y cómo
+
+- `tests/Unit/Auth/TotpServiceTest.php` — los vectores de la RFC, la ventana, el
+  replay, base32 y los códigos de recuperación.
+- `tests/Unit/Auth/TwoFactorPolicyTest.php` — las seis casillas de la tabla de
+  decisión, y que desafío y enrolamiento nunca son los dos a la vez.
+- `tests/Feature/Auth/TwoFactorLoginChainTest.php` — la cadena HTTP real: que el
+  login no emite tokens, que el desafío no sirve de Bearer ni refresca, el tope
+  de intentos, el replay, el uso único, los códigos de recuperación, `required`,
+  el 403 de `disable`, `/me` y la compatibilidad de un scope en `off`.
+- `tests/Feature/Auth/TwoFactorResetCommandTest.php` — el comando, su
+  idempotencia y el cierre de sesiones.
+- `tests/Feature/MakeAuthUserTwoFactorTest.php` — lo que emite el scaffolder, y
+  que **sin el flag no queda una sola huella** del segundo factor.
+
 ---
 
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)

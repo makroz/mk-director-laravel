@@ -36,13 +36,13 @@ Route::prefix('api/{{moduleNameLower}}/auth')->group(function () {
     Route::post('refresh', [AuthController::class, 'refresh']){{refreshThrottle}};
     {{registerRoute}}Route::post('password/forgot', [AuthController::class, 'forgotPassword']){{rbacForgotThrottle}};
     Route::post('password/reset', [AuthController::class, 'resetPassword']){{rbacResetThrottle}};
-{{emailVerifyRoutes}}
+{{twoFactorPublicRoutes}}{{emailVerifyRoutes}}
     // ── Protegidas (auth: scope) — solo self-profile, SIN CRUD/roles/abilities ──
     Route::middleware('mk.auth:{{moduleNameLower}}'){{verifiedMiddleware}}->group(function () {
         Route::post('logout', [AuthController::class, 'logout']);
         Route::post('logout-all', [AuthController::class, 'logoutAll']);
         Route::get('me', [AuthController::class, 'me']);
         Route::post('password/change', [AuthController::class, 'changePassword']);
-        {{updateProfileRoute}}
+{{twoFactorProtectedRoutes}}{{updateProfileRoute}}
     });
 });

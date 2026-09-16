@@ -26,6 +26,24 @@ use Mk\Director\Plugins\Enterprise\MkAuditLoggerPlugin;
  * | `auth.password_reset.success` | `{user_id}`                                                 |
  * | `auth.password_change_code.requested` | `{scope, user_id, code, expires_at, ip}` ⚠️ ver abajo |
  * | `auth.password_changed`       | `{user_id, ip}`                                             |
+ * | `auth.two_factor.enabled`     | `{scope, user_id, ip}`                                      |
+ * | `auth.two_factor.disabled`    | `{scope, user_id, ip}`                                      |
+ * | `auth.two_factor.challenge_failed` | `{scope, user_id, via, ip}` (`via`: `totp`\|`recovery_code`\|`setup`) |
+ * | `auth.two_factor.recovery_code_used` | `{scope, user_id, remaining, ip}`                    |
+ * | `auth.two_factor.reset`       | `{scope, user_id, actor}` (`mk:auth:two-factor-reset`)      |
+ *
+ * ## Verificación en dos pasos (§ 3.20)
+ *
+ * Los cinco eventos de arriba existen para que el consumer avise: un
+ * `auth.two_factor.recovery_code_used` con `remaining` bajo es el momento de
+ * mandar un email («usaste un código de recuperación, te quedan 2»), y un
+ * `auth.two_factor.challenge_failed` repetido es lo que alimenta una alerta.
+ * El paquete no manda nada: despacha y el consumer decide.
+ *
+ * ⚠️ **Ninguno lleva el secreto TOTP ni los códigos de recuperación.** El
+ * secreto vive cifrado en la columna del scope y los códigos sólo hasheados;
+ * los códigos en claro viajan UNA vez, en el body del response del
+ * enrolamiento, y de ahí no los toma ningún evento.
  *
  * ## Privacidad / seguridad
  *

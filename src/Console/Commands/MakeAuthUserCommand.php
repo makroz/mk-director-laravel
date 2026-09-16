@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\HasApiTokens;
 use Mk\Director\Auth\Enums\ScopeStatus;
+use Mk\Director\Auth\Enums\TwoFactorPolicy;
 use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Auth\Services\AuthScopeResolver;
 
@@ -181,6 +182,7 @@ class MakeAuthUserCommand extends Command
         {--managed-by= : (ARCH-01/FEEDBACK6) Genera un recurso admin-scoped para que OTRO scope administre users de ESTE scope. Ej: `mk:make:auth-user Member --managed-by=Admin` expone `/api/admin/members` gateado con mk.auth:admin + mk.ability:admin.members.* (reusa los controllers del scope, registra las rutas managed en el ServiceProvider y genera el seeder de abilities cross-scope para los roles del manager). Requiere CRUD ON. El manager (StudlyCase) debe ser un scope existente. Default BC: sin managed resource.}
         {--kind=manager : (F10-B08) Tipo de scope: `manager` (default, BC) o `consumer`. `manager` es el scope completo de siempre (CRUD propio + Role/AbilityController + rutas propias). `consumer` es un scope administrado: su Http/Routes/api.php queda reducido a solo auth + self-profile (login/refresh/logout/me/PATCH me/forgot/reset) — SIN las rutas CRUD propias, SIN /roles, SIN /abilities — porque es administrado por OTRO scope via --managed-by (el manager expone `/api/<manager>/<consumers>` + gestiona roles/abilities del consumer con SU token). `--kind=consumer` REQUIERE `--managed-by=<Scope>` (falla si se omite) y el manager DEBE scaffoldearse PRIMERO (orden: `mk:make:auth-user Admin` antes de `mk:make:auth-user Member --kind=consumer --managed-by=Admin`).}
         {--plural= : Plural snake_case del scope, usado como nombre de tabla, provider de config/auth.php, migración, rutas CRUD y abilities (ej: `mk:make:auth-user Operador --plural=operadores`). Default: `Str::plural()` del scope en snake_case, que es el inflector INGLÉS (`operador` → `operadors`). Debe matchear ^[a-z][a-z0-9_]*$.}
+        {--two-factor=off : Verificación en dos pasos por TOTP. `--two-factor` (sin valor) u `--two-factor=optional` = el usuario decide; `--two-factor=required` = el scope la exige y un usuario sin enrolar sólo puede enrolarse. Omitido = `off`, o sea el login de siempre. Emite las 4 columnas en la migración, sus casts en el modelo, los 6 endpoints con su throttle y el override `twoFactorPolicy()` en el AuthController. Para un scope YA generado, la receta de la migración está en DEVELOPER_GUIDE § 3.20.}
         {--multi-tenant : (R-PKG-052, FEEDBACK11) Genera el scope con soporte multi-tenant: pine `client_id` en \$fillable del modelo + columna `client_id` en la migration. Default: single-tenant (RETO es single-tenant — pinear `client_id` por default provocaba `column not found: client_id` en INSERT). Opt-in explícito: pinearlo solo si el consumer tiene tenant isolation (ver docs/guides/MULTI_TENANT.md).}
 
         **BC BREAK (R-PKG-047 D2)**: Flags eliminados — `--with-crud`, `--with-auth-rbac`, `--with-status`, `--status-values`. Estos son ahora defaults ON. Para opt-out, usar `--no-crud`, `--no-rbac`, `--no-status`. Consumers que pinean los flags viejos en scripts CI/tutores deben actualizar a los `--no-*` correspondientes. La simplificación pinea el principio R-G-033 "maximo default + minimo custom" (Mario feedback 2026-07-09 22:12).';
@@ -237,6 +239,15 @@ class MakeAuthUserCommand extends Command
         // not found: client_id` en el primer INSERT). Pinear este flag solo
         // si el consumer tiene tenant isolation.
         $multiTenant = (bool) $this->option('multi-tenant');
+
+        // Verificación en dos pasos (§ 3.20). Falla ANTES de tocar el
+        // filesystem: un valor mal escrito que cayera en `off` dejaría un scope
+        // que pidió 2FA obligatorio logueando sin segundo factor, y sin un solo
+        // error que lo dijera.
+        $twoFactorPolicy = $this->resolveTwoFactorPolicy($this->option('two-factor'));
+        if ($twoFactorPolicy === null) {
+            return self::FAILURE;
+        }
 
         // R-PKG-047 D2 — resolve profile fields con merge + defaults.
         // Pre-D2: $profileFieldsRaw = lo que pasó el dev (puede ser []).
@@ -921,11 +932,14 @@ PHP,
             '{{clientIdColumn}}' => $this->buildClientIdColumn($multiTenant),
         ];
 
+        $twoFactorReplacements = $this->buildTwoFactorReplacements($twoFactorPolicy, $scopeLower);
+
         $extraReplacements = array_merge(
             $loginFieldReplacements,
             $rbacReplacements,
             $profileFieldsReplacements,
             $verifyEmailReplacements,
+            $twoFactorReplacements,
             $factoryReplacements,
             $statusReplacements,
             $managedByReplacements,
@@ -4936,6 +4950,131 @@ PHP;
 PHP;
 
         return $code;
+    }
+
+    /**
+     * Traduce `--two-factor` a la política del scope, o `null` si el valor no
+     * existe (el error ya quedó impreso).
+     *
+     * Las tres formas que acepta el flag, y por qué `off` es el DEFAULT de la
+     * signature y no la ausencia del flag: con `VALUE_OPTIONAL`, Symfony no
+     * distingue «el flag no vino» de «vino sin valor» si el default es null.
+     * Poniendo `off` como default, la ausencia llega como `'off'` y
+     * `--two-factor` pelado llega como `null` — que es «prendelo, y decidí vos
+     * el modo»: `optional`.
+     */
+    protected function resolveTwoFactorPolicy(mixed $raw): ?TwoFactorPolicy
+    {
+        // `--two-factor` sin valor. `true` es lo que arma un `ArrayInput` con
+        // `['--two-factor' => true]` (los tests y los scripts lo escriben así).
+        if ($raw === null || $raw === true || (is_string($raw) && trim($raw) === '')) {
+            return TwoFactorPolicy::Optional;
+        }
+
+        try {
+            return TwoFactorPolicy::fromName((string) $raw);
+        } catch (\ValueError) {
+            $this->error("--two-factor debe ser 'optional' o 'required' (o pasarse sin valor). Recibido: '{$raw}'.");
+
+            return null;
+        }
+    }
+
+    /**
+     * Los cinco placeholders de la verificación en dos pasos.
+     *
+     * Con la política en `off` los cinco son string vacío: el scope generado
+     * queda IDÉNTICO al de antes de que este flag existiera — sin columnas, sin
+     * casts, sin rutas y sin el override. Es la garantía de compatibilidad, y
+     * por eso el método arranca por ahí.
+     *
+     * @return array<string, string>
+     */
+    protected function buildTwoFactorReplacements(TwoFactorPolicy $policy, string $scopeLower): array
+    {
+        if ($policy === TwoFactorPolicy::Off) {
+            return [
+                '{{twoFactorColumns}}' => '',
+                '{{twoFactorCastEntries}}' => '',
+                '{{twoFactorPolicyUse}}' => '',
+                '{{twoFactorPolicyMethod}}' => '',
+                '{{twoFactorPublicRoutes}}' => '',
+                '{{twoFactorProtectedRoutes}}' => '',
+            ];
+        }
+
+        $policyCase = $policy->name;
+
+        return [
+            // Las cuatro columnas del scope. El paquete NO puede migrarlas por
+            // su cuenta: no conoce el nombre de la tabla del scope.
+            //
+            // `implode` y no un heredoc: la última línea tendría que terminar en
+            // la indentación de la línea que sigue, y una línea de source con
+            // espacios al final no sobrevive a ningún formateador.
+            '{{twoFactorColumns}}' => implode("\n            ", [
+                "\$table->text('two_factor_secret')->nullable();",
+                "\$table->text('two_factor_recovery_codes')->nullable();",
+                "\$table->timestamp('two_factor_confirmed_at')->nullable();",
+                "\$table->unsignedBigInteger('two_factor_last_step')->nullable();",
+            ])."\n            ",
+
+            // 🔴 Los casts van en el MODELO DEL SCOPE, no sólo en `AuthUser`: el
+            // modelo generado override `$casts` entero, así que lo que no esté
+            // acá no se castea. Sin el cast `encrypted`, el secreto queda en
+            // claro en la base; sin `array`, los códigos de recuperación salen
+            // como el string JSON y ninguno matchea.
+            '{{twoFactorCastEntries}}' => <<<'PHP'
+        'two_factor_secret' => 'encrypted',
+        'two_factor_recovery_codes' => 'array',
+        'two_factor_confirmed_at' => 'datetime',
+        'two_factor_last_step' => 'integer',
+
+PHP,
+
+            '{{twoFactorPolicyUse}}' => "use Mk\\Director\\Auth\\Enums\\TwoFactorPolicy;\n",
+
+            '{{twoFactorPolicyMethod}}' => <<<PHP
+
+    /**
+     * Qué exige este acceso como segundo factor.
+     *
+     * `Required` significa que un usuario sin enrolar NO recibe sesión en el
+     * login: sólo la credencial de enrolamiento. Bajarlo a `Optional` deja
+     * entrar sin segundo factor a quien no lo prendió.
+     */
+    protected function twoFactorPolicy(): TwoFactorPolicy
+    {
+        return TwoFactorPolicy::{$policyCase};
+    }
+
+PHP,
+
+            // Públicas: llevan la credencial que emitió el login (no un token),
+            // así que cada una tiene su propio prefijo de throttle.
+            '{{twoFactorPublicRoutes}}' => <<<"PHP"
+
+    // ── Verificación en dos pasos, el segundo paso del login ──────────
+    Route::post('two-factor/challenge', [AuthController::class, 'confirmTwoFactorChallenge'])
+        ->middleware('throttle:'.config('mk_director.auth.rate_limits.two_factor_challenge', '10,10').',{$scopeLower}-2fa-challenge');
+    Route::post('two-factor/setup/confirm', [AuthController::class, 'confirmTwoFactorSetup'])
+        ->middleware('throttle:'.config('mk_director.auth.rate_limits.two_factor_setup', '10,10').',{$scopeLower}-2fa-setup');
+PHP,
+
+            '{{twoFactorProtectedRoutes}}' => <<<"PHP"
+        // Verificación en dos pasos: enrolar, confirmar, códigos de recuperación
+        // y apagar (esto último da 403 si la política del scope es `Required`).
+        Route::post('two-factor/enable', [AuthController::class, 'enableTwoFactor'])
+            ->middleware('throttle:'.config('mk_director.auth.rate_limits.two_factor_manage', '10,10').',{$scopeLower}-2fa-enable');
+        Route::post('two-factor/confirm', [AuthController::class, 'confirmTwoFactor'])
+            ->middleware('throttle:'.config('mk_director.auth.rate_limits.two_factor_manage', '10,10').',{$scopeLower}-2fa-confirm');
+        Route::post('two-factor/recovery-codes', [AuthController::class, 'regenerateTwoFactorRecoveryCodes'])
+            ->middleware('throttle:'.config('mk_director.auth.rate_limits.two_factor_manage', '10,10').',{$scopeLower}-2fa-codes');
+        Route::post('two-factor/disable', [AuthController::class, 'disableTwoFactor'])
+            ->middleware('throttle:'.config('mk_director.auth.rate_limits.two_factor_manage', '10,10').',{$scopeLower}-2fa-disable');
+
+PHP,
+        ];
     }
 
     /**

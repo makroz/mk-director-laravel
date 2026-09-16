@@ -84,16 +84,26 @@ test('R-PKG-047 D1: BaseAuthController::login() pinea `abilities` en el response
     $base = (string) file_get_contents($basePath);
     expect($base)->toBeString();
 
-    // F7-B02 + D1: el método `login()` vive en BaseAuthController y pinea
-    // `abilities` en el response. Pinean que el SSoT incluye la ability
-    // mapping.
-    if (! preg_match('/public function login\([^)]*\)[^{]*\{(.*?)\n    \}/s', $base, $matches)) {
+    // F7-B02 + D1: el login de BaseAuthController pinea `abilities` en el
+    // response. Pinean que el SSoT incluye la ability mapping.
+    //
+    // El sobre del login SE ARMA en `issueSessionResponse()` y no dentro de
+    // `login()`: hay DOS caminos que terminan en la misma sesión (el login
+    // directo y el segundo paso de la verificación en dos pasos), y duplicar el
+    // armado dejaría a uno de los dos sin `abilities`. Por eso se mide ahí, más
+    // la delegación — sin ese segundo `expect`, el método podría estar muerto y
+    // el test seguiría en verde.
+    if (! preg_match('/protected function issueSessionResponse\(.*?\n    \}/s', $base, $matches)) {
+        test()->fail('Could not locate issueSessionResponse() in BaseAuthController.');
+    }
+
+    expect($matches[0])->toContain('getEffectiveAbilities');
+
+    if (! preg_match('/public function login\([^)]*\)[^{]*\{(.*?)\n    \}/s', $base, $loginMatches)) {
         test()->fail('Could not locate login() method in BaseAuthController.');
     }
-    $loginBody = $matches[1];
 
-    expect($loginBody)
-        ->toContain('getEffectiveAbilities');
+    expect($loginMatches[1])->toContain('issueSessionResponse');
 })->group('feedback7', 'scaffolder');
 
 test('R-PKG-047 D1: stub AuthController es thin wrapper — NO contiene me() ni login() inline', function () use ($authControllerStubPath) {

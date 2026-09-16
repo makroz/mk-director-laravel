@@ -164,13 +164,49 @@ abstract class AuthUser extends Authenticatable implements AuthenticatableContra
     ];
 
     /**
+     * Las cuatro columnas del segundo factor, en un solo lugar.
+     *
+     * Las emite `mk:make:auth-user --two-factor` en la tabla del scope (el
+     * paquete no puede migrarlas: no conoce el nombre de la tabla). Un scope sin
+     * ellas se comporta como si el 2FA estuviera apagado — `getAttribute()`
+     * devuelve null y {@see hasConfirmedTwoFactor()} da `false`.
+     *
+     * Existe como constante porque la leen tres lugares que tienen que decir lo
+     * mismo: `$hidden`, {@see forgetTwoFactor()} y el comando
+     * `mk:auth:two-factor-reset`. Escrita tres veces, un rename deja una
+     * columna adentro.
+     *
+     * @var array<int, string>
+     */
+    public const TWO_FACTOR_COLUMNS = [
+        'two_factor_secret',
+        'two_factor_recovery_codes',
+        'two_factor_confirmed_at',
+        'two_factor_last_step',
+    ];
+
+    /**
      * Columnas ocultas al serializar.
+     *
+     * 🔴 Las cuatro del segundo factor van acá, no sólo el secreto. El secreto y
+     * los códigos de recuperación son credenciales; `two_factor_last_step` y
+     * `two_factor_confirmed_at` no lo son, pero un `toArray()` del modelo sale
+     * en el `data` de `/me` y de cada CRUD de usuarios, y ahí no significan
+     * nada: `/me` expone `two_factor_enabled` y `two_factor_confirmed_at`
+     * explícitamente, con el nombre que el front consume.
+     *
+     * Ocultar una columna que no existe es un no-op: un scope sin `--two-factor`
+     * no cambia en nada.
      *
      * @var array<int, string>
      */
     protected $hidden = [
         'password',
         'remember_token',
+        'two_factor_secret',
+        'two_factor_recovery_codes',
+        'two_factor_confirmed_at',
+        'two_factor_last_step',
     ];
 
     /**
@@ -216,6 +252,51 @@ abstract class AuthUser extends Authenticatable implements AuthenticatableContra
     {
         $this->setAttribute($this->getAuthPasswordName(), $password);
         $this->save();
+    }
+
+    /**
+     * ¿Este usuario terminó de enrolar su segundo factor?
+     *
+     * Las dos condiciones juntas: hay secreto Y está confirmado. Un secreto sin
+     * confirmar es un enrolamiento que el usuario abandonó a mitad de camino —
+     * si eso trabara el login, quedaría afuera de su propia cuenta.
+     *
+     * Tolera la ausencia de las columnas (scope generado sin `--two-factor`) y
+     * un secreto vacío o en blanco.
+     */
+    public function hasConfirmedTwoFactor(): bool
+    {
+        $secret = $this->getAttribute('two_factor_secret');
+
+        return is_string($secret)
+            && trim($secret) !== ''
+            && $this->getAttribute('two_factor_confirmed_at') !== null;
+    }
+
+    /**
+     * Borra el enrolamiento del segundo factor (dispositivo perdido, o baja
+     * voluntaria). Deja el modelo listo para enrolarse de nuevo.
+     *
+     * Escribe SÓLO las columnas que la tabla tiene: un scope sin `--two-factor`
+     * reventaría con «Unknown column». Se mide con los atributos ya cargados y
+     * no con `Schema::hasColumn()`, que sería una query por columna.
+     */
+    public function forgetTwoFactor(): void
+    {
+        $attributes = $this->getAttributes();
+        $touched = false;
+
+        foreach (self::TWO_FACTOR_COLUMNS as $column) {
+            if (! array_key_exists($column, $attributes)) {
+                continue;
+            }
+            $this->setAttribute($column, null);
+            $touched = true;
+        }
+
+        if ($touched) {
+            $this->save();
+        }
     }
 
     /**

@@ -12,12 +12,14 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\Rule;
 use Mk\Director\Auth\Attributes\Ability;
+use Mk\Director\Auth\Enums\TwoFactorPolicy;
 use Mk\Director\Auth\Events\AuthEvent;
 use Mk\Director\Auth\Services\AccountStatus;
 use Mk\Director\Auth\Services\EmailOtpService;
 use Mk\Director\Auth\Services\InvalidRefreshTokenException;
 use Mk\Director\Auth\Services\OtpVerifyResult;
 use Mk\Director\Auth\Services\TokenIssuer;
+use Mk\Director\Auth\Services\TotpService;
 use Mk\Director\Controllers\BaseController;
 
 /**
@@ -331,6 +333,41 @@ abstract class BaseAuthController extends BaseController
             );
         }
 
+        // 🔴 EL ÚNICO PUNTO entre «las credenciales son buenas» y «se emiten
+        // tokens». Antes no existía: cualquier segunda prueba de identidad había
+        // que cablearla reescribiendo `login()` entero en cada scope, y un scope
+        // que se olvidara de hacerlo no daba ninguna señal.
+        //
+        // Devuelve null cuando el scope no pide segundo factor (la política
+        // default, `off`): el login sigue exactamente como antes.
+        if ($gate = $this->twoFactorGate($request, $user)) {
+            return $gate;
+        }
+
+        return $this->issueSessionResponse($request, $user);
+    }
+
+    /**
+     * Emite la sesión (par de tokens) y arma el sobre del login.
+     *
+     * Vive aparte porque hay DOS caminos que terminan en la misma sesión: el
+     * login directo y el `two-factor/challenge`. Duplicar esto dejaría al
+     * segundo sin `afterLogin()`, sin el evento de auditoría o con otra forma de
+     * respuesta — y un front que funciona sin 2FA y se rompe con 2FA prendido no
+     * apunta a ninguna de las dos.
+     *
+     * @param  array<string, mixed>  $extraPayload  campos extra dentro de `data`
+     * @param  array<string, mixed>  $extraData  campos para `__extraData`
+     */
+    protected function issueSessionResponse(
+        Request $request,
+        Authenticatable $user,
+        string $message = 'Login exitoso',
+        array $extraPayload = [],
+        array $extraData = [],
+    ): JsonResponse {
+        $scope = $this->authScope();
+
         // Eager-load relaciones (R-PKG-014 BUG-06 fix).
         if (method_exists($user, 'loadMissing')) {
             $user->loadMissing(['roles', 'directAbilities']);
@@ -363,13 +400,13 @@ abstract class BaseAuthController extends BaseController
             ? $user->getEffectiveAbilities()
             : [];
 
-        return $this->sendResponse([
+        return $this->sendResponse(array_merge([
             'access_token' => $tokens['access_token'],
             'refresh_token' => $tokens['refresh_token'],
             'token_type' => 'Bearer',
             'expires_in' => $tokens['expires_in'],
             $scope => $userPayload,
-        ], 'Login exitoso');
+        ], $extraPayload), $message, 200, $extraData);
     }
 
     /**
@@ -454,6 +491,14 @@ abstract class BaseAuthController extends BaseController
         $payload['abilities'] = method_exists($user, 'getEffectiveAbilities')
             ? $user->getEffectiveAbilities()
             : [];
+
+        // Estado del segundo factor, con los nombres que consume el front. El
+        // secreto y los códigos de recuperación NUNCA salen: están en `$hidden`
+        // del modelo base, así que `toArray()` ya no los trae, y acá se agregan
+        // sólo estas dos claves. Un scope sin las columnas informa `false`/`null`,
+        // que es la verdad.
+        $payload['two_factor_enabled'] = $this->userHasConfirmedTwoFactor($user);
+        $payload['two_factor_confirmed_at'] = $this->twoFactorConfirmedAtIso($user);
 
         $customized = $this->customizeMePayload($user);
         if (is_array($customized) && $customized !== []) {
@@ -719,11 +764,8 @@ abstract class BaseAuthController extends BaseController
         DB::transaction(function () use ($user, $data, $revokeOthers) {
             $user->setAuthPassword((string) $data['password']);
 
-            if ($revokeOthers && method_exists($user, 'tokens')) {
-                $currentToken = method_exists($user, 'currentAccessToken')
-                    ? $user->currentAccessToken()
-                    : null;
-                $user->tokens()->where('id', '!=', $currentToken?->id)->delete();
+            if ($revokeOthers) {
+                $this->revokeOtherTokens($user);
             }
         });
 
@@ -860,11 +902,8 @@ abstract class BaseAuthController extends BaseController
         DB::transaction(function () use ($user, $data, $revokeOthers) {
             $user->setAuthPassword((string) $data['password']);
 
-            if ($revokeOthers && method_exists($user, 'tokens')) {
-                $currentToken = method_exists($user, 'currentAccessToken')
-                    ? $user->currentAccessToken()
-                    : null;
-                $user->tokens()->where('id', '!=', $currentToken?->id)->delete();
+            if ($revokeOthers) {
+                $this->revokeOtherTokens($user);
             }
         });
 
@@ -1121,8 +1160,765 @@ abstract class BaseAuthController extends BaseController
     }
 
     // ============================================================
+    //  Verificación en dos pasos (TOTP) — DEVELOPER_GUIDE § 3.20
+    // ============================================================
+
+    /**
+     * `purpose` de la credencial que reemplaza a la sesión mientras falta el
+     * segundo factor. El nombre lo reservaba el docblock de `EmailOtpService`
+     * desde que se escribió la tabla.
+     */
+    protected const TWO_FACTOR_CHALLENGE_PURPOSE = 'login_2fa';
+
+    /** `purpose` de la credencial que SÓLO habilita el enrolamiento. */
+    protected const TWO_FACTOR_SETUP_PURPOSE = 'login_2fa_setup';
+
+    /**
+     * Qué exige este scope como segundo factor. Default `off`: todo scope ya
+     * generado sigue logueando igual que antes.
+     *
+     * Se override en el `AuthController` del scope, como `loginField()` — el
+     * scaffolder lo emite con `--two-factor=optional|required`:
+     *
+     *     protected function twoFactorPolicy(): TwoFactorPolicy
+     *     {
+     *         return TwoFactorPolicy::Required;
+     *     }
+     */
+    protected function twoFactorPolicy(): TwoFactorPolicy
+    {
+        return TwoFactorPolicy::default();
+    }
+
+    /**
+     * POST /api/{scope}/auth/two-factor/challenge
+     *
+     * Auth: público, con el DESAFÍO que devolvió el login (no es un token: no
+     * autentica ninguna ruta y no se puede refrescar).
+     * Ability: `mk.ability:{scope}.auth.two-factor-challenge` (per-route).
+     *
+     * Body: `{challenge, code}` o `{challenge, recovery_code}`.
+     * Éxito: EXACTAMENTE el mismo sobre que habría devuelto el login.
+     *
+     * El desafío sobrevive a un código equivocado —si no, un dígito mal tipeado
+     * mandaría a loguearse de nuevo y el tope de intentos no contaría nada— pero
+     * cada intento se reserva de forma atómica, así que a los N intentos el
+     * desafío queda bloqueado (`423`) y hay que volver a empezar.
+     */
+    #[Ability('{scope}.auth.two-factor-challenge', 'Completar el segundo factor del login en {scope}')]
+    public function confirmTwoFactorChallenge(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'challenge' => ['required', 'string'],
+            'code' => ['required_without:recovery_code', 'nullable', 'string'],
+            'recovery_code' => ['required_without:code', 'nullable', 'string'],
+        ]);
+
+        [$user, $secret] = $this->resolveTwoFactorCredential(
+            (string) $data['challenge'],
+            self::TWO_FACTOR_CHALLENGE_PURPOSE,
+        );
+
+        if ($user === null) {
+            return $this->invalidTwoFactorChallenge();
+        }
+
+        $identifier = (string) $user->getAuthIdentifier();
+        $verdict = $this->emailOtpService()->reserveAttempt(
+            $this->authScope(),
+            self::TWO_FACTOR_CHALLENGE_PURPOSE,
+            $identifier,
+            $secret,
+        );
+
+        if ($response = $this->twoFactorVerdictResponse($verdict)) {
+            return $response;
+        }
+
+        $recoveryCode = (string) ($data['recovery_code'] ?? '');
+        $usedRecoveryCode = $recoveryCode !== '';
+
+        $accepted = $usedRecoveryCode
+            ? $this->consumeTwoFactorRecoveryCode($user, $recoveryCode)
+            : $this->acceptTwoFactorCode($user, (string) ($data['code'] ?? ''));
+
+        if (! $accepted) {
+            $this->dispatchAuthEventSafe('auth.two_factor.challenge_failed', [
+                'scope' => $this->authScope(),
+                'user_id' => $identifier,
+                'via' => $usedRecoveryCode ? 'recovery_code' : 'totp',
+                'ip' => $request->ip(),
+            ]);
+
+            return $this->sendError(
+                'Código inválido.',
+                ['code' => ['Código inválido.']],
+                422,
+                'ERR_VALIDATION',
+            );
+        }
+
+        // El desafío se gasta recién acá: una vez que el segundo factor entró.
+        $this->emailOtpService()->consume(
+            $this->authScope(),
+            self::TWO_FACTOR_CHALLENGE_PURPOSE,
+            $identifier,
+            $secret,
+        );
+
+        if ($usedRecoveryCode) {
+            $this->dispatchAuthEventSafe('auth.two_factor.recovery_code_used', [
+                'scope' => $this->authScope(),
+                'user_id' => $identifier,
+                'remaining' => count($this->twoFactorRecoveryHashes($user)),
+                'ip' => $request->ip(),
+            ]);
+        }
+
+        return $this->issueSessionResponse($request, $user);
+    }
+
+    /**
+     * POST /api/{scope}/auth/two-factor/setup/confirm
+     *
+     * Auth: público, con la credencial de ENROLAMIENTO que devolvió el login
+     * cuando la política es `required` y el usuario no tenía segundo factor.
+     * Ability: `mk.ability:{scope}.auth.two-factor-setup-confirm` (per-route).
+     *
+     * Body: `{setup, code}`. Éxito: el sobre del login + `recovery_codes`, que
+     * es la ÚNICA vez que esos códigos existen en claro.
+     */
+    #[Ability('{scope}.auth.two-factor-setup-confirm', 'Confirmar el enrolamiento obligatorio de dos factores en {scope}')]
+    public function confirmTwoFactorSetup(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'setup' => ['required', 'string'],
+            'code' => ['required', 'string'],
+        ]);
+
+        [$user, $secret] = $this->resolveTwoFactorCredential(
+            (string) $data['setup'],
+            self::TWO_FACTOR_SETUP_PURPOSE,
+        );
+
+        if ($user === null) {
+            return $this->invalidTwoFactorChallenge();
+        }
+
+        $identifier = (string) $user->getAuthIdentifier();
+        $verdict = $this->emailOtpService()->reserveAttempt(
+            $this->authScope(),
+            self::TWO_FACTOR_SETUP_PURPOSE,
+            $identifier,
+            $secret,
+        );
+
+        if ($response = $this->twoFactorVerdictResponse($verdict)) {
+            return $response;
+        }
+
+        if (! $this->acceptTwoFactorCode($user, (string) $data['code'])) {
+            $this->dispatchAuthEventSafe('auth.two_factor.challenge_failed', [
+                'scope' => $this->authScope(),
+                'user_id' => $identifier,
+                'via' => 'setup',
+                'ip' => $request->ip(),
+            ]);
+
+            return $this->sendError('Código inválido.', ['code' => ['Código inválido.']], 422, 'ERR_VALIDATION');
+        }
+
+        $recoveryCodes = $this->completeTwoFactorEnrollment($request, $user);
+
+        $this->emailOtpService()->consume(
+            $this->authScope(),
+            self::TWO_FACTOR_SETUP_PURPOSE,
+            $identifier,
+            $secret,
+        );
+
+        return $this->issueSessionResponse(
+            $request,
+            $user,
+            'Verificación en dos pasos activada.',
+            ['recovery_codes' => $recoveryCodes],
+        );
+    }
+
+    /**
+     * POST /api/{scope}/auth/two-factor/enable
+     *
+     * Auth: `mk.auth:{scope}` (per-route).
+     * Ability: `mk.ability:{scope}.auth.two-factor-enable` (per-route).
+     *
+     * Body: `{current_password}` cuando la política es `optional` — un token
+     * robado no puede enrolar el dispositivo del atacante.
+     *
+     * Devuelve el secreto y la URI `otpauth://` (el front dibuja el QR). El
+     * secreto queda guardado SIN confirmar: hasta el `confirm`, el login no
+     * pide nada.
+     */
+    #[Ability('{scope}.auth.two-factor-enable', 'Iniciar el enrolamiento de dos factores en {scope}')]
+    public function enableTwoFactor(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        if (! $user instanceof Authenticatable) {
+            return $this->sendError('No autenticado.', [], 401, 'ERR_UNAUTHENTICATED');
+        }
+
+        $policy = $this->twoFactorPolicy();
+
+        // Prender un segundo factor que el login va a ignorar es peor que no
+        // poder prenderlo: el usuario cree que su cuenta está protegida.
+        if ($policy === TwoFactorPolicy::Off) {
+            return $this->sendError(
+                'Este acceso no usa verificación en dos pasos.',
+                [],
+                403,
+                'ERR_2FA_DISABLED_BY_SCOPE',
+            );
+        }
+
+        if ($policy->requiresPasswordToEnable()) {
+            $data = $request->validate(['current_password' => ['required', 'string']]);
+
+            if (! Hash::check($data['current_password'], (string) $user->getAuthPassword())) {
+                return $this->sendError(
+                    'Contraseña actual incorrecta.',
+                    ['current_password' => ['Contraseña actual incorrecta.']],
+                    422,
+                    'ERR_VALIDATION',
+                );
+            }
+        }
+
+        if ($this->userHasConfirmedTwoFactor($user)) {
+            return $this->sendError(
+                'La verificación en dos pasos ya está activa.',
+                [],
+                422,
+                'ERR_2FA_ALREADY_ENABLED',
+            );
+        }
+
+        $secret = $this->startTwoFactorEnrollment($user);
+
+        return $this->sendResponse(
+            $this->twoFactorEnrollmentPayload($user, $secret),
+            'Escaneá el código y confirmá con los seis dígitos.',
+        );
+    }
+
+    /**
+     * POST /api/{scope}/auth/two-factor/confirm
+     *
+     * Auth: `mk.auth:{scope}` (per-route).
+     * Ability: `mk.ability:{scope}.auth.two-factor-confirm` (per-route).
+     *
+     * Body: `{code}`. Confirma el secreto pendiente, devuelve los códigos de
+     * recuperación (la única vez que se ven) y cierra las OTRAS sesiones.
+     */
+    #[Ability('{scope}.auth.two-factor-confirm', 'Confirmar el enrolamiento de dos factores en {scope}')]
+    public function confirmTwoFactor(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        if (! $user instanceof Authenticatable) {
+            return $this->sendError('No autenticado.', [], 401, 'ERR_UNAUTHENTICATED');
+        }
+
+        $request->validate(['code' => ['required', 'string']]);
+
+        if ($this->userHasConfirmedTwoFactor($user)) {
+            return $this->sendError('La verificación en dos pasos ya está activa.', [], 422, 'ERR_2FA_ALREADY_ENABLED');
+        }
+
+        if (! $this->hasPendingTwoFactorSecret($user)) {
+            return $this->sendError(
+                'No hay un enrolamiento en curso. Empezá por `two-factor/enable`.',
+                [],
+                422,
+                'ERR_2FA_NOT_ENABLED',
+            );
+        }
+
+        if (! $this->acceptTwoFactorCode($user, (string) $request->input('code'))) {
+            return $this->sendError('Código inválido.', ['code' => ['Código inválido.']], 422, 'ERR_VALIDATION');
+        }
+
+        $recoveryCodes = $this->completeTwoFactorEnrollment($request, $user);
+
+        return $this->sendResponse(
+            ['recovery_codes' => $recoveryCodes],
+            'Verificación en dos pasos activada.',
+        );
+    }
+
+    /**
+     * POST /api/{scope}/auth/two-factor/recovery-codes
+     *
+     * Auth: `mk.auth:{scope}` (per-route).
+     * Ability: `mk.ability:{scope}.auth.two-factor-recovery-codes` (per-route).
+     *
+     * Body: `{code}` — un código del autenticador. Sin esa prueba, cualquiera
+     * con el token podría pedir una tanda nueva de códigos y llevarse ocho
+     * llaves de la cuenta.
+     */
+    #[Ability('{scope}.auth.two-factor-recovery-codes', 'Regenerar los códigos de recuperación en {scope}')]
+    public function regenerateTwoFactorRecoveryCodes(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        if (! $user instanceof Authenticatable) {
+            return $this->sendError('No autenticado.', [], 401, 'ERR_UNAUTHENTICATED');
+        }
+
+        $request->validate(['code' => ['required', 'string']]);
+
+        if (! $this->userHasConfirmedTwoFactor($user)) {
+            return $this->sendError(
+                'La verificación en dos pasos no está activa.',
+                [],
+                422,
+                'ERR_2FA_NOT_ENABLED',
+            );
+        }
+
+        if (! $this->acceptTwoFactorCode($user, (string) $request->input('code'))) {
+            return $this->sendError('Código inválido.', ['code' => ['Código inválido.']], 422, 'ERR_VALIDATION');
+        }
+
+        $plain = $this->totpService()->generateRecoveryCodes();
+        $user->setAttribute('two_factor_recovery_codes', $this->totpService()->hashRecoveryCodes($plain));
+        $user->save();
+
+        return $this->sendResponse(['recovery_codes' => $plain], 'Códigos de recuperación regenerados.');
+    }
+
+    /**
+     * POST /api/{scope}/auth/two-factor/disable
+     *
+     * Auth: `mk.auth:{scope}` (per-route).
+     * Ability: `mk.ability:{scope}.auth.two-factor-disable` (per-route).
+     *
+     * Body: `{current_password, code}` — las dos pruebas. Con la política
+     * `required` responde 403: el scope lo exige, y sacárselo es decisión de un
+     * administrador (`php artisan mk:auth:two-factor-reset`).
+     */
+    #[Ability('{scope}.auth.two-factor-disable', 'Apagar la verificación en dos pasos en {scope}')]
+    public function disableTwoFactor(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        if (! $user instanceof Authenticatable) {
+            return $this->sendError('No autenticado.', [], 401, 'ERR_UNAUTHENTICATED');
+        }
+
+        if (! $this->twoFactorPolicy()->allowsDisabling()) {
+            return $this->sendError(
+                'Este acceso exige verificación en dos pasos: no se puede apagar.',
+                [],
+                403,
+                'ERR_2FA_REQUIRED_BY_SCOPE',
+            );
+        }
+
+        $data = $request->validate([
+            'current_password' => ['required', 'string'],
+            'code' => ['required', 'string'],
+        ]);
+
+        if (! Hash::check($data['current_password'], (string) $user->getAuthPassword())) {
+            return $this->sendError(
+                'Contraseña actual incorrecta.',
+                ['current_password' => ['Contraseña actual incorrecta.']],
+                422,
+                'ERR_VALIDATION',
+            );
+        }
+
+        if (! $this->userHasConfirmedTwoFactor($user)) {
+            return $this->sendError('La verificación en dos pasos no está activa.', [], 422, 'ERR_2FA_NOT_ENABLED');
+        }
+
+        if (! $this->acceptTwoFactorCode($user, (string) $data['code'])) {
+            return $this->sendError('Código inválido.', ['code' => ['Código inválido.']], 422, 'ERR_VALIDATION');
+        }
+
+        if (method_exists($user, 'forgetTwoFactor')) {
+            $user->forgetTwoFactor();
+        }
+
+        $this->revokeOtherTokens($user);
+
+        $this->dispatchAuthEventSafe('auth.two_factor.disabled', [
+            'scope' => $this->authScope(),
+            'user_id' => (string) $user->getAuthIdentifier(),
+            'ip' => $request->ip(),
+        ]);
+
+        return $this->sendResponse(true, 'Verificación en dos pasos desactivada.');
+    }
+
+    // ============================================================
+    //  Segundo factor — mecánica compartida
+    // ============================================================
+
+    /**
+     * La decisión del login: `null` = seguí, emití tokens.
+     *
+     * Las dos ramas devuelven 200 (las credenciales ERAN buenas; falta el
+     * segundo paso) con `data.two_factor` diciendo cuál es ese paso y el mismo
+     * dato en `__extraData.code`, para que un front pueda ramificar por donde ya
+     * ramifica los errores.
+     *
+     * 🔴 Ninguna de las dos credenciales es un token: no llevan
+     * `auth_scope:{scope}`, así que `mk.auth` no las mira, y no tienen la
+     * ability `refresh`, así que `/auth/refresh` tampoco. Viven en
+     * `verification_codes` con su vencimiento y su tope de intentos.
+     */
+    protected function twoFactorGate(Request $request, Authenticatable $user): ?JsonResponse
+    {
+        $policy = $this->twoFactorPolicy();
+        $confirmed = $this->userHasConfirmedTwoFactor($user);
+
+        if ($policy->requiresChallenge($confirmed)) {
+            $ttl = $this->twoFactorConfigInt('challenge_ttl_seconds', 300);
+
+            return $this->sendResponse([
+                'two_factor' => 'challenge',
+                'challenge' => $this->issueTwoFactorCredential($user, self::TWO_FACTOR_CHALLENGE_PURPOSE, $ttl),
+                'expires_in' => $ttl,
+            ], 'Ingresá el código de tu app de autenticación.', 200, ['code' => 'TWO_FACTOR_REQUIRED']);
+        }
+
+        if ($policy->requiresEnrollment($confirmed)) {
+            $ttl = $this->twoFactorConfigInt('setup_ttl_seconds', 900);
+            $secret = $this->startTwoFactorEnrollment($user);
+
+            return $this->sendResponse(array_merge([
+                'two_factor' => 'setup',
+                'setup' => $this->issueTwoFactorCredential($user, self::TWO_FACTOR_SETUP_PURPOSE, $ttl),
+                'expires_in' => $ttl,
+            ], $this->twoFactorEnrollmentPayload($user, $secret)),
+                'Este acceso exige verificación en dos pasos. Escaneá el código y confirmá.',
+                200,
+                ['code' => 'TWO_FACTOR_SETUP_REQUIRED'],
+            );
+        }
+
+        return null;
+    }
+
+    /**
+     * Emite la credencial de un solo uso y devuelve lo que viaja al cliente:
+     * `{identificador}.{secreto}`.
+     *
+     * El identificador va adelante porque el cliente NO está autenticado: sin
+     * él no hay forma de saber de qué fila hablamos. Es el id del usuario, el
+     * mismo que el login exitoso devuelve en el sobre — no agrega nada que la
+     * respuesta de al lado no diga.
+     */
+    protected function issueTwoFactorCredential(Authenticatable $user, string $purpose, int $ttlSeconds): string
+    {
+        $identifier = (string) $user->getAuthIdentifier();
+        $secret = bin2hex(random_bytes(32));
+
+        $this->emailOtpService()->issue(
+            $this->authScope(),
+            $purpose,
+            $identifier,
+            plainCode: $secret,
+            ttlSeconds: $ttlSeconds,
+            maxAttempts: $this->twoFactorConfigInt('max_attempts', 5),
+        );
+
+        return $identifier.'.'.$secret;
+    }
+
+    /**
+     * Parte la credencial y resuelve al usuario con las MISMAS puertas que el
+     * login: scope correcto y cuenta habilitada. Un usuario bloqueado entre el
+     * login y el segundo paso no termina de entrar.
+     *
+     * @return array{0: Authenticatable|null, 1: string}
+     */
+    protected function resolveTwoFactorCredential(string $credential, string $purpose): array
+    {
+        $parts = explode('.', $credential, 2);
+        if (count($parts) !== 2 || $parts[0] === '' || $parts[1] === '') {
+            return [null, ''];
+        }
+
+        [$identifier, $secret] = $parts;
+
+        /** @var Authenticatable|null $user */
+        $user = $this->authModelClass()::query()->whereKey($identifier)->first();
+
+        if (! $user
+            || $user->getAuthScope() !== $this->authScope()
+            || ! $this->userHasValidStatus($user)
+        ) {
+            return [null, ''];
+        }
+
+        return [$user, $secret];
+    }
+
+    /**
+     * Arranca (o reinicia) el enrolamiento: secreto nuevo SIN confirmar, y la
+     * tanda anterior de códigos de recuperación y el último paso aceptado a
+     * cero — son de un secreto que ya no existe.
+     */
+    protected function startTwoFactorEnrollment(Authenticatable $user): string
+    {
+        $secret = $this->totpService()->generateSecret();
+
+        $user->setAttribute('two_factor_secret', $secret);
+        $user->setAttribute('two_factor_recovery_codes', null);
+        $user->setAttribute('two_factor_confirmed_at', null);
+        $user->setAttribute('two_factor_last_step', null);
+        $user->save();
+
+        return $secret;
+    }
+
+    /**
+     * Cierra el enrolamiento: lo marca confirmado, emite los códigos de
+     * recuperación y cierra las OTRAS sesiones (si alguien más estaba adentro
+     * con esta cuenta, prender el segundo factor no puede dejarlo adentro).
+     *
+     * @return array<int, string> los códigos EN CLARO, que se muestran una vez
+     */
+    protected function completeTwoFactorEnrollment(Request $request, Authenticatable $user): array
+    {
+        $plain = $this->totpService()->generateRecoveryCodes();
+
+        $user->setAttribute('two_factor_recovery_codes', $this->totpService()->hashRecoveryCodes($plain));
+        $user->setAttribute('two_factor_confirmed_at', now());
+        $user->save();
+
+        $this->revokeOtherTokens($user);
+
+        $this->dispatchAuthEventSafe('auth.two_factor.enabled', [
+            'scope' => $this->authScope(),
+            'user_id' => (string) $user->getAuthIdentifier(),
+            'ip' => $request->ip(),
+        ]);
+
+        return $plain;
+    }
+
+    /**
+     * Valida el código del autenticador Y sella el paso aceptado.
+     *
+     * Las dos cosas van juntas a propósito: si el sellado quedara del lado del
+     * caller, un endpoint nuevo que se olvidara de hacerlo dejaría el mismo
+     * código sirviendo durante toda su ventana.
+     */
+    protected function acceptTwoFactorCode(Authenticatable $user, string $code): bool
+    {
+        $secret = $this->twoFactorAttribute($user, 'two_factor_secret');
+        if (! is_string($secret) || trim($secret) === '') {
+            return false;
+        }
+
+        $lastStep = $this->twoFactorAttribute($user, 'two_factor_last_step');
+        $step = $this->totpService()->verify(
+            $secret,
+            trim($code),
+            $lastStep === null ? null : (int) $lastStep,
+        );
+
+        if ($step === null) {
+            return false;
+        }
+
+        $user->setAttribute('two_factor_last_step', $step);
+        $user->save();
+
+        return true;
+    }
+
+    /**
+     * Gasta un código de recuperación. La lista se guarda sin el que se usó
+     * ANTES de emitir la sesión: si se guardara después, dos requests con el
+     * mismo código entrarían las dos.
+     */
+    protected function consumeTwoFactorRecoveryCode(Authenticatable $user, string $candidate): bool
+    {
+        $remaining = $this->totpService()->consumeRecoveryCode(
+            $this->twoFactorRecoveryHashes($user),
+            trim($candidate),
+        );
+
+        if ($remaining === null) {
+            return false;
+        }
+
+        $user->setAttribute('two_factor_recovery_codes', $remaining);
+        $user->save();
+
+        return true;
+    }
+
+    /**
+     * Traduce el veredicto de la credencial a HTTP. `null` = seguí.
+     *
+     * Mismo mapeo que el PIN de email (§ 3.18): `Invalid` y `NotFound` colapsan
+     * al mismo 422 genérico — no se distingue «nunca existió» de «no es el
+     * valor correcto».
+     */
+    protected function twoFactorVerdictResponse(OtpVerifyResult $verdict): ?JsonResponse
+    {
+        return match ($verdict) {
+            OtpVerifyResult::Confirmed => null,
+            OtpVerifyResult::Expired => $this->sendError(
+                'El desafío expiró. Volvé a iniciar sesión.',
+                [],
+                410,
+                'ERR_CODE_EXPIRED',
+            ),
+            OtpVerifyResult::Locked => $this->sendError(
+                'Demasiados intentos. Volvé a iniciar sesión.',
+                [],
+                423,
+                'ERR_CODE_LOCKED',
+            ),
+            default => $this->invalidTwoFactorChallenge(),
+        };
+    }
+
+    /**
+     * El 422 genérico del desafío: no dice si el usuario existe, si la
+     * credencial venció o si nunca hubo una.
+     */
+    protected function invalidTwoFactorChallenge(): JsonResponse
+    {
+        return $this->sendError(
+            'Desafío inválido o expirado.',
+            ['challenge' => ['Desafío inválido o expirado.']],
+            422,
+            'ERR_VALIDATION',
+        );
+    }
+
+    /**
+     * El secreto + la URI del QR. El secreto sale en claro a propósito: es lo
+     * que el usuario tipea a mano cuando el lector de QR no lee.
+     *
+     * @return array<string, string>
+     */
+    protected function twoFactorEnrollmentPayload(Authenticatable $user, string $secret): array
+    {
+        $label = (string) ($user->getAttribute($this->loginField()) ?? $user->getAuthIdentifier());
+
+        return [
+            'secret' => $secret,
+            'otpauth_uri' => $this->totpService()->otpauthUri($secret, $label, $this->twoFactorIssuer()),
+        ];
+    }
+
+    /**
+     * El nombre con el que la cuenta aparece en la app del usuario. Sin
+     * configurar, el nombre de la aplicación: «MK Director» en la pantalla del
+     * teléfono no le dice nada a nadie.
+     */
+    protected function twoFactorIssuer(): ?string
+    {
+        $issuer = config('mk_director.auth.two_factor.issuer');
+
+        if (is_string($issuer) && trim($issuer) !== '') {
+            return $issuer;
+        }
+
+        $appName = config('app.name');
+
+        return is_string($appName) && trim($appName) !== '' ? $appName : null;
+    }
+
+    /** ¿Hay un secreto emitido y todavía sin confirmar? */
+    protected function hasPendingTwoFactorSecret(Authenticatable $user): bool
+    {
+        $secret = $this->twoFactorAttribute($user, 'two_factor_secret');
+
+        return is_string($secret) && trim($secret) !== '';
+    }
+
+    /**
+     * Delega en el modelo. Un modelo que no extiende `AuthUser` (o un scope sin
+     * las columnas) informa «no»: el 2FA queda apagado, que es el default.
+     */
+    protected function userHasConfirmedTwoFactor(Authenticatable $user): bool
+    {
+        return method_exists($user, 'hasConfirmedTwoFactor') && $user->hasConfirmedTwoFactor();
+    }
+
+    /** @return array<int, string> */
+    protected function twoFactorRecoveryHashes(Authenticatable $user): array
+    {
+        $hashes = $this->twoFactorAttribute($user, 'two_factor_recovery_codes');
+
+        return is_array($hashes) ? array_values(array_filter($hashes, 'is_string')) : [];
+    }
+
+    protected function twoFactorConfirmedAtIso(Authenticatable $user): ?string
+    {
+        $value = $this->twoFactorAttribute($user, 'two_factor_confirmed_at');
+
+        if ($value instanceof \DateTimeInterface) {
+            return $value->format(\DateTimeInterface::ATOM);
+        }
+
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    /**
+     * Lee un atributo del segundo factor tolerando que la columna no exista
+     * (scope generado sin `--two-factor`) y que el modelo no sea un Eloquent.
+     */
+    protected function twoFactorAttribute(Authenticatable $user, string $column): mixed
+    {
+        return method_exists($user, 'getAttribute') ? $user->getAttribute($column) : null;
+    }
+
+    protected function twoFactorConfigInt(string $key, int $default): int
+    {
+        $value = config("mk_director.auth.two_factor.{$key}", $default);
+
+        return is_numeric($value) && (int) $value > 0 ? (int) $value : $default;
+    }
+
+    /**
+     * Resuelve el servicio TOTP desde el container (singleton,
+     * `AuthServiceProvider`). Mismo patrón que `tokenIssuer()`.
+     */
+    protected function totpService(): TotpService
+    {
+        return app(TotpService::class);
+    }
+
+    // ============================================================
     //  Helpers privados
     // ============================================================
+
+    /**
+     * Cierra TODAS las sesiones del usuario menos la que hizo esta request.
+     *
+     * Estaba escrito igual en `changePassword()` y en `confirmPasswordCode()`;
+     * lo necesitan además los tres endpoints que tocan el segundo factor. Un
+     * cuarto copiado es un cuarto lugar donde olvidarse del `!= currentToken` y
+     * desloguear al que acaba de hacer el cambio.
+     */
+    protected function revokeOtherTokens(Authenticatable $user): void
+    {
+        if (! method_exists($user, 'tokens')) {
+            return;
+        }
+
+        $currentToken = method_exists($user, 'currentAccessToken')
+            ? $user->currentAccessToken()
+            : null;
+
+        $user->tokens()->where('id', '!=', $currentToken?->id)->delete();
+    }
 
     /**
      * Resolve TokenIssuer desde container (singleton, R-PKG-014 AuthServiceProvider).

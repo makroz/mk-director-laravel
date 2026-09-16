@@ -35,7 +35,7 @@ Route::prefix('api/{{moduleNameLower}}/auth')->group(function () {
         ->middleware('throttle:'.config('mk_director.auth.rate_limits.password_reset_code_request', '3,10').',{{moduleNameLower}}-reset-code-req');
     Route::post('password/reset/code/confirm', [AuthController::class, 'confirmPasswordResetCode'])
         ->middleware('throttle:'.config('mk_director.auth.rate_limits.password_reset_code_confirm', '5,10').',{{moduleNameLower}}-reset-code-confirm');
-{{emailVerifyRoutes}}
+{{twoFactorPublicRoutes}}{{emailVerifyRoutes}}
     // ── Protegidas (auth: scope) ────────────────────────────────────
     Route::middleware('mk.auth:{{moduleNameLower}}'){{verifiedMiddleware}}->group(function () {
         Route::post('logout', [AuthController::class, 'logout']);
@@ -47,6 +47,6 @@ Route::prefix('api/{{moduleNameLower}}/auth')->group(function () {
             ->middleware('throttle:'.config('mk_director.auth.rate_limits.password_code_request', '3,10').',{{moduleNameLower}}-pwd-code-req');
         Route::post('password/code/confirm', [AuthController::class, 'confirmPasswordCode'])
             ->middleware('throttle:'.config('mk_director.auth.rate_limits.password_code_confirm', '5,10').',{{moduleNameLower}}-pwd-code-confirm');
-        {{updateProfileRoute}}
+{{twoFactorProtectedRoutes}}{{updateProfileRoute}}
     });
 });
