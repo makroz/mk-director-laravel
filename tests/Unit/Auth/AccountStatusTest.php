@@ -45,3 +45,75 @@ test('legacy is_active: false/0/"0" bloquean; true y null dejan pasar', function
 test('BC: sin columna status ni is_active, el usuario sigue autenticando', function () {
     expect(AccountStatus::allowsAuthentication(accountStatusUser(['name' => 'x'])))->toBeTrue();
 });
+
+/*
+|--------------------------------------------------------------------------
+| Los chequeos extra del consumidor
+|--------------------------------------------------------------------------
+|
+| El caso que los pidió: suspender a la EMPRESA tiene que cortarles a todos
+| sus usuarios, al que está entrando y al que ya tiene un token vivo. Como
+| viven acá, las tres puertas los ven de una sola vez.
+*/
+
+final class ChequeoQueNiega
+{
+    public function __invoke($user): bool
+    {
+        return false;
+    }
+}
+
+final class ChequeoQueConcede
+{
+    public function __invoke($user): bool
+    {
+        return true;
+    }
+}
+
+afterEach(function () {
+    config(['mk_director.auth.account_checks' => []]);
+});
+
+test('🔴 un chequeo extra puede negarle la autenticación a un usuario activo', function () {
+    $activo = accountStatusUser(['status' => ScopeStatus::Active->value], ['status' => ScopeStatus::class]);
+
+    expect(AccountStatus::allowsAuthentication($activo))->toBeTrue();
+
+    config(['mk_director.auth.account_checks' => [ChequeoQueNiega::class]]);
+
+    expect(AccountStatus::allowsAuthentication($activo))->toBeFalse();
+});
+
+test('🔴 UN CHEQUEO EXTRA NO REHABILITA A UN USUARIO BLOQUEADO', function () {
+    // Si alcanzara para conceder, agregar un chequeo podría abrirle la puerta
+    // a alguien que su propio estado ya bloqueó — y nadie lo leería así.
+    config(['mk_director.auth.account_checks' => [ChequeoQueConcede::class]]);
+
+    $bloqueado = accountStatusUser(['status' => ScopeStatus::Blocked->value], ['status' => ScopeStatus::class]);
+
+    expect(AccountStatus::allowsAuthentication($bloqueado))->toBeFalse();
+});
+
+test('todos tienen que decir que sí', function () {
+    $activo = accountStatusUser(['status' => ScopeStatus::Active->value], ['status' => ScopeStatus::class]);
+
+    config(['mk_director.auth.account_checks' => [ChequeoQueConcede::class, ChequeoQueNiega::class]]);
+
+    expect(AccountStatus::allowsAuthentication($activo))->toBeFalse();
+});
+
+test('acepta un closure además del nombre de una clase', function () {
+    $activo = accountStatusUser(['status' => ScopeStatus::Active->value], ['status' => ScopeStatus::class]);
+
+    config(['mk_director.auth.account_checks' => [fn ($user) => false]]);
+
+    expect(AccountStatus::allowsAuthentication($activo))->toBeFalse();
+});
+
+test('sin chequeos configurados se comporta igual que antes de que existieran', function () {
+    config(['mk_director.auth.account_checks' => []]);
+
+    expect(AccountStatus::allowsAuthentication(accountStatusUser(['name' => 'x'])))->toBeTrue();
+});

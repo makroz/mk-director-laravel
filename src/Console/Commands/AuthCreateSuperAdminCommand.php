@@ -15,6 +15,7 @@ use Mk\Director\Auth\Enums\FixedStatus;
 use Mk\Director\Auth\Models\Ability;
 use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Auth\Models\Role;
+use Mk\Director\Console\Concerns\ResolvesScopeModel;
 use Mk\Director\Tenancy\Concerns\HasTenantMembership;
 use Mk\Director\Tenancy\TenantMembershipGate;
 use Symfony\Component\Console\Input\InputOption;
@@ -102,6 +103,8 @@ use Symfony\Component\Console\Input\InputOption;
  */
 class AuthCreateSuperAdminCommand extends Command
 {
+    use ResolvesScopeModel;
+
     /**
      * The name and signature of the console command.
      *
@@ -171,51 +174,6 @@ class AuthCreateSuperAdminCommand extends Command
                 );
             }
         }
-    }
-
-    /**
-     * Modelos de todos los guards cableados + el Admin por convención (BC).
-     *
-     * @return array<int, string>
-     */
-    private function candidateScopeModels(): array
-    {
-        $models = ['App\\Modules\\Admin\\Models\\Admin'];
-
-        try {
-            $guards = function_exists('config') ? (array) config('auth.guards', []) : [];
-        } catch (\Throwable) {
-            $guards = [];
-        }
-
-        foreach (array_keys($guards) as $guard) {
-            $models[] = $this->resolveScopeModel((string) $guard);
-        }
-
-        return array_values(array_unique($models));
-    }
-
-    /**
-     * FQCN del modelo de un scope, por el mismo camino que usa `mk.auth:{scope}`
-     * (`Auth::guard($scope)` → provider → model). Cae a la convención del
-     * scaffolder si el guard no está cableado en config/auth.php.
-     */
-    private function resolveScopeModel(string $scope): string
-    {
-        try {
-            $provider = function_exists('config') ? config("auth.guards.{$scope}.provider") : null;
-            $model = is_string($provider) ? config("auth.providers.{$provider}.model") : null;
-        } catch (\Throwable) {
-            $model = null;
-        }
-
-        if (is_string($model) && $model !== '') {
-            return $model;
-        }
-
-        $studly = Str::studly($scope);
-
-        return "App\\Modules\\{$studly}\\Models\\{$studly}";
     }
 
     /**

@@ -961,6 +961,35 @@ estado de la cuenta. Medido en el piloto NetPizza, con la cadena HTTP real:
 
 Para cambiar qué estados autentican, override `canAuthenticate()` en el enum del scope. `BaseAuthController::userHasValidStatus()` sigue existiendo por BC y delega en `AccountStatus`, pero **un override ahí sólo afecta a login/forgot/reset**: `mk.auth` y el refresh no lo ven.
 
+**Cuando "puede autenticarse" no depende sólo del usuario — `account_checks`.**
+En un SaaS se suspende a la EMPRESA, y esa suspensión tiene que cortarles a
+todos sus usuarios: al que está entrando y al que ya tiene un token vivo.
+Escrito como middleware nuevo cubre sólo al segundo; repetido a mano en las tres
+puertas, algún día va a estar puesto en dos.
+
+```php
+// config/mk_director.php
+'auth' => [
+    'account_checks' => [\App\Support\Tenancy\TenantIsActive::class],
+],
+
+// Una clase invocable. `false` = esta cuenta no autentica, en las tres puertas.
+final class TenantIsActive
+{
+    public function __invoke(Authenticatable $user): bool { /* ... */ }
+}
+```
+
+- Sólo pueden **negar**: un `true` no rehabilita a quien su propio `status` ya
+  bloqueó. Si alcanzara para conceder, agregar un chequeo podría abrirle la
+  puerta a alguien bloqueado.
+- Corren **después** del estado propio, que no cuesta una query: a un usuario ya
+  bloqueado no se le consulta la empresa.
+- Corren en **cada request autenticado**. El que consulte la base debería
+  cachear — registrarlo como singleton alcanza.
+- Si uno revienta, la excepción sube: un chequeo de seguridad que falla en
+  silencio es un chequeo que no está.
+
 **Impacto en consumers:**
 
 - Un usuario bloqueado/inactivo/pendiente **pierde sus sesiones vivas** en el próximo request. El front tiene que tratar `ERR_ACCOUNT_DISABLED` como "cerrar sesión", no como "reintentar refresh".
@@ -2970,6 +2999,32 @@ La **política no está acá** (§ 3.20.1), y los parámetros del algoritmo tamp
   que **sin el flag no queda una sola huella** del segundo factor.
 
 ---
+
+### 3.21 `mk:auth:grant` — el primer usuario de un scope, y el huevo y la gallina
+
+`mk:auth:create-super-admin` es idempotente: sobre un login ya tomado avisa «no
+se creó nada» y sale en verde **sin tocar roles ni abilities**. Es lo correcto
+—re-correr un alta no debería reescribir permisos— pero dejaba sin salida al
+usuario creado con `--no-roles`: sin capacidades, y sin forma de dárselas salvo
+`tinker`. Es justo el caso del primer usuario de un scope nuevo, que todavía no
+tiene pantalla de roles donde apretar el botón, y que es el único que podría
+usarla.
+
+```bash
+php artisan mk:auth:grant operator mario@ejemplo.com --abilities='*'
+php artisan mk:auth:grant mesero 7654321 --roles=viewer
+php artisan mk:auth:grant admin ana@ejemplo.com --roles=admin --abilities=admin.reports.view
+```
+
+`{scope} {login}` posicionales, como `two-factor-reset`. Busca al usuario **sin
+global scopes** (en consola no hay tenant, y con `tenant.fail_closed` el scope
+agrega `where 1 = 0`: el usuario existe y la consulta no lo ve). Los roles los
+crea `assignRole()` con el guard del **usuario**, no con el del argumento. Es
+**acumulativo**: no le saca nada — para quitar se pasa por la pantalla de roles,
+donde queda registrado quién lo hizo.
+
+⚠️ No pasa por `AccessGrantGuard`: acá no hay actor, hay una terminal con acceso
+al servidor y a la base que ya podría escribir la fila a mano.
 
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)
 

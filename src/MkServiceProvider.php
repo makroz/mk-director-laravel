@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\ServiceProvider;
 use Mk\Director\Auth\AuthServiceProvider;
 use Mk\Director\Console\Commands\AuthCreateSuperAdminCommand;
+use Mk\Director\Console\Commands\AuthGrantCommand;
 use Mk\Director\Console\Commands\AuthTwoFactorResetCommand;
 use Mk\Director\Console\Commands\CleanReportsCommand;
 use Mk\Director\Console\Commands\DiscoverAbilitiesCommand;
@@ -257,6 +258,7 @@ class MkServiceProvider extends ServiceProvider
                 MkSkillListCommand::class,
                 MkSkillDeployCommand::class,
                 AuthCreateSuperAdminCommand::class,
+                AuthGrantCommand::class,
                 AuthTwoFactorResetCommand::class,
                 DiscoverAbilitiesCommand::class,
                 PruneAbilitiesCommand::class,

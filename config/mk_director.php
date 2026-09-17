@@ -300,6 +300,24 @@ return [
         // cuando el token no trae ability explícita.
         'login_field' => env('MK_LOGIN_FIELD', 'email'),
 
+        // Chequeos EXTRA de "esta cuenta puede autenticarse", del consumidor.
+        //
+        // Lista de clases invocables `(Authenticatable $user): bool`. Las
+        // resuelve el contenedor y las consulta `AccountStatus` en las tres
+        // puertas de una vez: login, refresh y el middleware `mk.auth`.
+        //
+        // 🔴 Sólo pueden NEGAR: un `true` no rehabilita a un usuario que su
+        // propio `status` ya bloqueó.
+        //
+        // El caso que lo pidió: suspender a la EMPRESA tiene que cortarles a
+        // todos sus usuarios, al que está entrando y al que ya tiene un token
+        // vivo. Escrito como middleware nuevo sólo cubre al segundo; repetido
+        // a mano en las tres puertas, algún día va a estar puesto en dos.
+        //
+        // Corren en cada request autenticado: el que consulte la base debería
+        // cachear (registrarlo como singleton alcanza).
+        'account_checks' => [],
+
         // R-PKG-010: ability checks opcionales en endpoints privados del
         // AuthController generado con `mk:make:auth-user --with-auth-rbac`.
         //
