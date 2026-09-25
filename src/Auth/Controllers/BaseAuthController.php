@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Mk\Director\Auth\Controllers;
 
 use Illuminate\Contracts\Auth\Authenticatable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -145,6 +146,60 @@ abstract class BaseAuthController extends BaseController
      * estén disponibles.
      */
     abstract protected function authModelClass(): string;
+
+    /**
+     * Consulta para resolver la IDENTIDAD de alguien que todavía no está
+     * autenticado, SIN el scope de tenant.
+     *
+     * 🔴 CON `tenant.fail_closed` PRENDIDO, LA BÚSQUEDA NORMAL NO ENCONTRABA A
+     * NADIE: NI LOGIN, NI RECUPERACIÓN, NI PIN, NI SEGUNDO FACTOR.
+     *
+     * Si el modelo del scope lleva `HasTenantScope` —que es lo que aísla sus
+     * LISTADOS—, `authModelClass()::query()` corre con el scope puesto y **sin
+     * contexto**: en estas rutas no hay usuario del que sacar el tenant, porque
+     * el tenant es justamente lo que se quiere averiguar. Con `fail_closed` el
+     * scope sin contexto agrega `where 1 = 0`, o sea cero filas.
+     *
+     * Medido en el piloto, con el flag en `true`:
+     *
+     *     POST /auth/login con credenciales válidas  -> 422 «Credenciales inválidas»
+     *     POST /auth/password/forgot                 -> el token no se guarda
+     *     POST /auth/password/reset/code/request     -> el PIN no se encola
+     *
+     * 🔴 Sin error ni log: la anti-enumeración responde igual exista o no el
+     * usuario, así que «no se encontró por el scope» y «no existe» son
+     * indistinguibles — el peor modo de fallar que hay para depurar.
+     *
+     * Y hay un usuario para el que anclar el contexto no alcanza NUNCA: el
+     * super-admin que crea `mk:auth:create-super-admin`, con el tenant nulo.
+     *
+     * ── Por qué sacar el scope es correcto y no un agujero ──────────────────
+     *
+     * «Quién es» es anterior a «qué puede ver». Es el mismo criterio que ya
+     * obliga a resolver el `tokenable` de Sanctum fuera del scope: el guard
+     * también tiene que poder contestar de quién es un token antes de saber en
+     * qué tenant está.
+     *
+     * Y el campo de login del paquete es único GLOBALMENTE, no por tenant: el
+     * `FormRequest` que emite el scaffolder valida con
+     * `unique:{scopePlural},{loginField}` a secas. Un campo de login repetido
+     * entre tenants ya estaba fuera del contrato antes de este cambio.
+     *
+     * ⚠️ Lo que este método NO afecta: todo lo que pasa DESPUÉS de autenticar.
+     * El aislamiento de los listados, del CRUD y de las relaciones sigue siendo
+     * el global scope, intacto. Acá se saca sólo para la pregunta «¿existe este
+     * usuario?», y el `getAuthScope() !== $scope` + el hash de la contraseña
+     * siguen decidiendo si entra.
+     *
+     * `withoutGlobalScope()` sobre un modelo que no registró el scope es un
+     * no-op, así que un consumidor sin tenancy no cambia en nada.
+     *
+     * @return Builder<covariant \Illuminate\Database\Eloquent\Model>
+     */
+    protected function identityQuery()
+    {
+        return $this->authModelClass()::query()->withoutGlobalScope('tenant');
+    }
 
     /**
      * Scope string para auth + middleware (e.g. 'admin', 'member', 'tenant').
@@ -306,10 +361,8 @@ abstract class BaseAuthController extends BaseController
             return $this->sendError('Credenciales inválidas.', [$loginField => []], 422, 'ERR_VALIDATION');
         }
 
-        $modelClass = $this->authModelClass();
-
         /** @var Authenticatable|null $user */
-        $user = $modelClass::query()
+        $user = $this->identityQuery()
             ->where($loginField, $credentials[$loginField])
             ->first();
 
@@ -605,7 +658,7 @@ abstract class BaseAuthController extends BaseController
         ]);
 
         /** @var Authenticatable|null $user */
-        $user = $this->authModelClass()::query()
+        $user = $this->identityQuery()
             ->where($loginField, $credentials[$loginField])
             ->first();
 
@@ -694,7 +747,7 @@ abstract class BaseAuthController extends BaseController
         }
 
         /** @var Authenticatable|null $user */
-        $user = $this->authModelClass()::query()
+        $user = $this->identityQuery()
             ->where($loginField, $data[$loginField])
             ->first();
 
@@ -953,7 +1006,7 @@ abstract class BaseAuthController extends BaseController
         );
 
         /** @var Authenticatable|null $user */
-        $user = $this->authModelClass()::query()
+        $user = $this->identityQuery()
             ->where($loginField, $credentials[$loginField])
             ->first();
 
@@ -1022,7 +1075,7 @@ abstract class BaseAuthController extends BaseController
         );
 
         /** @var Authenticatable|null $user */
-        $user = $this->authModelClass()::query()
+        $user = $this->identityQuery()
             ->where($loginField, $data[$loginField])
             ->first();
 
@@ -1090,7 +1143,7 @@ abstract class BaseAuthController extends BaseController
         }
 
         /** @var Authenticatable|null $user */
-        $user = $this->authModelClass()::query()->find($id);
+        $user = $this->identityQuery()->find($id);
 
         if (! $user || $user->getAuthScope() !== $this->authScope()) {
             return $this->sendError('Usuario no encontrado.', [], 404, 'ERR_NOT_FOUND');
@@ -1650,7 +1703,7 @@ abstract class BaseAuthController extends BaseController
         [$identifier, $secret] = $parts;
 
         /** @var Authenticatable|null $user */
-        $user = $this->authModelClass()::query()->whereKey($identifier)->first();
+        $user = $this->identityQuery()->whereKey($identifier)->first();
 
         if (! $user
             || $user->getAuthScope() !== $this->authScope()

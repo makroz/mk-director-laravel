@@ -12,6 +12,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — 🔴 Con `tenant.fail_closed` prendido, NADIE podía loguearse ni recuperar su contraseña
+
+Los siete lugares donde el `BaseAuthController` resuelve la identidad de alguien que
+todavía no está autenticado —`login()`, `forgotPassword()`, `resetPassword()`, los
+dos pasos del PIN, `verifyEmail()` y el login de dos pasos— buscaban con
+`authModelClass()::query()`.
+
+Si el modelo del scope lleva `HasTenantScope` —que es lo que aísla sus **listados**—,
+esa búsqueda corre con el scope puesto y **sin contexto**: en estas rutas no hay
+usuario del que sacar el tenant, porque el tenant es justamente lo que se quiere
+averiguar. Con `fail_closed` en `true` el scope sin contexto agrega `where 1 = 0`,
+o sea cero filas.
+
+**Medido** en el piloto, con el flag en `true`:
+
+```
+POST /auth/login con credenciales válidas  -> 422 «Credenciales inválidas»
+POST /auth/password/forgot                 -> el token no se guarda, el mail no se encola
+POST /auth/password/reset/code/request     -> el PIN no se encola
+```
+
+🔴 **Sin error ni log**: la anti-enumeración responde igual exista o no el usuario,
+así que «no se encontró por el scope» y «no existe» son indistinguibles. Y hay un
+usuario para el que anclar el contexto no alcanza nunca: el super-admin que crea
+`mk:auth:create-super-admin`, con el tenant nulo.
+
+### Added
+
+- `BaseAuthController::identityQuery()` (`protected`): la consulta de identidad, con
+  el scope `tenant` sacado. Los siete lugares pasan por ahí — una sola puerta, no
+  siete parches.
+
+### Por qué sacar el scope es correcto y no un agujero
+
+«Quién es» es anterior a «qué puede ver». Es el mismo criterio que ya obliga a
+resolver el `tokenable` de Sanctum fuera del scope: el guard también tiene que poder
+contestar de quién es un token antes de saber en qué tenant está.
+
+Y el campo de login del paquete es único **globalmente**, no por tenant: el
+`FormRequest` que emite el scaffolder valida con `unique:{scopePlural},{loginField}`
+a secas. Un campo de login repetido entre tenants ya estaba fuera del contrato antes
+de este cambio.
+
+⚠️ **Lo que no cambia**: todo lo que pasa DESPUÉS de autenticar. El aislamiento de
+los listados, del CRUD y de las relaciones sigue siendo el global scope, intacto. El
+`getAuthScope() !== $scope` y el hash de la contraseña siguen decidiendo si entra.
+
+### BC-safe
+
+Sí. `withoutGlobalScope()` sobre un modelo que no registró el scope es un **no-op**,
+así que un consumidor sin tenancy no cambia en nada. Y un consumidor con tenancy y
+`fail_closed` apagado tampoco: el scope sin contexto ya era un no-op para él. Lo
+único que cambia es el caso que hoy está roto. Medido en el consumidor:
+`netpizza-api` **1373/1373 en verde`.
+
+### Tests
+
+`tests/Feature/Auth/IdentidadSinScopeDeTenantTest.php`, 6 casos por la cadena HTTP
+real, con un modelo de actor tenant-scoped y `fail_closed` prendido —la config del
+piloto—. Tres miden el bug (login, el super-admin sin tenant, y que la recuperación
+GUARDE su token, no sólo que responda 200) y **tres son controles**: sin ellos los
+verdes también salen si el scope nunca se registró o si `fail_closed` quedó apagado,
+o sea midiendo un mundo donde el bug no podía existir. El primero afirma que el mismo
+modelo SIGUE aislado en una consulta normal.
+
+⚠️ Y una trampa del fixture que valía anotar: `tenant_id` se escribe **por
+atributo**. `AuthUser` declara `$fillable`, y un `$fillable` no vacío gana sobre el
+`$guarded = []` de la subclase — pasado en el array del `create()` se descarta en
+silencio y las filas quedan con tenant nulo, con lo cual el control de aislamiento
+mediría nada.
+
+---
+
 ## [UNRELEASED] — 🔴 El refresh usa el modelo de token CONFIGURADO, no la clase base de Sanctum
 
 `TokenIssuer::rotateRefreshToken()` hacía
