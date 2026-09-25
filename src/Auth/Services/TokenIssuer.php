@@ -8,6 +8,7 @@ use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Support\Facades\Config;
 use Laravel\Sanctum\NewAccessToken;
 use Laravel\Sanctum\PersonalAccessToken;
+use Laravel\Sanctum\Sanctum;
 
 /**
  * TokenIssuer — emite access + refresh tokens Sanctum.
@@ -187,6 +188,40 @@ class TokenIssuer
      * `refresh`: cualquiera de las dos marcas alcanza para que `mk.auth` lo
      * rechace como Bearer.
      */
+    /**
+     * El modelo de `personal_access_tokens` que el consumidor configuró, o la
+     * clase base de Sanctum si no configuró ninguno.
+     *
+     * 🔴 EL REFRESH LEÍA EL TOKEN CON LA CLASE BASE A SECAS, Y ESO NO ES UN
+     * DETALLE DE ESTILO.
+     *
+     * `Sanctum::usePersonalAccessTokenModel()` existe para que el consumidor
+     * cambie esa clase, y el caso que lo obliga es el que más importa:
+     * `$token->tokenable` es un `morphTo` pelado, así que le entran los global
+     * scopes del modelo de usuario. Con el modelo del scope tenant-scoped, la
+     * consulta que contesta «de quién es este token» sale filtrada por un tenant
+     * que todavía no se validó contra nadie. El consumidor arregla eso en SU
+     * modelo de token; el refresh, hardcodeando la clase base, se lo salteaba.
+     *
+     * Medido en el piloto con `fail_closed` prendido: un refresh token recién
+     * emitido y válido daba 401 «Refresh token not found.», que el front lee como
+     * sesión vencida y desloguea. Con el flag apagado andaba, así que nadie lo
+     * vio.
+     *
+     * Es el mismo modelo que resuelve el guard de Sanctum: si acá se usa otro,
+     * la autenticación y el refresh contestan distinto sobre la misma fila.
+     *
+     * @return class-string<PersonalAccessToken>
+     */
+    public static function tokenModelClass(): string
+    {
+        $configurado = Sanctum::personalAccessTokenModel();
+
+        return is_string($configurado) && is_subclass_of($configurado, PersonalAccessToken::class)
+            ? $configurado
+            : PersonalAccessToken::class;
+    }
+
     public static function isRefreshToken(PersonalAccessToken $token): bool
     {
         return $token->name === 'refresh'
@@ -283,7 +318,7 @@ class TokenIssuer
         $parser = new RefreshTokenParser;
         [$tokenId, $plaintext] = $parser->parse($refreshToken);
 
-        $tokenModel = PersonalAccessToken::query()->find($tokenId);
+        $tokenModel = self::tokenModelClass()::query()->find($tokenId);
         if (! $tokenModel) {
             throw InvalidRefreshTokenException::notFound();
         }

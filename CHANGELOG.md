@@ -12,6 +12,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — 🔴 El refresh usa el modelo de token CONFIGURADO, no la clase base de Sanctum
+
+`TokenIssuer::rotateRefreshToken()` hacía
+`\Laravel\Sanctum\PersonalAccessToken::query()->find($tokenId)` a secas.
+
+`Sanctum::usePersonalAccessTokenModel()` existe para que el consumidor cambie esa
+clase, y el caso que lo obliga es el que más importa: `$token->tokenable` es un
+`morphTo` pelado, así que le entran los global scopes del modelo de usuario. Con el
+modelo del scope tenant-scoped, la consulta que contesta «de quién es este token»
+sale filtrada por un tenant que todavía **no se validó contra nadie** —viene crudo
+del header—. El consumidor arregla eso en SU modelo de token; el refresh,
+hardcodeando la clase base, se lo salteaba.
+
+**Medido** en el piloto con `MK_TENANT_FAIL_CLOSED=true`: un refresh token recién
+emitido y válido → **401 «Refresh token not found.»**, que el front lee como sesión
+vencida y desloguea. Con el flag apagado andaba, así que nadie lo vio: el refresh no
+tenía ni un test.
+
+### Added
+
+- `TokenIssuer::tokenModelClass()`: el modelo de `personal_access_tokens` que el
+  consumidor configuró, o la clase base si no configuró ninguno. Exige
+  `is_subclass_of(PersonalAccessToken::class)`, así que un valor basura en el estado
+  global de Sanctum degrada a la clase base en vez de reventar.
+
+### Changed
+
+- `rotateRefreshToken()` busca el token con ese modelo — el mismo que resuelve el
+  guard de Sanctum. Si acá se usara otro, la autenticación y el refresh contestarían
+  distinto sobre la misma fila.
+
+### BC-safe
+
+Sí. Sin `usePersonalAccessTokenModel()` el modelo es la clase base y no cambia nada.
+Medido en el consumidor: `netpizza-api` **1373/1373 en verde** — y ese repo sí
+configura su modelo, con lo cual el workaround `mk.identidad` en la ruta de refresh
+queda redundante (no se saca acá: lo decide su dueño).
+
+### Tests
+
+`tests/Feature/Auth/RefreshUsaElModeloDeTokenConfiguradoTest.php`, 3 casos por la
+cadena HTTP real.
+
+🔴 **La aserción va al revés, y tiene que ir así**: un test que configure un modelo
+propio y pida 200 no mide nada — la clase base encuentra el mismo token y responde
+200 igual, con el bug vivo. Lo único que discrimina es un modelo configurado que NO
+VE la fila (un global scope `1 = 0`, que es la forma mínima de lo que el consumidor
+le pone): si el refresh sigue dando 200, es porque no está usando el modelo que se
+le dijo. Los otros dos casos son los controles.
+
+---
+
 ## [UNRELEASED] — 🔴 Un módulo nuevo ya no es invisible durante una hora
 
 `ModuleProviderRegistry::cacheKey()` hasheaba el directorio **padre**
