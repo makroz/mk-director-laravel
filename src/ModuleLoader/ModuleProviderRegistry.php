@@ -16,10 +16,11 @@ use Illuminate\Support\Facades\Log;
  * Before this registry, ModuleLoaderServiceProvider walked the
  * `app/Modules` directory on every request via DirectoryIterator.
  * For an app with 30+ modules, that is 30+ stat() calls per request
- * plus a class_exists() probe for each one. The cache key is the
- * md5 of the canonical (real) path of every discovered directory;
- * if any of those paths change (add/remove/rename), the key
- * changes and the cache is automatically rebuilt.
+ * plus a class_exists() probe for each one. La clave del cache es el
+ * md5 del directorio de módulos MÁS los nombres de sus subdirectorios:
+ * agregar, borrar o renombrar un módulo la cambia y el descubrimiento
+ * se reconstruye solo. El porqué —y lo que la clave sigue sin ver—
+ * está en {@see cacheKey()}.
  *
  * Security:
  *  - Symlinked module directories are rejected (R2-016). A symlink
@@ -348,13 +349,86 @@ class ModuleProviderRegistry
     }
 
     /**
-     * Cache key composed of the canonical modules path hash so any
-     * directory rename/add/remove invalidates the cache automatically.
+     * Clave del cache: el directorio de módulos MÁS los nombres de sus
+     * subdirectorios, así agregar, borrar o renombrar un módulo la cambia y el
+     * descubrimiento se reconstruye solo.
+     *
+     * 🔴 ANTES ERA EL md5 DEL DIRECTORIO PADRE A SECAS, QUE NO CAMBIA NUNCA.
+     *
+     * Con el TTL de 3600 s eso hacía que un módulo nuevo fuera invisible hasta
+     * una hora, y el modo de fallar no señala nada: `php artisan migrate` dice
+     * «nothing to migrate», el endpoint da 404, la Policy no se registra. Se
+     * busca el problema en el provider, en el namespace, en el
+     * `composer dump-autoload` — en todos lados menos en un cache que nadie sabe
+     * que existe. Y en CI, donde el cache arranca vacío, todo funciona: el
+     * síntoma sólo aparece en la máquina de quien escribió el módulo.
+     *
+     * ⚠️ NO SE USA `filemtime()` DEL DIRECTORIO, que era la otra opción obvia y
+     * es más barata. `filemtime()` devuelve segundos enteros: dos cambios dentro
+     * del mismo segundo dan la misma clave. Para una persona creando un módulo da
+     * igual, pero un test —o un script de scaffolding que crea y corrige— cae
+     * justo ahí, y un caché que falla una vez por segundo es peor que uno que
+     * falla siempre: el que lo ve no puede reproducirlo.
+     *
+     * El costo es UNA lectura de directorio con el cache caliente, contra el scan
+     * completo que hace un `realpath()` y un `class_exists()` —o sea autoload y
+     * stats— por módulo. Es la parte barata de lo que R4-006 vino a sacar.
+     *
+     * ⚠️ LO QUE ESTA CLAVE NO VE: un provider agregado DENTRO de un directorio de
+     * módulo que ya existía. Los nombres de los subdirectorios no cambiaron, así
+     * que la clave tampoco. `mk:module` crea el directorio y el provider juntos,
+     * con lo cual el caso normal está cubierto; para el resto está `flush()`.
      */
     protected function cacheKey(): string
     {
-        $path = $this->canonicalModulesPath() ?? 'no_modules_path';
+        $path = $this->canonicalModulesPath();
 
-        return self::CACHE_KEY_PREFIX.md5($path);
+        if ($path === null) {
+            return self::CACHE_KEY_PREFIX.md5('no_modules_path');
+        }
+
+        return self::CACHE_KEY_PREFIX.md5($path.'|'.implode(',', $this->moduleDirNames($path)));
+    }
+
+    /**
+     * Nombres de los subdirectorios de `$path`, ordenados.
+     *
+     * Ordenados porque el orden en que el sistema de archivos los devuelve no
+     * está garantizado: sin ordenar, la misma lista de módulos podría producir
+     * dos claves distintas y el cache no serviría de nada.
+     *
+     * Un directorio ilegible devuelve `[]` y la clave queda siendo la del
+     * directorio pelado: se pierde la invalidación automática, no el boot. Es la
+     * misma relación que el resto de la clase — el cache es una optimización.
+     *
+     * @return array<int, string>
+     */
+    protected function moduleDirNames(string $path): array
+    {
+        try {
+            $entradas = scandir($path);
+        } catch (\Throwable) {
+            return [];
+        }
+
+        if ($entradas === false) {
+            return [];
+        }
+
+        $nombres = [];
+
+        foreach ($entradas as $entrada) {
+            if ($entrada === '.' || $entrada === '..') {
+                continue;
+            }
+            if (! is_dir($path.'/'.$entrada)) {
+                continue;
+            }
+            $nombres[] = $entrada;
+        }
+
+        sort($nombres);
+
+        return $nombres;
     }
 }

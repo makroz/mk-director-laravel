@@ -12,6 +12,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — 🔴 Un módulo nuevo ya no es invisible durante una hora
+
+`ModuleProviderRegistry::cacheKey()` hasheaba el directorio **padre**
+(`app/Modules`), que no cambia nunca. Con el TTL de 3600 s, agregar un módulo no
+invalidaba nada.
+
+Y el modo de fallar no señala nada: `php artisan migrate` dice «nothing to
+migrate» —`migrate:status` ni lista las migraciones nuevas—, el endpoint da 404, la
+Policy no se registra. Se busca el problema en el provider, en el namespace, en el
+`composer dump-autoload`: en todos lados menos en un caché que nadie sabe que
+existe. Y en CI, donde el caché arranca vacío, todo funciona, así que el síntoma
+sólo aparece en la máquina de quien escribió el módulo.
+
+🔴 **El docblock de la clase afirmaba lo contrario, textual**: «The cache key is the
+md5 of the canonical (real) path of every discovered directory; if any of those
+paths change (add/remove/rename), the key changes and the cache is automatically
+rebuilt». Con la clave que estaba escrita, no. Quedó corregido.
+
+### Changed
+
+- La clave del caché es `md5(<directorio de módulos>|<nombres de sus
+  subdirectorios, ordenados>)`. Agregar, borrar o renombrar un módulo la cambia.
+
+### ⚠️ Por qué no `filemtime()` del directorio, que era más barato
+
+`filemtime()` devuelve **segundos enteros**: dos cambios dentro del mismo segundo
+dan la misma clave. Para una persona creando un módulo da igual, pero un test —o un
+script de scaffolding que crea y corrige— cae justo ahí, y un caché que falla una
+vez por segundo es peor que uno que falla siempre: el que lo ve no puede
+reproducirlo.
+
+El costo de la clave nueva es **una** lectura de directorio con el caché caliente,
+contra el scan completo que hace un `realpath()` y un `class_exists()` —o sea
+autoload y stats— por módulo. Es la parte barata de lo que R4-006 vino a sacar.
+
+⚠️ **Lo que la clave sigue sin ver**: un provider agregado DENTRO de un directorio
+de módulo que ya existía. `mk:module` crea el directorio y el provider juntos, con
+lo cual el caso normal está cubierto; para el resto está `flush()`.
+
+### BC-safe
+
+Sí. La clave cambia de valor, así que el primer boot después de actualizar
+rescanea una vez y vuelve a cachear — no hay que limpiar nada a mano. Medido en el
+consumidor: `netpizza-api` **1373/1373 en verde** (y ese repo pinea sus providers
+en `bootstrap/providers.php`, así que para él el auto-discovery es red de
+contención).
+
+### Tests
+
+`tests/Unit/ModuleLoader/ModuleProviderRegistryCacheKeyTest.php`, 3 casos con
+directorios temporales de verdad y dos clases de provider declaradas en el propio
+archivo (`scan()` exige que la clase exista). Mide el síntoma —un módulo en disco
+que la app no ve— y no la forma de la clave: un test que compare dos `cacheKey()`
+queda verde el día que alguien la cambie de una forma que igual no invalide. El
+tercero es el control que impide «arreglarlo» tirando el caché a la basura.
+
+---
+
 ## [UNRELEASED] — 🔴 Un `service` declarado y no resoluble ya no apaga todos los hooks en silencio
 
 `CRUDSmart::getService()` devolvía `null` cuando `$mkConfig['service']` nombraba
