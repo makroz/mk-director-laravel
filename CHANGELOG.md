@@ -12,6 +12,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — La Policy generada ahora se PRUEBA corriendo, no grepeando
+
+El hallazgo 3 del piloto —las Policies generadas llamaban a `hasAbility()`, que no
+existe en `AuthUser`— ya estaba arreglado: el pack `auth-user` tiene su propio
+`policy-user.stub` con `canMk()`, y once tests cubren el contrato de los dos packs.
+
+🔴 **Pero los once leen el stub como TEXTO.** Y la lección de ese hallazgo es
+justamente que «los tests del paquete afirmaban el comportamiento incorrecto y pasaban
+en verde: un test escrito con la misma lente que el bug no lo ve nunca». Un grep
+prueba que alguien escribió `canMk`, no que el método exista en el modelo que la
+policy va a recibir. El día que `AuthUser` renombre `canMk()`, los once siguen verdes.
+
+### Tests
+
+`tests/Feature/MakeAuthUserPolicyGeneradaCorreTest.php`: corre el scaffolder, carga la
+`CrewPolicy` y el modelo `Crew` generados, y le llama `viewAny()`.
+
+🔴 **El orden de las dos aserciones importa, y la primera es la que mide**: sin la
+ability, `viewAny()` tiene que devolver `false` — y para devolver `false` tuvo que
+EJECUTAR el chequeo. Un test que sólo pidiera el `true` pasa en verde con un `before()`
+que aprueba todo y el chequeo nunca llamado.
+
+Reinyección (volver el stub a `hasAbility()`): `BadMethodCallException`, que es
+exactamente la falla latente que el hallazgo describía.
+
+Sin cambios de código: es cobertura.
+
+---
+
 ## [UNRELEASED] — 🔴 Un campo que un hook escribe y no está en `$fillable` ya no se descarta callado
 
 `CRUDSmart` corre `beforeCreate`/`beforeUpdate` y **después** filtra `$input` contra
