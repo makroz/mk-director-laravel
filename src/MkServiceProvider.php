@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Mk\Director;
 
+use Illuminate\Contracts\Http\Kernel as HttpKernel;
 use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -38,6 +39,7 @@ use Mk\Director\Export\Contracts\ReportHeaderProvider;
 use Mk\Director\Export\Controllers\MkReportController;
 use Mk\Director\Export\FilasDelExport;
 use Mk\Director\Export\Support\DefaultReportHeaderProvider;
+use Mk\Director\Http\Middleware\MkApiEnvelope;
 use Mk\Director\Http\Middleware\MkEnvelope;
 use Mk\Director\Managers\CacheManager;
 use Mk\Director\Managers\PluginManager;
@@ -548,8 +550,9 @@ class MkServiceProvider extends ServiceProvider
      * El alias `mk.envelope` va SIEMPRE: registrar un alias no cambia el
      * comportamiento de nadie y es lo que permite ponerlo en una parte de la API.
      *
-     * El empujón al grupo `api` va detrás de `mk_director.response.force_envelope`
-     * (env `MK_FORCE_ENVELOPE`), default `false`.
+     * El normalizador GLOBAL, limitado a `api/*`, va detrás de
+     * `mk_director.response.force_envelope` (env `MK_FORCE_ENVELOPE`), default
+     * `false`. Global y no en el grupo `api`: hallazgo 66.
      *
      * ⚠️ El default no es timidez: prenderlo en un `composer update` reescribiría el
      * cuerpo de TODAS las respuestas JSON de todo consumidor sin que nadie lo pidiera,
@@ -570,8 +573,15 @@ class MkServiceProvider extends ServiceProvider
         // esta línea nunca se lee. El default que manda es el del archivo de config.
         // Se deja igual porque cubre el consumidor con una config publicada vieja, que
         // no tiene el bloque.
+        // Hallazgo 66: GLOBAL y limitado a `envelope_paths`, no empujado al grupo
+        // `api`. Las rutas de módulo se registran con `loadRoutesFrom()` fuera de
+        // ese grupo, y ahí el flag no llegaba a ninguna. Ver {@see MkApiEnvelope}.
         if (filter_var(config('mk_director.response.force_envelope', false), FILTER_VALIDATE_BOOLEAN)) {
-            $router->pushMiddlewareToGroup('api', MkEnvelope::class);
+            $kernel = $this->app->make(HttpKernel::class);
+
+            if (method_exists($kernel, 'hasMiddleware') && ! $kernel->hasMiddleware(MkApiEnvelope::class)) {
+                $kernel->pushMiddleware(MkApiEnvelope::class);
+            }
         }
     }
 

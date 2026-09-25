@@ -12,6 +12,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `force_envelope` llega a las rutas de módulo (hallazgo 66)
+
+El flag empujaba `MkEnvelope` al grupo `api`, y los módulos registran sus rutas con
+`loadRoutesFrom()` **fuera** de ese grupo —por eso su prefijo lleva `api/` a mano—. En un
+consumidor organizado en módulos, que es lo que el paquete scaffoldea, el flag no llegaba a
+ninguna ruta. Medido en NetPizza: 43 de 292 tests rojos con el flag prendido y su
+normalizador propio sacado.
+
+Ahora el flag engancha `MkApiEnvelope` como middleware **global**, limitado a
+`mk_director.response.envelope_paths` (default `['api/*']`). Envuelve también las respuestas
+del manejador de excepciones. El alias `mk.envelope` no cambia.
+
+⚠️ **Cambio para quien ya tenía el flag prendido**: antes envolvía las rutas del grupo `api`;
+ahora envuelve todo `api/*`, dentro o fuera del grupo. Una respuesta que ya trae `success` no
+se toca, así que un consumidor con su propio normalizador no termina con dos sobres.
+
 ## [UNRELEASED] — `beforeList()` que devuelve un Builder dice dónde se filtra (hallazgo 64)
 
 El gancho se documentaba «modificar query» y recibe una instancia **nueva del modelo**:

@@ -909,6 +909,11 @@ return [
         // Para una parte de la API en vez de todo el grupo `api`, está el alias
         // `mk.envelope`, que se registra siempre.
         'force_envelope' => env('MK_FORCE_ENVELOPE', false),
+
+        // Qué rutas envuelve `force_envelope`, con la sintaxis de `Request::is()`.
+        // Se engancha como middleware GLOBAL (hallazgo 66): las rutas de módulo
+        // no pasan por el grupo `api`.
+        'envelope_paths' => ['api/*'],
     ],
 
     /*

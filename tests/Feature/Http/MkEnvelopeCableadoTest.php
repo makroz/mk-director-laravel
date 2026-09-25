@@ -127,3 +127,42 @@ test('el alias apunta a la clase del paquete, no a una copia del consumidor', fu
     expect($this->httpApp['router']->getMiddleware()['mk.envelope'] ?? null)
         ->toBe(MkEnvelope::class);
 });
+
+/*
+|--------------------------------------------------------------------------
+| HALLAZGO 66 — LAS RUTAS DE MÓDULO NO PASAN POR EL GRUPO `api`.
+|--------------------------------------------------------------------------
+|
+| Un módulo registra sus rutas con `loadRoutesFrom()` desde su provider, fuera
+| del grupo `api` —por eso su prefijo lleva `api/` a mano—. Empujado sólo al
+| grupo, `force_envelope` no llegaba a NINGUNA: medido en NetPizza, 43 de 292
+| tests rojos con el flag prendido y el normalizador del proyecto sacado.
+*/
+
+test('🔴 con `force_envelope`, una ruta bajo `api/` FUERA del grupo `api` también sale con sobre', function () {
+    armarMundoDelSobre($this, forzar: true);
+
+    // Como la registra un módulo: sin el grupo, con el `api/` en el prefijo.
+    Route::get('api/modulo/pedidos', fn () => new JsonResponse(['data' => ['id' => 9]], 200));
+
+    $cuerpo = cuerpoDe($this, '/api/modulo/pedidos');
+
+    expect($cuerpo['success'])->toBeTrue()
+        ->and($cuerpo['data']['id'])->toBe(9);
+});
+
+test('CONTROL: fuera de `api/` el flag no toca nada', function () {
+    armarMundoDelSobre($this, forzar: true);
+
+    Route::get('interno/estado', fn () => new JsonResponse(['ok' => true], 200));
+
+    expect(cuerpoDe($this, '/interno/estado'))->toBe(['ok' => true]);
+});
+
+test('CONTROL: sin el flag, la ruta de módulo sigue sin sobre', function () {
+    armarMundoDelSobre($this, forzar: false);
+
+    Route::get('api/modulo/pedidos', fn () => new JsonResponse(['data' => ['id' => 9]], 200));
+
+    expect(cuerpoDe($this, '/api/modulo/pedidos'))->not->toHaveKey('success');
+});
