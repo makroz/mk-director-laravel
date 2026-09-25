@@ -62,7 +62,13 @@ interface MkModuleServiceInterface
     public function afterDelete(Request $request, Model $model, string|int $id): mixed;
 
     /**
-     * Hook before list - modificar query
+     * Hook before list — recibe una instancia NUEVA del modelo y devuelve una
+     * instancia del modelo (hallazgo 64: se llamaba «modificar query» y no lo
+     * es). Sirve para cambiar la conexión o la tabla del listado.
+     *
+     * 🔴 PARA FILTRAR EL LISTADO, `beforeSearch()`: ése recibe el builder. Si
+     * este gancho devuelve un Builder, `CRUDSmart::index()` tira un
+     * `LogicException` que lo dice.
      */
     public function beforeList(Request $request, $query);
 

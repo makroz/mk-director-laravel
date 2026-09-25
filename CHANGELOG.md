@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `beforeList()` que devuelve un Builder dice dónde se filtra (hallazgo 64)
+
+El gancho se documentaba «modificar query» y recibe una instancia **nueva del modelo**:
+`CRUDSmart::index()` le entrega lo que devuelva a `ListManager::apply(Model $model)`. Quien
+filtraba ahí devolvía un Builder y el listado reventaba con un `TypeError` adentro de
+`ListManager`, sin nombrar el gancho. Ahora es un `LogicException` que nombra el service y
+la salida: **para filtrar el listado, `beforeSearch()`**, que recibe el builder. El contrato
+y el stub del service dicen lo mismo. Sin cambio de comportamiento para quien devolvía el modelo.
+
 ## [UNRELEASED] — 🔴 Las `rules()` de un FormRequest pueden limitar lo que se escribe: `write_only_validated`
 
 `CRUDSmart::store()`/`update()` usaban `$request->all()` y filtraban contra `$fillable`.

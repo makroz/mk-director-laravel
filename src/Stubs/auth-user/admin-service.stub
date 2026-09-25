@@ -127,7 +127,8 @@ class {{ModuleName}}Service implements MkModuleServiceInterface
     }
 
     /**
-     * Hook antes de listar (modificar query).
+     * Hook antes de listar: recibe una instancia del modelo, NO el query. Para
+     * filtrar el listado usá `beforeSearch()`.
      */
     public function beforeList(Request $request, $query)
     {

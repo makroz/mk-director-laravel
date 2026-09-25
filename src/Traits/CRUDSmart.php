@@ -571,6 +571,19 @@ trait CRUDSmart
         $service = $this->getService();
         if ($service && method_exists($service, 'beforeList')) {
             $model = $service->beforeList($request, $model) ?? $model;
+
+            // Hallazgo 64: el gancho recibe una instancia NUEVA del modelo, no
+            // el query. Quien filtra acá devuelve un Builder y `ListManager`
+            // revienta con un TypeError que no nombra el gancho ni la salida.
+            if (! $model instanceof Model) {
+                throw new \LogicException(sprintf(
+                    '%s::beforeList() devolvió %s: ese gancho recibe y devuelve una '
+                    .'instancia del modelo, no el query. Para filtrar el listado usá '
+                    .'beforeSearch(), que recibe el builder ya armado.',
+                    $service::class,
+                    get_debug_type($model),
+                ));
+            }
         }
 
         // Apply list management (filters, sorting, search, pagination)
