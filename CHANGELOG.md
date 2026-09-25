@@ -12,6 +12,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — 🔴 La caché de permisos por fin corre: nadie registraba el `AbilityResolver`
+
+`HasAbilities::canMk()` delega en `AbilityResolver`, y el resolver arranca con un
+guard: `if (! $app->bound(AbilityResolver::class)) return null;`. El guard existe
+para el unit test que no bootea un container — pero **ningún provider del paquete
+registraba la clase**, así que ese `null` era la respuesta de SIEMPRE, también en
+producción. Medido en una app booteada: `app()->bound(AbilityResolver::class)`
+daba `false`.
+
+Consecuencias, todas silenciosas:
+
+- `canMk()` caía siempre a `canMkLegacy()`, el camino con N+1 en policies y
+  middleware que la auditoría R4-001 documentó y que el resolver vino a
+  reemplazar. El arreglo estaba escrito, testeado y desconectado.
+- `invalidateAbilityCache()` —que `giveAbilityTo()`, `assignRole()` y compañía
+  llaman religiosamente— era un no-op: no había nada cacheado que invalidar.
+- El short-circuit de Sanctum del resolver no corría para una Policy que llama
+  `canMk()` directo (`MkAbility` sí hace su propio `tokenCan()` antes).
+
+Un fallback silencioso sobre un servicio que nadie registró es indistinguible de
+un fallback que nunca se usa: no falla, no loguea, y no tiene forma de notarse.
+
+### Added
+
+- `AuthServiceProvider` registra `AbilityResolver` con `scoped()`.
+
+### 🔴 Por qué `scoped()` con un `ArrayStore` y no la caché de la app
+
+Lo que R4-001 midió es un N+1 **dentro** de un request: la cadena de middleware y
+las policies llaman `canMk()` muchas veces por request y cada llamada volvía a la
+base. Una caché por request cubre el 100 % de eso.
+
+Usar la caché compartida de la app cubriría lo mismo y **agregaría un problema
+nuevo**: `AbilityResolver::invalidate()` es POR USUARIO, así que cambiarle las
+abilities a un ROL —lo que hace `PUT /roles/{id}/abilities`, y también cualquier
+`$role->abilities()->sync()`— no invalida a ninguno de sus usuarios. Con el TTL
+de 300 s serían cinco minutos de permisos viejos, sin error y sin rastro. Con un
+store por request no existe: el request siguiente arranca vacío.
+
+`scoped()` y no `singleton()` porque es lo que Octane reinicia entre requests; con
+`singleton()` un worker de larga vida se quedaría con la caché del primer usuario
+que atendió.
+
+No se le pasa `setLoader()`: `AbilityResolver::loadFromSource()` ya delega en
+`getEffectiveAbilities()`, que reusa las relaciones que `MkAuthenticate` deja
+cargadas. Un loader acá sería una SEGUNDA implementación de la misma regla de
+autorización.
+
+### BC-safe
+
+Sí. El resultado de `canMk()` no cambia —el resolver sin loader resuelve por
+`getEffectiveAbilities()`, que es lo mismo que `canMkLegacy()`— y los tokens que
+emite `TokenIssuer` sólo llevan `auth_scope:{scope}`, nunca abilities de RBAC ni
+`*`, así que el short-circuit de Sanctum no puede ampliar permisos. Lo que cambia
+es la cantidad de queries: menos. Medido en el consumidor: `netpizza-api`
+**1373/1373 en verde**.
+
+### Tests
+
+`tests/Feature/Auth/AbilityResolverEstaRegistradoTest.php`, 3 casos. El primero
+afirma el binding en una app booteada con los providers reales — un test que
+construya el resolver a mano pasa en verde con el bug vivo, que es exactamente lo
+que hacía `AbilityResolverTest`. El segundo prueba que la caché SIRVE: borra la
+fila del pivot por debajo y exige que la segunda respuesta siga siendo `true`.
+
+---
+
 ## [UNRELEASED] — 🔴 `mk:auth:create-super-admin` ya no crea el primer usuario SIN tenant
 
 El comando escribía la fila sin tocar la columna de tenant. En un scope generado

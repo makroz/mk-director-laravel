@@ -171,10 +171,9 @@ class AbilityResolver
             return is_array($result) ? array_values(array_unique($result)) : [];
         }
 
-        // Sin loader registrado —y HOY NO LO REGISTRA NADIE: `setLoader()` no
-        // tiene un solo call site en el paquete, así que este "fallback" es
-        // en realidad el camino normal de producción—, resolvemos por el
-        // usuario mismo.
+        // Sin loader registrado —y el provider del paquete NO le pasa uno a
+        // propósito, así que éste es el camino normal de producción—,
+        // resolvemos por el usuario mismo.
         //
         // 🔴 DELEGAR EN `getEffectiveAbilities()` NO ES SÓLO DRY. Este método
         // tenía una SEGUNDA implementación del mismo cálculo, y las dos
