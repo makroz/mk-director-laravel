@@ -12,6 +12,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — 🔴 `sendResponse()` ya pagina con un Resource elegido por el controller
+
+El camino de paginador de `BaseController::sendResponse()` era todo o nada:
+
+- Le pasás el **paginador** → emite `__extraData.pagination`, pero el Resource lo
+  resuelve `autoTransform()` por `Model::$apiResource`: el shaping lo elige el MODELO.
+- Le pasás la **`ResourceCollection`** —la única forma de que el shaping lo elija el
+  CONTROLLER— → `$isPaginator` da `false` y la metadata de paginación se pierde ENTERA.
+
+No había una tercera forma. Y `sendResponse(MiResource::collection($paginador))` es
+exactamente lo que alguien escribe cuando quiere las dos cosas.
+
+🔴 **El síntoma es el peor que hay**: 200, filas correctas, y la lista truncada en
+silencio. `useMkList` lee la paginación de un solo lugar (`__extraData.pagination`, sin
+fallback a `meta`), así que el front no puede ni saber que hay más páginas. Medido en el
+piloto sobre las 38 rutas de listado: **9 rutas de 8 controllers** paginaban de verdad y
+**ninguna** la emitía.
+
+### Fixed
+
+- `sendResponse()` detecta una `ResourceCollection` construida sobre un paginador
+  (`$result->resource instanceof AbstractPaginator|CursorPaginator`), toma los items con
+  `resolve()` —que respeta el Resource elegido— y la metadata del paginador.
+
+`ResourceCollection::collectResource()` deja el paginador en `$resource` —no una copia—
+y le setea adentro la colección ya mapeada, así que de ahí salen las dos mitades. **No**
+se usa `autoTransform()` en esa rama: pisaría la elección del controller con la del
+modelo, que es la mitad del defecto.
+
+### BC-safe
+
+Sí, y es **aditivo**: hoy ese caso no emite nada, así que nadie puede depender del
+comportamiento actual. Los tres caminos que ya funcionaban —paginador pelado,
+`ResourceCollection` sin paginar, modelo suelto— van con su control.
+
+### Tests
+
+`tests/Feature/BaseControllerResourceCollectionPaginadaTest.php`, 8 casos: la paginación
+emitida, **el shaping que sigue siendo el del controller** (sin esa mitad, «arreglarlo»
+sería el mismo bug con otra cara), el `data` plano, el cursor, el `$extra` del llamador
+que sigue ganando, y tres controles de los caminos viejos.
+
+### ⚠️ Dos reinyecciones VERDES, y las dos enseñaron algo
+
+1. Sacar `$paginadorDelResource !== null` de la condición que emite `__extraData` dejó
+   los ocho tests en verde: la rama nueva ya le puso `pagination` a `$extra`, así que
+   `$extra !== []` lo cubría. Era **código muerto** y se sacó — un `||` que nunca decide
+   nada es una invitación a leerlo como una regla que existe.
+2. Reemplazar `resolve()` por `autoTransform(new Collection($paginador->items()))`
+   también quedó verde: los items del paginador YA son instancias del Resource, así que
+   las dos formas dan la misma salida. Se dejó `resolve()` por ser la que expresa la
+   intención, no por medición.
+
+La reinyección que sí pone rojo es sacar la rama entera: 2 de 8.
+
+---
+
 ## [UNRELEASED] — 🔴 El sobre `{success}` se puede normalizar desde el paquete: `mk.envelope`
 
 El cliente HTTP del paquete (`@makroz/core`, `useApiCore.ts`) hace, textual:

@@ -11,6 +11,7 @@ use Illuminate\Http\Request;
 use Illuminate\Foundation\Bus\DispatchesJobs;
 use Illuminate\Foundation\Validation\ValidatesRequests;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
+use Illuminate\Http\Resources\Json\ResourceCollection;
 use Illuminate\Pagination\AbstractPaginator;
 use Illuminate\Pagination\CursorPaginator;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -89,6 +90,31 @@ abstract class BaseController extends LaravelController
     {
         $isPaginator = $result instanceof AbstractPaginator || $result instanceof CursorPaginator;
 
+        // 🔴 UNA `ResourceCollection` SOBRE UN PAGINADOR PERDÍA LA PAGINACIÓN ENTERA.
+        //
+        // El camino de arriba era todo o nada: con el PAGINADOR pelado salía
+        // `__extraData.pagination`, pero el Resource lo elegía el MODELO
+        // (`Model::$apiResource`, vía `autoTransform()`). Con la `ResourceCollection`
+        // —la única forma de que el shaping lo elija el CONTROLLER— `$isPaginator`
+        // daba `false` y la metadata se perdía entera. No había una tercera forma, y
+        // `sendResponse(MiResource::collection($paginador))` es exactamente lo que
+        // alguien escribe cuando quiere las dos cosas.
+        //
+        // El síntoma es el peor que hay: 200, filas correctas, y la lista truncada en
+        // silencio. `useMkList` lee la paginación de un solo lugar
+        // (`__extraData.pagination`, sin fallback a `meta`), así que el front no puede
+        // ni saber que hay más páginas. Medido en el piloto sobre 38 rutas de listado:
+        // 9 rutas de 8 controllers paginaban de verdad y NINGUNA la emitía.
+        //
+        // `ResourceCollection::collectResource()` deja el paginador en `$resource`
+        // —no una copia— y le setea adentro la colección ya mapeada, así que de ahí
+        // salen las dos mitades: los items por `resolve()` (que respeta el Resource
+        // elegido) y la metadata del paginador.
+        $paginadorDelResource = $result instanceof ResourceCollection
+            && ($result->resource instanceof AbstractPaginator || $result->resource instanceof CursorPaginator)
+                ? $result->resource
+                : null;
+
         if ($isPaginator) {
             $items = $result->items();
             // Wrap as Collection so autoTransform() picks up the model
@@ -100,6 +126,15 @@ abstract class BaseController extends LaravelController
             // defaults, then $extra — so caller can override the entire
             // `pagination` sub-object by passing `'pagination' => [...]`).
             $extra = array_merge(['pagination' => $this->extractPaginationMetadata($result)], $extra);
+        } elseif ($paginadorDelResource !== null) {
+            // `resolve()` devuelve los items ya pasados por el Resource que eligió el
+            // controller, planos. NO se usa `autoTransform()`: pisaría esa elección
+            // con la del modelo, que es la mitad del defecto.
+            $dataPayload = $result->resolve();
+            $extra = array_merge(
+                ['pagination' => $this->extractPaginationMetadata($paginadorDelResource)],
+                $extra,
+            );
         } else {
             $dataPayload = $this->autoTransform($result);
         }
@@ -115,6 +150,11 @@ abstract class BaseController extends LaravelController
         // Emit whenever paginator (auto-pagination meta) OR caller passed
         // non-empty $extra. Empty __extraData is omitted to keep the
         // response shape minimal for non-list endpoints.
+        // ⚠️ Acá NO hace falta preguntar por `$paginadorDelResource`: la rama de arriba
+        // ya le puso `pagination` a `$extra`, así que `$extra !== []` lo cubre. Se
+        // midió: agregar la condición y sacarla dejaba los ocho tests en verde, o sea
+        // que era código muerto. Un `||` de más que nunca decide nada es una invitación
+        // a que el próximo lo lea como una regla que existe.
         if ($isPaginator || $extra !== []) {
             $response['__extraData'] = $extra;
         }
