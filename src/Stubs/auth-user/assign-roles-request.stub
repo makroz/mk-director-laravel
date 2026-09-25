@@ -27,7 +27,20 @@ class AssignRolesRequest extends FormRequest
      */
     public function rules(): array
     {
-        $existingRoleNames = Role::query()->pluck('name')->all();
+        // 🔴 SÓLO LOS ROLES DE ESTE GUARD. La tabla `roles` es compartida y los
+        // nombres se repiten entre scopes POR DISEÑO: el scaffolder siembra
+        // `super-admin`, `admin`, `editor`, `viewer` y `base` en cada guard.
+        //
+        // Sin el filtro, el nombre de un rol del scope ajeno pasaba el `in:`. Y
+        // como el repositorio SÍ filtra por guard, el `sync()` no encontraba nada
+        // y BORRABA todos los roles del usuario contestando 200. Un 200 que borra
+        // en silencio es peor que la fuga original: la fuga dejaba un
+        // `viewer, viewer` visible en la pantalla; esto deja al usuario sin
+        // ninguna ability sin que nada lo diga.
+        $existingRoleNames = Role::query()
+            ->where('guard', '{{moduleNameLower}}')
+            ->pluck('name')
+            ->all();
 
         return [
             // `present` (no `required`) para que `{ "roles": [] }`

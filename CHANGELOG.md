@@ -12,6 +12,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — 🔴 La regla `in:` de los FormRequest generados aceptaba el nombre de un rol de OTRO guard
+
+La tabla `roles` es compartida y los nombres se repiten entre scopes **por diseño**:
+el scaffolder siembra `super-admin`, `admin`, `editor`, `viewer` y `base` en cada
+guard. `AssignRolesRequest` y `AssignAccessRequest` validaban con `in:` sobre
+`Role::query()->pluck('name')` —sin filtrar por guard—, así que el nombre de un rol
+del scope ajeno era «válido».
+
+🔴 **Y el síntoma de hoy es PEOR que la fuga original.** El repositorio generado ya
+filtra por guard (cerrado en `4625d6f`). Con el filtro de un lado y no del otro, el
+nombre ajeno pasa la validación, el repositorio no encuentra nada, y `sync([])`
+**borra todos los roles del usuario** contestando 200.
+
+Un 200 que borra en silencio es peor que la fuga: la fuga dejaba un `viewer, viewer`
+visible en la pantalla —la única pista, y sólo si alguien la miraba—, y esto deja al
+usuario sin ningún rol, o sea sin ninguna ability, sin que nada lo diga.
+
+### Fixed
+
+- `assign-roles-request.stub` y `assign-access-request.stub`: la lista del `in:` sale
+  de `Role::query()->where('guard', '{{moduleNameLower}}')`.
+
+### BC-safe
+
+Sí, y además cierra una puerta: lo que antes pasaba la validación y borraba en
+silencio ahora da 422. Sólo afecta a **scopes nuevos** (son stubs del scaffolder);
+ningún consumidor existente cambia sin volver a scaffoldear. Medido en el consumidor:
+`netpizza-api` **1373/1373 en verde** — ese repo ya había cerrado las dos mitades a
+mano.
+
+### Tests
+
+`tests/Feature/MakeAuthUserRolesPorGuardTest.php`, 5 casos sobre el código GENERADO
+(scaffolder en un directorio temporal + migraciones + los FormRequest reales).
+
+🔴 **El nombre del rol tiene que existir en OTRO guard**: con un nombre inventado el
+test pasa en verde con el bug vivo, porque el `in:` lo rechaza igual por no estar en
+ninguno. Lo único que discrimina es un nombre que existe, en el guard equivocado.
+
+Dos controles: el mismo nombre en el guard propio tiene que **pasar** (sin eso,
+«arreglarlo» rechazando todo también pone los rojos en verde y deja el endpoint
+inutilizable), y un quinto caso mide el daño concreto —el `sync()` con un nombre que
+el repositorio no encuentra deja al usuario con 0 roles—.
+
+⚠️ Y una trampa del harness que valía anotar: `FormRequest::failedValidation()` llama
+a `getRedirectUrl()` **siempre**, incluso con `Accept: application/json`, y el harness
+del paquete no tiene redirector. Sin `setRedirector(app('redirect'))` la excepción que
+sale es `Error: Call to a member function getUrlGenerator() on null`, no la
+`ValidationException`: un `toThrow(ValidationException::class)` daría rojo con la
+validación funcionando perfecto, midiendo el harness.
+
+---
+
 ## [UNRELEASED] — 🔴 Con `tenant.fail_closed` prendido, NADIE podía loguearse ni recuperar su contraseña
 
 Los siete lugares donde el `BaseAuthController` resuelve la identidad de alguien que
