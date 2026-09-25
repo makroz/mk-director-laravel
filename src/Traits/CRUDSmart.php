@@ -13,6 +13,7 @@ use Illuminate\Routing\Route;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Contracts\MkModuleServiceInterface;
@@ -86,6 +87,104 @@ trait CRUDSmart
      * El `return null` de abajo sigue siendo lo correcto para
      * `$mkConfig['service']` AUSENTE, que sí es opcional.
      */
+    /**
+     * Deja constancia de las claves que un HOOK escribió y el filtro de
+     * `$fillable` está por descartar.
+     *
+     * 🔴 EL PATRÓN MÁS NATURAL DEL PAQUETE NO FUNCIONABA, Y NO AVISABA.
+     *
+     * `CRUDSmart` corre `beforeCreate`/`beforeUpdate` y DESPUÉS filtra `$input`
+     * contra el `$fillable` del modelo. Así que la defensa obvia para un campo que
+     * no puede llegar del body —sacarlo del `$fillable` y escribirlo desde el
+     * Service, que es donde vive el usuario autenticado— se descarta sola: el hook
+     * lo pone y el filtro lo saca.
+     *
+     * ⚠️ Y SON DOS FILTROS, NO UNO. El obvio es el `array_intersect_key()` de abajo,
+     * pero `applyDTOValidation()` corre ANTES y, cuando el modelo no declara un DTO
+     * explícito, `DTOFactory::makeAuto()` hace su propio
+     * `array_intersect_key($data, array_flip($fillable))`. Medido acá: con el aviso
+     * puesto después de `applyDTOValidation()` no salía nunca, porque la clave ya no
+     * estaba. Por eso el aviso va ANTES de las dos — y por eso el orden de esas dos
+     * líneas no es cosmético.
+     *
+     * Medido en el piloto con `announcements`, y los dos síntomas son muy distintos:
+     *
+     *   | campo                  | síntoma                        | qué se ve |
+     *   |------------------------|--------------------------------|-----------|
+     *   | `tenant_id` (NOT NULL) | `SQLSTATE[23502]`              | ruidoso   |
+     *   | `author_id` (nullable) | la fila se crea con autor NULL | **nada**  |
+     *
+     * El segundo es el caro: un comunicado sin autor se lee como «dato viejo», no
+     * como «el pipeline tiró lo que el Service escribió». Y la defensa que uno creía
+     * haber puesto —«el autor sale del token»— no está puesta, mientras el código
+     * dice que sí.
+     *
+     * Las combinaciones que SÍ sirven, que conviene tener escritas porque no son
+     * simétricas:
+     *
+     *  - **fillable + pisado por el hook**: el hook sobrescribe lo que vino del body
+     *    sin mirarlo. Funciona.
+     *  - **no-fillable + escrito por el MODELO** (`creating`): el `$fillable` no
+     *    interviene porque no es mass assignment. Funciona, y además vale para
+     *    seeders y jobs, no sólo para el request.
+     *  - **no-fillable + escrito por el hook**: NO EXISTE. Es la que uno escribe
+     *    primero.
+     *
+     * ── 🔴 POR QUÉ SÓLO LAS CLAVES QUE EL HOOK AGREGÓ ───────────────────────
+     *
+     * Las claves que manda el CLIENTE y no son `fillable` las descarta el mismo
+     * filtro, y ahí el silencio es CORRECTO: es la lista blanca haciendo su trabajo.
+     * Avisar de ésas llenaría el log en cada request y enterraría el caso que
+     * importa. Lo que no puede pasar callado es una clave que NO venía en el
+     * request: ésa sólo pudo ponerla un hook o un plugin, o sea el consumidor, a
+     * propósito.
+     *
+     * ── Por qué un log y no una excepción ───────────────────────────────────
+     *
+     * Tirar acá cambiaría un 200 con un dato faltante por un 500, y hay consumidores
+     * cuyos hooks agregan claves de trabajo a propósito sabiendo que el filtro las
+     * saca. El aviso nombra las claves, la operación y el controller, que es todo lo
+     * que hace falta para ubicarlo; convertirlo en error es decisión del consumidor.
+     *
+     * @param  array<string, mixed>  $antesDeLosHooks
+     * @param  array<string, mixed>  $despuesDeLosHooks
+     * @param  array<int, string>  $fillable
+     */
+    protected function warnAboutHookKeysDiscardedByFillable(
+        array $antesDeLosHooks,
+        array $despuesDeLosHooks,
+        array $fillable,
+        string $operacion,
+    ): void {
+        $descartadas = array_values(array_diff(
+            array_keys($despuesDeLosHooks),
+            $fillable,
+            array_keys($antesDeLosHooks),
+        ));
+
+        if ($descartadas === []) {
+            return;
+        }
+
+        // El aviso no puede ser el problema nuevo: sin logger disponible, esto no
+        // puede tirar abajo una escritura que de por sí iba a funcionar.
+        try {
+            Log::warning(
+                'mk-director: un hook escribió claves que el filtro de $fillable descarta, '
+                .'así que no llegan a la base. Ponelas en $fillable y pisalas en el hook, '
+                .'o escribilas desde el modelo (evento `creating`).',
+                [
+                    'keys' => $descartadas,
+                    'operation' => $operacion,
+                    'controller' => static::class,
+                    'model' => $this->getModel(),
+                ],
+            );
+        } catch (\Throwable) {
+            // Sin logger no hay nada más que hacer.
+        }
+    }
+
     protected function getService(): ?MkModuleServiceInterface
     {
         $serviceClass = $this->mkConfig['service'] ?? null;
@@ -634,15 +733,18 @@ trait CRUDSmart
         // Plugin Hook: beforeSave
         $this->getPluginManager()->fireBeforeSave($request, $input, 'create');
 
+        $antesDeLosHooks = $input;
+
         if ($service && method_exists($service, 'beforeCreate')) {
             $input = $service->beforeCreate($request, $input) ?? $input;
         }
 
-        // Apply DTO validation (type safety + enum validation)
-        $input = $this->applyDTOValidation($input);
-
         // Filter input to only fillable fields
         $fillable = $this->getFillable();
+        $this->warnAboutHookKeysDiscardedByFillable($antesDeLosHooks, $input, $fillable, 'create');
+
+        // Apply DTO validation (type safety + enum validation)
+        $input = $this->applyDTOValidation($input);
         $input = array_intersect_key($input, array_flip($fillable));
 
         // 🔴 La escritura y sus hooks van en UNA transacción.
@@ -728,12 +830,15 @@ trait CRUDSmart
             foreach ($items as $raw) {
                 $data = $raw;
 
+                $antesDeLosHooks = $data;
+
                 $this->getPluginManager()->fireBeforeSave($request, $data, 'create');
 
                 if ($service && method_exists($service, 'beforeCreate')) {
                     $data = $service->beforeCreate($request, $data) ?? $data;
                 }
 
+                $this->warnAboutHookKeysDiscardedByFillable($antesDeLosHooks, $data, $fillable, 'create');
                 $data = $this->applyDTOValidation($data);
                 $data = array_intersect_key($data, array_flip($fillable));
 
@@ -824,16 +929,19 @@ trait CRUDSmart
         $this->getPluginManager()->setContextModel($model);
         $this->getPluginManager()->fireBeforeSave($request, $input, 'update');
 
+        $antesDeLosHooks = $input;
+
         // Apply service hook beforeUpdate
         if ($service && method_exists($service, 'beforeUpdate')) {
             $input = $service->beforeUpdate($request, $id, $input) ?? $input;
         }
 
-        // Apply DTO validation (type safety + enum validation)
-        $input = $this->applyDTOValidation($input);
-
         // Filter input to only fillable fields
         $fillable = $this->getFillable();
+        $this->warnAboutHookKeysDiscardedByFillable($antesDeLosHooks, $input, $fillable, 'update');
+
+        // Apply DTO validation (type safety + enum validation)
+        $input = $this->applyDTOValidation($input);
         $input = array_intersect_key($input, array_flip($fillable));
 
         // La escritura y sus hooks, en una transacción. Ver el comentario

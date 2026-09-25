@@ -12,6 +12,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — 🔴 Un campo que un hook escribe y no está en `$fillable` ya no se descarta callado
+
+`CRUDSmart` corre `beforeCreate`/`beforeUpdate` y **después** filtra `$input` contra
+el `$fillable` del modelo. Así que la defensa obvia para un campo que no puede llegar
+del body —sacarlo del `$fillable` y escribirlo desde el Service, que es donde vive el
+usuario autenticado— se descarta sola: el hook lo pone y el filtro lo saca.
+
+Medido en el piloto con `announcements`, y los dos síntomas son muy distintos:
+
+| campo                  | síntoma                        | qué se ve |
+|------------------------|--------------------------------|-----------|
+| `tenant_id` (NOT NULL) | `SQLSTATE[23502]`              | ruidoso   |
+| `author_id` (nullable) | la fila se crea con autor NULL | **nada**  |
+
+El segundo es el caro: un comunicado sin autor se lee como «dato viejo» o «lo cargó
+el sistema», no como «el pipeline tiró lo que el Service escribió». Y la defensa que
+uno creía haber puesto —«el autor sale del token»— no está puesta, mientras el código
+dice que sí.
+
+### Added
+
+- `CRUDSmart::warnAboutHookKeysDiscardedByFillable()`, llamada en `store()`,
+  `storeMany()` y `update()`. Registra un `Log::warning` con las claves, la operación,
+  el controller y el modelo, y nombra las dos salidas que sí funcionan.
+
+### 🔴 Sólo avisa de las claves que el HOOK agregó
+
+Las claves que manda el CLIENTE y no son `fillable` las descarta el mismo filtro, y
+ahí el silencio es **correcto**: es la lista blanca haciendo su trabajo. Avisar de
+ésas llenaría el log en cada request y enterraría el caso que importa. Lo que no puede
+pasar callado es una clave que NO venía en el request: ésa sólo pudo ponerla un hook o
+un plugin, o sea el consumidor, a propósito.
+
+### ⚠️ Y la causa documentada estaba una línea corrida: son DOS filtros
+
+El obvio es el `array_intersect_key()`. Pero `applyDTOValidation()` corre **antes** y,
+cuando el modelo no declara un DTO explícito, `DTOFactory::makeAuto()` hace su propio
+`array_intersect_key($data, array_flip($fillable))`. Medido: con el aviso puesto
+después de `applyDTOValidation()` **no salía nunca**, porque la clave ya no estaba.
+Por eso el aviso va antes de las dos, y por eso el orden de esas líneas no es
+cosmético.
+
+### Por qué un log y no una excepción
+
+Tirar ahí cambiaría un 200 con un dato faltante por un 500, y hay consumidores cuyos
+hooks agregan claves de trabajo a propósito sabiendo que el filtro las saca. El aviso
+trae todo lo que hace falta para ubicarlo; convertirlo en error es decisión del
+consumidor.
+
+### Las tres combinaciones, escritas porque no son simétricas
+
+- **fillable + pisado por el hook**: el hook sobrescribe lo que vino del body sin
+  mirarlo. Funciona.
+- **no-fillable + escrito por el MODELO** (`creating`): el `$fillable` no interviene
+  porque no es mass assignment. Funciona, y además vale para seeders y jobs.
+- **no-fillable + escrito por el hook**: NO EXISTE. Es la que uno escribe primero.
+
+### BC-safe
+
+Sí: el comportamiento de escritura no cambia en nada, sólo se agrega una línea de log
+en el caso que hoy es silencioso. Medido en el consumidor: `netpizza-api`
+**1373/1373 en verde**.
+
+### Tests
+
+`tests/Unit/CRUDSmartHookEscribeFueraDelFillableTest.php`, 6 casos. Cuatro miden la
+**discriminación** —que es donde está la sutileza— y tres de ésos son controles: sin
+ellos, «avisar de todo lo que el filtro descarta» también pone el rojo en verde.
+
+🔴 **Y el sexto corre `store()` de verdad contra sqlite**, porque los otros cinco
+pasan en verde con el método escrito y nunca llamado — que es la forma exacta en la
+que este paquete ya se equivocó dos veces (la Policy que `CRUDSmart` no invocaba, el
+`AbilityResolver` que nadie bindeaba). Reinyección: sacar la llamada de `store()`
+deja los cinco unitarios verdes y sólo ese sexto rojo.
+
+---
+
 ## [UNRELEASED] — 🔴 La regla `in:` de los FormRequest generados aceptaba el nombre de un rol de OTRO guard
 
 La tabla `roles` es compartida y los nombres se repiten entre scopes **por diseño**:
