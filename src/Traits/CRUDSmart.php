@@ -65,6 +65,26 @@ trait CRUDSmart
      * clases concretas auto-resolvibles (`class_exists()`) vía
      * `app()->make()` — el container de Laravel ya sabe instanciar
      * concrete classes con dependencias resolvibles sin bind explícito.
+     *
+     * 🔴 Y UN `service` DECLARADO QUE NO SE PUEDE RESOLVER AHORA EXPLOTA.
+     *
+     * Antes devolvía `null`, igual que el `service` ausente. Y como cada hook
+     * está guardado con `if ($service && method_exists(...))`, un FQCN mal
+     * formado apagaba TODOS los hooks del módulo sin una sola línea de log.
+     *
+     * La forma fácil de conseguirlo no es un typo: es un `Foo::class` SIN su
+     * `use`. PHP lo resuelve contra el namespace del archivo actual, así que un
+     * service que vive en `App\Modules\Admin\Services` se pinea como
+     * `App\Modules\Admin\Http\Controllers\FooService` y nadie se queja.
+     *
+     * 🔴 El síntoma es indistinguible de «el fix no funciona»: así se encontró,
+     * cableando un filtro por scope. El endpoint siguió respondiendo 200 con los
+     * datos sin filtrar — exactamente la misma respuesta que antes del arreglo—,
+     * o sea que el bug se buscó en el hook, que era el único lugar donde no
+     * estaba.
+     *
+     * El `return null` de abajo sigue siendo lo correcto para
+     * `$mkConfig['service']` AUSENTE, que sí es opcional.
      */
     protected function getService(): ?MkModuleServiceInterface
     {
@@ -76,8 +96,20 @@ trait CRUDSmart
 
         // Si es un string, resolver del container: bindeado explícito O
         // clase concreta auto-resolvible.
-        if (is_string($serviceClass) && (app()->bound($serviceClass) || class_exists($serviceClass))) {
-            return app()->make($serviceClass);
+        if (is_string($serviceClass)) {
+            if (app()->bound($serviceClass) || class_exists($serviceClass)) {
+                return app()->make($serviceClass);
+            }
+
+            throw new \LogicException(sprintf(
+                'El `service` declarado en $mkConfig de %s no existe: `%s`. '
+                .'Si el FQCN parece del namespace del controller, falta el `use` '
+                .'de la clase del Service — PHP resuelve `Foo::class` contra el '
+                .'namespace del archivo actual. Sin esto, TODOS los hooks del '
+                .'módulo quedan apagados en silencio.',
+                static::class,
+                $serviceClass,
+            ));
         }
 
         if ($serviceClass instanceof MkModuleServiceInterface) {

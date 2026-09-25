@@ -12,6 +12,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — 🔴 Un `service` declarado y no resoluble ya no apaga todos los hooks en silencio
+
+`CRUDSmart::getService()` devolvía `null` cuando `$mkConfig['service']` nombraba
+una clase inexistente — lo mismo que devuelve cuando no hay `service` configurado.
+Y como cada hook está guardado con `if ($service && method_exists(...))`, un FQCN
+mal formado apagaba **todos** los hooks del módulo (`beforeList`, `beforeCreate`,
+`beforeSearch`, `setExtraData`, …) sin una sola línea de log.
+
+La forma fácil de conseguirlo no es un typo: es un **`Foo::class` sin su `use`**.
+PHP lo resuelve contra el namespace del archivo actual, así que un service que
+vive en `App\Modules\Admin\Services` se pinea como
+`App\Modules\Admin\Http\Controllers\FooService` y nadie se queja.
+
+🔴 **Y el síntoma es indistinguible de «el fix no funciona».** Así se encontró,
+cableando un filtro por scope: el endpoint siguió respondiendo 200 con los datos
+sin filtrar, exactamente la misma respuesta que antes del arreglo. O sea que el
+bug se buscó en el hook, que era el único lugar donde no estaba.
+
+### Changed
+
+- `CRUDSmart::getService()` lanza `\LogicException` cuando `$mkConfig['service']`
+  es un string y la clase no existe ni está bindeada. El mensaje nombra la clase y
+  el controller, y menciona el `use` faltante, que es la causa más probable.
+- `$mkConfig['service']` **ausente** sigue devolviendo `null`: eso sí es opcional.
+
+### BC-safe
+
+Sí, para todo consumidor cuyo `service` exista — que es el único que hoy tiene los
+hooks corriendo. Un consumidor con el FQCN mal formado ya tenía sus hooks muertos:
+lo que cambia es que ahora se enteran. Medido en el consumidor: `netpizza-api`
+**1373/1373 en verde**.
+
+### Tests
+
+3 casos nuevos en `tests/Unit/CRUDSmartGetServiceTest.php` (el archivo que ya
+cubría este método), con el mismo FQCN falso de la medición original y un control
+que exige que el `service` legítimo siga resolviendo y el ausente siga dando
+`null`.
+
+---
+
 ## [UNRELEASED] — 🔴 La caché de permisos por fin corre: nadie registraba el `AbilityResolver`
 
 `HasAbilities::canMk()` delega en `AbilityResolver`, y el resolver arranca con un

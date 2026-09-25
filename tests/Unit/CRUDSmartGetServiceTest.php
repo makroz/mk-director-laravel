@@ -142,3 +142,48 @@ test('F10-B03: el hook resuelto por getService() efectivamente se dispara (befor
     expect($service->beforeCreateWasCalled)->toBeTrue();
     expect($result)->toHaveKey('touched_by_service');
 });
+
+/*
+|--------------------------------------------------------------------------
+| HALLAZGO 26: un `service` declarado y NO resoluble devolvía `null`.
+|
+| El `return null` de abajo es correcto para `$mkConfig['service']` AUSENTE,
+| que sí es opcional. Para un string que nombra una clase que no existe es
+| una trampa de depuración cara: un `Foo::class` sin su `use` lo resuelve PHP
+| contra el namespace del archivo actual, así que el FQCN sale mal formado sin
+| ningún error. `getService()` devolvía `null`, y como cada hook está guardado
+| con `if ($service && method_exists(...))`, TODOS los hooks del módulo dejaban
+| de correr sin una sola línea de log.
+|
+| 🔴 Y el síntoma es indistinguible de "el fix no funciona": así se encontró,
+| cableando el filtro por scope del hallazgo 19 — el endpoint siguió
+| respondiendo 200 con los datos sin filtrar, exactamente igual que antes.
+|--------------------------------------------------------------------------
+*/
+
+test('🔴 HALLAZGO 26: un `service` que nombra una clase inexistente explota, no devuelve null', function () {
+    $controller = new F10B03FakeController([
+        'service' => 'App\\Modules\\Admin\\Http\\Controllers\\RbacCatalogService',
+    ]);
+
+    expect(fn () => $controller->exposeGetService())
+        ->toThrow(\LogicException::class);
+});
+
+test('HALLAZGO 26: el mensaje nombra la clase, que es el único dato que hace falta', function () {
+    $controller = new F10B03FakeController(['service' => 'Namespace\\Mal\\Puesto\\FooService']);
+
+    expect(fn () => $controller->exposeGetService())
+        ->toThrow(\LogicException::class, 'Namespace\Mal\Puesto\FooService');
+});
+
+/**
+ * El control: sin esto el rojo de arriba podría salir de cualquier string y el
+ * `service` legítimo quedaría roto igual.
+ */
+test('CONTROL: un `service` que SÍ existe sigue resolviendo, y el ausente sigue dando null', function () {
+    expect((new F10B03FakeController(['service' => F10B03FakeService::class]))->exposeGetService())
+        ->toBeInstanceOf(F10B03FakeService::class);
+
+    expect((new F10B03FakeController([]))->exposeGetService())->toBeNull();
+});
