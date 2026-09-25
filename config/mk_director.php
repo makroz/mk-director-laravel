@@ -847,6 +847,30 @@ return [
         // with the flag on see no change. Consumers that ran rc12 with the
         // flag off see the new shape — RETO migration tracked in sprint
         // `2026-06-28-fase-12-retos-bump-v170`.
+
+        // 🔴 EL SOBRE `{success}` ES CONTRATO DURO DEL CLIENTE, Y HASTA ACÁ SÓLO LO
+        // EMITÍA `BaseController::sendResponse()`.
+        //
+        // `@makroz/core` hace `if (result.success !== true) throw`, así que CUALQUIER
+        // 2xx sin `success` explota en el cliente. Y `CRUDSmart` no sirve para tomar
+        // un pedido, cobrar ni sincronizar: para eso el consumidor escribe un
+        // controller que extiende `Illuminate\Routing\Controller` y devuelve
+        // `{data: ...}` sin sobre. Válido para Laravel, ilegible para el cliente del
+        // propio paquete. En el piloto NetPizza eso fueron 9 rutas con 200 sin sobre
+        // —detrás de 473 tests en verde— y 15 más que lo perdían en el error.
+        //
+        // Con esto en `true`, `Mk\Director\Http\Middleware\MkEnvelope` se empuja al
+        // grupo `api` y toda respuesta JSON sale con el sobre. El `data` se LEVANTA,
+        // no se anida: nunca produce `data.data`.
+        //
+        // ⚠️ DEFAULT `false` A PROPÓSITO, igual que `authorize_with_policy`:
+        // prenderlo en un `composer update` reescribiría el cuerpo de todas las
+        // respuestas JSON sin que nadie lo pidiera. Un consumidor que ya normalizó el
+        // sobre por su cuenta tiene que sacar su middleware ANTES de prender esto.
+        //
+        // Para una parte de la API en vez de todo el grupo `api`, está el alias
+        // `mk.envelope`, que se registra siempre.
+        'force_envelope' => env('MK_FORCE_ENVELOPE', false),
     ],
 
     /*

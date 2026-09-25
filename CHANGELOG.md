@@ -12,6 +12,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — 🔴 El sobre `{success}` se puede normalizar desde el paquete: `mk.envelope`
+
+El cliente HTTP del paquete (`@makroz/core`, `useApiCore.ts`) hace, textual:
+
+```ts
+if (!result || result.success !== true) throw new ApiCoreError(...)
+```
+
+O sea que **cualquier 2xx sin `success: true` explota en el cliente**. Y del lado de
+Laravel lo único que emitía ese sobre era `BaseController::sendResponse()`.
+
+`CRUDSmart` no sirve para tomar un pedido, cobrar, encolar una impresión ni
+sincronizar: para eso el consumidor escribe un controller que extiende
+`Illuminate\Routing\Controller`, devuelve `Resource->response()`, y produce
+`{data: ...}` sin `success`. Válido para Laravel, ilegible para el cliente del propio
+paquete. En el piloto NetPizza el defecto vivió detrás de **473 tests en verde** hasta
+que la app de meseros usó `useApiClient()` contra un controller escrito a mano: el
+barrido de rutas dio **9 rutas con 200 sin sobre** y 15 más que lo perdían en el camino
+de error. No era un módulo: eran seis.
+
+### Added
+
+- `Mk\Director\Http\Middleware\MkEnvelope`: normaliza toda respuesta JSON a
+  `{success, message, data}`.
+- Alias **`mk.envelope`**, registrado siempre, para normalizar una parte de la API.
+- `mk_director.response.force_envelope` (env `MK_FORCE_ENVELOPE`): lo empuja al grupo
+  `api` entero.
+
+### 🔴 El `data` se LEVANTA, no se anida
+
+Un `Resource->response()` ya produce `{data: {...}}` y una colección paginada
+`{data: [...], links, meta}`. El middleware toma ESE `data` y le agrega
+`success`/`message` como **hermanos**, dejando los demás keys donde estaban. Envolver
+el cuerpo entero adentro de `data` daría `data.data.*` y rompería toda aserción
+existente — y eso no sería «hay que reescribir los tests», sería la señal de que la
+forma elegida es la equivocada. Es además la misma forma de un nivel que R-PKG-024 ya
+impuso.
+
+### Lo que no toca
+
+Lo que ya trae `success` (las respuestas del propio paquete: reescribirlas pisaría
+`__extraData` y `debugMsg`), los `204`/`304` (meterles cuerpo los vuelve inválidos), y
+cualquier cosa que no sea una `JsonResponse` con un array adentro.
+
+`success` sale del **status**, no de una opinión: un 4xx con `success: true` haría que
+el cliente tratara un error como un éxito, que es peor que el bug original.
+
+### BC-safe
+
+Sí. El alias registrado no cambia el comportamiento de nadie, y
+`force_envelope` es **opt-in, default `false`, a propósito** — el mismo criterio que
+`authorize_with_policy`: prenderlo en un `composer update` reescribiría el cuerpo de
+todas las respuestas JSON de todo consumidor sin que nadie lo pidiera, y un consumidor
+que ya normalizó el sobre por su cuenta terminaría con dos middlewares peleando por la
+misma forma.
+
+### ⚠️ Lo que queda afuera
+
+El segundo punto del hallazgo —el mensaje `'API returned success=false'`, que manda a
+buscar en el servidor un `success:false` que no existe— vive en `@makroz/core`, o sea
+en el paquete TypeScript. No se toca desde acá.
+
+### Tests
+
+- `tests/Unit/Http/MkEnvelopeMiddlewareTest.php`, 9 casos: la forma del sobre, el
+  `data` al mismo nivel, el `message` que sube antes que el `data`, y cuatro controles
+  de lo que NO toca.
+- `tests/Feature/Http/MkEnvelopeCableadoTest.php`, 6 casos por el Kernel real, porque
+  los nueve de arriba **pasan en verde con el middleware escrito y nunca registrado** —
+  que es exactamente cómo este paquete ya se equivocó tres veces (hallazgos 31, 13 y
+  14). Incluye el control de que el **default no fuerza nada**: sin él, el día que el
+  default cambie sin que nadie lo decida es un BC break silencioso.
+
+⚠️ Y una que costó una reinyección verde: **el segundo argumento de `config()` es
+inerte para esta clave**. `mergeConfigFrom()` trae el bloque `response` del
+`config/mk_director.php` del paquete para todo consumidor que no lo haya publicado, así
+que la clave EXISTE con su `false` y el default de la línea nunca se lee. El default
+que manda es el del archivo de config — reinyectar ahí sí pone rojo el control.
+
+---
+
 ## [UNRELEASED] — La Policy generada ahora se PRUEBA corriendo, no grepeando
 
 El hallazgo 3 del piloto —las Policies generadas llamaban a `hasAbility()`, que no

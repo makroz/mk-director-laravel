@@ -38,6 +38,7 @@ use Mk\Director\Export\Contracts\ReportHeaderProvider;
 use Mk\Director\Export\Controllers\MkReportController;
 use Mk\Director\Export\FilasDelExport;
 use Mk\Director\Export\Support\DefaultReportHeaderProvider;
+use Mk\Director\Http\Middleware\MkEnvelope;
 use Mk\Director\Managers\CacheManager;
 use Mk\Director\Managers\PluginManager;
 use Mk\Director\Models\MkReport;
@@ -224,6 +225,7 @@ class MkServiceProvider extends ServiceProvider
         $this->applyRequestAwareStorageUrl();
 
         $this->registerTenantMiddleware();
+        $this->registerEnvelopeMiddleware();
 
         // R2-005: Flush the TenantContext at the end of every request
         // so long-lived workers (Octane / Swoole) do not leak tenant
@@ -538,6 +540,39 @@ class MkServiceProvider extends ServiceProvider
         /** @var Router $router */
         $router = $this->app['router'];
         $router->pushMiddlewareToGroup('api', TenantResolver::class);
+    }
+
+    /**
+     * Registra el normalizador del sobre `{success, message, data}`.
+     *
+     * El alias `mk.envelope` va SIEMPRE: registrar un alias no cambia el
+     * comportamiento de nadie y es lo que permite ponerlo en una parte de la API.
+     *
+     * El empujón al grupo `api` va detrás de `mk_director.response.force_envelope`
+     * (env `MK_FORCE_ENVELOPE`), default `false`.
+     *
+     * ⚠️ El default no es timidez: prenderlo en un `composer update` reescribiría el
+     * cuerpo de TODAS las respuestas JSON de todo consumidor sin que nadie lo pidiera,
+     * y un consumidor que ya normalizó el sobre por su cuenta terminaría con dos
+     * middlewares peleando por la misma forma. El porqué completo está en
+     * {@see MkEnvelope}.
+     */
+    protected function registerEnvelopeMiddleware(): void
+    {
+        /** @var Router $router */
+        $router = $this->app['router'];
+        $router->aliasMiddleware('mk.envelope', MkEnvelope::class);
+
+        // ⚠️ EL SEGUNDO ARGUMENTO DE `config()` ES CASI SIEMPRE INERTE ACÁ, Y MEDIRLO
+        // COSTÓ UNA REINYECCIÓN QUE QUEDÓ VERDE. `mergeConfigFrom()` trae el
+        // `response` del `config/mk_director.php` del paquete para todo consumidor que
+        // no lo haya publicado, así que la clave EXISTE con su `false` y el default de
+        // esta línea nunca se lee. El default que manda es el del archivo de config.
+        // Se deja igual porque cubre el consumidor con una config publicada vieja, que
+        // no tiene el bloque.
+        if (filter_var(config('mk_director.response.force_envelope', false), FILTER_VALIDATE_BOOLEAN)) {
+            $router->pushMiddlewareToGroup('api', MkEnvelope::class);
+        }
     }
 
     /**
