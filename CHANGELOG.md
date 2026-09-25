@@ -12,6 +12,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — 🔴 Las `rules()` de un FormRequest pueden limitar lo que se escribe: `write_only_validated`
+
+`CRUDSmart::store()`/`update()` usaban `$request->all()` y filtraban contra `$fillable`.
+`validateResolved()` verifica lo que llegó pero **no lo recorta**, así que cualquier campo
+`fillable` ausente de `rules()` viajaba hasta la escritura.
+
+🔴 **Eso convierte «no lo puse en las reglas» en una defensa IMAGINARIA**, que es la peor
+clase: se lee en el diff como si defendiera. El autor de un `UpdateRequest` cree que
+declara qué se puede **editar**, y sólo declara qué se **valida**. Lo que se puede editar
+es `$fillable`, que vive en otro archivo y se escribió pensando en el ALTA.
+
+En el piloto el campo expuesto era el eje de aislamiento (`branch_id`): un área que
+cambiaba de sucursal dejaba sus mesas —y los pedidos históricos de esas mesas— apuntando
+a otro edificio, y como el scope filtra por esa columna la fila **desaparece** de la
+pantalla de quien la acaba de editar. El síntoma no es «se movió», es «se borró».
+
+Es el mismo hueco que el aviso del hallazgo 14 por el otro lado: no se puede escribir lo
+que no es fillable, **y se puede escribir todo lo que sí lo es**.
+
+### Added
+
+- `mk_director.features.write_only_validated` (env `MK_WRITE_ONLY_VALIDATED`), y
+  `$mkConfig['features']['write_only_validated']` per-controller, que gana sobre el
+  global en los dos sentidos.
+- `CRUDSmart::inputParaEscritura()`: con el flag prendido y un FormRequest resuelto, la
+  entrada sale de `validated()`.
+
+### Fixed
+
+- **El docblock que afirmaba lo contrario.** Decía «el FormRequest tiene `validated()` +
+  `all()` filtrados — el controller sigue trabajando con `$request->all()`, ahora
+  filtrado». `validated()` sí queda filtrado; `all()` **no**, y `all()` era lo que el
+  trait usaba.
+
+### ⚠️ Default apagado, y el default se mide
+
+Un consumidor que hoy dependa de escribir un campo que no declaró en `rules()` dejaría
+de escribirlo **sin error**: la fila se guarda con el valor viejo. Prenderlo en un
+`composer update` sería cambiar datos sin que nadie lo pida. Mismo criterio que
+`authorize_with_policy`.
+
+🔴 **Y sólo aplica si hay un FormRequest resuelto**: `validated()` no existe en una
+`Request` común, así que un controller sin `store_request`/`update_request` con el flag
+prendido dejaría de escribir TODO. Eso no sería una defensa, sería el CRUD roto en
+silencio. Tiene su propio test.
+
+### BC-safe
+
+Sí, default apagado. Medido en el consumidor: `netpizza-api` **1385/1385 en verde**.
+
+### Tests
+
+`tests/Feature/CrudSmartEscribeSoloLoValidadoTest.php`, 5 casos por la cadena HTTP real,
+con `httpSendPatch()` nuevo en el harness.
+
+🔴 **La primera versión del test era CIEGA y pasó en verde con el flag sin implementar.**
+Instanciaba el controller a mano, y ahí el FormRequest llegaba **vacío** —lo que le copia
+la entrada es el callback `resolving` de `FoundationServiceProvider`, que el harness no
+registra—, así que no se escribía nada y el campo quedaba con el valor viejo por el motivo
+equivocado. Se descubrió porque el control del default también daba rojo. Un valor de
+prueba que el bug puede producir por casualidad no mide nada, y acá el bug producía justo
+el valor esperado.
+
+### Un pin reescrito, no rodeado
+
+`CRUDSmartFormRequestTest` afirmaba el orden «`resolveFormRequest()` antes de la lectura»
+buscando la cadena literal `$request->all()`, y se puso rojo sin que el orden cambiara.
+El pin se reescribió contra la lectura real (`inputParaEscritura($request)`): el orden es
+la regla, el nombre de la llamada no.
+
+---
+
 ## [UNRELEASED] — 🔴 `sendResponse()` ya pagina con un Resource elegido por el controller
 
 El camino de paginador de `BaseController::sendResponse()` era todo o nada:

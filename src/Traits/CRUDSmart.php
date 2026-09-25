@@ -295,6 +295,70 @@ trait CRUDSmart
     }
 
     /**
+     * ¿Este controller escribe SÓLO lo que el FormRequest declaró en `rules()`?
+     *
+     * Mismo criterio que {@see isPolicyAuthorizationEnabled()}: el valor
+     * per-controller gana en los dos sentidos sobre el global.
+     */
+    protected function isWriteOnlyValidatedEnabled(): bool
+    {
+        $features = $this->getListFeatures();
+
+        if (array_key_exists('write_only_validated', $features)) {
+            return (bool) $features['write_only_validated'];
+        }
+
+        return (bool) config('mk_director.features.write_only_validated', false);
+    }
+
+    /**
+     * La entrada que va a la escritura.
+     *
+     * 🔴 LAS `rules()` DE UN FORMREQUEST NO LIMITABAN LO QUE SE ESCRIBE.
+     *
+     * `store()`/`update()` usaban `$request->all()` y filtraban contra `$fillable`.
+     * `validateResolved()` verifica lo que llegó pero **no lo recorta**, así que
+     * cualquier campo `fillable` ausente de `rules()` viajaba hasta el `update()`.
+     *
+     * Eso convierte «no lo puse en las reglas» en una defensa IMAGINARIA, que es la peor
+     * clase: se lee en el diff como si defendiera. El autor de un `UpdateRequest` cree
+     * que declara qué se puede editar, y sólo declara qué se valida. Lo que se puede
+     * editar es `$fillable`, que vive en otro archivo y se escribió pensando en el ALTA.
+     *
+     * En el piloto el campo expuesto era el eje de aislamiento (`branch_id`): un área
+     * que cambia de sucursal deja sus mesas apuntando a otro edificio, y como el scope
+     * filtra por esa columna la fila DESAPARECE de la pantalla de quien la acaba de
+     * editar. El síntoma no es «se movió», es «se borró».
+     *
+     * Es el mismo hueco que el aviso de
+     * {@see warnAboutHookKeysDiscardedByFillable()} por el otro lado: no se puede
+     * escribir lo que no es fillable, y se puede escribir todo lo que sí lo es.
+     *
+     * ── ⚠️ POR QUÉ VA CON TOGGLE Y DEFAULT APAGADO ─────────────────────────
+     *
+     * Un consumidor que hoy dependa de escribir un campo que no declaró en `rules()`
+     * dejaría de escribirlo SIN ERROR: la fila se guarda con el valor viejo.
+     * Prenderlo en un `composer update` sería cambiar datos sin que nadie lo pida.
+     *
+     * ── 🔴 Y SÓLO APLICA SI HAY UN FORMREQUEST RESUELTO ────────────────────
+     *
+     * `validated()` no existe en una `Request` común. Un controller sin
+     * `store_request`/`update_request` con el flag prendido dejaría de escribir TODO, y
+     * eso no sería una defensa: sería el CRUD roto en silencio. Por eso el
+     * `instanceof`, y por eso tiene su propio test.
+     *
+     * @return array<string, mixed>
+     */
+    protected function inputParaEscritura(Request $request): array
+    {
+        if ($request instanceof FormRequest && $this->isWriteOnlyValidatedEnabled()) {
+            return $request->validated();
+        }
+
+        return $request->all();
+    }
+
+    /**
      * Invocar la Policy del modelo configurado, si la hay y si está activada.
      *
      * ── 🔴 LOS TRES DETALLES QUE HACEN QUE ESTO SEA SEGURO ──────────────
@@ -719,7 +783,7 @@ trait CRUDSmart
         );
 
         // Apply service hook beforeCreate
-        $input = $request->all();
+        $input = $this->inputParaEscritura($request);
 
         // FEEDBACK (bulk) — if the payload is a list of objects, do a
         // transactional bulk insert instead of a single create. This pairs
@@ -921,7 +985,7 @@ trait CRUDSmart
         $this->authorizeWithMkPolicy('update', $request, $model);
 
         // Get input
-        $input = $request->all();
+        $input = $this->inputParaEscritura($request);
 
         // Plugin Hook: beforeSave — el modelo persistido va como contexto para
         // que los plugins puedan ver el estado previo (e.g. FileStoragePlugin
@@ -1195,8 +1259,16 @@ trait CRUDSmart
         // ValidationException se lanza → manejado por el framework → 422.
         $formRequest->validateResolved();
 
-        // Post-validación, el FormRequest tiene `validated()` + `all()` filtrados.
-        // El controller sigue trabajando con `$request->all()` etc. — ahora filtrado.
+        // 🔴 `validated()` SÍ QUEDA FILTRADO. `all()` NO.
+        //
+        // Este comentario decía «el FormRequest tiene `validated()` + `all()` filtrados
+        // — el controller sigue trabajando con `$request->all()`, ahora filtrado», y era
+        // FALSO: `validateResolved()` verifica lo que llegó pero no lo recorta. Todo
+        // campo `fillable` ausente de `rules()` viajaba igual hasta la escritura, así que
+        // «no lo puse en las reglas» era una defensa imaginaria.
+        //
+        // Quién decide de dónde sale la entrada está en
+        // {@see inputParaEscritura()}, detrás del flag `write_only_validated`.
         return $formRequest;
     }
 

@@ -62,12 +62,19 @@ test('R-PKG-046 F9-B08 — store() llama resolveFormRequest ANTES de $request->a
     expect($storeBody)->toContain('resolveFormRequest(');
     expect($storeBody)->toContain('store_request');
 
-    // El resolveFormRequest debe correr ANTES de $request->all().
+    // El resolveFormRequest debe correr ANTES de que se LEA la entrada.
+    //
+    // ⚠️ ESTE PIN BUSCABA LA CADENA `$request->all()`, Y ESO NO ERA LO QUE QUERÍA
+    // CUIDAR. La lectura de la entrada pasó a `inputParaEscritura($request)` —el
+    // hallazgo 33: `validated()` en vez de `all()` cuando el consumidor lo pide—, y el
+    // pin se puso rojo sin que el orden hubiera cambiado. Un pin escrito contra el
+    // NOMBRE de una llamada se rompe en cada refactor y no detecta nada nuevo; el orden
+    // sí es la regla, así que se mide el orden contra la lectura, como se llame.
     $resolvePos = strpos($storeBody, 'resolveFormRequest(');
-    $allPos = strpos($storeBody, '$request->all()');
+    $inputPos = strpos($storeBody, 'inputParaEscritura($request)');
     expect($resolvePos)->not->toBeFalse();
-    expect($allPos)->not->toBeFalse();
-    expect($resolvePos)->toBeLessThan($allPos);
+    expect($inputPos)->not->toBeFalse();
+    expect($resolvePos)->toBeLessThan($inputPos);
 });
 
 test('R-PKG-046 F9-B08 — update() llama resolveFormRequest con route param para Rule::unique', function () {
@@ -86,12 +93,12 @@ test('R-PKG-046 F9-B08 — update() llama resolveFormRequest con route param par
     expect($updateBody)->toContain('resolveFormRequest(');
     expect($updateBody)->toContain('update_request');
 
-    // El resolveFormRequest debe correr ANTES de $request->all().
+    // Idem store(): el orden es la regla, no el nombre de la llamada.
     $resolvePos = strpos($updateBody, 'resolveFormRequest(');
-    $allPos = strpos($updateBody, '$request->all()');
+    $inputPos = strpos($updateBody, 'inputParaEscritura($request)');
     expect($resolvePos)->not->toBeFalse();
-    expect($allPos)->not->toBeFalse();
-    expect($resolvePos)->toBeLessThan($allPos);
+    expect($inputPos)->not->toBeFalse();
+    expect($resolvePos)->toBeLessThan($inputPos);
 });
 
 test('R-PKG-046 F9-B08 — resolveFormRequest() corre validateResolved() (FormRequest validation)', function () {

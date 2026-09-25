@@ -166,6 +166,19 @@ trait BootsHttpApp
     }
 
     /**
+     * Igual que {@see httpPost()}, con `PATCH`. Existe porque el CRUD del paquete
+     * expone la edición por `PUT`/`PATCH` y un test de edición no se puede escribir
+     * con `httpPost()` sin medir otra ruta.
+     *
+     * @param  array<string,mixed>  $data
+     * @param  array<string,string>  $headers
+     */
+    public function httpSendPatch(string $uri, array $data = [], array $headers = []): Response
+    {
+        return $this->httpSend('PATCH', $uri, $data, $headers);
+    }
+
+    /**
      * @param  array<string,mixed>  $data
      * @param  array<string,string>  $headers
      */

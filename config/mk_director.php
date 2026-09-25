@@ -109,6 +109,44 @@ return [
          */
         'authorize_with_policy' => env('MK_AUTHORIZE_WITH_POLICY', false),
 
+        /*
+         * 🔴 LAS `rules()` DE UN FORMREQUEST NO LIMITAN LO QUE SE ESCRIBE.
+         *
+         * `CRUDSmart` usa `$request->all()` y filtra contra `$fillable`.
+         * `validateResolved()` verifica lo que llegó pero NO lo recorta, así que
+         * cualquier campo `fillable` ausente de `rules()` viaja hasta la escritura.
+         *
+         * Eso convierte «no lo puse en las reglas» en una defensa IMAGINARIA, que es la
+         * peor clase: se lee en el diff como si defendiera. El autor de un
+         * `UpdateRequest` cree que declara qué se puede EDITAR, y sólo declara qué se
+         * VALIDA. Lo que se puede editar es `$fillable`, que vive en otro archivo y se
+         * escribió pensando en el ALTA.
+         *
+         * En el piloto NetPizza el campo expuesto era el eje de aislamiento
+         * (`branch_id`): un área que cambiaba de sucursal dejaba sus mesas apuntando a
+         * otro edificio, y como el scope filtra por esa columna la fila DESAPARECE de la
+         * pantalla de quien la acaba de editar. El síntoma no es «se movió», es «se
+         * borró».
+         *
+         * Con esto en `true`, `store()`/`update()` toman la entrada de `validated()`
+         * cuando hay un FormRequest configurado.
+         *
+         * ⚠️ DEFAULT `false` A PROPÓSITO, igual que `authorize_with_policy`: un consumidor
+         * que hoy dependa de escribir un campo que no declaró dejaría de escribirlo SIN
+         * ERROR —la fila se guarda con el valor viejo—, y prenderlo en un
+         * `composer update` sería cambiar datos sin que nadie lo pida.
+         *
+         * 🔴 Sólo aplica si hay un FormRequest resuelto: `validated()` no existe en una
+         * `Request` común, así que un controller sin `store_request`/`update_request`
+         * dejaría de escribir TODO. Eso no sería una defensa, sería el CRUD roto en
+         * silencio.
+         *
+         * Se puede pinear por controller en
+         * `$mkConfig['features']['write_only_validated']`, que gana sobre este valor en
+         * los dos sentidos.
+         */
+        'write_only_validated' => env('MK_WRITE_ONLY_VALIDATED', false),
+
         // R-PKG-007: auto-run `mk:discover-abilities` on every boot.
         // Solo usar en sandbox/dev. Idempotente (UPSERT), pero agrega overhead.
         'auto_discover_abilities' => env('MK_AUTO_DISCOVER_ABILITIES', false),
