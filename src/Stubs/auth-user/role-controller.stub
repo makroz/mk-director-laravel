@@ -8,6 +8,7 @@ use App\Modules\{{ModuleName}}\Http\Requests\SyncRoleAbilitiesRequest;
 use App\Modules\{{ModuleName}}\Services\{{ModuleName}}Service;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Mk\Director\Auth\Access\AccessGrantGuard;
 use Mk\Director\Auth\Models\Ability;
 use Mk\Director\Auth\Models\Role;
 use Mk\Director\Controllers\SmartController;
@@ -19,6 +20,12 @@ use Mk\Director\Controllers\SmartController;
  *
  * Los roles son GLOBALES del paquete (`Mk\Director\Auth\Models\Role`).
  * El sync de abilities a un role se hace via `syncAbilities()`.
+ *
+ * Editar, borrar o sincronizar un rol pasa por
+ * `AccessGrantGuard::assertCanChangeRole()` (403): un rol fijo no se toca,
+ * nadie cambia las abilities de un rol que tiene, ni toca el rol de alguien con
+ * más acceso, y sólo se agrega o se quita lo que el actor tiene. Si
+ * sobreescribís `update()`, `destroy()` o `syncAbilities()`, conservá la llamada.
  *
  * No importa modelos de otros módulos.
  */
@@ -72,6 +79,39 @@ class RoleController extends SmartController
     }
 
     /**
+     * `is_fixed` lo pone el sistema (seeders, discovery), nunca el body: el
+     * CRUD no lo escribe, ni en el alta ni en la edición. Un rol que alguien
+     * marcara fijo desde la UI ya no se podría volver a editar.
+     *
+     * @return array<int, string>
+     */
+    protected function getFillable(): array
+    {
+        return array_values(array_diff(parent::getFillable(), ['is_fixed']));
+    }
+
+    /**
+     * Editar un rol (su `guard`, por ejemplo) ya es tocar el acceso de quienes lo tienen.
+     */
+    public function update(Request $request, string|int $id)
+    {
+        app(AccessGrantGuard::class)->assertCanChangeRole($request->user(), Role::query()->findOrFail($id), null);
+
+        return parent::update($request, $id);
+    }
+
+    /**
+     * Borrar el rol es sacarles TODAS sus abilities a quienes lo tienen: se
+     * controla como un sync a `[]`.
+     */
+    public function destroy(Request $request, string|int $id)
+    {
+        app(AccessGrantGuard::class)->assertCanChangeRole($request->user(), Role::query()->findOrFail($id), []);
+
+        return parent::destroy($request, $id);
+    }
+
+    /**
      * PUT /api/roles/{id}/abilities
      *
      * Sincroniza (reemplaza) las abilities del role. Body: `{"abilities": ["admin.dashboard.view"]}`.
@@ -80,6 +120,8 @@ class RoleController extends SmartController
     {
         /** @var Role $role */
         $role = Role::findOrFail($id);
+
+        app(AccessGrantGuard::class)->assertCanChangeRole($request->user(), $role, $request->validated('abilities'));
 
         app({{ModuleName}}Service::class)->syncRoleAbilities($role, $request->validated('abilities'));
 

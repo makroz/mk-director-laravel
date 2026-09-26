@@ -12,6 +12,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — el CRUD de roles generado ya no deja darse permisos por el propio rol
+
+Cambiarle las abilities a un rol es cambiárselas a todos los que lo tienen, y el `RoleController`
+generado por `mk:make:auth-user --with-crud` no pasaba por `AccessGrantGuard`. Medido en RETO: con
+sólo `{scope}.roles.update`, un encargado le agregaba abilities a su PROPIO rol por
+`PUT /roles/{id}/abilities` y las tenía (200). Igual podía vaciar o borrar el rol del dueño, o
+tocar `super-admin` (sembrado con `is_fixed`, que nadie hacía cumplir).
+
+Nuevo `AccessGrantGuard::assertCanChangeRole($actor, $role, ?array $nextAbilities)`: un rol fijo no
+se toca ni con `*` (`ERR_FIXED_ROLE`), nadie cambia las abilities de un rol que tiene
+(`ERR_SELF_ACCESS_CHANGE`), nadie toca un rol que tiene alguien con más acceso
+(`ERR_TARGET_OUTRANKS_ACTOR`), y sólo se agrega o se quita lo que el actor tiene
+(`ERR_ACCESS_NOT_HELD`). El `RoleController` generado lo llama en `update()` (con `null`),
+`destroy()` (con `[]`) y `syncAbilities()`, y su `getFillable()` saca `is_fixed`: el CRUD no lo
+escribe. Lo mide `tests/Feature/MakeAuthUserAccessEscalationTest.php` sobre el controller generado.
+
+⚠️ **Código ya generado:** en el `RoleController` de cada scope, agregar la llamada
+`app(AccessGrantGuard::class)->assertCanChangeRole($request->user(), $role, …)` en los tres métodos
+(sobreescribiendo `update()` y `destroy()`, que hoy hereda) y el override de `getFillable()`. Ver el
+stub `src/Stubs/auth-user/role-controller.stub`.
+
 ## [UNRELEASED] — editar un rol o una ability ya no busca un usuario con su id (500 en Postgres)
 
 `RoleController` y `AbilityController` generados por `mk:make:auth-user --with-crud` declaraban

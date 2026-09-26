@@ -6,6 +6,7 @@ namespace Mk\Director\Auth\Access;
 
 use BackedEnum;
 use Illuminate\Contracts\Auth\Authenticatable;
+use Mk\Director\Auth\Enums\FixedStatus;
 use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Auth\Models\Role;
 
@@ -50,6 +51,7 @@ use Mk\Director\Auth\Models\Role;
  *     app(AccessGrantGuard::class)->assertCanChangeAccess($request->user(), $target, $roleNames, $abilityNames);
  *     app(AccessGrantGuard::class)->assertCanUpdate($request->user(), $target, $input);
  *     app(AccessGrantGuard::class)->assertCanDelete($request->user(), $target);
+ *     app(AccessGrantGuard::class)->assertCanChangeRole($request->user(), $role, $abilityNames);
  *
  * Cada `assert*` tira {@see AccessGrantDeniedException}, que se renderiza 403.
  */
@@ -60,6 +62,8 @@ class AccessGrantGuard
     public const ERR_TARGET_OUTRANKS_ACTOR = 'ERR_TARGET_OUTRANKS_ACTOR';
 
     public const ERR_ACCESS_NOT_HELD = 'ERR_ACCESS_NOT_HELD';
+
+    public const ERR_FIXED_ROLE = 'ERR_FIXED_ROLE';
 
     /**
      * Antes de sincronizar roles y/o abilities directas de `$target`.
@@ -146,6 +150,53 @@ class AccessGrantGuard
         }
 
         $this->assertDoesNotOutrank($actor, $target);
+    }
+
+    /**
+     * Antes de editar, borrar o sincronizar las abilities de `$role` por el CRUD
+     * de roles. Las mismas reglas, llevadas al rol: cambiarle las abilities a un
+     * rol es cambiárselas a TODOS los que lo tienen.
+     *
+     * 🔴 Medido en RETO: con sólo `{scope}.roles.update`, un encargado le
+     * agregaba abilities a su PROPIO rol por `PUT /roles/{id}/abilities` y las
+     * tenía (200). Las reglas de arriba cubrían el CRUD de usuarios, no este.
+     *
+     *  - Un rol FIJO (`is_fixed`) es del sistema: no se toca, ni con `*`
+     *    → `ERR_FIXED_ROLE`.
+     *  - Nadie cambia las abilities de un rol que TIENE → `ERR_SELF_ACCESS_CHANGE`.
+     *  - Nadie toca un rol que tiene alguien con MÁS acceso: editarlo (el
+     *    `guard`) o borrarlo también le cambia el acceso → `ERR_TARGET_OUTRANKS_ACTOR`.
+     *  - Sólo se agrega o se quita lo que el actor tiene → `ERR_ACCESS_NOT_HELD`.
+     *
+     * Fuera, como en las otras reglas: sin actor, quien tiene `*`, y un rol de
+     * OTRO scope que el del actor (un admin armando los roles de los meseros).
+     *
+     * @param  array<int, string>|null  $nextAbilities  El conjunto COMPLETO que va a quedar; null = no se tocan (editar). Borrar es `[]`.
+     *
+     * @throws AccessGrantDeniedException
+     */
+    public function assertCanChangeRole(?Authenticatable $actor, Role $role, ?array $nextAbilities): void
+    {
+        if ($role->is_fixed === FixedStatus::Fixed) {
+            throw new AccessGrantDeniedException('Es un rol del sistema: no se modifica desde acá.', self::ERR_FIXED_ROLE);
+        }
+
+        if (! $actor instanceof AuthUser || $actor->getAuthScope() !== $role->guard || $this->holds($actor, '*')) {
+            return;
+        }
+
+        if ($nextAbilities !== null && $actor->roles()->whereKey($role->getKey())->exists()) {
+            throw new AccessGrantDeniedException('No podés cambiar las abilities de un rol que tenés.', self::ERR_SELF_ACCESS_CHANGE);
+        }
+
+        $holders = $actor::query()->whereHas('roles', fn ($q) => $q->whereKey($role->getKey()))->get();
+        foreach ($holders as $holder) {
+            $this->assertDoesNotOutrank($actor, $holder);
+        }
+
+        if ($nextAbilities !== null) {
+            $this->assertHoldsAll($actor, $this->symmetricDifference($role->abilities()->pluck('name')->all(), $nextAbilities));
+        }
     }
 
     /**

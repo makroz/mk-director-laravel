@@ -1029,8 +1029,33 @@ app(AccessGrantGuard::class)->assertCanUpdate($request->user(), $target, $input)
 app(AccessGrantGuard::class)->assertCanDelete($request->user(), $target);
 ```
 
+🔴 `assertCanUpdate` recibe el usuario que el Service generado busca con el `$id`
+de la ruta, así que ese Service es **sólo** del controller de usuarios. El
+`RoleController` y el `AbilityController` generados no declaran `service`: con
+el id de un rol (entero) la búsqueda sobre la columna uuid es un 500 en Postgres.
+
+**El CRUD de roles es otra puerta al mismo acceso**: cambiarle las abilities a
+un rol es cambiárselas a todos los que lo tienen. Medido en RETO: con sólo
+`{scope}.roles.update`, un encargado le agregaba abilities a su propio rol por
+`PUT /roles/{id}/abilities` → 200. El `RoleController` generado llama, en
+`update()`, `destroy()` (como un sync a `[]`) y `syncAbilities()`:
+
+```php
+app(AccessGrantGuard::class)->assertCanChangeRole($request->user(), $role, $abilityNames); // null = no toca abilities
+```
+
+| Regla | Código |
+|---|---|
+| Un rol **fijo** (`is_fixed`) no se edita, sincroniza ni borra, ni con `*`. El CRUD tampoco escribe `is_fixed` | `ERR_FIXED_ROLE` |
+| Nadie cambia las abilities de un rol que **tiene** | `ERR_SELF_ACCESS_CHANGE` |
+| Nadie toca un rol que tiene alguien con **más** acceso | `ERR_TARGET_OUTRANKS_ACTOR` |
+| Sólo se agrega o se quita lo que el actor tiene | `ERR_ACCESS_NOT_HELD` |
+
+Fuera, igual que arriba: quien tiene `*` (salvo el rol fijo) y un rol de otro
+scope que el del actor.
+
 ⚠️ **Los scopes ya generados no la tienen**: el paquete no reescribe código
-emitido. Agregar las tres llamadas a mano, o regenerar el scope.
+emitido. Agregar las llamadas a mano, o regenerar el scope.
 
 #### 3.8.3. Ability checks — `canMk()` vs `can()` vs `hasAbility()` (HALLAZGO-NEW-FASE14-06)
 

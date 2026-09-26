@@ -54,7 +54,7 @@ function bootGeneratedCrew(object $test): void
         'Enums/CrewStatus.php', 'Models/Crew.php', 'Repositories/Contracts/CrewRepositoryInterface.php',
         'Repositories/CrewRepository.php', 'Services/CrewService.php', 'Http/Requests/AssignAccessRequest.php',
         'Http/Requests/AssignRolesRequest.php', 'Http/Requests/AssignDirectAbilitiesRequest.php', 'Http/Resources/CrewResource.php', 'Http/Controllers/CrewController.php',
-        'Http/Resources/RoleResource.php', 'Http/Resources/AbilityResource.php', 'Http/Controllers/RoleController.php', 'Http/Controllers/AbilityController.php',
+        'Http/Resources/RoleResource.php', 'Http/Resources/AbilityResource.php', 'Http/Controllers/RoleController.php', 'Http/Controllers/AbilityController.php', 'Http/Requests/SyncRoleAbilitiesRequest.php',
     ] as $file) {
         if (! class_exists('App\\Modules\\Crew\\'.str_replace(['/', '.php'], ['\\', ''], $file), false)
             && ! interface_exists('App\\Modules\\Crew\\'.str_replace(['/', '.php'], ['\\', ''], $file), false)
@@ -66,7 +66,7 @@ function bootGeneratedCrew(object $test): void
     // Lo que hace el ServiceProvider generado: sin esto el controller no resuelve el Service.
     app()->bind('App\\Modules\\Crew\\Repositories\\Contracts\\CrewRepositoryInterface', 'App\\Modules\\Crew\\Repositories\\CrewRepository');
 
-    foreach (['crew.crews.update', 'crew.crews.delete', 'crew.branches.viewAll', '*'] as $name) {
+    foreach (['crew.crews.update', 'crew.crews.delete', 'crew.branches.viewAll', 'crew.roles.update', 'crew.roles.delete', '*'] as $name) {
         Ability::query()->firstOrCreate(['name' => $name]);
     }
 }
@@ -221,4 +221,110 @@ test('la guarda sigue viva en el CRUD de USUARIOS: editar al dueño por el contr
 
     $controller = new ('App\\Modules\\Crew\\Http\\Controllers\\CrewController');
     expect(crewDenial(fn () => $controller->update($request, (string) $owner->getKey())))->toBe(AccessGrantGuard::ERR_TARGET_OUTRANKS_ACTOR);
+});
+
+/**
+ * 🔴 El CRUD de ROLES es otra puerta al mismo acceso.
+ *
+ * Editar las abilities de un rol es editárselas a TODOS los que lo tienen, y el
+ * `RoleController` generado no pasaba por `AccessGrantGuard`: con sólo
+ * `crew.roles.update`, un encargado le agregaba abilities a su PROPIO rol por
+ * `PUT /roles/{id}/abilities` y las tenía (medido en RETO, #26).
+ */
+function crewRole(string $name, array $abilities, bool $fixed = false): Role
+{
+    $role = Role::query()->create(['name' => $name, 'guard' => 'crew', 'is_fixed' => $fixed ? 1 : 0]);
+    $role->abilities()->sync(Ability::query()->whereIn('name', $abilities)->pluck('id'));
+
+    return $role;
+}
+
+function crewRoleController(): object
+{
+    return new ('App\\Modules\\Crew\\Http\\Controllers\\RoleController');
+}
+
+function crewPut(array $data, AuthUser $actor, string $method = 'PUT'): Request
+{
+    $request = Request::create('/', $method, $data);
+    app()->instance('request', $request);
+    $request->setUserResolver(fn () => $actor);
+
+    return $request;
+}
+
+/** @return array<int, string> */
+function roleAbilityNames(Role $role): array
+{
+    return $role->fresh()->abilities()->pluck('name')->sort()->values()->all();
+}
+
+test('rol: nadie cambia las abilities de un rol que TIENE — el caso medido', function () {
+    bootGeneratedCrew($this);
+    $role = crewRole('encargado', ['crew.roles.update', 'crew.crews.update']);
+    $manager = crewUser('encargado', []);
+    $manager->assignRole($role);
+    $manager = $manager->fresh(['roles.abilities', 'directAbilities']);
+
+    $request = crewFormRequest('SyncRoleAbilitiesRequest', ['abilities' => ['crew.roles.update', 'crew.crews.update', 'crew.crews.delete']], $manager);
+
+    expect(crewDenial(fn () => crewRoleController()->syncAbilities((string) $role->getKey(), $request)))->toBe(AccessGrantGuard::ERR_SELF_ACCESS_CHANGE);
+    expect(roleAbilityNames($role))->toBe(['crew.crews.update', 'crew.roles.update']);
+});
+
+test('rol: sólo se agrega o se quita lo que el actor tiene; lo que tiene pasa (contraprueba)', function () {
+    bootGeneratedCrew($this);
+    $manager = crewUser('encargado', ['crew.roles.update', 'crew.crews.update']);
+    $waiter = crewRole('mesero', []);
+
+    $escalate = crewFormRequest('SyncRoleAbilitiesRequest', ['abilities' => ['crew.branches.viewAll']], $manager);
+    expect(crewDenial(fn () => crewRoleController()->syncAbilities((string) $waiter->getKey(), $escalate)))->toBe(AccessGrantGuard::ERR_ACCESS_NOT_HELD);
+    expect(roleAbilityNames($waiter))->toBe([]);
+
+    $held = crewFormRequest('SyncRoleAbilitiesRequest', ['abilities' => ['crew.crews.update']], $manager);
+    expect(crewRoleController()->syncAbilities((string) $waiter->getKey(), $held)->getStatusCode())->toBe(200);
+    expect(roleAbilityNames($waiter))->toBe(['crew.crews.update']);
+});
+
+test('rol: nadie toca un rol que tiene alguien con MÁS acceso — ni sync, ni edición, ni borrado', function () {
+    bootGeneratedCrew($this);
+    $cashier = crewRole('caja', ['crew.crews.update']);
+    $owner = crewUser('dueño', ['*']);
+    $owner->assignRole($cashier);
+    $manager = crewUser('encargado', ['crew.roles.update', 'crew.roles.delete', 'crew.crews.update']);
+
+    // Un sync que no cambia nada: el rol es de alguien con más acceso, y eso ya alcanza.
+    $sync = crewFormRequest('SyncRoleAbilitiesRequest', ['abilities' => ['crew.crews.update']], $manager);
+    expect(crewDenial(fn () => crewRoleController()->syncAbilities((string) $cashier->getKey(), $sync)))->toBe(AccessGrantGuard::ERR_TARGET_OUTRANKS_ACTOR);
+    expect(crewDenial(fn () => crewRoleController()->update(crewPut(['name' => 'otra', 'guard' => 'crew'], $manager), (string) $cashier->getKey())))->toBe(AccessGrantGuard::ERR_TARGET_OUTRANKS_ACTOR);
+    expect(crewDenial(fn () => crewRoleController()->destroy(crewPut([], $manager, 'DELETE'), (string) $cashier->getKey())))->toBe(AccessGrantGuard::ERR_TARGET_OUTRANKS_ACTOR);
+
+    expect(Role::query()->whereKey($cashier->getKey())->value('name'))->toBe('caja');
+    expect(roleAbilityNames($cashier))->toBe(['crew.crews.update']);
+});
+
+test('rol FIJO: no se edita, sincroniza ni borra por el CRUD, ni con `*`', function () {
+    bootGeneratedCrew($this);
+    $superAdmin = crewRole('super-admin', ['*'], fixed: true);
+    $owner = crewUser('dueño', ['*']);
+
+    $sync = crewFormRequest('SyncRoleAbilitiesRequest', ['abilities' => ['crew.crews.update']], $owner);
+    expect(crewDenial(fn () => crewRoleController()->syncAbilities((string) $superAdmin->getKey(), $sync)))->toBe(AccessGrantGuard::ERR_FIXED_ROLE);
+    expect(crewDenial(fn () => crewRoleController()->update(crewPut(['name' => 'nadie', 'guard' => 'crew'], $owner), (string) $superAdmin->getKey())))->toBe(AccessGrantGuard::ERR_FIXED_ROLE);
+    expect(crewDenial(fn () => crewRoleController()->destroy(crewPut([], $owner, 'DELETE'), (string) $superAdmin->getKey())))->toBe(AccessGrantGuard::ERR_FIXED_ROLE);
+
+    expect(Role::query()->whereKey($superAdmin->getKey())->value('name'))->toBe('super-admin');
+    expect(roleAbilityNames($superAdmin))->toBe(['*']);
+});
+
+test('rol: el CRUD no escribe `is_fixed`, ni en el alta ni en la edición', function () {
+    bootGeneratedCrew($this);
+    $owner = crewUser('dueño', ['*']);
+    $waiter = crewRole('mesero', []);
+
+    expect(crewRoleController()->store(crewPut(['name' => 'intocable', 'guard' => 'crew', 'is_fixed' => 1], $owner, 'POST'))->getStatusCode())->toBe(201);
+    expect(crewRoleController()->update(crewPut(['name' => 'mesero', 'guard' => 'crew', 'is_fixed' => 1], $owner), (string) $waiter->getKey())->getStatusCode())->toBe(200);
+
+    expect(Role::query()->where('name', 'intocable')->firstOrFail()->is_fixed->value)->toBe(0);
+    expect($waiter->fresh()->is_fixed->value)->toBe(0);
 });
