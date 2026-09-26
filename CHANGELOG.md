@@ -12,6 +12,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `mk:module --with-rbac`: el CRUD daba 500, y arreglarlo sólo lo dejaba abierto
+
+Los 15 endpoints CRUD de los tres controllers del pack (index/show/store/update/destroy de usuarios,
+roles y abilities) daban **500**: declaraban `'service' => RbacService`, que no es un
+`MkModuleServiceInterface`, y `getService()` tiraba `TypeError`. `RbacService` no tiene hooks del
+CRUD (sólo `assignRole`/`revokeRole`/`syncAbilities`, que se inyectan por método), así que no había
+nada que mudar: los tres controllers dejan de declararlo.
+
+Sacar sólo eso los dejaba ABIERTOS: la Policy del CRUD está apagada por defecto
+(`authorize_with_policy`) y las rutas no tenían middleware. Y con `{modulo}.{usuarios}.update` se le
+cambiaba la contraseña al dueño. Ahora:
+
+- los tres controllers prenden `'authorize_with_policy' => true`: el CRUD pasa por la Policy
+  generada (default-deny + bypass de `super-admin`; las abilities, de sólo lectura para el resto);
+- `update()`/`destroy()` de usuarios llaman `ModuleRbacGrantGuard::assertCanChangeUser()`: nadie
+  edita (ni le cambia la contraseña) ni borra a alguien con más acceso (`ERR_TARGET_OUTRANKS_ACTOR`).
+  Editarse a uno mismo sigue andando;
+- `update()`/`destroy()` de roles llaman `assertCanChangeRole()`: `super-admin` no se renombra ni se
+  borra, ningún rol se renombra a `super-admin` (`ERR_FIXED_ROLE`), no se toca el rol de alguien con
+  más acceso, y borrar un rol exige tener sus abilities (se controla como un sync a `[]`). Mandar el
+  mismo `name` no es renombrar.
+
+Lo mide `tests/Feature/MkModuleRbacCrudTest.php` (y el 404 de otro tenant en el `show`,
+`MkModuleRbacTenantIsolationTest.php`).
+
+⚠️ **Los módulos ya generados no se regeneran solos.** En los tres controllers: borrá la línea
+`'service' => RbacService::class` del `$mkConfig` y agregá `'authorize_with_policy' => true` en
+`features`. En el de usuarios y en `RoleController`, sobreescribí `update()` y `destroy()` para
+llamar a la guarda con `$this->findScopedOrFail($request, $id)` antes de `parent::` (copiá los del
+stub `src/Stubs/module-rbac/controller-{user,role}.stub`). Con la Policy prendida, el actor tiene que
+llegar en el guard por defecto: es lo que resuelve el middleware de las rutas.
+
 ## [UNRELEASED] — `mk:module --with-rbac`: asignar, revocar y sincronizar ya no escalan
 
 Las Policies del pack sólo miran si el actor tiene la ability del ENDPOINT, no QUÉ concede. Medido

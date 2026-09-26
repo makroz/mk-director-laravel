@@ -19,10 +19,10 @@ use Mk\Director\Controllers\SmartController;
  * El rol del sync se carga con `findScopedOrFail()`, el lookup del CRUD: con
  * un plugin de tenant, el rol de otro tenant da 404, no se escribe.
  *
- * El sync pasa por `ModuleRbacGrantGuard` (403): `super-admin` es fijo, nadie
+ * El sync, la edición y el borrado pasan por `ModuleRbacGrantGuard` (403): `super-admin` es fijo, nadie
  * cambia las abilities de un rol que tiene ni el de alguien con más acceso, y
  * sólo se agrega o se quita lo que el actor tiene. Si sobreescribís
- * `syncAbilities()`, conservá la llamada.
+ * `update()`, `destroy()` o `syncAbilities()`, conservá la llamada.
  *
  * Spec: RBAC-001, RBAC-005 (R-PKG-008).
  */
@@ -30,15 +30,45 @@ class RoleController extends SmartController
 {
     protected array $mkConfig = [
         'model'           => Role::class,
-        'service'         => RbacService::class,
+        // SIN `service`, a propósito: `RbacService` no es un
+        // `MkModuleServiceInterface` (no tiene hooks del CRUD) y declararlo
+        // daba 500 en los cinco endpoints. Se inyecta donde se usa.
         'searchable'      => ['name', 'description'],
         'with'            => ['abilities', 'users'],
         'allowedIncludes' => ['abilities', 'users'],
         'features'        => [
             'auto_cache'    => true,
             'remember_state' => true,
+            // El CRUD pasa por la Policy del modelo (default-deny + bypass de
+            // super-admin). Apagado, index/show/store/update/destroy no miran
+            // ninguna ability: las rutas generadas sólo tienen `--middleware`.
+            'authorize_with_policy' => true,
         ],
     ];
+
+    /**
+     * Editar un rol ya es tocar el acceso de quienes lo tienen, y renombrarlo
+     * a `super-admin` es darles todo: pasa por `ModuleRbacGrantGuard`.
+     */
+    public function update(Request $request, string|int $id)
+    {
+        $name = $request->input('name');
+
+        app(ModuleRbacGrantGuard::class)->assertCanChangeRole($request->user(), $this->findScopedOrFail($request, $id), null, is_string($name) ? $name : null);
+
+        return parent::update($request, $id);
+    }
+
+    /**
+     * Borrar el rol es sacarles TODAS sus abilities a quienes lo tienen: se
+     * controla como un sync a `[]`.
+     */
+    public function destroy(Request $request, string|int $id)
+    {
+        app(ModuleRbacGrantGuard::class)->assertCanChangeRole($request->user(), $this->findScopedOrFail($request, $id), []);
+
+        return parent::destroy($request, $id);
+    }
 
     /**
      * PUT /api/{{moduleNameLower}}-roles/{id}/abilities

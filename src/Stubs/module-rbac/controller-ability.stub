@@ -27,13 +27,19 @@ class AbilityController extends SmartController
 {
     protected array $mkConfig = [
         'model'           => Ability::class,
-        'service'         => \App\Modules\{{ModuleName}}\Services\RbacService::class,
+        // SIN `service`, a propósito: `RbacService` no es un
+        // `MkModuleServiceInterface` (no tiene hooks del CRUD) y declararlo
+        // daba 500 en los cinco endpoints. Se inyecta donde se usa.
         'searchable'      => ['name', 'description'],
         'with'            => ['roles'],
         'allowedIncludes' => ['roles'],
         'features'        => [
             'auto_cache'    => true,
             'remember_state' => true,
+            // El CRUD pasa por la Policy del modelo (default-deny + bypass de
+            // super-admin). Apagado, index/show/store/update/destroy no miran
+            // ninguna ability: las rutas generadas sólo tienen `--middleware`.
+            'authorize_with_policy' => true,
         ],
     ];
 }

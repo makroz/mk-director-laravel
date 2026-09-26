@@ -78,3 +78,11 @@ test('dentro del MISMO tenant asignar, revocar y sincronizar siguen andando', fu
     expect($status)->toBe(200)
         ->and($this->userHasRbacRole($this->ids['userA2'], $this->ids['r_a_staff']))->toBeFalse();
 });
+
+test('el show de un usuario de otro tenant da 404; el del propio anda', function () {
+    [$status] = $this->rbacSend('GET', "/api/squads/{$this->ids['userB']}", [], $this->ids['actorA']);
+    expect($status)->toBe(404);
+
+    [$status] = $this->rbacSend('GET', "/api/squads/{$this->ids['userA2']}", [], $this->ids['actorA']);
+    expect($status)->toBe(200);
+});

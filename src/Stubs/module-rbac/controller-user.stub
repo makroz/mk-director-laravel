@@ -24,6 +24,9 @@ use Mk\Director\Controllers\SmartController;
  * `findOrFail()` pelado, un tenant le asignaba y quitaba roles a los usuarios
  * de otro.
  *
+ * Editar y borrar un usuario también pasan por la guarda: nadie edita (ni le
+ * cambia la contraseña) ni borra a alguien con más acceso.
+ *
  * Asignar y revocar pasan por `ModuleRbacGrantGuard` (403): nadie cambia sus
  * roles, ni toca a alguien con más acceso, ni asigna o quita un rol con
  * abilities que no tiene (o `super-admin`, sin serlo). La Policy sólo mira si
@@ -36,15 +39,39 @@ class {{ModuleName}}Controller extends SmartController
 {
     protected array $mkConfig = [
         'model'           => {{ModuleName}}::class,
-        'service'         => RbacService::class,
+        // SIN `service`, a propósito: `RbacService` no es un
+        // `MkModuleServiceInterface` (no tiene hooks del CRUD) y declararlo
+        // daba 500 en los cinco endpoints. Se inyecta donde se usa.
         'searchable'      => ['name', 'email'],
         'with'            => ['roles'],
         'allowedIncludes' => ['roles', 'roles.abilities'],
         'features'        => [
             'auto_cache'    => true,
             'remember_state' => true,
+            // El CRUD pasa por la Policy del modelo (default-deny + bypass de
+            // super-admin). Apagado, index/show/store/update/destroy no miran
+            // ninguna ability: las rutas generadas sólo tienen `--middleware`.
+            'authorize_with_policy' => true,
         ],
     ];
+
+    /**
+     * Editar a alguien con más acceso —su email, su contraseña— es tomar su
+     * cuenta: pasa por `ModuleRbacGrantGuard`.
+     */
+    public function update(Request $request, string|int $id)
+    {
+        app(ModuleRbacGrantGuard::class)->assertCanChangeUser($request->user(), $this->findScopedOrFail($request, $id));
+
+        return parent::update($request, $id);
+    }
+
+    public function destroy(Request $request, string|int $id)
+    {
+        app(ModuleRbacGrantGuard::class)->assertCanChangeUser($request->user(), $this->findScopedOrFail($request, $id));
+
+        return parent::destroy($request, $id);
+    }
 
     /**
      * POST /api/{{moduleNamePluralLower}}/{id}/roles/{roleId}
