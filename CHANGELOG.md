@@ -12,6 +12,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — con un plugin de tenant, el acceso de otro tenant da 404: no 403, y no se escribe
+
+Los controllers generados de roles, abilities y usuarios cargaban la fila para `AccessGrantGuard`
+con un `Model::findOrFail()` pelado, que no corre los `beforeQuery` de los plugins: el filtro de
+`MkMultiTenantPlugin` no aplicaba. Medido con el plugin, desde otro tenant y con `*`:
+
+- `PUT`/`DELETE /roles/{id}` y `PUT /roles/{id}/abilities` de un rol FIJO ajeno → 403
+  `ERR_FIXED_ROLE` (confirma que existe y que es fijo) donde el CRUD da 404.
+- `PUT /roles/{id}/abilities` de un rol ajeno no fijo → **200, y le reescribía las abilities**: el
+  sync no pasa por el CRUD.
+- `POST /{usuarios}/{id}/access`, `/roles` y `/abilities` de un usuario ajeno → **200, y le
+  cambiaba el acceso**.
+
+Nuevo `CRUDSmart::findScopedOrFail(Request $request, $id)`: el mismo lookup de `update()` y
+`destroy()` (que ahora lo usan), con los `beforeQuery` de los plugins. Los stubs de
+`mk:make:auth-user` cargan con él, así que la fila ajena da 404 antes de la guarda. Con
+`roles_per_tenant` ya daba 404 (el scope global de `Role` cubre el lookup pelado). Lo mide
+`tests/Feature/MakeAuthUserAccessEscalationTest.php` (los tres casos «de otro tenant»).
+
+⚠️ **Los controllers ya generados no se regeneran solos**: en `RoleController`,
+`AbilityController` y el controller de usuarios, cambiá `Role::findOrFail($id)`,
+`Ability::query()->findOrFail($id)` y `{Modelo}::findOrFail($id)` por
+`$this->findScopedOrFail($request, $id)`.
+
 ## [UNRELEASED] — la sesión cortada por cuenta deshabilitada dice el motivo, no «Account disabled.»
 
 El 401 `ERR_ACCOUNT_DISABLED` de `mk.auth` y del refresh mandaba el texto fijo `'Account disabled.'`,

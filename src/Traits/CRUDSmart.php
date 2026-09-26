@@ -947,6 +947,31 @@ trait CRUDSmart
     }
 
     /**
+     * La fila `$id` como la ve el CRUD: query con los `beforeQuery` de los
+     * plugins (el filtro de `MkMultiTenantPlugin`, LAR-01) y `findOrFail`. Una
+     * fila que el plugin esconde da 404.
+     *
+     * 🔴 Un override que carga la fila ANTES de `parent::update()` o
+     * `parent::destroy()` —para pasarla por una guarda— la tiene que cargar con
+     * esto, no con `Model::findOrFail()`: medido en los controllers generados
+     * de roles, con un plugin de tenant la guarda veía el rol de OTRO tenant y
+     * daba 403 (confirmando que existía) donde el CRUD daba 404, y el sync de
+     * abilities —que no pasa por el CRUD— lo escribía.
+     */
+    protected function findScopedOrFail(Request $request, string|int $id): Model
+    {
+        $query = $this->getModel()::query();
+        $query->with($this->getWith());
+        $query->withCount($this->getWithCount());
+
+        // Plugin Hook: beforeQuery — MUST run before findOrFail so plugins
+        // like MkMultiTenantPlugin can scope the lookup (LAR-01 IDOR fix).
+        $this->getPluginManager()->fireBeforeQuery($query, $request);
+
+        return $query->findOrFail($id);
+    }
+
+    /**
      * PUT/PATCH /resource/{id} - Actualizar
      *
      * R-PKG-016 BUG-NEW-20 fix: ver show() — acepta string|int para UUIDs.
@@ -967,7 +992,6 @@ trait CRUDSmart
      */
     public function update(Request $request, string|int $id)
     {
-        $modelClass = $this->getModel();
         $service = $this->getService();
 
         // R-PKG-046 F9-B08 — Resolver FormRequest si está configurado.
@@ -981,17 +1005,7 @@ trait CRUDSmart
             routeParamValue: (string) $id,
         );
 
-        // Build query + eager loading (mirrors show() so any beforeQuery
-        // plugin sees the same builder shape).
-        $query = $modelClass::query();
-        $query->with($this->getWith());
-        $query->withCount($this->getWithCount());
-
-        // Plugin Hook: beforeQuery — MUST run before findOrFail so plugins
-        // like MkMultiTenantPlugin can scope the lookup (LAR-01 IDOR fix).
-        $this->getPluginManager()->fireBeforeQuery($query, $request);
-
-        $model = $query->findOrFail($id);
+        $model = $this->findScopedOrFail($request, $id);
 
         // Policy del modelo — DESPUÉS del findOrFail (404 gana sobre 403) y
         // ANTES de tocar nada.
@@ -1068,20 +1082,9 @@ trait CRUDSmart
      */
     public function destroy(Request $request, string|int $id)
     {
-        $modelClass = $this->getModel();
         $service = $this->getService();
 
-        // Build query + eager loading (mirrors show() so any beforeQuery
-        // plugin sees the same builder shape).
-        $query = $modelClass::query();
-        $query->with($this->getWith());
-        $query->withCount($this->getWithCount());
-
-        // Plugin Hook: beforeQuery — MUST run before findOrFail so plugins
-        // like MkMultiTenantPlugin can scope the lookup (LAR-01 IDOR fix).
-        $this->getPluginManager()->fireBeforeQuery($query, $request);
-
-        $model = $query->findOrFail($id);
+        $model = $this->findScopedOrFail($request, $id);
 
         // Policy del modelo — DESPUÉS del findOrFail (404 gana sobre 403) y
         // ANTES del hook de borrado.

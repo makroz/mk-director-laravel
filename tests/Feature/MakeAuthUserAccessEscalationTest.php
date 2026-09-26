@@ -2,8 +2,10 @@
 
 declare(strict_types=1);
 
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 use Mk\Director\Auth\Access\AccessGrantDeniedException;
 use Mk\Director\Auth\Access\AccessGrantGuard;
@@ -13,6 +15,9 @@ use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Auth\Models\Role;
 use Mk\Director\Auth\Pivots\MkPivot;
 use Mk\Director\Auth\Support\MorphPivot;
+use Mk\Director\Managers\PluginManager;
+use Mk\Director\Plugins\Enterprise\MkMultiTenantPlugin;
+use Mk\Director\Tenancy\TenantContext;
 use Mk\Director\Tests\Concerns\BootsHttpApp;
 use Mk\Director\Tests\Concerns\RunsAuthUserScaffolder;
 use Mk\Director\Tests\MkLaravelTestCase;
@@ -457,4 +462,120 @@ test('ability: un nombre de OTRO scope conocido queda afuera; uno sin scope cono
 
     expect(crewDenial(fn () => crewAbilityController()->destroy(crewPut([], $manager, 'DELETE'), (string) $noScope->getKey())))->toBe(AccessGrantGuard::ERR_ACCESS_NOT_HELD);
     expect(crewAbilityController()->destroy(crewPut([], $manager, 'DELETE'), (string) $otherScope->getKey())->getStatusCode())->toBe(200);
+});
+
+/**
+ * 🔴 Un rol de OTRO tenant tiene que dar 404, no la 403 de la guarda.
+ *
+ * `update()`, `destroy()` y `syncAbilities()` cargaban el rol con un
+ * `Role::findOrFail()` pelado ANTES del lookup del CRUD, que es el que corre los
+ * `beforeQuery` de los plugins (el filtro de `MkMultiTenantPlugin`). Con un
+ * plugin de tenant, la guarda veía la fila ajena: un rol fijo daba
+ * `ERR_FIXED_ROLE` (403, que confirma que existe y que es fijo) donde el CRUD
+ * daba 404 — y el sync, que no pasa por el CRUD, ESCRIBÍA el rol del otro
+ * tenant con quien tuviera `*`.
+ */
+function crewTenantRoles(): array
+{
+    Schema::table('roles', fn ($t) => $t->string('tenant_id')->nullable());
+    $insert = fn (string $name, int $fixed) => Role::query()->withoutGlobalScopes()->findOrFail(
+        DB::table('roles')->insertGetId(['name' => $name, 'guard' => 'crew', 'tenant_id' => 'roma', 'is_fixed' => $fixed])
+    );
+
+    return [$insert('ajeno-fijo', 1), $insert('ajeno', 0)];
+}
+
+/** Cada llamada, lo que salió: `404`, el código de la guarda, o el status HTTP. */
+function crewForeignOutcomes(AuthUser $actor, Role $fixed, Role $plain): array
+{
+    $outcome = function (Closure $fn): string {
+        try {
+            return (string) $fn()->getStatusCode();
+        } catch (ModelNotFoundException) {
+            return '404';
+        } catch (AccessGrantDeniedException $e) {
+            return $e->errorCode;
+        }
+    };
+
+    $out = [];
+    foreach ([$fixed, $plain] as $role) {
+        $id = (string) $role->getKey();
+        $out[$role->name] = [
+            'update' => $outcome(fn () => crewRoleController()->update(crewPut(['name' => 'tomado', 'guard' => 'crew'], $actor), $id)),
+            'sync' => $outcome(fn () => crewRoleController()->syncAbilities($id, crewFormRequest('SyncRoleAbilitiesRequest', ['abilities' => ['crew.crews.update']], $actor))),
+            'destroy' => $outcome(fn () => crewRoleController()->destroy(crewPut([], $actor, 'DELETE'), $id)),
+        ];
+    }
+
+    return $out;
+}
+
+test('🔴 rol de otro tenant con un plugin de tenant: 404 en editar, sincronizar y borrar, y no se escribe', function () {
+    bootGeneratedCrew($this);
+    [$fixed, $plain] = crewTenantRoles();
+    app()->bind(MkMultiTenantPlugin::class, fn () => new MkMultiTenantPlugin(['column' => 'tenant_id']));
+    app(PluginManager::class)->registerPlugin(MkMultiTenantPlugin::class);
+
+    $owner = crewUser('dueño', ['*']);
+    $owner->setAttribute('client_id', 'napoli'); // lo que lee el plugin (`getTenantId()`)
+
+    $all404 = ['update' => '404', 'sync' => '404', 'destroy' => '404'];
+    expect(crewForeignOutcomes($owner, $fixed, $plain))->toBe(['ajeno-fijo' => $all404, 'ajeno' => $all404]);
+
+    foreach ([$fixed, $plain] as $role) {
+        $row = Role::query()->withoutGlobalScopes()->find($role->getKey());
+        expect($row?->name)->toBe($role->name)->and(roleAbilityNames($row))->toBe([]);
+    }
+});
+
+test('rol de otro tenant con `roles_per_tenant`: 404 en editar, sincronizar y borrar', function () {
+    bootGeneratedCrew($this);
+    [$fixed, $plain] = crewTenantRoles();
+    config(['mk_director.tenant.roles_per_tenant' => true]);
+    app(TenantContext::class)->set('napoli');
+
+    $owner = crewUser('dueño', ['*']);
+    $all404 = ['update' => '404', 'sync' => '404', 'destroy' => '404'];
+
+    try {
+        expect(crewForeignOutcomes($owner, $fixed, $plain))->toBe(['ajeno-fijo' => $all404, 'ajeno' => $all404]);
+    } finally {
+        app(TenantContext::class)->flush();
+    }
+
+    expect(Role::query()->withoutGlobalScopes()->whereIn('id', [$fixed->getKey(), $plain->getKey()])->pluck('name')->sort()->values()->all())
+        ->toBe(['ajeno', 'ajeno-fijo']);
+});
+
+test('🔴 usuario de otro tenant con un plugin de tenant: /access, /roles y /abilities dan 404 y no se escribe', function () {
+    bootGeneratedCrew($this);
+    Schema::table('crews', fn ($t) => $t->string('client_id')->nullable());
+    app(PluginManager::class)->registerPlugin(MkMultiTenantPlugin::class);
+
+    $owner = crewUser('dueño', ['*']);
+    $foreign = crewUser('ajeno', []);
+    DB::table('crews')->where('id', $owner->getKey())->update(['client_id' => 'napoli']);
+    DB::table('crews')->where('id', $foreign->getKey())->update(['client_id' => 'roma']);
+    $owner = $owner->fresh(['roles.abilities', 'directAbilities']);
+    Role::query()->create(['name' => 'mesero', 'guard' => 'crew']);
+
+    $controller = new ('App\\Modules\\Crew\\Http\\Controllers\\CrewController');
+    $id = (string) $foreign->getKey();
+    $outcome = function (Closure $fn): string {
+        try {
+            return (string) $fn()->getStatusCode();
+        } catch (ModelNotFoundException) {
+            return '404';
+        }
+    };
+
+    expect([
+        'access' => $outcome(fn () => $controller->assignAccess($id, crewFormRequest('AssignAccessRequest', ['roles' => ['mesero'], 'abilities' => ['crew.crews.update']], $owner))),
+        'roles' => $outcome(fn () => $controller->assignRoles($id, crewFormRequest('AssignRolesRequest', ['roles' => ['mesero']], $owner))),
+        'abilities' => $outcome(fn () => $controller->assignDirectAbilities($id, crewFormRequest('AssignDirectAbilitiesRequest', ['abilities' => ['crew.crews.update']], $owner))),
+    ])->toBe(['access' => '404', 'roles' => '404', 'abilities' => '404']);
+
+    expect($foreign->fresh(['roles.abilities', 'directAbilities'])->getEffectiveAbilities())->toBe([])
+        ->and($foreign->fresh()->roles()->count())->toBe(0);
 });

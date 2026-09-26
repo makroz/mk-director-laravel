@@ -27,6 +27,10 @@ use Mk\Director\Controllers\SmartController;
  * más acceso, y sólo se agrega o se quita lo que el actor tiene. Si
  * sobreescribís `update()`, `destroy()` o `syncAbilities()`, conservá la llamada.
  *
+ * El rol se carga con `findScopedOrFail()`, el mismo lookup del CRUD: con un
+ * plugin de tenant, el rol de otro tenant da 404 antes de la guarda. Con un
+ * `Role::findOrFail()` pelado daba 403 (y el sync lo escribía).
+ *
  * No importa modelos de otros módulos.
  */
 class RoleController extends SmartController
@@ -95,7 +99,7 @@ class RoleController extends SmartController
      */
     public function update(Request $request, string|int $id)
     {
-        app(AccessGrantGuard::class)->assertCanChangeRole($request->user(), Role::query()->findOrFail($id), null);
+        app(AccessGrantGuard::class)->assertCanChangeRole($request->user(), $this->findScopedOrFail($request, $id), null);
 
         return parent::update($request, $id);
     }
@@ -106,7 +110,7 @@ class RoleController extends SmartController
      */
     public function destroy(Request $request, string|int $id)
     {
-        app(AccessGrantGuard::class)->assertCanChangeRole($request->user(), Role::query()->findOrFail($id), []);
+        app(AccessGrantGuard::class)->assertCanChangeRole($request->user(), $this->findScopedOrFail($request, $id), []);
 
         return parent::destroy($request, $id);
     }
@@ -119,7 +123,7 @@ class RoleController extends SmartController
     public function syncAbilities(string $id, SyncRoleAbilitiesRequest $request): JsonResponse
     {
         /** @var Role $role */
-        $role = Role::findOrFail($id);
+        $role = $this->findScopedOrFail($request, $id);
 
         app(AccessGrantGuard::class)->assertCanChangeRole($request->user(), $role, $request->validated('abilities'));
 

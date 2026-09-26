@@ -125,7 +125,7 @@ class {{ModuleName}}Controller extends SmartController
     public function assignAccess(string $id, AssignAccessRequest $request): JsonResponse
     {
         /** @var {{ModuleName}} ${{moduleNameLower}} */
-        ${{moduleNameLower}} = {{ModuleName}}::findOrFail($id);
+        ${{moduleNameLower}} = $this->findScopedOrFail($request, $id);
 
         // `update` sobre usuarios no alcanza para cambiar accesos: nadie cambia el
         // suyo, ni da o quita lo que no tiene, ni toca a quien tiene más (403).
@@ -157,7 +157,7 @@ class {{ModuleName}}Controller extends SmartController
     public function assignRoles(string $id, AssignRolesRequest $request): JsonResponse
     {
         /** @var {{ModuleName}} ${{moduleNameLower}} */
-        ${{moduleNameLower}} = {{ModuleName}}::findOrFail($id);
+        ${{moduleNameLower}} = $this->findScopedOrFail($request, $id);
 
         // Mismo control que `assignAccess()`.
         app(AccessGrantGuard::class)->assertCanChangeAccess($request->user(), ${{moduleNameLower}}, $request->validated('roles'), null);
@@ -179,7 +179,7 @@ class {{ModuleName}}Controller extends SmartController
     public function assignDirectAbilities(string $id, AssignDirectAbilitiesRequest $request): JsonResponse
     {
         /** @var {{ModuleName}} ${{moduleNameLower}} */
-        ${{moduleNameLower}} = {{ModuleName}}::findOrFail($id);
+        ${{moduleNameLower}} = $this->findScopedOrFail($request, $id);
 
         // Mismo control que `assignAccess()`.
         app(AccessGrantGuard::class)->assertCanChangeAccess($request->user(), ${{moduleNameLower}}, null, $request->validated('abilities'));

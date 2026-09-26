@@ -30,7 +30,9 @@ use Mk\Director\Controllers\SmartController;
  * roles y grants la apuntan por id, así que renombrarla es cambiarles el
  * permiso a todos los que la tienen. Hay que tener el nombre (el viejo y el
  * nuevo, al renombrar), y las fijas —`*` siempre— no se tocan. Si
- * sobreescribís `store()`, `update()` o `destroy()`, conservá la llamada.
+ * sobreescribís `store()`, `update()` o `destroy()`, conservá la llamada. La
+ * ability se carga con `findScopedOrFail()`, el lookup del CRUD: una fila que un
+ * plugin esconde da 404 antes de la guarda.
  *
  * `with` y `allowedIncludes` van vacíos: `Ability` no tiene relación `roles()`,
  * y declararla haría fallar el listado.
@@ -123,7 +125,7 @@ class AbilityController extends SmartController
         ]);
 
         $name = $request->has('name') ? trim((string) $request->input('name')) : null;
-        app(AccessGrantGuard::class)->assertCanChangeAbility($request->user(), Ability::query()->findOrFail($id), $name);
+        app(AccessGrantGuard::class)->assertCanChangeAbility($request->user(), $this->findScopedOrFail($request, $id), $name);
 
         return parent::update($request, $id);
     }
@@ -133,7 +135,7 @@ class AbilityController extends SmartController
      */
     public function destroy(Request $request, string|int $id)
     {
-        app(AccessGrantGuard::class)->assertCanDeleteAbility($request->user(), Ability::query()->findOrFail($id));
+        app(AccessGrantGuard::class)->assertCanDeleteAbility($request->user(), $this->findScopedOrFail($request, $id));
 
         return parent::destroy($request, $id);
     }

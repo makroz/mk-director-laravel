@@ -79,13 +79,19 @@ test('CRUDSmart::update() builds an Eloquent query before findOrFail (LAR-01 IDO
     expect($body)->not->toContain('$modelClass::findOrFail($id)');
 });
 
-test('CRUDSmart::update() fires beforeQuery on the query builder (LAR-01 IDOR fix)', function () {
+test('CRUDSmart::update() loads the row through findScopedOrFail() (LAR-01 IDOR fix)', function () {
     $body = tenantIsolationMethodBody('/function update\(/');
     expect($body)->not->toBeEmpty();
 
     // The MkMultiTenantPlugin (and any other beforeQuery plugin) MUST run before
-    // findOrFail so the tenant filter is applied to the lookup.
-    expect($body)->toContain('fireBeforeQuery(');
+    // findOrFail so the tenant filter is applied to the lookup: that lives in
+    // findScopedOrFail(), shared with the generated Role/Ability/user controllers.
+    expect($body)->toContain('$this->findScopedOrFail($request, $id)');
+});
+
+test('CRUDSmart::findScopedOrFail() fires beforeQuery before findOrFail (LAR-01 IDOR fix)', function () {
+    $body = tenantIsolationMethodBody('/function findScopedOrFail\(/');
+    expect($body)->not->toBeEmpty();
 
     // And the order matters: fireBeforeQuery must appear BEFORE the findOrFail call.
     $firePos = strpos($body, 'fireBeforeQuery(');
@@ -102,17 +108,11 @@ test('CRUDSmart::destroy() builds an Eloquent query before findOrFail (LAR-01 ID
     expect($body)->not->toContain('$modelClass::findOrFail($id)');
 });
 
-test('CRUDSmart::destroy() fires beforeQuery on the query builder (LAR-01 IDOR fix)', function () {
+test('CRUDSmart::destroy() loads the row through findScopedOrFail() (LAR-01 IDOR fix)', function () {
     $body = tenantIsolationMethodBody('/function destroy\(/');
     expect($body)->not->toBeEmpty();
 
-    expect($body)->toContain('fireBeforeQuery(');
-
-    $firePos = strpos($body, 'fireBeforeQuery(');
-    $findPos = strpos($body, 'findOrFail(');
-    expect($firePos)->not->toBeFalse();
-    expect($findPos)->not->toBeFalse();
-    expect($firePos)->toBeLessThan($findPos);
+    expect($body)->toContain('$this->findScopedOrFail($request, $id)');
 });
 
 test('CRUDSmart::show() still fires beforeQuery before findOrFail (regression guard for LAR-01 sibling)', function () {
