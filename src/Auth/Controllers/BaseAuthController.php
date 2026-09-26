@@ -21,6 +21,10 @@ use Mk\Director\Auth\Services\InvalidRefreshTokenException;
 use Mk\Director\Auth\Services\OtpVerifyResult;
 use Mk\Director\Auth\Services\TokenIssuer;
 use Mk\Director\Auth\Services\TotpService;
+use Mk\Director\Auth\Social\IdTokenVerifier;
+use Mk\Director\Auth\Social\SocialIdentity;
+use Mk\Director\Auth\Social\SocialLoginException;
+use Mk\Director\Auth\Social\SocialProviderConfigResolver;
 use Mk\Director\Controllers\BaseController;
 
 /**
@@ -1235,6 +1239,260 @@ abstract class BaseAuthController extends BaseController
         ]);
 
         return $this->sendResponse(true, 'Email de verificación enviado.');
+    }
+
+    // ============================================================
+    //  Login con Google y Apple (ID token) — DEVELOPER_GUIDE § 3.22
+    // ============================================================
+
+    /** Tabla del vínculo (provider, subject) → usuario del scope. */
+    protected const SOCIAL_IDENTITIES_TABLE = 'mk_social_identities';
+
+    /**
+     * POST /api/{scope}/auth/social/{provider}   (`google` | `apple`)
+     *
+     * Body: `{id_token: <string>, nonce?: <string>}`. `nonce` es el valor
+     * CRUDO que generó el cliente; sólo se mira con Apple (§ 3.22.3).
+     *
+     * 🔴 OPT-IN: ninguna ruta generada apunta acá. El scope la tiene sólo si el
+     * consumer la agrega a sus rutas (receta en § 3.22.1).
+     *
+     * Pipeline:
+     *   1. Client ids del proveedor para este scope, del
+     *      {@see SocialProviderConfigResolver} (la base del consumer, o config).
+     *      Vacío → 403 `ERR_SOCIAL_PROVIDER_DISABLED`, sin mirar el token.
+     *   2. {@see IdTokenVerifier}: firma, emisor, audiencia, vigencia, nonce.
+     *      Falla → 401 `ERR_SOCIAL_TOKEN_INVALID` (mensaje genérico; el motivo
+     *      va al evento `auth.login.failed`). Sin claves del proveedor → 503.
+     *   3. Usuario vinculado por `(scope, provider, sub)`. Si no hay,
+     *      {@see resolveSocialUser()}: el consumer vincula o crea. Nadie → 404
+     *      `ERR_SOCIAL_ACCOUNT_NOT_FOUND`.
+     *   4. De acá en adelante, EXACTAMENTE el login con contraseña: estado de
+     *      la cuenta (403), segundo factor del scope, y la misma sesión de
+     *      {@see issueSessionResponse()}.
+     */
+    #[Ability('{scope}.auth.social-login', 'Iniciar sesión con Google o Apple en {scope}')]
+    public function socialLogin(Request $request, string $provider): JsonResponse
+    {
+        $scope = $this->authScope();
+
+        $data = $request->validate([
+            'id_token' => ['required', 'string', 'max:8192'],
+            'nonce' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        try {
+            $identity = $this->idTokenVerifier()->verify(
+                $provider,
+                $data['id_token'],
+                $this->socialProviderConfigResolver()->clientIds($scope, $provider),
+                $data['nonce'] ?? null,
+            );
+        } catch (SocialLoginException $e) {
+            return $this->socialLoginError($request, $provider, $e);
+        }
+
+        $user = $this->findLinkedSocialUser($identity)
+            ?? DB::transaction(function () use ($request, $identity) {
+                $user = $this->resolveSocialUser($request, $identity);
+                if ($user !== null) {
+                    $this->linkSocialIdentity($user, $identity);
+                }
+
+                return $user;
+            });
+
+        if ($user === null) {
+            return $this->sendError(
+                'No hay una cuenta vinculada a este acceso.',
+                [],
+                404,
+                'ERR_SOCIAL_ACCOUNT_NOT_FOUND',
+            );
+        }
+
+        if (! $this->userHasValidStatus($user)) {
+            $this->dispatchAuthEventSafe('auth.login.failed', [
+                'scope' => $scope,
+                'provider' => $provider,
+                'ip' => $request->ip(),
+                'reason' => 'account_disabled',
+            ]);
+
+            return $this->sendError(
+                AccountStatus::denialReason($user) ?? AccountStatus::DEFAULT_DENIAL,
+                [],
+                403,
+                'ERR_ACCOUNT_DISABLED',
+            );
+        }
+
+        if ($gate = $this->twoFactorGate($request, $user)) {
+            return $gate;
+        }
+
+        return $this->issueSessionResponse($request, $user);
+    }
+
+    /**
+     * Qué hacer con una identidad verificada que todavía no está vinculada a
+     * nadie del scope. Devolvé el usuario (existente o recién creado) y el
+     * paquete guarda el vínculo en la misma transacción; `null` = 404.
+     *
+     * Default: vincula por email SÓLO si {@see socialAutoLinkByEmail()} está
+     * prendido y el proveedor verificó el email; si no, delega en
+     * {@see createSocialUser()}, que por defecto no crea a nadie.
+     *
+     * Override esto entero sólo si necesitás otra regla: el caso normal es
+     * override de `createSocialUser()` (alta) y, con cuidado,
+     * `socialAutoLinkByEmail()`.
+     */
+    protected function resolveSocialUser(Request $request, SocialIdentity $identity): ?Authenticatable
+    {
+        if ($this->socialAutoLinkByEmail()) {
+            $existing = $this->findUserByVerifiedSocialEmail($identity);
+            if ($existing !== null) {
+                return $existing;
+            }
+        }
+
+        return $this->createSocialUser($request, $identity);
+    }
+
+    /**
+     * ¿Una identidad nueva se vincula a la cuenta que ya tiene ese email?
+     *
+     * 🔴 DEFAULT `false`, Y PRENDERLO ES UNA DECISIÓN DE SEGURIDAD. Vincular por
+     * email es entregar la cuenta existente a quien pruebe ese email ante el
+     * proveedor. El paquete sólo lo hace si el proveedor dice
+     * `email_verified = true`, pero eso vale lo que vale el proveedor: una
+     * cuenta de Google Workspace de un dominio que cambió de dueño, o un email
+     * que la persona ya no controla, lo cumplen igual. Prendelo sólo si las
+     * cuentas del scope se crearon con el email verificado por vos.
+     */
+    protected function socialAutoLinkByEmail(): bool
+    {
+        return false;
+    }
+
+    /**
+     * Alta de un usuario nuevo desde una identidad verificada. Default: nadie
+     * (el login responde 404 y el front ofrece registrarse).
+     *
+     * Corre dentro de la transacción del vínculo: si el alta falla, no queda
+     * un vínculo huérfano, y si el vínculo falla, no queda un usuario suelto.
+     *
+     * ⚠️ Con `socialAutoLinkByEmail()` apagado, acá puede llegar una identidad
+     * cuyo email YA es de otra cuenta del scope. Decidí qué pasa (devolver
+     * `null`, crear sin email…): un `create()` a ciegas choca con el `unique`.
+     *
+     * Apple manda el nombre SÓLO en la primera autorización y fuera del token:
+     * si el front lo reenvía, está en `$request`.
+     */
+    protected function createSocialUser(Request $request, SocialIdentity $identity): ?Authenticatable
+    {
+        return null;
+    }
+
+    /**
+     * El usuario del scope cuyo email coincide con uno que el proveedor
+     * VERIFICÓ. Con `email_verified` falso o sin email, `null` siempre: es el
+     * único lugar del paquete que busca una cuenta por email ajeno.
+     *
+     * Busca en la columna `email`, que todo scope generado tiene (es parte
+     * del perfil base), aunque el scope loguee por otro campo.
+     */
+    protected function findUserByVerifiedSocialEmail(SocialIdentity $identity): ?Authenticatable
+    {
+        if (! $identity->emailVerified || $identity->email === null) {
+            return null;
+        }
+
+        /** @var Authenticatable|null $user */
+        $user = $this->identityQuery()
+            ->where('email', $identity->email)
+            ->first();
+
+        return $user !== null && $user->getAuthScope() === $this->authScope() ? $user : null;
+    }
+
+    /** El usuario ya vinculado a `(scope, provider, sub)`, o `null`. */
+    protected function findLinkedSocialUser(SocialIdentity $identity): ?Authenticatable
+    {
+        $userId = DB::table(self::SOCIAL_IDENTITIES_TABLE)
+            ->where('auth_scope', $this->authScope())
+            ->where('provider', $identity->provider)
+            ->where('subject', $identity->subject)
+            ->value('user_id');
+
+        if ($userId === null) {
+            return null;
+        }
+
+        /** @var Authenticatable|null $user */
+        $user = $this->identityQuery()->whereKey($userId)->first();
+
+        // Defense-in-depth, como en login(): el vínculo es del scope, pero el
+        // usuario tiene que seguir siéndolo.
+        return $user !== null && $user->getAuthScope() === $this->authScope() ? $user : null;
+    }
+
+    /**
+     * Guarda el vínculo. `updateOrInsert` porque un vínculo cuyo usuario se
+     * borró se reasigna en vez de chocar con el `unique`.
+     */
+    protected function linkSocialIdentity(Authenticatable $user, SocialIdentity $identity): void
+    {
+        DB::table(self::SOCIAL_IDENTITIES_TABLE)->updateOrInsert(
+            [
+                'auth_scope' => $this->authScope(),
+                'provider' => $identity->provider,
+                'subject' => $identity->subject,
+            ],
+            [
+                'user_id' => (string) $user->getAuthIdentifier(),
+                'email' => $identity->email,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+        );
+
+        $this->dispatchAuthEventSafe('auth.social.linked', [
+            'scope' => $this->authScope(),
+            'provider' => $identity->provider,
+            'user_id' => (string) $user->getAuthIdentifier(),
+        ]);
+    }
+
+    private function socialLoginError(Request $request, string $provider, SocialLoginException $e): JsonResponse
+    {
+        $this->dispatchAuthEventSafe('auth.login.failed', [
+            'scope' => $this->authScope(),
+            'provider' => $provider,
+            'ip' => $request->ip(),
+            'reason' => 'social_'.$e->reason,
+            'detail' => $e->getMessage(),
+        ]);
+
+        return match ($e->reason) {
+            SocialLoginException::PROVIDER_DISABLED => $this->sendError(
+                'Este método de acceso no está habilitado.', [], 403, 'ERR_SOCIAL_PROVIDER_DISABLED'),
+            SocialLoginException::KEYS_UNAVAILABLE => $this->sendError(
+                'No se pudo verificar el acceso en este momento. Probá de nuevo.', [], 503, 'ERR_SOCIAL_UNAVAILABLE'),
+            default => $this->sendError(
+                'El acceso no es válido. Volvé a intentarlo.', [], 401, 'ERR_SOCIAL_TOKEN_INVALID'),
+        };
+    }
+
+    /** Subclase puede override para inyectar un verificador custom (e.g. tests). */
+    protected function idTokenVerifier(): IdTokenVerifier
+    {
+        return app(IdTokenVerifier::class);
+    }
+
+    protected function socialProviderConfigResolver(): SocialProviderConfigResolver
+    {
+        return app(SocialProviderConfigResolver::class);
     }
 
     // ============================================================
