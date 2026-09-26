@@ -24,7 +24,8 @@
         "illuminate/http": "^13.0",
         "laravel/sanctum": "^4.0",
         "mpdf/mpdf": "^8.3",
-        "phpoffice/phpspreadsheet": "^5.3"
+        "phpoffice/phpspreadsheet": "^5.3",
+        "firebase/php-jwt": "^6.10 || ^7.0"
     },
     "require-dev": {
         "pestphp/pest": "^5.0",
