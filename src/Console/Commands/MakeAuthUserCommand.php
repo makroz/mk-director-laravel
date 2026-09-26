@@ -3135,7 +3135,7 @@ PHP;
         // pinea `'status' => $this->status?->value` canónico, y `{{profileFieldsResourceEntry}}`
         // pineaba `'status' => $this->status` (enum crudo) — eso PISABA el
         // canónico con el enum object, rompiendo el contrato cross-stack
-        // con `@makroz/web AdminDto.status: AdminStatusValue` (espera string).
+        // con `@makroz/web AuthUserDto.status: string | number | null` (espera un escalar).
         $coreFields = ['id', 'name', $loginField, 'auth_scope', 'password', 'status'];
 
         $out = '';
