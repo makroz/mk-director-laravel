@@ -70,6 +70,12 @@ class AccessGrantGuard
 
     public const ERR_FIXED_ABILITY = 'ERR_FIXED_ABILITY';
 
+    /** Con `roles_per_tenant`: un rol que no es del tenant del contexto. */
+    public const ERR_PLATFORM_ROLE = 'ERR_PLATFORM_ROLE';
+
+    /** Con `roles_per_tenant`: el catálogo de abilities es de la plataforma. */
+    public const ERR_PLATFORM_ABILITY = 'ERR_PLATFORM_ABILITY';
+
     /**
      * Antes de sincronizar roles y/o abilities directas de `$target`.
      *
@@ -186,6 +192,8 @@ class AccessGrantGuard
             throw new AccessGrantDeniedException('Es un rol del sistema: no se modifica desde acá.', self::ERR_FIXED_ROLE);
         }
 
+        $this->assertRoleBelongsToActingTenant($role);
+
         if (! $actor instanceof AuthUser || $actor->getAuthScope() !== $role->guard || $this->holds($actor, '*')) {
             return;
         }
@@ -223,6 +231,8 @@ class AccessGrantGuard
      */
     public function assertCanChangeAbility(?Authenticatable $actor, ?Ability $ability, ?string $newName): void
     {
+        $this->assertAbilityCatalogIsWritable();
+
         if ($ability !== null) {
             $this->assertAbilityNotFixed($ability);
         }
@@ -242,6 +252,7 @@ class AccessGrantGuard
      */
     public function assertCanDeleteAbility(?Authenticatable $actor, Ability $ability): void
     {
+        $this->assertAbilityCatalogIsWritable();
         $this->assertAbilityNotFixed($ability);
         $this->assertHoldsAbilityNames($actor, [$ability->name]);
     }
@@ -261,6 +272,45 @@ class AccessGrantGuard
         $resource = explode('.', $ability, 2)[0];
 
         return $resource !== '' && $resource !== '*' && in_array($resource.'.*', $names, true);
+    }
+
+    /**
+     * Con `roles_per_tenant`, desde un tenant sólo se tocan SUS roles. Va antes
+     * del atajo de `*`: el dueño de un tenant tiene `*` dentro de SU tenant, y
+     * un rol de la plataforma lo usan todos los demás.
+     *
+     * 🔴 Medido en NetPizza: el dueño de un restaurante (con `super-admin` y
+     * `*`) vaciaba y borraba el rol que usaba otro restaurante, 200.
+     */
+    private function assertRoleBelongsToActingTenant(Role $role): void
+    {
+        $tenant = Role::actingTenant();
+
+        if ($tenant === null || (string) $role->getAttribute('tenant_id') === (string) $tenant) {
+            return;
+        }
+
+        throw new AccessGrantDeniedException(
+            $role->getAttribute('tenant_id') === null
+                ? 'Es un rol de la plataforma: no se modifica desde acá.'
+                : 'Ese rol es de otra organización.',
+            self::ERR_PLATFORM_ROLE,
+        );
+    }
+
+    /**
+     * Con `roles_per_tenant`, las abilities son de la plataforma: el código las
+     * declara y todos los tenants las comparten. Renombrar o borrar una desde un
+     * tenant se la cambia a todos. Ni con `*`.
+     */
+    private function assertAbilityCatalogIsWritable(): void
+    {
+        if (Role::actingTenant() !== null) {
+            throw new AccessGrantDeniedException(
+                'Los permisos los define la plataforma: no se crean ni se modifican desde acá.',
+                self::ERR_PLATFORM_ABILITY,
+            );
+        }
     }
 
     private function assertDoesNotOutrank(AuthUser $actor, AuthUser $target): void

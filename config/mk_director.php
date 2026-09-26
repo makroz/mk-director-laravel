@@ -1035,6 +1035,24 @@ return [
             'api/*/auth/reset',
         ],
         'fail_closed' => filter_var(env('MK_TENANT_FAIL_CLOSED', false), FILTER_VALIDATE_BOOLEAN),
+
+        /*
+         | ROLES POR TENANT (opt-in). Sin esto los roles son GLOBALES: en un
+         | consumer multi-tenant, el CRUD de roles de un tenant edita, vacía o
+         | borra los roles que usan TODOS los demás (medido en NetPizza, 200).
+         |
+         | Prendido:
+         |   - `roles.tenant_id` (la columna la agrega el consumer, con el tipo
+         |     de SU id de tenant) dice de quién es el rol; `null` = de la
+         |     plataforma, visible para todos.
+         |   - Con un tenant en el contexto, `Role` sólo ve los de la plataforma
+         |     y los de ese tenant, y un rol creado nace de ese tenant.
+         |   - Sin contexto (consola, seeders, migraciones) ve todos y crea de la
+         |     plataforma.
+         |   - `AccessGrantGuard`: desde un tenant no se tocan los roles de la
+         |     plataforma ni el catálogo de abilities, ni con `*`.
+         */
+        'roles_per_tenant' => filter_var(env('MK_ROLES_PER_TENANT', false), FILTER_VALIDATE_BOOLEAN),
     ],
 
     /*

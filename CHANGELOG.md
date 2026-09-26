@@ -12,6 +12,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — roles por tenant (opt-in): un tenant ya no edita los roles de todos
+
+Los roles eran globales. En un consumer multi-tenant, el dueño de un tenant —con `super-admin` y
+`*`— vaciaba, borraba o le daba `*` al rol que usaban TODOS los demás, y renombraba o borraba
+abilities de todos (medido en NetPizza por HTTP, 200, con efecto en la base). El `*` salteaba
+`assertCanChangeRole()`, y su búsqueda de quién tiene el rol corría con el scope del tenant del
+actor: no veía a los de otros tenants.
+
+Nuevo `mk_director.tenant.roles_per_tenant` (`MK_ROLES_PER_TENANT`, **default `false`**: nada
+cambia para quien no lo prende):
+
+- `roles.tenant_id` dice de quién es el rol; `null` = de la plataforma.
+- Con un tenant en el contexto, `Role` ve los de la plataforma y los de ese tenant, y un rol creado
+  nace de ese tenant. `assignRole('cajero')` resuelve el propio aunque otro tenant tenga uno igual.
+  Sin contexto (consola, seeders, migraciones) ve todos y crea de la plataforma.
+- `AccessGrantGuard`: desde un tenant no se toca un rol que no sea suyo (`ERR_PLATFORM_ROLE`), y el
+  catálogo de abilities no se crea, renombra ni borra (`ERR_PLATFORM_ABILITY`). Ni con `*`.
+
+Lo mide `tests/Feature/Auth/RolesPerTenantTest.php`.
+
+⚠️ **Para prenderlo, el consumer** agrega `roles.tenant_id` con el tipo de SU id de tenant y cambia
+el único `(name, guard)` por `(name, guard, tenant_id)`, y valida al crear un rol que su nombre no
+choque con uno de la plataforma del mismo `guard` (si no, `hasRole()` y `assignRole()` por nombre
+serían ambiguos). Las rutas del CRUD de roles necesitan el tenant en el contexto: sin él, el scope
+no filtra.
+
 ## [UNRELEASED] — el CRUD de abilities generado ya no deja darse acceso renombrando, y `*` no se toca
 
 Roles y grants apuntan a la ability por id: renombrarla es cambiarles el permiso a todos los que
