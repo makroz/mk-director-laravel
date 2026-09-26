@@ -442,6 +442,36 @@ return [
             'two_factor_challenge' => env('MK_AUTH_RATE_LIMIT_2FA_CHALLENGE', '10,10'),
             'two_factor_setup' => env('MK_AUTH_RATE_LIMIT_2FA_SETUP', '10,10'),
             'two_factor_manage' => env('MK_AUTH_RATE_LIMIT_2FA_MANAGE', '10,10'),
+
+            // `POST /auth/social/{provider}` (§ 3.22), sólo si el consumer la
+            // cablea. Pública: el corte es por IP, igual que login.
+            'social' => env('MK_AUTH_RATE_LIMIT_SOCIAL', '10,1'),
+        ],
+
+        // Login con Google y Apple por ID token (DEVELOPER_GUIDE § 3.22).
+        //
+        // 🔴 ESTO NO PRENDE NINGUNA RUTA. El endpoint existe en cada scope sólo
+        // si el consumer agrega `Route::post('social/{provider}', …)` a las
+        // rutas del scope. Y es sólo lo que lee el resolver por defecto
+        // (`ConfigSocialProviderConfigResolver`): un consumer que guarda las
+        // credenciales en su base bindea su propio
+        // `SocialProviderConfigResolver` y esta sección no se lee.
+        //
+        // `client_ids` = las audiencias aceptadas (array o CSV):
+        //   - google: los client ids OAuth de web, iOS y Android.
+        //   - apple:  el Services ID (web) y los bundle ids de las apps.
+        // Sin client ids, o con `enabled = false`, el proveedor responde 403.
+        'social' => [
+            'providers' => [
+                'google' => [
+                    'enabled' => filter_var(env('MK_AUTH_SOCIAL_GOOGLE_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
+                    'client_ids' => env('MK_AUTH_SOCIAL_GOOGLE_CLIENT_IDS', ''),
+                ],
+                'apple' => [
+                    'enabled' => filter_var(env('MK_AUTH_SOCIAL_APPLE_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
+                    'client_ids' => env('MK_AUTH_SOCIAL_APPLE_CLIENT_IDS', ''),
+                ],
+            ],
         ],
 
         // Verificación en dos pasos por TOTP (DEVELOPER_GUIDE § 3.20).
