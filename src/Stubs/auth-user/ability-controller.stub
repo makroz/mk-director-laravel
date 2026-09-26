@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Modules\{{ModuleName}}\Http\Controllers;
 
 use App\Modules\{{ModuleName}}\Http\Resources\AbilityResource;
-use App\Modules\{{ModuleName}}\Services\{{ModuleName}}Service;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -38,7 +37,10 @@ class AbilityController extends SmartController
         'model'           => Ability::class,
         // `Ability` es un modelo del paquete: el Resource del módulo se declara acá.
         'resource'        => \App\Modules\{{ModuleName}}\Http\Resources\AbilityResource::class,
-        'service'         => {{ModuleName}}Service::class,
+        // SIN `service`, a propósito: el Service del módulo es el de los
+        // USUARIOS, y sus hooks (`beforeUpdate` con `AccessGrantGuard`) buscan un
+        // usuario con el `$id` que les llega. Acá ese id es de una ABILITY: un entero
+        // contra un uuid, 500 en Postgres.
         'searchable'      => ['name', 'description'],
         'with'            => [],
         'allowedIncludes' => [],

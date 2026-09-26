@@ -31,7 +31,10 @@ class RoleController extends SmartController
         'model'           => Role::class,
         // `Role` es un modelo del paquete: el Resource del módulo se declara acá.
         'resource'        => \App\Modules\{{ModuleName}}\Http\Resources\RoleResource::class,
-        'service'         => {{ModuleName}}Service::class,
+        // SIN `service`, a propósito: el Service del módulo es el de los
+        // USUARIOS, y sus hooks (`beforeUpdate` con `AccessGrantGuard`) buscan un
+        // usuario con el `$id` que les llega. Acá ese id es de un ROL: un entero
+        // contra un uuid, 500 en Postgres. `syncRoleAbilities()` se llama directo.
         'searchable'      => ['name'],
         'with'            => ['abilities'],
         'allowedIncludes' => ['abilities'],

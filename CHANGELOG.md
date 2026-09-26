@@ -12,6 +12,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — editar un rol o una ability ya no busca un usuario con su id (500 en Postgres)
+
+`RoleController` y `AbilityController` generados por `mk:make:auth-user --with-crud` declaraban
+`'service' => {Scope}Service::class`, el Service de los USUARIOS. Desde que ese Service llama a
+`AccessGrantGuard` en `beforeUpdate()` con `{Scope}::query()->find($id)`, `PUT roles/{id}` y
+`PUT abilities/{id}` buscaban un usuario con el id de un rol: un entero contra la columna uuid.
+En Postgres es `SQLSTATE[22P02]` → 500 en toda edición de un rol o una ability (medido en RETO);
+en MySQL/sqlite no revienta y la búsqueda da null.
+
+Ahora los dos controllers no declaran `service`: todos sus hooks eran passthrough salvo la guarda,
+que es de usuarios. `RoleController::syncAbilities()` sigue llamando a `syncRoleAbilities()`
+directo. El `beforeDelete()` no tenía el problema (ya chequeaba `instanceof`). Lo mide
+`tests/Feature/MakeAuthUserAccessEscalationTest.php` corriendo el `update()` generado de los dos
+controllers y afirmando que no consultan la tabla de usuarios, y que la guarda sigue dando 403 por
+el `update()` del controller de usuarios.
+
+⚠️ **Código ya generado:** sacá la línea `'service' => {Scope}Service::class` del `$mkConfig` de
+`RoleController` y de `AbilityController` (y el `use` que queda sin uso en `AbilityController`).
+Si agregaste hooks propios al Service pensando en roles, movelos al controller.
+
 ## [UNRELEASED] — el motor de reportes es opt-in y su prefijo no trae el `v3` de Condaty (hallazgo 48)
 
 `mk_director.export.register_routes` venía en `true` y `route_prefix` en `'v3/reports'`: todo

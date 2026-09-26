@@ -82,6 +82,11 @@ class {{ModuleName}}Service implements MkModuleServiceInterface
         // Nadie cambia su propio `status`, ni edita a quien tiene más acceso que
         // él (un encargado bloqueando al dueño). Si sobreescribís este hook,
         // conservá esta línea.
+        //
+        // 🔴 `$id` es de un USUARIO porque este Service es SÓLO el de
+        // `{{ModuleName}}Controller`. No lo declares como `service` de otro
+        // controller: con el id de un rol (entero) esta búsqueda sobre un uuid
+        // es un 500 en Postgres.
         $target = {{ModuleName}}::query()->find($id);
         if ($target !== null) {
             app(AccessGrantGuard::class)->assertCanUpdate($request->user(), $target, $input);

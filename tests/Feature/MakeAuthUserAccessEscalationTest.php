@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Mk\Director\Auth\Access\AccessGrantDeniedException;
 use Mk\Director\Auth\Access\AccessGrantGuard;
 use Mk\Director\Auth\Models\Ability;
@@ -53,6 +54,7 @@ function bootGeneratedCrew(object $test): void
         'Enums/CrewStatus.php', 'Models/Crew.php', 'Repositories/Contracts/CrewRepositoryInterface.php',
         'Repositories/CrewRepository.php', 'Services/CrewService.php', 'Http/Requests/AssignAccessRequest.php',
         'Http/Requests/AssignRolesRequest.php', 'Http/Requests/AssignDirectAbilitiesRequest.php', 'Http/Resources/CrewResource.php', 'Http/Controllers/CrewController.php',
+        'Http/Resources/RoleResource.php', 'Http/Resources/AbilityResource.php', 'Http/Controllers/RoleController.php', 'Http/Controllers/AbilityController.php',
     ] as $file) {
         if (! class_exists('App\\Modules\\Crew\\'.str_replace(['/', '.php'], ['\\', ''], $file), false)
             && ! interface_exists('App\\Modules\\Crew\\'.str_replace(['/', '.php'], ['\\', ''], $file), false)
@@ -60,6 +62,9 @@ function bootGeneratedCrew(object $test): void
             require "{$module}/{$file}";
         }
     }
+
+    // Lo que hace el ServiceProvider generado: sin esto el controller no resuelve el Service.
+    app()->bind('App\\Modules\\Crew\\Repositories\\Contracts\\CrewRepositoryInterface', 'App\\Modules\\Crew\\Repositories\\CrewRepository');
 
     foreach (['crew.crews.update', 'crew.crews.delete', 'crew.branches.viewAll', '*'] as $name) {
         Ability::query()->firstOrCreate(['name' => $name]);
@@ -162,4 +167,58 @@ test('Service generado: bloquear o borrar al dueño es 403; su propio status tam
     $asOwner->setUserResolver(fn () => $owner);
     expect(crewDenial(fn () => $service->beforeUpdate($asOwner, (string) $manager->getKey(), ['status' => 3])))->toBeNull();
     expect(crewDenial(fn () => $service->beforeUpdate($asManager, (string) $manager->getKey(), ['name' => 'Nuevo'])))->toBeNull();
+});
+
+/**
+ * 🔴 El Service de usuarios corría también para roles y abilities.
+ *
+ * `RoleController` y `AbilityController` generados declaraban el MISMO
+ * `'service' => CrewService::class`, así que `PUT /roles/{id}` llegaba a
+ * `CrewService::beforeUpdate()` con el id de un ROL y hacía
+ * `Crew::find($id)`: buscaba un uuid con un entero. En Postgres eso es
+ * `SQLSTATE[22P02]` → 500 en toda edición de un rol o una ability (medido en
+ * RETO). En sqlite/MySQL no revienta, devuelve null — por eso se mide la
+ * CONSULTA, que es la causa, y no el 500, que depende del motor.
+ */
+test('editar un rol o una ability NO busca un usuario con su id', function () {
+    bootGeneratedCrew($this);
+    $owner = crewUser('dueño', ['*']);
+    $role = Role::query()->create(['name' => 'mesero', 'guard' => 'crew']);
+    $ability = Ability::query()->where('name', 'crew.crews.update')->firstOrFail();
+
+    $queries = [];
+    DB::listen(function ($q) use (&$queries) {
+        $queries[] = $q->sql;
+    });
+
+    foreach ([
+        ['RoleController', (string) $role->getKey(), ['name' => 'mozo', 'guard' => 'crew']],
+        ['AbilityController', (string) $ability->getKey(), ['description' => 'Editar crews.']],
+    ] as [$class, $id, $data]) {
+        $request = Request::create('/', 'PUT', $data);
+        app()->instance('request', $request);
+        $request->setUserResolver(fn () => $owner);
+
+        $queries = [];
+        $response = (new ('App\\Modules\\Crew\\Http\\Controllers\\'.$class))->update($request, $id);
+
+        expect($response->getStatusCode())->toBe(200, $class);
+        expect(array_filter($queries, fn (string $sql) => preg_match('/from ["`]?crews["`]?/i', $sql) === 1))
+            ->toBe([], "{$class}::update consultó la tabla de usuarios");
+    }
+
+    expect($role->fresh()->name)->toBe('mozo');
+});
+
+test('la guarda sigue viva en el CRUD de USUARIOS: editar al dueño por el controller es 403', function () {
+    bootGeneratedCrew($this);
+    $owner = crewUser('dueño', ['*']);
+    $manager = crewUser('encargado', ['crew.crews.update']);
+
+    $request = Request::create('/', 'PUT', ['status' => 3]);
+    app()->instance('request', $request);
+    $request->setUserResolver(fn () => $manager);
+
+    $controller = new ('App\\Modules\\Crew\\Http\\Controllers\\CrewController');
+    expect(crewDenial(fn () => $controller->update($request, (string) $owner->getKey())))->toBe(AccessGrantGuard::ERR_TARGET_OUTRANKS_ACTOR);
 });
