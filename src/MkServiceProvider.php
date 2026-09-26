@@ -281,7 +281,14 @@ class MkServiceProvider extends ServiceProvider
         $this->registerGlobalCacheListener();
         $this->registerOpenApiRoutes();
         $this->registerExportRoutes();
-        $this->registerAutoDiscoverAbilities();
+        // 🔴 En `booted`, no acá. El `Artisan::call()` del auto-discover
+        // arranca el kernel de consola y marca sus comandos como cargados; si
+        // eso pasa durante el boot de los providers, `routes/console.php` —que
+        // Laravel agrega en SU callback `booted`— no se lee nunca, y el
+        // scheduler queda vacío sin error: `schedule:list` decía "No scheduled
+        // tasks" en RETO con el flag prendido. Registrado acá, corre DESPUÉS
+        // del callback de Laravel.
+        $this->app->booted(fn () => $this->registerAutoDiscoverAbilities());
     }
 
     /**
