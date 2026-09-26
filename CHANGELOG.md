@@ -90,16 +90,20 @@ stub `src/Stubs/auth-user/role-controller.stub`.
 En Postgres es `SQLSTATE[22P02]` → 500 en toda edición de un rol o una ability (medido en RETO);
 en MySQL/sqlite no revienta y la búsqueda da null.
 
-Ahora los dos controllers no declaran `service`: todos sus hooks eran passthrough salvo la guarda,
-que es de usuarios. `RoleController::syncAbilities()` sigue llamando a `syncRoleAbilities()`
+Ahora los dos controllers no declaran `service`: en el stub, todos sus hooks eran passthrough salvo
+la guarda, que es de usuarios. `RoleController::syncAbilities()` sigue llamando a `syncRoleAbilities()`
 directo. El `beforeDelete()` no tenía el problema (ya chequeaba `instanceof`). Lo mide
 `tests/Feature/MakeAuthUserAccessEscalationTest.php` corriendo el `update()` generado de los dos
 controllers y afirmando que no consultan la tabla de usuarios, y que la guarda sigue dando 403 por
 el `update()` del controller de usuarios.
 
-⚠️ **Código ya generado:** sacá la línea `'service' => {Scope}Service::class` del `$mkConfig` de
-`RoleController` y de `AbilityController` (y el `use` que queda sin uso en `AbilityController`).
-Si agregaste hooks propios al Service pensando en roles, movelos al controller.
+⚠️ **Código ya generado:** antes de sacar la línea `'service' => {Scope}Service::class` del
+`$mkConfig` de `RoleController` y de `AbilityController`, revisá los hooks del Service de usuarios.
+Si alguno no es passthrough y también lo necesitan roles o abilities, sacarlo lo apaga sin error:
+movelo a un Service propio de esos dos controllers y declará ese. Pasó en RETO, donde
+`beforeSearch` hacía el filtro `?scope=` de los listados de roles y abilities; sin él, el panel de
+un scope mostraba los del otro. RETO lo movió a `AccessCatalogService`. Después sacá el `use` que
+quede sin uso en `AbilityController`.
 
 ## [UNRELEASED] — el motor de reportes es opt-in y su prefijo no trae el `v3` de Condaty (hallazgo 48)
 
