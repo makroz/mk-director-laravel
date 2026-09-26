@@ -103,6 +103,7 @@ beforeEach(function () {
     ]);
 
     (require __DIR__.'/../../src/Database/Migrations/2026_08_11_000001_create_mk_reports_table.php')->up();
+    (require __DIR__.'/../../src/Database/Migrations/2026_09_26_000001_add_user_type_to_mk_reports_table.php')->up();
 
     app('router')->getRoutes()->refreshNameLookups();
     app()->register(BusServiceProvider::class);
@@ -120,8 +121,9 @@ function pedirElCustom(?string $abilityDelReporte, object $usuario): int
     app()->instance(CustomReportRegistry::class, $registry);
 
     $request = Request::create('/x', 'POST', ['_export' => 'csv']);
-    $request->setUserResolver(fn () => $usuario);
+    // Primero el binding: el rebinding de Auth pisa el user resolver.
     app()->instance('request', $request);
+    $request->setUserResolver(fn () => $usuario);
 
     return app(AsyncExportManager::class)
         ->export($request, [], 'finanzas-ingresos')

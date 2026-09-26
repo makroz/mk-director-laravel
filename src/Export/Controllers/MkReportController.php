@@ -36,7 +36,7 @@ final class MkReportController extends BaseController
     public function index(Request $request): JsonResponse
     {
         $query = MkReport::query()
-            ->where('user_id', (string) $request->user()?->getKey())
+            ->de($request->user())
             ->latest('id');
 
         if ($tipo = $request->input('type')) {
@@ -117,7 +117,7 @@ final class MkReportController extends BaseController
     public function destroy(Request $request): JsonResponse
     {
         $query = MkReport::query()
-            ->where('user_id', (string) $request->user()?->getKey())
+            ->de($request->user())
             ->whereIn('status', MkReport::TERMINAL_STATUSES);
 
         if ($tipo = $request->input('type')) {
@@ -188,7 +188,7 @@ final class MkReportController extends BaseController
             return $this->sendError('Reporte no encontrado.', [], 404);
         }
 
-        if ((string) $reporte->user_id !== (string) $request->user()?->getKey()) {
+        if (! $reporte->esDe($request->user())) {
             return $this->sendError('Reporte no encontrado.', [], 404);
         }
 

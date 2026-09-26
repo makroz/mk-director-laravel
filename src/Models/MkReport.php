@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace Mk\Director\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model as EloquentModel;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\Relation;
 use Mk\Director\Tenancy\HasTenantScope;
 use RuntimeException;
 
@@ -41,6 +43,7 @@ class MkReport extends EloquentModel
     protected $fillable = [
         'uuid',
         'user_id',
+        'user_type',
         'tenant_id',
         'type',
         'format',
@@ -130,6 +133,55 @@ class MkReport extends EloquentModel
             ?? config('auth.providers.users.model');
 
         return is_string($declarado) && $declarado !== '' ? $declarado : null;
+    }
+
+    /**
+     * Lo que se guarda en `user_type` para este usuario: su morph class.
+     */
+    public static function tipoDe(mixed $user): ?string
+    {
+        return $user instanceof EloquentModel ? $user->getMorphClass() : null;
+    }
+
+    /**
+     * Los reportes de este usuario: su id Y su tipo.
+     *
+     * 🔴 Por id solo, el member 5 veía y bajaba los reportes del admin 5. Una
+     * fila sin `user_type` (anterior a la columna) se sigue comparando sólo
+     * por id.
+     */
+    public function scopeDe(Builder $query, mixed $user): Builder
+    {
+        $tipo = static::tipoDe($user);
+
+        return $query
+            ->where('user_id', (string) ($user?->getKey() ?? ''))
+            ->where(fn (Builder $q) => $q->whereNull('user_type')->when(
+                $tipo !== null,
+                fn (Builder $q) => $q->orWhere('user_type', $tipo),
+            ));
+    }
+
+    public function esDe(mixed $user): bool
+    {
+        return $user !== null
+            && (string) $this->user_id === (string) $user->getKey()
+            && ($this->user_type === null || $this->user_type === static::tipoDe($user));
+    }
+
+    /**
+     * Quien pidió el reporte, resuelto con SU modelo; `null` si ya no existe.
+     *
+     * 🔴 Es la identidad con la que corre el job. Con el modelo de la config
+     * para todos, un reporte del member 5 corría como el admin 5.
+     */
+    public function solicitante(): ?EloquentModel
+    {
+        $modelo = $this->user_type !== null
+            ? (Relation::getMorphedModel($this->user_type) ?? $this->user_type)
+            : static::userModel();
+
+        return $modelo !== null && class_exists($modelo) ? $modelo::find($this->user_id) : null;
     }
 
     /**

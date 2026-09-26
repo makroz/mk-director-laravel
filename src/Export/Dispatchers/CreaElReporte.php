@@ -60,10 +60,12 @@ trait CreaElReporte
         string $type,
         string $format,
         array $params,
+        ?string $userType = null,
     ): MkReport {
         return MkReport::create([
             'uuid' => (string) Str::uuid(),
             'user_id' => (string) $userId,
+            'user_type' => $userType,
             'tenant_id' => $tenantId !== null ? (string) $tenantId : null,
             'type' => $type,
             'format' => $format,

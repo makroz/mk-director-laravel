@@ -37,6 +37,7 @@ final class InlineExportDispatcher
         string $format,
         array $params = [],
         ?string $controllerClass = null,
+        ?string $userType = null,
     ): JsonResponse {
         $config = $this->registry->get($type);
 
@@ -58,7 +59,7 @@ final class InlineExportDispatcher
         $format = $this->normalizeFormat($format);
         $this->exigirFormatoSoportado($format, $config->supportedFormats(), $type);
 
-        $report = $this->crearElReporte($userId, $tenantId, $type, $format, $params);
+        $report = $this->crearElReporte($userId, $tenantId, $type, $format, $params, $userType);
 
         GenerateListExportJob::dispatch($report->id, $controllerClass);
 

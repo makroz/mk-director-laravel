@@ -293,9 +293,7 @@ class GenerateListExportJob implements ShouldQueue
 
     private function usuarioDelReporte(MkReport $report): mixed
     {
-        $modelo = MkReport::userModel();
-
-        return $modelo !== null && class_exists($modelo) ? $modelo::find($report->user_id) : null;
+        return $report->solicitante();
     }
 
     /**

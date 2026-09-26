@@ -120,8 +120,7 @@ class GenerateCustomReportJob implements ShouldQueue
      */
     private function comoElDuenoDelReporte(MkReport $report, callable $flujo): string
     {
-        $modelo = MkReport::userModel();
-        $usuario = $modelo !== null && class_exists($modelo) ? $modelo::find($report->user_id) : null;
+        $usuario = $report->solicitante();
         $tenant = app(TenantContext::class);
 
         $usuarioPrevio = Auth::user();

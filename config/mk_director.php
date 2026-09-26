@@ -610,9 +610,11 @@ return [
         // con su archivo. Ver la nota de arriba sobre el 0.
         'retention_hours' => env('MK_EXPORT_RETENTION_HOURS', 48),
 
-        // El modelo de usuario del consumer, para la relación `user()` del
-        // reporte y el historial "mis descargas". Null = `auth.providers.
-        // users.model` de Laravel.
+        // El modelo de usuario para los reportes SIN `user_type` (anteriores
+        // a esa columna) y para la relación `user()`. Los nuevos guardan el
+        // tipo de quien los pidió y se resuelven con SU modelo, así que un
+        // consumer con varios scopes no necesita elegir uno. Null =
+        // `auth.providers.users.model` de Laravel.
         'user_model' => env('MK_EXPORT_USER_MODEL', null),
 
         /*

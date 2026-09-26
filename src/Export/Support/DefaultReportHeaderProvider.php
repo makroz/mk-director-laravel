@@ -39,13 +39,7 @@ final class DefaultReportHeaderProvider implements ReportHeaderProvider
      */
     private function nombreDeQuienPidio(MkReport $report): string
     {
-        $modelo = MkReport::userModel();
-
-        if (! $modelo || ! class_exists($modelo)) {
-            return 'Sistema';
-        }
-
-        $user = $modelo::find($report->user_id);
+        $user = $report->solicitante();
 
         if (! $user) {
             return 'Sistema';

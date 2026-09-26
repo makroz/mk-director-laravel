@@ -34,6 +34,7 @@ final class CustomReportDispatcher
         string $type,
         string $format,
         array $params = [],
+        ?string $userType = null,
     ): JsonResponse {
         $custom = $this->registry->get($type);
 
@@ -47,7 +48,7 @@ final class CustomReportDispatcher
         $format = $this->normalizeFormat($format);
         $this->exigirFormatoSoportado($format, $custom->supportedFormats(), $type);
 
-        $report = $this->crearElReporte($userId, $tenantId, $type, $format, $params);
+        $report = $this->crearElReporte($userId, $tenantId, $type, $format, $params, $userType);
 
         GenerateCustomReportJob::dispatch($report->id);
 

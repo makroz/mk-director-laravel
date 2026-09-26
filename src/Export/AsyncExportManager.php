@@ -7,6 +7,7 @@ namespace Mk\Director\Export;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Mk\Director\Export\Contracts\CustomReportInterface;
+use Mk\Director\Models\MkReport;
 use Mk\Director\Tenancy\TenantContext;
 
 /**
@@ -104,6 +105,7 @@ final class AsyncExportManager
                 type: $type,
                 format: (string) $format,
                 params: $params,
+                userType: MkReport::tipoDe($user),
             );
         }
 
@@ -115,6 +117,7 @@ final class AsyncExportManager
                 format: (string) $format,
                 params: $params,
                 controllerClass: $controllerClass,
+                userType: MkReport::tipoDe($user),
             );
         }
 
