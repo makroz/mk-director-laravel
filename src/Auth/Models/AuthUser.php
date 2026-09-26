@@ -54,6 +54,32 @@ abstract class AuthUser extends Authenticatable implements AuthenticatableContra
     use Notifiable;
 
     /**
+     * Los scopes de verdad: guards de `config/auth.php` cuyo modelo extiende
+     * `AuthUser`. Es el registro que ya decide quién entra (`mk.auth:{scope}`
+     * resuelve ese guard), así que no hace falta una lista aparte que se
+     * desincronice. Lo leen `mk:discover-abilities` (qué prefijo de ability es
+     * un scope) y `AccessGrantGuard` (qué nombres son de OTRO scope): un solo
+     * criterio, o los dos empiezan a contestar distinto.
+     *
+     * @return array<int, string>
+     */
+    public static function configuredScopes(): array
+    {
+        $scopes = [];
+
+        foreach ((array) config('auth.guards', []) as $guard => $definition) {
+            $provider = is_array($definition) ? ($definition['provider'] ?? null) : null;
+            $model = is_string($provider) ? config("auth.providers.{$provider}.model") : null;
+
+            if (is_string($model) && class_exists($model) && is_subclass_of($model, self::class)) {
+                $scopes[] = (string) $guard;
+            }
+        }
+
+        return $scopes;
+    }
+
+    /**
      * R-PKG-035 DB defensive boot (v1.8.3-rc0).
      *
      * HALLAZGO-NEW-FASE15 (Mario DB question 2026-06-30): la tabla

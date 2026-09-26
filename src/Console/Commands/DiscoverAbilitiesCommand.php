@@ -682,23 +682,13 @@ class DiscoverAbilitiesCommand extends Command
      * que no tenía ningún usuario, y la baseline quedó colgando de ellos.
      *
      * Un scope es un guard de `config/auth.php` cuyo modelo extiende
-     * `AuthUser`: es el registro que ya decide quién entra (`mk.auth:{scope}`
-     * resuelve ese guard), así que no hace falta una lista aparte que se
-     * desincronice. Sin ningún guard así —un harness mínimo, un consumidor sin
+     * `AuthUser` ({@see AuthUser::configuredScopes()}, el mismo criterio que
+     * `AccessGrantGuard`). Sin ningún guard así —un harness mínimo, un consumidor sin
      * scopes todavía— todo prefijo cuenta, que es el comportamiento de antes.
      */
     private function esScopeReal(string $scope): bool
     {
-        $reales = [];
-
-        foreach ((array) config('auth.guards', []) as $guard => $definicion) {
-            $provider = is_array($definicion) ? ($definicion['provider'] ?? null) : null;
-            $modelo = is_string($provider) ? config("auth.providers.{$provider}.model") : null;
-
-            if (is_string($modelo) && class_exists($modelo) && is_subclass_of($modelo, AuthUser::class)) {
-                $reales[] = (string) $guard;
-            }
-        }
+        $reales = AuthUser::configuredScopes();
 
         return $reales === [] || in_array($scope, $reales, true);
     }

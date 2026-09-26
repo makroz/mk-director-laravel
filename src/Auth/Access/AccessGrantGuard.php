@@ -358,7 +358,8 @@ class AccessGrantGuard
             return;
         }
 
-        $scopes = $this->knownScopes();
+        // Sin ningún scope configurado, ningún nombre queda afuera: falla cerrada.
+        $scopes = AuthUser::configuredScopes();
 
         foreach ($names as $name) {
             // El scope es el primer segmento, en singular o plural (`crew.` o `crews.`).
@@ -370,29 +371,6 @@ class AccessGrantGuard
                 throw new AccessGrantDeniedException("No podés crear, renombrar ni borrar un acceso que no tenés: {$name}.", self::ERR_ACCESS_NOT_HELD);
             }
         }
-    }
-
-    /**
-     * Los scopes de verdad: guards de `config/auth.php` cuyo modelo extiende
-     * `AuthUser` (el mismo criterio que `mk:discover-abilities`). Sin ninguno,
-     * ningún nombre queda afuera: la regla falla cerrada.
-     *
-     * @return array<int, string>
-     */
-    private function knownScopes(): array
-    {
-        $scopes = [];
-
-        foreach ((array) config('auth.guards', []) as $guard => $definition) {
-            $provider = is_array($definition) ? ($definition['provider'] ?? null) : null;
-            $model = is_string($provider) ? config("auth.providers.{$provider}.model") : null;
-
-            if (is_string($model) && class_exists($model) && is_subclass_of($model, AuthUser::class)) {
-                $scopes[] = (string) $guard;
-            }
-        }
-
-        return $scopes;
     }
 
     private function isSameAccount(AuthUser $actor, AuthUser $target): bool
