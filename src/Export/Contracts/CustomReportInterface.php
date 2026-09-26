@@ -67,6 +67,18 @@ interface CustomReportInterface extends ReportChromeAware
     public function supportedFormats(): array;
 
     /**
+     * La ability que hace falta para pedirlo, o `null` si alcanza con llegar
+     * a la ruta.
+     *
+     * 🔴 Existe porque la ruta de reportes tiene UN middleware para todos: sin
+     * esto, quien podía pedir un reporte podía pedir cualquier custom —el de
+     * finanzas incluido—, y el custom corre su propia consulta, sin la Policy
+     * del listado. Se chequea con `canMk()` antes de encolar; un usuario sin
+     * `canMk()` queda afuera.
+     */
+    public function ability(): ?string;
+
+    /**
      * Genera el archivo y devuelve su contenido binario.
      *
      * 🔴 Corre dentro del job: no hay request HTTP, ni sesión, ni usuario

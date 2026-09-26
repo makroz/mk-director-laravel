@@ -6,6 +6,7 @@ namespace Mk\Director\Export;
 
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Mk\Director\Export\Contracts\CustomReportInterface;
 use Mk\Director\Tenancy\TenantContext;
 
 /**
@@ -90,6 +91,13 @@ final class AsyncExportManager
         // módulo, y un custom puede compartir nombre con el listado del que
         // cuelga.
         if ($this->customRegistry->has($type)) {
+            if (! $this->puedePedirElCustom($user, $type)) {
+                return new JsonResponse([
+                    'success' => false,
+                    'message' => 'No tenés permiso para este reporte.',
+                ], 403);
+            }
+
             return $this->customDispatcher->dispatch(
                 userId: $user->getKey(),
                 tenantId: $tenantId,
@@ -121,6 +129,20 @@ final class AsyncExportManager
     public function isMigrated(string $type): bool
     {
         return $this->configRegistry->has($type) || $this->customRegistry->has($type);
+    }
+
+    /**
+     * Ver {@see CustomReportInterface::ability()}.
+     */
+    private function puedePedirElCustom(mixed $user, string $type): bool
+    {
+        $ability = $this->customRegistry->get($type)?->ability();
+
+        if ($ability === null) {
+            return true;
+        }
+
+        return method_exists($user, 'canMk') && $user->canMk($ability);
     }
 
     /**

@@ -50,7 +50,8 @@ final class InlineExportDispatcher
         if ($controllerClass === null) {
             throw new InvalidArgumentException(
                 'Un export de lista necesita el controller: el job lo re-ejecuta '
-                .'para conseguir las filas ya procesadas por los hooks del módulo.'
+                .'para conseguir las filas ya procesadas por los hooks del módulo. '
+                ."Pedilo desde su listado: GET {listado}?_export={$format}."
             );
         }
 
