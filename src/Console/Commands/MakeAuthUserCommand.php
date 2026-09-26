@@ -490,9 +490,12 @@ class MakeAuthUserCommand extends Command
         // overrides de `roles()` y `directAbilities()` con FKs explícitas. Sin
         // esto, Eloquent infiere `admin_id` del nombre del modelo y la pivot
         // `role_user` usa `user_id` → `SQLSTATE: no such column: role_user.admin_id`.
-        // El polimorfismo via `wherePivot('user_type', static::class)` mantiene
-        // la MME (R-MK-001): cada scope tiene su propio modelo, pero comparte
-        // las pivots globales del paquete.
+        // El polimorfismo lo pone `MkBelongsToMany::from()`, que filtra por
+        // `user_type` aceptando el alias Y el FQCN. 🔴 El override NO agrega
+        // su propio `wherePivot('user_type', static::class)`: la escritura usa
+        // `getMorphClass()` —el alias cuando hay morph map— y ese filtro lee el
+        // FQCN pelado, así que el usuario perdía sus roles en silencio el día
+        // que el consumidor registraba el alias (hallazgo 69 de NetPizza).
         $factoryReplacements = [
             // R-PKG-017 BUG-NEW-24 fix: cuando `--with-crud` está activo, el
             // modelo concreto usa `{$scope}Factory` en `newFactory()`'s return
@@ -579,7 +582,6 @@ PHP
             'role_id',
         )
             ->using(\Mk\Director\Auth\Pivots\MkRoleUserPivot::class)
-            ->wherePivot('user_type', static::class)
             ->withTimestamps();
 
         return \Mk\Director\Database\Eloquent\Relations\MkBelongsToMany::from(\$relation);
@@ -594,8 +596,8 @@ PHP,
 
     /**
      * Abilities asignadas directamente al usuario, sobre la pivot global
-     * `ability_user`. Misma FK (`user_id`) y mismo filtro por `user_type` que
-     * `roles()`.
+     * `ability_user`. Misma FK (`user_id`) que `roles()`; el filtro por
+     * `user_type` lo pone `MkBelongsToMany::from()`.
      */
     public function directAbilities(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
     {
@@ -606,7 +608,6 @@ PHP,
             'ability_id',
         )
             ->using(\Mk\Director\Auth\Pivots\MkAbilityUserPivot::class)
-            ->wherePivot('user_type', static::class)
             ->withTimestamps();
 
         return \Mk\Director\Database\Eloquent\Relations\MkBelongsToMany::from(\$relation);

@@ -149,8 +149,11 @@ test('BUG-NEW-06: command genera overrides de roles() y directAbilities() cuando
         // El override debe usar 'user_id' explícitamente (NO 'admin_id' inferido).
         ->and($src)->toMatch("/->belongsToMany\(\s*\\\\?Mk\\\\?Director\\\\?Auth\\\\?Models\\\\?Role\\\\?::class,\s*'role_user',\s*'user_id',\s*'role_id'/s")
         ->and($src)->toMatch("/->belongsToMany\(\s*\\\\?Mk\\\\?Director\\\\?Auth\\\\?Models\\\\?Ability\\\\?::class,\s*'ability_user',\s*'user_id',\s*'ability_id'/s")
-        // Y debe usar wherePivot con user_type polimórfico (MME R-MK-001).
-        ->and($src)->toContain("wherePivot('user_type', static::class)");
+        // 🔴 Y NO agrega su propio `wherePivot('user_type', static::class)`: el
+        // filtro polimórfico lo pone `MkBelongsToMany::from()` con alias y FQCN.
+        // Ese `wherePivot` leía el FQCN mientras la escritura usaba el alias del
+        // morph map, y el usuario perdía sus roles sin error (hallazgo 69).
+        ->and($src)->not->toContain("->wherePivot('user_type', static::class)");
 
     // Y el model stub debe tener los placeholders correspondientes.
     $modelStub = stubContents('auth-user.model.stub');

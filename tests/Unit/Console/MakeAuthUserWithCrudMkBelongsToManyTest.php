@@ -56,14 +56,14 @@ test('BUG-NEW-33 scaffolder: rolesRelationOverride mantiene FK explícita user_i
     expect($src)->toContain("'user_id',\n            'role_id'");
 });
 
-test('BUG-NEW-33 scaffolder: rolesRelationOverride mantiene wherePivot user_type (MME-polimórfico)', function () {
+test('🔴 hallazgo 69: los overrides NO agregan su propio wherePivot user_type', function () {
     $src = scaffolderSource();
 
-    // El wherePivot está dentro de un bloque heredoc y la sintaxis exacta puede
-    // tener whitespace variable. Pineamos que la cadena `->wherePivot('user_type'`
-    // aparezca al menos 2 veces (roles + directAbilities).
-    $count = substr_count($src, "->wherePivot('user_type', static::class)");
-    expect($count)->toBeGreaterThanOrEqual(2);
+    // El filtro polimórfico lo pone `MkBelongsToMany::from()`, que acepta el
+    // alias del morph map Y el FQCN. Un `wherePivot('user_type', static::class)`
+    // encima leía sólo el FQCN mientras la escritura usaba el alias: el usuario
+    // perdía sus roles sin error el día que el consumidor registraba el alias.
+    expect(substr_count($src, "->wherePivot('user_type', static::class)"))->toBe(0);
 });
 
 // ── Bloque BUG-NEW-33 fix #2: directAbilitiesRelationOverride ────────────

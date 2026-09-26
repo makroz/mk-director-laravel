@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — el scaffolder ya no emite el `wherePivot` que perdía los roles con morph map (hallazgo 69)
+
+`mk:make:auth-user --with-crud` generaba `roles()` y `directAbilities()` con
+`->wherePivot('user_type', static::class)`: el FQCN pelado. La escritura pasa por
+`MkBelongsToMany::newPivot()`, que usa `getMorphClass()` —el alias cuando el consumidor registra
+un morph map—, así que ese día el usuario perdía sus roles y sus permisos directos sin error.
+
+`MkBelongsToMany::from()` ya filtra por `user_type` aceptando alias y FQCN; el override deja de
+agregar el suyo. ⚠️ Los modelos ya generados lo siguen teniendo: hay que sacarlo a mano antes de
+registrar el alias.
+
 ## [UNRELEASED] — borrar una cuenta se lleva sus tokens, sus roles y sus permisos (hallazgo 68)
 
 `role_user` y `ability_user` son polimórficas: la base no tiene FK que las limpie. La limpieza
