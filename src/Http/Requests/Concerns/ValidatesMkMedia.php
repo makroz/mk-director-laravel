@@ -46,6 +46,17 @@ use Illuminate\Http\UploadedFile;
  * `mkEmbedUrlRules()` va APARTE y es opt-in: un flyer de evento no tiene por
  * qué aceptar links de YouTube, y una regla que se arrastra "porque venía
  * junta" es una superficie de entrada que nadie decidió abrir.
+ *
+ * Los PDF siguen la misma lógica: `mkAllowsDocuments()` devuelve `false` y el
+ * FormRequest que los quiera (planos, documentos legales) lo sobrescribe:
+ *
+ *     protected function mkAllowsDocuments(): bool
+ *     {
+ *         return true;
+ *     }
+ *
+ * Así los consumidores que ya existen (muro, eventos) no empiezan a aceptar
+ * PDFs por actualizar el paquete.
  */
 trait ValidatesMkMedia
 {
@@ -91,6 +102,15 @@ trait ValidatesMkMedia
     }
 
     /**
+     * ¿Este request acepta documentos PDF en `media[]`? OPT-IN, `false` por
+     * defecto. Sobrescribilo en el FormRequest que los necesite.
+     */
+    protected function mkAllowsDocuments(): bool
+    {
+        return false;
+    }
+
+    /**
      * Tope de archivos por request. Sin él, una sola request puede subir mil
      * archivos y ocupar el disco entero.
      */
@@ -112,18 +132,33 @@ trait ValidatesMkMedia
     }
 
     /**
+     * Tamaño máximo de un documento PDF, en bytes. Sólo aplica si
+     * {@see mkAllowsDocuments()} es `true`.
+     */
+    protected function mkDocumentMaxBytes(): int
+    {
+        return 20 * 1024 * 1024;
+    }
+
+    /**
      * Reglas de `media[]`.
      *
      * @return array<string, mixed>
      */
     protected function mkMediaRules(): array
     {
+        $mimes = $this->mkAllowedMimeTypes();
+
+        if ($this->mkAllowsDocuments()) {
+            $mimes[] = 'application/pdf';
+        }
+
         return [
             'media' => ['sometimes', 'array', 'max:'.$this->mkMediaMaxFiles()],
 
             'media.*' => [
                 'file',
-                'mimetypes:'.implode(',', $this->mkAllowedMimeTypes()),
+                'mimetypes:'.implode(',', $mimes),
                 $this->mkMediaSizeRule(),
             ],
         ];
@@ -169,6 +204,10 @@ trait ValidatesMkMedia
      * con 50 MB una imagen de 40 MB pasa y hace reventar la memoria del proceso
      * que la mide. (El default del paquete para archivos sueltos es 2048 KB, que
      * tampoco alcanza para video.)
+     *
+     * Un PDF tiene SU propio tope: si cayera en la rama "no es imagen", se
+     * mediría contra el de video y un documento de 45 MB entraría sin que
+     * nadie lo haya decidido.
      */
     private function mkMediaSizeRule(): Closure
     {
@@ -179,13 +218,16 @@ trait ValidatesMkMedia
 
             // El mime REAL, no el declarado por el cliente: el header
             // `Content-Type` de un multipart lo elige quien sube el archivo.
-            $esImagen = str_starts_with((string) $value->getMimeType(), 'image/');
-            $limite = $esImagen ? $this->mkImageMaxBytes() : $this->mkVideoMaxBytes();
+            $mime = (string) $value->getMimeType();
+
+            [$limite, $tipo] = match (true) {
+                str_starts_with($mime, 'image/') => [$this->mkImageMaxBytes(), 'imagen'],
+                $mime === 'application/pdf' => [$this->mkDocumentMaxBytes(), 'documento'],
+                default => [$this->mkVideoMaxBytes(), 'video'],
+            };
 
             if ((int) $value->getSize() > $limite) {
-                $fail($esImagen
-                    ? 'Cada imagen puede pesar hasta '.$this->enMegas($this->mkImageMaxBytes()).' MB.'
-                    : 'Cada video puede pesar hasta '.$this->enMegas($this->mkVideoMaxBytes()).' MB.');
+                $fail("Cada {$tipo} puede pesar hasta ".$this->enMegas($limite).' MB.');
             }
         };
     }

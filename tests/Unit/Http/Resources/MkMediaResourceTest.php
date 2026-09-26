@@ -125,6 +125,37 @@ test('una imagen serializa las 14 claves del contrato con la url resuelta contra
     ]);
 });
 
+test('un documento PDF serializa las mismas claves, con url del disk de su fila y sin dimensiones', function () {
+    $media = MkMedia::create([
+        'mediable_type' => 'lot',
+        'mediable_id' => '7',
+        'collection' => 'blueprints',
+        'kind' => MkMediaKind::Document,
+        'disk' => 's3-docs',
+        'path' => 'lotes/plano.pdf',
+        'mime_type' => 'application/pdf',
+        'size' => 1_048_576,
+        'position' => 1,
+    ]);
+
+    $payload = (new MkMediaResource($media))->resolve($this->request);
+
+    expect(array_keys($payload))->toBe(mkMediaContractKeys());
+
+    expect($payload)->toMatchArray([
+        'kind' => 4,
+        'kind_label' => 'Documento',
+        'url' => 'https://cdn.test/s3-docs/lotes/plano.pdf',
+        'mime_type' => 'application/pdf',
+        'width' => null,
+        'height' => null,
+        'duration' => null,
+        'provider' => null,
+        'source_url' => null,
+        'thumbnail_url' => null,
+    ]);
+});
+
 test('un embed serializa provider, provider_id y source_url; la url cae en la source_url', function () {
     $media = MkMedia::create([
         'mediable_type' => 'post',

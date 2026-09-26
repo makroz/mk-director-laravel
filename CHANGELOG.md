@@ -12,6 +12,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `mk_media` guarda PDFs como `MkMediaKind::Document`, opt-in por FormRequest
+
+**Added** (aditivo, sin BC): `MkMediaKind::Document = 4` (label `Documento`, `hasStoredFile()` en
+`true`). `HasMkMedia::attachUploadedFile()` guarda `application/pdf` como Document, en el disk de la
+fila y con `width`/`height`/`duration` en null. Es SÓLO PDF: texto, zip, Office y cualquier otro mime
+que no sea imagen ni video siguen lanzando `InvalidArgumentException`. Lo pidió RETO para planos y
+documentos legales.
+
+`ValidatesMkMedia` NO acepta PDFs salvo que el FormRequest lo pida sobrescribiendo
+`mkAllowsDocuments(): bool` (default `false`). Así el muro y los eventos que ya lo usan no empiezan a
+aceptar PDFs al actualizar el paquete. El tope es `mkDocumentMaxBytes()` (default 20 MB,
+sobrescribible), con el mensaje "Cada documento puede pesar hasta N MB.". Antes, cualquier mime que
+no fuera `image/*` se medía contra el tope de video: un PDF no puede caer ahí.
+
+`MkMediaResource` no cambia de forma: un Document sale con `kind: 4`, `kind_label: "Documento"` y su
+`url`. ⚠️ Los fronts que tipan `kind` como `1 | 2 | 3` tienen que sumar el `4`.
+
 ## [UNRELEASED] — login con Google y Apple por ID token, opt-in por ruta
 
 Un scope puede aceptar «Iniciar sesión con Google» y «con Apple» sin flujo OAuth en el backend: el

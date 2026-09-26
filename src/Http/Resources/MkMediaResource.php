@@ -29,8 +29,9 @@ use Mk\Director\Models\MkMedia;
  * Agregar claves es aditivo y seguro; renombrar o sacar una clave es breaking
  * y se evalúa contra los consumers antes de tocar nada.
  *
- * Las tres variantes NO son intercambiables y la respuesta lo refleja: una
- * imagen o un video traen `url` (resuelta contra el disk DE SU FILA), y un
+ * Las variantes NO son intercambiables y la respuesta lo refleja: una
+ * imagen, un video o un documento PDF traen `url` (resuelta contra el disk DE
+ * SU FILA) —el documento, con `width`/`height`/`duration` en null—, y un
  * embed no tiene archivo propio nuestro — trae `provider`, `source_url` y una
  * miniatura remota que puede ser null si el oEmbed del tercero falló.
  *
@@ -52,7 +53,7 @@ class MkMediaResource extends JsonResource
             'kind_label' => $this->kind?->label(),
             'position' => $this->position,
 
-            // Archivo propio (imagen/video). Null para embed.
+            // Archivo propio (imagen/video/documento). Null para embed.
             'url' => $this->url,
             'mime_type' => $this->mime_type,
             'width' => $this->width,
