@@ -12,6 +12,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — el motor de reportes es opt-in y su prefijo no trae el `v3` de Condaty (hallazgo 48)
+
+`mk_director.export.register_routes` venía en `true` y `route_prefix` en `'v3/reports'`: todo
+consumer que instalaba el paquete montaba 7 rutas en `/api/v3/reports`, las usara o no. `v3` es la
+versión de API de Condaty —que ni usa el paquete—; NetPizza nunca tuvo un v3 y tuvo que apagarlas
+a mano.
+
+Ahora `register_routes` es `env('MK_EXPORT_REGISTER_ROUTES', false)` y el prefijo por defecto es
+`reports`, también en los fallbacks de `MkServiceProvider` y de `GenerateListExportJob`. Lo mide
+`tests/Feature/ExportRoutesOptInTest.php` con la app booteada.
+
+🔴 **BC break.** Un consumer que usaba el motor con las rutas montadas solas tiene que pedirlas:
+`MK_EXPORT_REGISTER_ROUTES=true` (o `register_routes => true`), y si quiere seguir en la URL vieja,
+`MK_EXPORT_ROUTE_PREFIX=v3/reports`. Sin las rutas, `MkReport::getDownloadUrl()` no encuentra
+`mk.reports.download`. Del lado del front, `@makroz/web` también pasó su default a `/reports`
+(prop `reportsPrefix`).
+
 ## [UNRELEASED] — el scaffolder ya no emite el `wherePivot` que perdía los roles con morph map (hallazgo 69)
 
 `mk:make:auth-user --with-crud` generaba `roles()` y `directAbilities()` con

@@ -285,7 +285,8 @@ class MkServiceProvider extends ServiceProvider
     }
 
     /**
-     * Las rutas del motor de reportes.
+     * Las rutas del motor de reportes. OPT-IN: sólo con
+     * `mk_director.export.register_routes = true` (ver el config).
      *
      * ⚠️ El nombre `mk.reports.download` NO es decorativo:
      * {@see MkReport::getDownloadUrl()} lo resuelve con
@@ -294,12 +295,12 @@ class MkServiceProvider extends ServiceProvider
      */
     protected function registerExportRoutes(): void
     {
-        if (! config('mk_director.export.register_routes', true)) {
+        if (! config('mk_director.export.register_routes', false)) {
             return;
         }
 
         Route::group([
-            'prefix' => (string) config('mk_director.export.route_prefix', 'v3/reports'),
+            'prefix' => (string) config('mk_director.export.route_prefix', 'reports'),
             'middleware' => (array) config('mk_director.export.route_middleware', ['api']),
         ], function (): void {
             Route::get('/', [MkReportController::class, 'index'])->name('mk.reports.index');

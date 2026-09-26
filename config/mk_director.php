@@ -797,7 +797,13 @@ return [
 
         // Prefijo de las rutas del motor: GET /{prefix}, POST
         // /{prefix}/{type}/export, GET /{prefix}/{uuid}/status, etc.
-        'route_prefix' => env('MK_EXPORT_ROUTE_PREFIX', 'v3/reports'),
+        //
+        // El default NO lleva versión de API: el paquete no sabe si el
+        // consumer versiona sus rutas ni con qué nombre. Traía `v3/reports`,
+        // el prefijo de Condaty, y se montaba así en proyectos que nunca
+        // tuvieron un v3 (hallazgo 48 de NetPizza). El que versiona lo pone
+        // acá: `MK_EXPORT_ROUTE_PREFIX=v2/reports`.
+        'route_prefix' => env('MK_EXPORT_ROUTE_PREFIX', 'reports'),
 
         // Middleware del grupo de rutas. Igual que el resto del paquete,
         // el scope de auth lo decide el consumer.
@@ -807,9 +813,16 @@ return [
         // sí; el default trae `mk.auth` y el consumer le pone el scope.
         'route_middleware' => ['api', 'mk.auth'],
 
-        // Poné false si preferís declarar las rutas del motor a mano en el
-        // `routes/api.php` de tu app.
-        'register_routes' => true,
+        // 🔴 OPT-IN: el motor NO monta sus rutas si el consumer no lo pide.
+        // Antes venía en `true` y montaba 7 endpoints en todo proyecto que
+        // instalara el paquete, lo usara o no. Una ruta que nadie pidió es
+        // superficie que nadie vigila.
+        //
+        // `MK_EXPORT_REGISTER_ROUTES=true` las activa sin publicar la config.
+        // ⚠️ Apagado, `MkReport::getDownloadUrl()` no tiene la ruta
+        // `mk.reports.download` para resolver: quien use el motor con las
+        // rutas declaradas a mano tiene que ponerles los mismos nombres.
+        'register_routes' => (bool) env('MK_EXPORT_REGISTER_ROUTES', false),
 
         /*
         | Dónde buscar los `ExportConfig` y los `CustomReport`.

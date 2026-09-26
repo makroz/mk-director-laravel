@@ -202,7 +202,7 @@ class GenerateListExportJob implements ShouldQueue
     private function armarElRequest(MkReport $report): Request
     {
         $params = is_array($report->params) ? $report->params : [];
-        $uri = '/api/'.trim((string) config('mk_director.export.route_prefix', 'v3/reports'), '/').'/'.$report->type;
+        $uri = '/api/'.trim((string) config('mk_director.export.route_prefix', 'reports'), '/').'/'.$report->type;
 
         $request = Request::create($uri, 'GET', $params);
         $request->setUserResolver(fn () => $this->usuarioDelReporte($report));
