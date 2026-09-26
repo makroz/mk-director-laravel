@@ -382,10 +382,11 @@ class TokenIssuer
             throw InvalidRefreshTokenException::notFound();
         }
 
-        if (! AccountStatus::allowsAuthentication($user)) {
+        $denial = AccountStatus::denialReason($user);
+        if ($denial !== null) {
             $tokenModel->delete();
 
-            throw InvalidRefreshTokenException::accountDisabled();
+            throw InvalidRefreshTokenException::accountDisabled($denial);
         }
 
         // Decidir rotación del refresh token.

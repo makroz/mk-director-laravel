@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — la sesión cortada por cuenta deshabilitada dice el motivo, no «Account disabled.»
+
+El 401 `ERR_ACCOUNT_DISABLED` de `mk.auth` y del refresh mandaba el texto fijo `'Account disabled.'`,
+en inglés, y los fronts lo muestran en el login al echar al usuario. Ahora el `message` es
+`AccountStatus::denialReason()`, el mismo que ya daba el 403 del login con la contraseña buena: el
+`denialMessage()` del enum de estado o del chequeo extra, o `AccountStatus::DEFAULT_DENIAL`. No abre
+un oráculo: quien llega a esos dos puntos ya presentó un token válido.
+`InvalidRefreshTokenException::accountDisabled()` acepta el motivo (default `DEFAULT_DENIAL`). El
+`code` no cambia. Lo mide `tests/Feature/Auth/TokenLifecycleChainTest.php` (casos D).
+
 ## [UNRELEASED] — roles por tenant (opt-in): un tenant ya no edita los roles de todos
 
 Los roles eran globales. En un consumer multi-tenant, el dueño de un tenant —con `super-admin` y

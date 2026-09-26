@@ -219,6 +219,7 @@ test('🔴 D: usuario BLOQUEADO — su access token vivo → 401 ERR_ACCOUNT_DIS
 
     expect($status)->toBe(401);
     expect($body['__extraData']['code'] ?? null)->toBe('ERR_ACCOUNT_DISABLED');
+    expect($body['message'] ?? null)->toBe(AccountStatus::DEFAULT_DENIAL);
 });
 
 test('🔴 D: usuario BLOQUEADO — refresh → 401 ERR_ACCOUNT_DISABLED y el refresh token queda revocado en la base', function () {
@@ -229,6 +230,7 @@ test('🔴 D: usuario BLOQUEADO — refresh → 401 ERR_ACCOUNT_DISABLED y el re
 
     expect($status)->toBe(401);
     expect($body['__extraData']['code'] ?? null)->toBe('ERR_ACCOUNT_DISABLED');
+    expect($body['message'] ?? null)->toBe(AccountStatus::DEFAULT_DENIAL);
     expect(tokenChainRowExists($tokens['refresh_token']))->toBeFalse();
 });
 

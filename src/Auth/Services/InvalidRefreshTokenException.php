@@ -49,10 +49,14 @@ class InvalidRefreshTokenException extends AuthorizationException
         return new self('Token is not a refresh token.');
     }
 
-    /** La cuenta ya no puede autenticarse (bloqueada, inactiva, pendiente). */
-    public static function accountDisabled(): self
+    /**
+     * La cuenta ya no puede autenticarse (bloqueada, inactiva, pendiente).
+     * `$reason` es el de `AccountStatus::denialReason()`: el front lo muestra
+     * en el login al cortar la sesión.
+     */
+    public static function accountDisabled(string $reason = AccountStatus::DEFAULT_DENIAL): self
     {
-        $e = new self('Account disabled.');
+        $e = new self($reason);
         $e->errorCode = 'ERR_ACCOUNT_DISABLED';
 
         return $e;

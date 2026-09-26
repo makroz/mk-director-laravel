@@ -132,9 +132,12 @@ class MkAuthenticate
 
         // 🔴 El estado de la cuenta se re-chequea en CADA request, no sólo al
         // emitir tokens. Si no, bloquear a un usuario no corta su access token
-        // vivo. Misma regla que login y refresh: `AccountStatus`.
-        if (! AccountStatus::allowsAuthentication($user)) {
-            return $this->unauthorizedResponse($request, $scope, 'Account disabled.', 'ERR_ACCOUNT_DISABLED');
+        // vivo. Misma regla que login y refresh: `AccountStatus`. El motivo va
+        // en el mensaje porque el front lo muestra en el login al echarlo; no
+        // es un oráculo: quien llega acá ya presentó un token válido.
+        $denial = AccountStatus::denialReason($user);
+        if ($denial !== null) {
+            return $this->unauthorizedResponse($request, $scope, $denial, 'ERR_ACCOUNT_DISABLED');
         }
 
         // 🔴 AISLAMIENTO MULTI-TENANT — acá y no en otro lado.
