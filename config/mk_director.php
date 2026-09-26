@@ -576,6 +576,10 @@ return [
             // Si `true`, el refresh_token se invalida después de cada uso
             // y se emite uno nuevo (recomendado para B2B). Default BC: false
             // (mantiene el mismo refresh_token a lo largo de múltiples usos).
+            // Es el default GLOBAL: cada scope lo pisa con
+            // `BaseAuthController::rotatesRefreshTokens()` (y el TTL con
+            // `refreshTtlSeconds()`). Rotar prende la detección de
+            // reutilización (DEVELOPER_GUIDE § 3.23).
             //
             // FILTER_VALIDATE_BOOLEAN respeta los env vars typeados: 'true',
             // '1', 'yes' → true; 'false', '0', 'no', '' → false. Sin este

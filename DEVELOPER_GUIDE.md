@@ -827,8 +827,9 @@ php artisan mk:make:auth-user Admin --login-field=ci --with-auth-rbac
         'register' => env('MK_AUTH_RATE_LIMIT_REGISTER', '3,1'), // sólo con --with-register
     ],
     // v1.6.0-rc4 (R-PKG-014 BUG-07 fix): rotación de refresh tokens.
+    // Es el default global: cada scope la pisa con `rotatesRefreshTokens()` (§ 3.23).
     'refresh' => [
-        'rotate_on_refresh' => env('MK_AUTH_REFRESH_ROTATE', false),
+        'rotate_on_refresh' => filter_var(env('MK_AUTH_REFRESH_ROTATE_ON_REFRESH', false), FILTER_VALIDATE_BOOLEAN),
     ],
 ],
 ```
@@ -969,8 +970,8 @@ estado de la cuenta. Medido en el piloto NetPizza, con la cadena HTTP real:
 
 | Token | Nombre | Abilities | TTL | Sirve para |
 |---|---|---|---|---|
-| Access | `access` | `auth_scope:{scope}` + `refresh_token_id:{id}` (+ las que pase el caller) | `ttl.access_seconds` (15 min) | Bearer en rutas con `mk.auth:{scope}` |
-| Refresh | `refresh` | `refresh` + `auth_scope:{scope}` | `ttl.refresh_seconds` (7 días) | **Sólo** el body de `POST /auth/refresh` |
+| Access | `access` | `auth_scope:{scope}` + `refresh_token_id:{id}` + `refresh_family:{f}` (+ las que pase el caller) | `ttl.access_seconds` (15 min) | Bearer en rutas con `mk.auth:{scope}` |
+| Refresh | `refresh` | `refresh` + `auth_scope:{scope}` + `refresh_family:{f}` | `ttl.refresh_seconds` (7 días), o el del scope (§ 3.23) | **Sólo** el body de `POST /auth/refresh` |
 
 - `mk.auth` rechaza un token con la ability `refresh` **o** el nombre `refresh` → `401 ERR_UNAUTHENTICATED`. El chequeo vive en `AuthScopeResolver`, así que aplica a todos los scopes.
 - `TokenIssuer::rotateRefreshToken()` exige la ability `refresh` → un access token da `401 ERR_UNAUTHENTICATED` y no emite nada.
@@ -2419,7 +2420,7 @@ Los tres viven bajo `/api/{scope}/auth/` (`{scope}` = `admin` | `member`) y requ
 
 > **Anti-oracle**: `Invalid` y `NotFound` colapsan al MISMO `422` genérico — el endpoint **no distingue** "nunca existió" vs "expirado/consumido con código equivocado". Evita filtrar si un identifier tiene o no un código activo.
 
-En éxito, el confirm corre dentro de `DB::transaction`: `setAuthPassword()` (ver §3.18.4) y, si `config('mk_director.auth.password_change.revoke_other_sessions')` (default `true`), revoca los demás tokens Sanctum del usuario. Luego despacha `auth.password_changed`. Throttle de ruta default `5,10`.
+En éxito, el confirm corre dentro de `DB::transaction`: `setAuthPassword()` (ver §3.18.4) y, si `config('mk_director.auth.password_change.revoke_other_sessions')` (default `true`), revoca las demás sesiones del usuario y **conserva la propia** (el access de la request y su refresh ligado; ver § 3.23.4). Luego despacha `auth.password_changed`. Throttle de ruta default `5,10`.
 
 **`PATCH me` ampliado** — antes solo validaba `name` + `phone`; ahora es un **superset estricto** BC-safe (cada regla `sometimes`-guardada): `name` (`sometimes`), `phone` (`sometimes|nullable`), `email` (`sometimes|unique` ignorando al propio usuario), `avatar` (`sometimes|file|image|max:4096`, cableado a través de `FileStoragePlugin`). Solo se scaffoldea cuando el scope se genera con `--profile-fields`.
 
@@ -3218,7 +3219,9 @@ El vínculo vive en la tabla del paquete **`mk_social_identities`**
 (migración `2026_09_26_000001`, cargada con `loadMigrationsFrom`: corré
 `php artisan migrate` al actualizar), con clave única
 `(auth_scope, provider, subject)`. Es por scope: la misma cuenta de Google puede
-ser un comensal y un administrador, y son usuarios distintos.
+ser un comensal y un administrador, y son usuarios distintos. Borrar **de
+verdad** al usuario (no soft delete) borra sus filas, igual que sus tokens y sus
+roles (`AuthUser::forgetAccessOnDelete()`).
 
 Orden de resolución:
 
@@ -3265,7 +3268,9 @@ Google Workspace de un dominio que cambió de dueño, o un email que la persona 
 no controla, lo cumplen igual. Prendelo sólo si las cuentas del scope se crearon
 con el email **verificado por vos**. `findUserByVerifiedSocialEmail()` es el
 único lugar del paquete que busca una cuenta por un email ajeno, y con
-`email_verified` falso devuelve `null` siempre.
+`email_verified` falso devuelve `null` siempre. Compara **sin mayúsculas**
+(`LOWER()` de los dos lados, igual en pgsql, mysql y sqlite): el proveedor puede
+mandar `Ana@Gmail.com` y el scope tenerlo guardado en minúsculas.
 
 ⚠️ Con el auto-vínculo apagado, a `createSocialUser()` puede llegar una
 identidad cuyo email **ya** es de otra cuenta del scope: un `create()` a ciegas
@@ -3288,6 +3293,95 @@ guarda del verificador y del controller se reinyectó (se sacó el chequeo, el
 test se puso en rojo, se restauró). El chequeo propio de `alg` se mide por el
 motivo del evento: `firebase/php-jwt` también rechaza `none` y `HS256`, así que
 mirando sólo el 401 sacarlo dejaba el test en verde.
+
+### 3.23 La sesión larga: TTL y rotación del refresh por scope, y detección de reutilización
+
+Hallazgo 73 de Mozzo (2026-09-26), armando la sesión de 90 días del comensal.
+Tres defectos y dos de arrastre, medidos por HTTP en
+`tests/Feature/Auth/RefreshSessionTest.php`:
+
+#### 3.23.1 `rotate_on_refresh = true` no rotaba
+
+La config castea `MK_AUTH_REFRESH_ROTATE_ON_REFRESH` con `FILTER_VALIDATE_BOOLEAN`
+y guarda un **booleano**; `TokenIssuer` lo leía con `readConfigInt()`, que sólo
+acepta `is_int()` y cae al default `0`. Resultado: con el interruptor en `true`
+no rotaba nunca, sin error; sólo el entero `1` rotaba. Ahora se lee con
+`FILTER_VALIDATE_BOOLEAN`: rotan `true`, `1`, `'1'`, `'true'`, `'yes'`, `'on'`;
+no rotan `false`, `0`, `'false'`, `null`, `''`.
+
+#### 3.23.2 TTL y rotación por scope
+
+Como `twoFactorPolicy()` o `loginField()`, lo declara el controller del scope. No
+hay un mapa `auth.scopes.{scope}` en la config: obligaría al paquete a conocer
+los nombres de los scopes del consumer.
+
+```php
+class CustomerAuthController extends BaseAuthController
+{
+    protected function refreshTtlSeconds(): ?int
+    {
+        return (int) config('app_propia.customer.refresh_ttl_days', 90) * 86400;
+    }
+
+    protected function rotatesRefreshTokens(): ?bool
+    {
+        return true;
+    }
+}
+```
+
+`null` (el default de los dos) = la config global (`auth.ttl.refresh_seconds`,
+`auth.refresh.rotate_on_refresh`): un scope que no los declara se comporta
+exactamente como antes. Con alguno declarado, `tokenIssuer()` arma un
+`new TokenIssuer(refreshTtlSeconds:, rotateOnRefresh:)` para ese scope. El TTL
+vale para el login, el `two-factor/challenge`, el login social y cada rotación
+(ventana deslizante: el refresh nuevo vive el TTL completo).
+
+⚠️ Si tu scope ya pisaba `tokenIssuer()` para pasar el TTL, pasá a
+`refreshTtlSeconds()`: un `tokenIssuer()` propio ignora los dos hooks.
+
+#### 3.23.3 Familia y detección de reutilización
+
+Con rotación, un refresh usado da 401 — pero si el **ladrón** lo usa primero, se
+queda él con la sesión y el que recibe el 401 es el dueño. La práctica (OAuth 2.0
+Security BCP) es revocar la sesión entera cuando vuelve un refresh ya usado.
+
+- Cada sesión (`issueTokenPair()`) lleva una ability `refresh_family:{f}` en su
+  refresh y en cada access que emite. `f` es aleatorio; un refresh anterior a
+  esta versión estrena la familia `token-{id}` en su primera rotación.
+- Al rotar, el refresh viejo **no se borra**: queda como **lápida** (`refresh`
+  se reemplaza por `refresh_rotated`, conserva el nombre `refresh` —así `mk.auth`
+  lo sigue rechazando como Bearer— y su `expires_at` original).
+- Si llega una lápida con el hash correcto, se borran **todos** los tokens de esa
+  familia del mismo usuario (refresh vigente, lápidas y access) y responde
+  **`401 ERR_REFRESH_REUSED`**. Las otras sesiones del usuario no se tocan. Va
+  antes del chequeo de vencimiento: una lápida vencida sigue siendo una copia.
+- Sin migración: la familia y la lápida viven en `abilities`
+  (`personal_access_tokens` es de Sanctum). La familia se busca con un `LIKE`
+  que incluye las comillas del JSON (`f1` no alcanza a `f10`).
+
+⚠️ **Dos refresh simultáneos con el mismo token**: el segundo encuentra la
+lápida y cierra la sesión. Los `MkAuthProvider` de web y mobile ya serializan el
+refresh dentro de una pestaña/app; dos pestañas del navegador refrescando a la
+vez no. Las lápidas se acumulan hasta su vencimiento: `sanctum:prune-expired`
+las limpia como a cualquier token vencido.
+
+#### 3.23.4 Cambiar la clave ya no desloguea a quien la cambia
+
+`revokeOtherTokens()` (password/change, el confirm del PIN y los endpoints del
+segundo factor) conservaba sólo el access de la request: el refresh de esa misma
+sesión moría y a los 15 minutos el usuario quedaba afuera (medido en Mozzo: 401
+en el refresh propio después del cambio). Ahora conserva también el refresh
+ligado (`refresh_token_id:`); las demás sesiones y las lápidas se van.
+
+#### 3.23.5 El login cuesta lo mismo exista o no el correo
+
+`login()` cortaba con `! $user || … || ! Hash::check(…)`: un correo inexistente
+no pagaba el bcrypt y el reloj decía qué correos tienen cuenta. Ahora el
+`Hash::check()` corre siempre; sin usuario (o sin clave, como una cuenta creada
+por login social) compara contra un hash descartable hecho con el driver y el
+costo configurados (`dummyPasswordHash()`, uno por proceso y driver). El primer
+login sin usuario de cada proceso paga además el `make`.
 
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)
 
