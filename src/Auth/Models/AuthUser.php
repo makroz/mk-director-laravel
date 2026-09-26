@@ -11,6 +11,8 @@ use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\HasApiTokens;
 use Laravel\Sanctum\PersonalAccessToken;
@@ -131,6 +133,11 @@ abstract class AuthUser extends Authenticatable implements AuthenticatableContra
      * Va en `deleted` y no en `deleting`: si el borrado falla —una FK que lo
      * bloquea—, la cuenta sigue viva y no puede quedarse sin sus permisos. Con
      * soft delete no hace nada, para que `restore()` la devuelva entera.
+     *
+     * También su vínculo con Google/Apple (`mk_social_identities`, tampoco
+     * tiene FK): si no, la fila guardaba el correo de una cuenta que ya no
+     * existe. `hasTable` porque un consumer que no corrió esa migración no
+     * puede quedarse sin poder borrar usuarios.
      */
     protected function forgetAccessOnDelete(): void
     {
@@ -141,6 +148,14 @@ abstract class AuthUser extends Authenticatable implements AuthenticatableContra
         $this->tokens()->delete();
         $this->roles()->detach();
         $this->directAbilities()->detach();
+
+        // La misma conexión con la que la escribe `BaseAuthController`.
+        if (Schema::hasTable('mk_social_identities')) {
+            DB::table('mk_social_identities')
+                ->where('auth_scope', $this->getAuthScope())
+                ->where('user_id', (string) $this->getKey())
+                ->delete();
+        }
     }
 
     /**

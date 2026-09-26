@@ -6,6 +6,7 @@ namespace Mk\Director\Auth\Services;
 
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Support\Facades\Config;
+use Illuminate\Support\Str;
 use Laravel\Sanctum\NewAccessToken;
 use Laravel\Sanctum\PersonalAccessToken;
 use Laravel\Sanctum\Sanctum;
@@ -39,7 +40,16 @@ use Laravel\Sanctum\Sanctum;
  *  - `rotate_on_refresh` → default false. Si true, el refresh_token se
  *    invalida después de cada uso (más seguro, recomendado para B2B).
  *
- * Los TTLs también se pueden pasar por constructor (útil para tests).
+ * El TTL del refresh y la rotación también se pasan por constructor: así los
+ * fija cada scope (`BaseAuthController::refreshTtlSeconds()` y
+ * `rotatesRefreshTokens()`), con la config global como default.
+ *
+ * Familia y detección de reutilización (DEVELOPER_GUIDE § 3.23): cada sesión
+ * lleva una ability `refresh_family:{id}` en TODOS sus tokens. Con rotación,
+ * el refresh usado no se borra: queda como LÁPIDA (`refresh_rotated` en vez
+ * de `refresh`) hasta su vencimiento. Si una lápida vuelve a llegar, alguien
+ * tiene una copia vieja del token —el ladrón o el dueño, no se sabe cuál— y
+ * se revoca la familia entera: los dos vuelven a loguear.
  */
 class TokenIssuer
 {
@@ -59,9 +69,23 @@ class TokenIssuer
      */
     public const REFRESH_LINK_PREFIX = 'refresh_token_id:';
 
+    /** Ability que marca la sesión (familia) a la que pertenece cada token. */
+    public const FAMILY_PREFIX = 'refresh_family:';
+
+    /**
+     * Ability de un refresh ya rotado (la lápida). Reemplaza a `refresh`, así
+     * que no vuelve a refrescar; el nombre sigue siendo `refresh`, así que
+     * `mk.auth` lo sigue rechazando como Bearer.
+     */
+    public const ROTATED_ABILITY = 'refresh_rotated';
+
+    /**
+     * @param  bool|null  $rotateOnRefresh  null = `mk_director.auth.refresh.rotate_on_refresh`
+     */
     public function __construct(
         private readonly ?int $accessTtlSeconds = null,
         private readonly ?int $refreshTtlSeconds = null,
+        private readonly ?bool $rotateOnRefresh = null,
     ) {}
 
     /**
@@ -87,10 +111,11 @@ class TokenIssuer
      */
     public function issueTokenPair(Authenticatable $user): array
     {
-        $refresh = $this->issueRefreshToken($user);
+        $family = Str::random(32);
+        $refresh = $this->issueRefreshToken($user, $family);
 
         return [
-            'access' => $this->issueAccessToken($user, [self::refreshLinkAbility($refresh)]),
+            'access' => $this->issueAccessToken($user, [self::refreshLinkAbility($refresh), self::FAMILY_PREFIX.$family]),
             'refresh' => $refresh,
         ];
     }
@@ -98,12 +123,20 @@ class TokenIssuer
     /**
      * Emite un refresh token (TTL largo) con ability `refresh`.
      * Devuelve el `plainTextToken` (string) listo para entregar al cliente.
+     *
+     * @param  string|null  $family  la sesión a la que pertenece; null = suelto
+     *                               (la primera rotación le asigna una).
      */
-    public function issueRefreshToken(Authenticatable $user): string
+    public function issueRefreshToken(Authenticatable $user, ?string $family = null): string
     {
+        $abilities = [self::REFRESH_ABILITY, $this->scopeAbilityFor($user)];
+        if ($family !== null) {
+            $abilities[] = self::FAMILY_PREFIX.$family;
+        }
+
         $token = $user->createToken(
             name: 'refresh',
-            abilities: [self::REFRESH_ABILITY, $this->scopeAbilityFor($user)],
+            abilities: $abilities,
             expiresAt: now()->addSeconds($this->refreshTtl()),
         );
 
@@ -247,6 +280,22 @@ class TokenIssuer
         return null;
     }
 
+    /**
+     * La familia (sesión) de un token, o null si se emitió sin ella.
+     *
+     * @param  array<int|string,mixed>  $abilities
+     */
+    public static function familyOf(array $abilities): ?string
+    {
+        foreach (self::flattenAbilities($abilities) as $ability) {
+            if (str_starts_with($ability, self::FAMILY_PREFIX)) {
+                return substr($ability, strlen(self::FAMILY_PREFIX));
+            }
+        }
+
+        return null;
+    }
+
     /** `refresh_token_id:{id}` a partir del `<id>|<plaintext>` del refresh. */
     private static function refreshLinkAbility(string $refreshPlainText): string
     {
@@ -300,8 +349,11 @@ class TokenIssuer
      *   6. Cargar el `tokenable` (user).
      *   6b. Re-chequear `AccountStatus`: si la cuenta ya no autentica, revocar
      *       este refresh token y rechazar (`ERR_ACCOUNT_DISABLED`).
-     *   7. Si `mk_director.auth.refresh.rotate_on_refresh` es true, invalidar el viejo
-     *      refresh token y emitir uno nuevo. Si no, mantener el viejo.
+     *   3c. Si es una lápida (ya rotado), revocar la familia entera y rechazar
+     *       (`ERR_REFRESH_REUSED`).
+     *   7. Si la rotación está prendida (constructor o
+     *      `mk_director.auth.refresh.rotate_on_refresh`), dejar el viejo como
+     *      lápida y emitir uno nuevo de la misma familia. Si no, mantener el viejo.
      *   8. Emitir nuevo access token ligado al refresh vigente.
      *
      * @param  string  $refreshToken  El `<id>|<plaintext>` recibido del cliente.
@@ -361,7 +413,20 @@ class TokenIssuer
             throw InvalidRefreshTokenException::hashMismatch();
         }
 
-        if (! in_array(self::REFRESH_ABILITY, self::flattenAbilities($tokenModel->abilities ?? []), true)) {
+        $abilities = self::flattenAbilities($tokenModel->abilities ?? []);
+
+        // 🔴 REUTILIZACIÓN: el token es auténtico (el hash coincide) pero ya se
+        // rotó. Quien lo presenta tiene una copia vieja: si es el ladrón, el
+        // dueño ya refrescó; si es el dueño, el ladrón refrescó primero. Sin
+        // poder distinguirlos, se corta la sesión de los dos. Va antes del
+        // vencimiento y del scope: una lápida vencida sigue siendo una copia.
+        if (in_array(self::ROTATED_ABILITY, $abilities, true)) {
+            $this->revokeFamily($tokenModel, self::familyOf($abilities));
+
+            throw InvalidRefreshTokenException::reused();
+        }
+
+        if (! in_array(self::REFRESH_ABILITY, $abilities, true)) {
             throw InvalidRefreshTokenException::notARefreshToken();
         }
 
@@ -389,29 +454,78 @@ class TokenIssuer
             throw InvalidRefreshTokenException::accountDisabled($denial);
         }
 
-        // Decidir rotación del refresh token.
-        $rotateOnRefresh = (bool) $this->readConfigInt(
-            'mk_director.auth.refresh.rotate_on_refresh',
-            0,
-        );
+        // Un refresh anterior a las familias estrena una con su propio id.
+        $family = self::familyOf($abilities) ?? 'token-'.$tokenModel->getKey();
 
-        if ($rotateOnRefresh) {
-            // Rotar: borrar el viejo, emitir uno nuevo.
-            $tokenModel->delete();
-            $newRefreshPlaintext = $this->issueRefreshToken($user);
+        if ($this->rotatesOnRefresh()) {
+            // Rotar: el viejo queda como lápida (no se borra, para reconocerlo
+            // si vuelve) y se emite uno nuevo de la misma familia.
+            // ponytail: dos refresh simultáneos con el mismo token rotan los dos
+            // (no hay claim atómico); el cliente tiene que serializar el refresh.
+            $tombstone = array_values(array_diff($abilities, [self::REFRESH_ABILITY, self::FAMILY_PREFIX.$family]));
+            $tokenModel->forceFill([
+                'abilities' => [...$tombstone, self::ROTATED_ABILITY, self::FAMILY_PREFIX.$family],
+            ])->save();
+            $newRefreshPlaintext = $this->issueRefreshToken($user, $family);
         } else {
             // Mantener el viejo (BC default).
             $newRefreshPlaintext = $refreshToken;
         }
 
         // Emitir nuevo access token, ligado al refresh vigente (logout revoca los dos).
-        $newAccess = $this->issueAccessToken($user, [self::refreshLinkAbility($newRefreshPlaintext)]);
+        $newAccess = $this->issueAccessToken($user, [
+            self::refreshLinkAbility($newRefreshPlaintext),
+            self::FAMILY_PREFIX.$family,
+        ]);
 
         return [
             'access_token' => $newAccess->plainTextToken,
             'refresh_token' => $newRefreshPlaintext,
             'user_id' => (string) $user->getAuthIdentifier(),
         ];
+    }
+
+    /**
+     * Revoca TODOS los tokens de la familia (refresh vigente, lápidas y
+     * access) del dueño del token. Sin familia (token suelto), sólo ese.
+     *
+     * Se busca por `tokenable_*` y no por `$token->tokenable`: el usuario
+     * puede no resolverse (global scopes) y la sesión igual tiene que morir.
+     * El LIKE lleva las comillas del JSON para que `f1` no alcance a `f10`.
+     */
+    private function revokeFamily(PersonalAccessToken $token, ?string $family): void
+    {
+        if ($family === null) {
+            $token->delete();
+
+            return;
+        }
+
+        self::tokenModelClass()::query()
+            ->where('tokenable_type', $token->tokenable_type)
+            ->where('tokenable_id', $token->tokenable_id)
+            ->where('abilities', 'like', '%"'.self::FAMILY_PREFIX.$family.'"%')
+            ->delete();
+    }
+
+    /**
+     * 🔴 NO SE LEE CON `readConfigInt()`. La config castea el env con
+     * FILTER_VALIDATE_BOOLEAN y guarda un BOOLEANO; `readConfigInt()` sólo
+     * acepta `is_int()`, así que `true` caía al default 0 y la rotación no se
+     * prendía nunca, sin error (medido por HTTP en Mozzo: sólo el entero `1`
+     * rotaba). Acá valen `true`, `1`, `'1'`, `'true'`, `'yes'`, `'on'`.
+     */
+    private function rotatesOnRefresh(): bool
+    {
+        if ($this->rotateOnRefresh !== null) {
+            return $this->rotateOnRefresh;
+        }
+
+        if (! $this->containerHasConfig()) {
+            return false;
+        }
+
+        return filter_var(Config::get('mk_director.auth.refresh.rotate_on_refresh', false), FILTER_VALIDATE_BOOLEAN);
     }
 
     private function accessTtl(): int

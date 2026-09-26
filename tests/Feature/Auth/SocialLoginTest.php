@@ -667,3 +667,39 @@ test('🔴 el segundo factor del scope NO se saltea entrando con Google', functi
     expect($body['data']['two_factor'])->toBe('challenge');
     expectNoSession();
 });
+
+// ─── 7. Restos del hallazgo 72 ──────────────────────────────────────────────
+
+test('auto-vínculo: el email del proveedor se compara SIN mayúsculas contra el guardado', function () {
+    fakeJwks();
+    SocialAuthController::$autoLink = true;
+
+    [$status, $body] = socialPost($this, 'google', ['id_token' => googleToken(['email' => 'Diner@Mozzo.TEST'])]);
+
+    expect($status)->toBe(200, json_encode($body));
+    expect($body['data']['customer']['id'])->toBe($this->diner->getKey());
+});
+
+test('el 401 del token social está en castellano neutro', function () {
+    fakeJwks();
+
+    [$status, $body] = socialPost($this, 'google', ['id_token' => googleToken(['aud' => 'otra-app.apps.googleusercontent.test'])]);
+
+    expect($status)->toBe(401);
+    expect($body['message'])->toBe('El acceso no es válido.');
+});
+
+test('borrar de verdad la cuenta se lleva su vínculo social, y sólo el suyo', function () {
+    $other = SocialDiner::create([
+        'name' => 'Otro',
+        'email' => 'other@mozzo.test',
+        'password' => Hash::make('secret'),
+        'auth_scope' => 'customer',
+    ]);
+    linkDiner($this->diner, 'google', 'google-sub-1');
+    linkDiner($other, 'google', 'google-sub-2');
+
+    $this->diner->delete();
+
+    expect(DB::table('mk_social_identities')->pluck('subject')->all())->toBe(['google-sub-2']);
+});

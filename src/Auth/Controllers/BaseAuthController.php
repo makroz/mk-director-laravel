@@ -11,7 +11,9 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Laravel\Sanctum\PersonalAccessToken;
 use Mk\Director\Auth\Attributes\Ability;
 use Mk\Director\Auth\Enums\TwoFactorPolicy;
 use Mk\Director\Auth\Events\AuthEvent;
@@ -372,10 +374,19 @@ abstract class BaseAuthController extends BaseController
             ->where($loginField, $credentials[$loginField])
             ->first();
 
+        // 🔴 EL BCRYPT CORRE SIEMPRE, exista o no el usuario. Antes el `||`
+        // cortaba antes del `Hash::check` cuando no había usuario: un correo
+        // inexistente respondía sin pagar el hash, y el reloj decía qué correos
+        // tienen cuenta. Sin usuario (o sin clave, como una cuenta social) se
+        // compara contra un hash descartable del mismo costo.
+        $storedHash = $user ? (string) $user->getAuthPassword() : '';
+        $passwordMatches = Hash::check($credentials['password'], $storedHash !== '' ? $storedHash : $this->dummyPasswordHash())
+            && $storedHash !== '';
+
         // Defense-in-depth: user existe, scope coincide, password OK.
         if (! $user
             || $user->getAuthScope() !== $scope
-            || ! Hash::check($credentials['password'], (string) $user->getAuthPassword())
+            || ! $passwordMatches
         ) {
             $this->dispatchAuthEventSafe('auth.login.failed', [
                 'scope' => $scope,
@@ -1408,9 +1419,15 @@ abstract class BaseAuthController extends BaseController
             return null;
         }
 
+        // Sin distinguir mayúsculas: el proveedor puede mandar `Ana@Gmail.com`
+        // y el consumer haberlo guardado en minúsculas. `LOWER()` de los dos
+        // lados es igual en pgsql, mysql y sqlite.
+        $query = $this->identityQuery();
+        $column = $query->getQuery()->getGrammar()->wrap('email');
+
         /** @var Authenticatable|null $user */
-        $user = $this->identityQuery()
-            ->where('email', $identity->email)
+        $user = $query
+            ->whereRaw("LOWER({$column}) = ?", [mb_strtolower($identity->email)])
             ->first();
 
         return $user !== null && $user->getAuthScope() === $this->authScope() ? $user : null;
@@ -1478,9 +1495,9 @@ abstract class BaseAuthController extends BaseController
             SocialLoginException::PROVIDER_DISABLED => $this->sendError(
                 'Este método de acceso no está habilitado.', [], 403, 'ERR_SOCIAL_PROVIDER_DISABLED'),
             SocialLoginException::KEYS_UNAVAILABLE => $this->sendError(
-                'No se pudo verificar el acceso en este momento. Probá de nuevo.', [], 503, 'ERR_SOCIAL_UNAVAILABLE'),
+                'No se pudo verificar el acceso en este momento.', [], 503, 'ERR_SOCIAL_UNAVAILABLE'),
             default => $this->sendError(
-                'El acceso no es válido. Volvé a intentarlo.', [], 401, 'ERR_SOCIAL_TOKEN_INVALID'),
+                'El acceso no es válido.', [], 401, 'ERR_SOCIAL_TOKEN_INVALID'),
         };
     }
 
@@ -2242,6 +2259,13 @@ abstract class BaseAuthController extends BaseController
      * lo necesitan además los tres endpoints que tocan el segundo factor. Un
      * cuarto copiado es un cuarto lugar donde olvidarse del `!= currentToken` y
      * desloguear al que acaba de hacer el cambio.
+     *
+     * 🔴 LA SESIÓN PROPIA SON DOS TOKENS: el access y su refresh. Antes sólo se
+     * conservaba el access, así que el refresh de quien cambió la clave moría
+     * y a los 15 minutos (cuando vencía el access) quedaba deslogueado —medido
+     * en Mozzo: el refresh de la misma sesión daba 401 después del cambio—.
+     * Se conserva también el refresh ligado (`refresh_token_id:`); las lápidas
+     * de rotaciones anteriores se van, que ya no sirven para refrescar.
      */
     protected function revokeOtherTokens(Authenticatable $user): void
     {
@@ -2253,17 +2277,72 @@ abstract class BaseAuthController extends BaseController
             ? $user->currentAccessToken()
             : null;
 
-        $user->tokens()->where('id', '!=', $currentToken?->id)->delete();
+        $keep = array_filter([
+            $currentToken?->id,
+            $currentToken instanceof PersonalAccessToken
+                ? TokenIssuer::linkedRefreshTokenId($currentToken->abilities ?? [])
+                : null,
+        ], static fn ($id) => $id !== null);
+
+        $user->tokens()->whereNotIn('id', $keep)->delete();
     }
 
     /**
-     * Resolve TokenIssuer desde container (singleton, R-PKG-014 AuthServiceProvider).
+     * Hash descartable para el login sin usuario, del driver y el costo
+     * configurados (un hash fijo de otro costo volvería a delatar por el reloj).
+     * Se calcula una vez por proceso y driver.
+     *
+     * ponytail: el PRIMER login sin usuario de cada proceso paga `make` + `check`.
+     */
+    protected function dummyPasswordHash(): string
+    {
+        static $hashes = [];
+
+        return $hashes[Hash::getDefaultDriver()] ??= Hash::make(Str::random(40));
+    }
+
+    /**
+     * Resolve TokenIssuer desde container (singleton, R-PKG-014 AuthServiceProvider),
+     * o uno propio del scope si declara {@see refreshTtlSeconds()} o
+     * {@see rotatesRefreshTokens()}.
      *
      * Subclase puede override para inyectar TokenIssuer custom (e.g. tests).
      */
     protected function tokenIssuer(): TokenIssuer
     {
-        return app(TokenIssuer::class);
+        $ttl = $this->refreshTtlSeconds();
+        $rotate = $this->rotatesRefreshTokens();
+
+        if ($ttl === null && $rotate === null) {
+            return app(TokenIssuer::class);
+        }
+
+        return new TokenIssuer(refreshTtlSeconds: $ttl, rotateOnRefresh: $rotate);
+    }
+
+    /**
+     * Vida del refresh token de ESTE scope, en segundos. `null` = la global
+     * (`mk_director.auth.ttl.refresh_seconds`, 7 días).
+     *
+     * Por scope y en el controller, como {@see TwoFactorPolicy()}: un comensal
+     * necesita 90 días y un operador 7, y un mapa global de config obligaría al
+     * paquete a conocer los nombres de los scopes del consumer.
+     */
+    protected function refreshTtlSeconds(): ?int
+    {
+        return null;
+    }
+
+    /**
+     * ¿El refresh de ESTE scope rota en cada uso? `null` = la global
+     * (`mk_director.auth.refresh.rotate_on_refresh`, apagada).
+     *
+     * Rotar prende también la detección de reutilización (DEVELOPER_GUIDE
+     * § 3.23): un refresh viejo que vuelve cierra la sesión entera.
+     */
+    protected function rotatesRefreshTokens(): ?bool
+    {
+        return null;
     }
 
     /**

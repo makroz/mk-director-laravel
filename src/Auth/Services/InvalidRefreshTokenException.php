@@ -50,6 +50,18 @@ class InvalidRefreshTokenException extends AuthorizationException
     }
 
     /**
+     * Un refresh ya rotado volvió a llegar: alguien tiene una copia vieja. La
+     * familia entera ya se revocó cuando se lanza esto (`TokenIssuer`).
+     */
+    public static function reused(): self
+    {
+        $e = new self('Refresh token already used. The session was closed.');
+        $e->errorCode = 'ERR_REFRESH_REUSED';
+
+        return $e;
+    }
+
+    /**
      * La cuenta ya no puede autenticarse (bloqueada, inactiva, pendiente).
      * `$reason` es el de `AccountStatus::denialReason()`: el front lo muestra
      * en el login al cortar la sesión.
