@@ -3104,6 +3104,191 @@ donde queda registrado quién lo hizo.
 ⚠️ No pasa por `AccessGrantGuard`: acá no hay actor, hay una terminal con acceso
 al servidor y a la base que ya podría escribir la fila a mano.
 
+### 3.22 Login con Google y Apple por ID token (`socialLogin`)
+
+> Un scope acepta «Iniciar sesión con Google» y «con Apple» **sin flujo OAuth en
+> el backend**: el front consigue el **ID token** con Google Identity Services o
+> Sign in with Apple (JS o SDK nativo) y lo manda a un endpoint del scope. El
+> paquete verifica el token, resuelve a quién pertenece y emite **la misma
+> sesión que el login con contraseña**. **Opt-in por ruta**: un scope que no la
+> agrega no expone nada nuevo. Nace de Mozzo (cuentas de comensal), y sirve
+> igual para cualquier scope de cualquier consumer.
+
+#### 3.22.1 Prenderlo en un scope: una ruta
+
+`BaseAuthController::socialLogin(Request $request, string $provider)` ya está en
+el controller de todo scope. Ninguna ruta generada apunta a él: se agrega a mano
+en las rutas **públicas** del scope, con su throttle con prefijo propio (§ 3.19.2):
+
+```php
+Route::post('social/{provider}', [AuthController::class, 'socialLogin'])
+    ->whereIn('provider', ['google', 'apple'])
+    ->middleware('throttle:'.config('mk_director.auth.rate_limits.social', '10,1').',customer-social');
+```
+
+Body: `{id_token, nonce?}`. `nonce` es el valor **crudo** que generó el cliente
+(sólo se mira con Apple, § 3.22.3).
+
+| resultado | status | `__extraData.code` |
+|---|---|---|
+| sesión (o desafío de segundo factor, § 3.20) | 200 | — / `TWO_FACTOR_REQUIRED` |
+| token inválido (firma, emisor, audiencia, vigencia, nonce) | 401 | `ERR_SOCIAL_TOKEN_INVALID` |
+| proveedor apagado, sin client ids o desconocido | 403 | `ERR_SOCIAL_PROVIDER_DISABLED` |
+| cuenta bloqueada / inactiva | 403 | `ERR_ACCOUNT_DISABLED` |
+| identidad sin cuenta vinculada y sin alta | 404 | `ERR_SOCIAL_ACCOUNT_NOT_FOUND` |
+| no se pudieron bajar las claves del proveedor | 503 | `ERR_SOCIAL_UNAVAILABLE` |
+
+El 401 dice siempre lo mismo: el motivo real va al evento `auth.login.failed`
+(`reason: social_invalid_token`, `detail`), no a la respuesta — detallarlo le
+enseña a quien fabrica tokens qué parte ya le salió bien.
+
+#### 3.22.2 Los client ids: `SocialProviderConfigResolver`
+
+La audiencia (`aud`) del token es lo que impide que un token emitido para
+**otra** app con el mismo proveedor sirva para entrar a la tuya. Los client ids
+aceptados se piden **en cada login** a `Mk\Director\Auth\Social\SocialProviderConfigResolver`:
+
+```php
+public function clientIds(string $scope, string $provider): array; // [] = apagado
+```
+
+- **Google**: los client ids OAuth de web, iOS y Android que piden el token.
+- **Apple**: el Services ID (web) y los bundle ids de las apps.
+
+El default (`ConfigSocialProviderConfigResolver`) lee la config:
+
+```php
+// config/mk_director.php
+'auth' => ['social' => ['providers' => [
+    'google' => ['enabled' => true, 'client_ids' => 'web.apps.googleusercontent.com,ios…'], // array o CSV
+    'apple'  => ['enabled' => true, 'client_ids' => ['com.ejemplo.web', 'com.ejemplo.app']],
+]]],
+```
+
+Env: `MK_AUTH_SOCIAL_GOOGLE_ENABLED`, `MK_AUTH_SOCIAL_GOOGLE_CLIENT_IDS`,
+`MK_AUTH_SOCIAL_APPLE_ENABLED`, `MK_AUTH_SOCIAL_APPLE_CLIENT_IDS`,
+`MK_AUTH_RATE_LIMIT_SOCIAL`.
+
+Un consumer que guarda las credenciales en su base y prende o apaga cada método
+desde una consola bindea su propia implementación — el paquete la registra con
+`bindIf`, así que la del consumer gana aunque su provider bootee antes:
+
+```php
+$this->app->bind(SocialProviderConfigResolver::class, DbSocialProviderConfigResolver::class);
+```
+
+🔴 **Nunca devuelvas un comodín ni «cualquier client id»**: sin la audiencia,
+cualquier app del mundo con «Iniciar sesión con Google» consigue tokens que
+entran a la tuya.
+
+#### 3.22.3 Qué verifica `IdTokenVerifier`
+
+`Mk\Director\Auth\Social\IdTokenVerifier`, sobre `firebase/php-jwt`:
+
+1. `alg` = **RS256**. Rechaza `none` y `HS*` (con HS256 el atacante «firma» con
+   la clave pública como si fuera un secreto).
+2. `kid` presente en el JWKS del proveedor (Google:
+   `https://www.googleapis.com/oauth2/v3/certs`; Apple:
+   `https://appleid.apple.com/auth/keys`).
+3. Firma RSA contra esa clave.
+4. `exp` **obligatorio**; `exp`, `iat` y `nbf` con **60 s** de tolerancia de reloj.
+5. `iss`: `https://accounts.google.com` o `accounts.google.com`; `https://appleid.apple.com`.
+6. `aud` dentro de los client ids del resolver (string o array).
+7. `sub` presente: es la identidad que se vincula.
+8. **Apple con `nonce` en el body**: el claim `nonce` tiene que ser el
+   **SHA-256 (hex)** del nonce crudo, como pide Apple — al SDK se le pasa el
+   hash, al backend el crudo. Si el cliente no manda nonce, no se exige. A
+   Google no se le mira el nonce.
+
+`email_verified` llega como booleano (Google) o como `"true"` (Apple); se
+normaliza a `SocialIdentity::$emailVerified`.
+
+**JWKS**: se cachea con el `Cache` de la app según el `max-age` de la
+respuesta (acotado a 60 s – 24 h; sin `Cache-Control`, 1 h). Un `kid` que no
+está en la caché fuerza **una** re-descarga (el proveedor rotó la clave), con un
+freno de 60 s por proveedor: una ráfaga de `kid` inventados no se convierte en
+una ráfaga de requests a Google.
+
+`firebase/php-jwt` mide el tiempo con estáticos globales (`JWT::$leeway`,
+`JWT::$timestamp`): el verificador los pone para su llamada y los restaura.
+
+#### 3.22.4 A quién pertenece la identidad: vínculo, alta y el riesgo del email
+
+El vínculo vive en la tabla del paquete **`mk_social_identities`**
+(migración `2026_09_26_000001`, cargada con `loadMigrationsFrom`: corré
+`php artisan migrate` al actualizar), con clave única
+`(auth_scope, provider, subject)`. Es por scope: la misma cuenta de Google puede
+ser un comensal y un administrador, y son usuarios distintos.
+
+Orden de resolución:
+
+1. **Vinculada** por `(scope, provider, sub)` → ese usuario.
+2. Si no, `resolveSocialUser($request, $identity)`, que por defecto:
+   - si `socialAutoLinkByEmail()` es `true` **y** el proveedor verificó el
+     email → la cuenta del scope con ese `email`;
+   - si no, `createSocialUser($request, $identity)` → **`null` por defecto** (404).
+3. El usuario que devuelva el hook queda vinculado **en la misma transacción**
+   que el alta, y se emite `auth.social.linked` `{scope, provider, user_id}`.
+
+Después, lo mismo que `login()`: estado de la cuenta, **el segundo factor del
+scope** (entrar con Google no lo saltea) y `issueSessionResponse()`.
+
+El alta típica, en el `AuthController` del scope:
+
+```php
+use Mk\Director\Auth\Social\SocialIdentity;
+
+protected function createSocialUser(Request $request, SocialIdentity $identity): ?Authenticatable
+{
+    if ($identity->email !== null && Customer::where('email', $identity->email)->exists()) {
+        return null; // ese email ya tiene cuenta: que entre con contraseña y vincule desde su perfil
+    }
+
+    return Customer::create([
+        'name' => $request->input('name') ?? $identity->claims['name'] ?? 'Cliente',
+        'email' => $identity->email,
+        'password' => Str::password(32),
+        'email_verified_at' => $identity->emailVerified ? now() : null,
+    ]);
+}
+```
+
+Apple manda el nombre **sólo en la primera autorización y fuera del token**: si
+el front lo reenvía, está en `$request`. Y puede entregar un email de relay
+privado (`is_private_email`).
+
+🔴 **`socialAutoLinkByEmail()` es `false` por defecto, y prenderlo es una
+decisión de seguridad.** Vincular por email entrega la cuenta existente a quien
+pruebe ese email ante el proveedor. El paquete sólo lo hace con
+`email_verified = true`, pero eso vale lo que vale el proveedor: una cuenta de
+Google Workspace de un dominio que cambió de dueño, o un email que la persona ya
+no controla, lo cumplen igual. Prendelo sólo si las cuentas del scope se crearon
+con el email **verificado por vos**. `findUserByVerifiedSocialEmail()` es el
+único lugar del paquete que busca una cuenta por un email ajeno, y con
+`email_verified` falso devuelve `null` siempre.
+
+⚠️ Con el auto-vínculo apagado, a `createSocialUser()` puede llegar una
+identidad cuyo email **ya** es de otra cuenta del scope: un `create()` a ciegas
+choca con el `unique` y responde 500. Decidilo en el hook (como en el ejemplo).
+
+#### 3.22.5 Qué NO hace
+
+- **Ningún otro proveedor** ni el flujo OAuth con `code`/redirect: sólo ID
+  tokens de Google y Apple.
+- No revoca el token de Apple ni guarda refresh tokens del proveedor: el
+  proveedor sólo prueba identidad; la sesión es la del scope.
+- No agrega la ruta sola, ni al scaffolder: un scope ya generado y uno nuevo se
+  prenden igual, con la línea de § 3.22.1.
+
+#### 3.22.6 Qué se mide, y cómo
+
+`tests/Feature/Auth/SocialLoginTest.php`, con la cadena HTTP real y **sin red**:
+las claves RSA se generan en el test y el JWKS sale de `Http::fake()`. Cada
+guarda del verificador y del controller se reinyectó (se sacó el chequeo, el
+test se puso en rojo, se restauró). El chequeo propio de `alg` se mide por el
+motivo del evento: `firebase/php-jwt` también rechaza `none` y `HS256`, así que
+mirando sólo el 401 sacarlo dejaba el test en verde.
+
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)
 
 Tanto para **Next.js** como para **React Native**, el consumo de listas es estandarizado mediante parámetros URL:

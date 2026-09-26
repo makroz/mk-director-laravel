@@ -15,6 +15,8 @@ use Mk\Director\Auth\Services\AuthScopeResolver;
 use Mk\Director\Auth\Services\EmailOtpService;
 use Mk\Director\Auth\Services\TokenIssuer;
 use Mk\Director\Auth\Services\TotpService;
+use Mk\Director\Auth\Social\ConfigSocialProviderConfigResolver;
+use Mk\Director\Auth\Social\SocialProviderConfigResolver;
 
 /**
  * Auth subsystem service provider.
@@ -29,6 +31,9 @@ use Mk\Director\Auth\Services\TotpService;
  *  - AuthScopeResolver — validates that the current token's scope matches
  *    the expected one.
  *  - AbilityResolver (scoped) — cachea el set de abilities por usuario.
+ *  - SocialProviderConfigResolver — client ids del login con Google/Apple
+ *    (DEVELOPER_GUIDE § 3.22). `bindIf`: el binding del consumer gana
+ *    aunque su provider se registre antes que éste.
  *  - `mk.auth` and `mk.ability` middleware aliases.
  */
 class AuthServiceProvider extends ServiceProvider
@@ -38,6 +43,7 @@ class AuthServiceProvider extends ServiceProvider
         $this->app->singleton(TokenIssuer::class);
         $this->app->singleton(EmailOtpService::class);
         $this->app->singleton(TotpService::class);
+        $this->app->bindIf(SocialProviderConfigResolver::class, ConfigSocialProviderConfigResolver::class);
         $this->app->bind(AuthScopeResolver::class, function ($app) {
             return new AuthScopeResolver($app['request']);
         });

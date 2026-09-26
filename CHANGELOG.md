@@ -12,6 +12,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — login con Google y Apple por ID token, opt-in por ruta
+
+Un scope puede aceptar «Iniciar sesión con Google» y «con Apple» sin flujo OAuth en el backend: el
+front obtiene el **ID token** (Google Identity Services, Sign in with Apple JS o SDK nativo) y lo
+manda a `POST {scope}/auth/social/{provider}`. Guía: `DEVELOPER_GUIDE.md § 3.22`.
+
+- **`BaseAuthController::socialLogin(Request, string $provider)`**. Verifica el token, busca el
+  vínculo `(scope, provider, sub)` y, si no hay, delega en `resolveSocialUser()`. Desde ahí sigue
+  **igual que `login()`**: estado de la cuenta (403), el segundo factor del scope (§ 3.20) y la misma
+  sesión de `issueSessionResponse()`. Errores: 401 `ERR_SOCIAL_TOKEN_INVALID`, 403
+  `ERR_SOCIAL_PROVIDER_DISABLED`, 404 `ERR_SOCIAL_ACCOUNT_NOT_FOUND`, 503 `ERR_SOCIAL_UNAVAILABLE`.
+- **Opt-in**: ninguna ruta generada apunta al endpoint. Un consumer que no agrega
+  `Route::post('social/{provider}', …)` no expone nada nuevo.
+- **`Mk\Director\Auth\Social\IdTokenVerifier`**: RS256 únicamente (rechaza `none` y `HS*`), JWKS
+  cacheado según el `max-age` del proveedor con re-descarga única ante un `kid` desconocido (freno de
+  60 s), `exp` obligatorio, `exp`/`iat`/`nbf` con 60 s de tolerancia, emisor, audiencia, `sub`, y con
+  Apple el `nonce` como SHA-256 del nonce crudo que manda el cliente.
+- **`SocialProviderConfigResolver`** (contrato): los client ids aceptados se piden **en cada login**,
+  así un consumer que los guarda en su base los prende y apaga sin deploy. Default
+  `ConfigSocialProviderConfigResolver` → `mk_director.auth.social.providers.{google,apple}`
+  (`enabled`, `client_ids`). Lista vacía = proveedor apagado (403 sin mirar el token).
+- **Hooks del alta**: `createSocialUser()` (default: nadie → 404) y `socialAutoLinkByEmail()`
+  (default **`false`**). 🔴 Vincular por email entrega la cuenta existente a quien pruebe ese email
+  ante el proveedor; aun prendido, sólo aplica con `email_verified = true`.
+- **Tabla nueva `mk_social_identities`** (migración del paquete, `loadMigrationsFrom`): corré
+  `php artisan migrate` al actualizar. Evento nuevo `auth.social.linked`; `auth.login.failed` lleva
+  `reason: social_*` y el `detail` del rechazo.
+- **Config nueva**: `auth.social.providers.*` y `auth.rate_limits.social` (`MK_AUTH_SOCIAL_*`,
+  `MK_AUTH_RATE_LIMIT_SOCIAL`). Ability nueva `{scope}.auth.social-login`, que
+  `mk:discover-abilities` agrega como el resto de las de `BaseAuthController`.
+- **Dependencia nueva: `firebase/php-jwt` (`^6.10 || ^7.0`)**. Verificar firmas RSA y el formato JWK
+  a mano es exactamente el código que no conviene escribir. Es la librería que usa el SDK oficial de
+  Google para PHP, y ya estaba en `condaty-api` (v7.1.0), así que no le agrega un paquete nuevo.
+
+Lo mide `tests/Feature/Auth/SocialLoginTest.php` (20 tests, cadena HTTP real, sin red: claves RSA
+generadas en el test y JWKS por `Http::fake()`), con cada guarda reinyectada.
+
 ## [UNRELEASED] — el "Generado" del CSV y del XLSX, y el nombre del archivo, en la zona del reporte
 
 `CsvGenerator` y `XlsxGenerator` escribían `Generado: …` con `date()`, que usa la zona del proceso (UTC
