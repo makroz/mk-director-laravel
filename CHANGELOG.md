@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — el "Generado" del CSV y del XLSX, y el nombre del archivo, en la zona del reporte
+
+`CsvGenerator` y `XlsxGenerator` escribían `Generado: …` con `date()`, que usa la zona del proceso (UTC
+en la app), mientras las filas y el encabezado del PDF ya salían en `export.display_timezone`. Un
+reporte pedido a las 20:30 en Bolivia decía "Generado: 00:30" del día siguiente. El nombre del archivo
+descargado (`{tipo}-{fecha}.{formato}`) tomaba la fecha de `created_at` en UTC, con el mismo corrimiento
+de día. Los tres usan ahora `DateFormat::displayTimezone()`. Medido en RETO. Test:
+`tests/Unit/Export/GeneratedAtUsesDisplayTimezoneTest.php`.
+
 ## [UNRELEASED] — `mk:module --with-rbac` exige `--middleware`: las 18 rutas salían sin ninguno
 
 ⚠️ **BC**: `mk:module X --with-rbac` sin `--middleware` ahora **aborta** (exit 1) sin escribir nada.

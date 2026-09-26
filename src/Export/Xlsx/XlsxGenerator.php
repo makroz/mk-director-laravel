@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Mk\Director\Export\Xlsx;
 
+use Carbon\Carbon;
 use Mk\Director\Export\Support\ColumnDefinition;
+use Mk\Director\Export\Support\DateFormat;
 use Mk\Director\Export\Support\XlsxLayout;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Style\Alignment;
@@ -167,7 +169,7 @@ final class XlsxGenerator
         $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(14);
         $sheet->mergeCells('A1:'.$ultima.'1');
 
-        $sheet->setCellValue('A2', 'Generado: '.date('Y-m-d H:i'));
+        $sheet->setCellValue('A2', 'Generado: '.Carbon::now(DateFormat::displayTimezone())->format('Y-m-d H:i'));
         $sheet->getStyle('A2')->getFont()->setSize(9)->setItalic(true);
         $sheet->mergeCells('A2:'.$ultima.'2');
 

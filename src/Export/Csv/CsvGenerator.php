@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Mk\Director\Export\Csv;
 
+use Carbon\Carbon;
 use DateTimeInterface;
+use Mk\Director\Export\Support\DateFormat;
 use RuntimeException;
 
 /**
@@ -59,7 +61,7 @@ final class CsvGenerator
 
             if ($this->title !== null) {
                 $this->escribir($fp, [$this->title]);
-                $this->escribir($fp, ['Generado: '.date('Y-m-d H:i')]);
+                $this->escribir($fp, ['Generado: '.Carbon::now(DateFormat::displayTimezone())->format('Y-m-d H:i')]);
                 $this->escribir($fp, ['']);
             }
 

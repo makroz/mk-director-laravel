@@ -12,6 +12,7 @@ use Mk\Director\Controllers\BaseController;
 use Mk\Director\Export\AsyncExportManager;
 use Mk\Director\Export\CustomReportRegistry;
 use Mk\Director\Export\ExportConfigRegistry;
+use Mk\Director\Export\Support\DateFormat;
 use Mk\Director\Models\MkReport;
 use Mk\Director\Tenancy\TenantContext;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -221,7 +222,9 @@ final class MkReportController extends BaseController
 
     private function nombreDelArchivo(MkReport $report): string
     {
-        $fecha = $report->created_at?->format('Y-m-d') ?? date('Y-m-d');
+        // La fecha del nombre en la zona del lector, como el resto del reporte:
+        // en UTC, un reporte pedido a las 21:00 en Bolivia salía con el día siguiente.
+        $fecha = ($report->created_at?->copy() ?? now())->timezone(DateFormat::displayTimezone())->format('Y-m-d');
 
         return "{$report->type}-{$fecha}.{$report->format}";
     }
