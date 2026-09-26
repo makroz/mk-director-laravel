@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — borrar una cuenta se lleva sus tokens, sus roles y sus permisos (hallazgo 68)
+
+`role_user` y `ability_user` son polimórficas: la base no tiene FK que las limpie. La limpieza
+vivía en el `delete()` del Repository scaffoldeado, pero `CRUDSmart::destroy()` borra el modelo
+directo y no pasa por ahí: medido en NetPizza, `DELETE /api/admins/{id}` dejaba las tres cosas
+colgando.
+
+Ahora `AuthUser` lo hace en su evento `deleted`, venga de donde venga el borrado. Va en `deleted`
+y no en `deleting`: si una FK bloquea el borrado, la cuenta sigue viva con sus permisos. Con soft
+delete no toca nada, para que `restore()` la devuelva entera. El stub del Repository ya no repite
+la limpieza.
+
 ## [UNRELEASED] — `mk:discover-abilities` no inventa roles base para prefijos que no son scopes (hallazgo 67)
 
 El discovery tomaba el primer segmento del nombre de una ability como scope. Una ability

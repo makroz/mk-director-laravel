@@ -87,10 +87,8 @@ class {{ModuleName}}Repository implements {{ModuleName}}RepositoryInterface
             // Borra del storage los archivos del usuario: `FileStoragePlugin` no
             // limpia al borrar la fila, así que lo hace el Repository.
 {{fileFieldsDeleteCleanup}}
-            // Limpia tokens + pivots.
-            ${{moduleNameLower}}->tokens()->delete();
-            ${{moduleNameLower}}->roles()->detach();
-            ${{moduleNameLower}}->directAbilities()->detach();
+            // Los tokens, los roles y los permisos directos los limpia
+            // `AuthUser` al borrarse, venga de donde venga el borrado.
 
             return ${{moduleNameLower}}->delete();
         });

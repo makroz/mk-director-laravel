@@ -3,9 +3,11 @@
 declare(strict_types=1);
 
 use Illuminate\Foundation\Providers\FoundationServiceProvider;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 use Laravel\Sanctum\PersonalAccessToken;
 use Mk\Director\Auth\Controllers\BaseAuthController;
 use Mk\Director\Auth\Enums\ScopeStatus;
@@ -305,4 +307,23 @@ test('🔴 E: el motivo lo pone el chequeo extra que negó, si declara denialMes
 
     expect($status)->toBe(403);
     expect($body['message'] ?? null)->toBe('La empresa está suspendida.');
+});
+
+// ── Borrar la cuenta se lleva su acceso ──
+
+test('🔴 borrar la cuenta se lleva sus tokens y sus roles', function () {
+    tokenChainLogin($this);
+    $admin = TokenChainAdmin::query()->firstOrFail();
+    $rolId = (string) Str::uuid();
+    DB::table('roles')->insert(['id' => $rolId, 'name' => 'editor', 'created_at' => now(), 'updated_at' => now()]);
+    $admin->roles()->attach($rolId);
+
+    // Contraprueba: con nada antes, el cero de después no mediría nada.
+    expect(PersonalAccessToken::query()->count())->toBeGreaterThan(0)
+        ->and($admin->roles()->count())->toBe(1);
+
+    $admin->delete();
+
+    expect(PersonalAccessToken::query()->count())->toBe(0)
+        ->and(DB::table('role_user')->count())->toBe(0);
 });

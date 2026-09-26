@@ -87,6 +87,34 @@ abstract class AuthUser extends Authenticatable implements AuthenticatableContra
         parent::boot();
 
         static::preventTableDriftFootgun();
+
+        static::deleted(static function (self $user): void {
+            $user->forgetAccessOnDelete();
+        });
+    }
+
+    /**
+     * Al borrar la cuenta se van sus tokens, sus roles y sus permisos directos.
+     *
+     * 🔴 `role_user` Y `ability_user` SON POLIMÓRFICAS: la base no tiene una FK
+     * que las limpie. Medido en NetPizza: `DELETE /api/admins/{id}` (CRUDSmart,
+     * que borra el modelo directo) dejaba las tres cosas colgando, y el
+     * Repository que sí las limpiaba no está en ese camino. Acá corre venga de
+     * donde venga el borrado.
+     *
+     * Va en `deleted` y no en `deleting`: si el borrado falla —una FK que lo
+     * bloquea—, la cuenta sigue viva y no puede quedarse sin sus permisos. Con
+     * soft delete no hace nada, para que `restore()` la devuelva entera.
+     */
+    protected function forgetAccessOnDelete(): void
+    {
+        if (method_exists($this, 'isForceDeleting') && ! $this->isForceDeleting()) {
+            return;
+        }
+
+        $this->tokens()->delete();
+        $this->roles()->detach();
+        $this->directAbilities()->detach();
     }
 
     /**
