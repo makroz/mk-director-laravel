@@ -12,6 +12,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — el CRUD de abilities generado ya no deja darse acceso renombrando, y `*` no se toca
+
+Roles y grants apuntan a la ability por id: renombrarla es cambiarles el permiso a todos los que
+la tienen. El `AbilityController` generado heredaba `update()` y `destroy()` sin ninguna guarda ni
+validación del `name`: con `{scope}.abilities.update`, un encargado renombraba una ability suya a
+`{scope}.*` —o al nombre que pide otra ruta— y lo tenía (medido en RETO); cualquiera con
+`{scope}.abilities.delete` borraba `*` y dejaba sin nada a los super-admins; e `is_fixed` e
+`is_baseline` se escribían desde el body.
+
+Nuevos `AccessGrantGuard::assertCanChangeAbility($actor, ?Ability $ability, ?string $newName)` y
+`assertCanDeleteAbility($actor, $ability)`. Crear, renombrar (viejo y nuevo) o borrar pide tener el
+nombre con la semántica de `holds()` (`ERR_ACCESS_NOT_HELD`); mandar el mismo `name` no es
+renombrar. Una ability fija —`is_fixed`, o `*` siempre por nombre— no se edita ni se borra, ni con
+`*` (`ERR_FIXED_ABILITY`). Un nombre de otro scope conocido queda afuera; uno sin scope conocido se
+exige. El stub valida el prefijo del scope también en `update()` y rechaza `is_fixed`/`is_baseline`
+con 422. Lo mide `tests/Feature/MakeAuthUserAccessEscalationTest.php` sobre el controller generado.
+
+⚠️ **Código ya generado:** en el `AbilityController` de cada scope, sobreescribir `update()` y
+`destroy()` con las llamadas al guard, llamar a `assertCanChangeAbility()` en `store()` (por cada
+uno de los 5 verbos en el alta `{scope}.{recurso}`), y sumar `'is_fixed' => ['prohibited']` e
+`'is_baseline' => ['prohibited']` a la validación. Ver `src/Stubs/auth-user/ability-controller.stub`.
+
 ## [UNRELEASED] — el CRUD de roles generado ya no deja darse permisos por el propio rol
 
 Cambiarle las abilities a un rol es cambiárselas a todos los que lo tienen, y el `RoleController`

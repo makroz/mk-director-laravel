@@ -8,6 +8,7 @@ use App\Modules\{{ModuleName}}\Http\Resources\AbilityResource;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Mk\Director\Auth\Access\AccessGrantGuard;
 use Mk\Director\Auth\Models\Ability;
 use Mk\Director\Controllers\SmartController;
 
@@ -24,6 +25,12 @@ use Mk\Director\Controllers\SmartController;
  * Este controller expone los 5 endpoints estándar. Para policies default-deny,
  * override en `App\Modules\{{ModuleName}}\Policies\AbilityPolicy` (si la generás
  * via `mk:module --with-rbac` por separado).
+ *
+ * Crear, renombrar o borrar una ability pasa por `AccessGrantGuard` (403):
+ * roles y grants la apuntan por id, así que renombrarla es cambiarles el
+ * permiso a todos los que la tienen. Hay que tener el nombre (el viejo y el
+ * nuevo, al renombrar), y las fijas —`*` siempre— no se tocan. Si
+ * sobreescribís `store()`, `update()` o `destroy()`, conservá la llamada.
  *
  * `with` y `allowedIncludes` van vacíos: `Ability` no tiene relación `roles()`,
  * y declararla haría fallar el listado.
@@ -50,6 +57,12 @@ class AbilityController extends SmartController
         ],
     ];
 
+    /** `{scope}.{recurso}` o `{scope}.{recurso}.{accion}`. */
+    private const NAME_REGEX = '/^{{moduleNameLower}}\.[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)?$/';
+
+    /** Los verbos del set CRUD que crea `store()` con `{scope}.{recurso}`. */
+    private const CRUD_VERBS = ['viewAny', 'view', 'create', 'update', 'delete'];
+
     public function __construct()
     {
         $this->middleware('mk.auth:{{moduleNameLower}}');
@@ -71,18 +84,58 @@ class AbilityController extends SmartController
     public function store(Request $request)
     {
         $request->validate([
-            'name' => ['required', 'string', 'regex:/^{{moduleNameLower}}\.[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)?$/'],
+            'name' => ['required', 'string', 'regex:'.self::NAME_REGEX],
+            // Los pone el sistema (seeders, `mk:discover-abilities`), nunca la UI.
+            'is_fixed' => ['prohibited'],
+            'is_baseline' => ['prohibited'],
         ]);
 
-        $parts = explode('.', trim((string) $request->input('name')));
+        $name = trim((string) $request->input('name'));
+        $parts = explode('.', $name);
+        $guard = app(AccessGrantGuard::class);
 
         // 2 segmentos = `{scope}.{recurso}` → expandir a las 5 CRUD.
         if (count($parts) === 2) {
+            foreach (self::CRUD_VERBS as $verb) {
+                $guard->assertCanChangeAbility($request->user(), null, "{$name}.{$verb}");
+            }
+
             return $this->storeCrudSet($parts[0], $parts[1]);
         }
 
+        $guard->assertCanChangeAbility($request->user(), null, $name);
+
         // 3 segmentos = `{scope}.{recurso}.{accion}` → single.
         return parent::store($request);
+    }
+
+    /**
+     * Renombrar pide tener el nombre viejo y el nuevo; mandar el mismo `name`
+     * (el formulario lo manda siempre) no es renombrar. El nuevo sigue
+     * prefijado con el scope, como en `store()`.
+     */
+    public function update(Request $request, string|int $id)
+    {
+        $request->validate([
+            'name' => ['sometimes', 'required', 'string', 'regex:'.self::NAME_REGEX],
+            'is_fixed' => ['prohibited'],
+            'is_baseline' => ['prohibited'],
+        ]);
+
+        $name = $request->has('name') ? trim((string) $request->input('name')) : null;
+        app(AccessGrantGuard::class)->assertCanChangeAbility($request->user(), Ability::query()->findOrFail($id), $name);
+
+        return parent::update($request, $id);
+    }
+
+    /**
+     * Borrarla se la saca a todos los que la tienen: sólo la borra quien la tiene.
+     */
+    public function destroy(Request $request, string|int $id)
+    {
+        app(AccessGrantGuard::class)->assertCanDeleteAbility($request->user(), Ability::query()->findOrFail($id));
+
+        return parent::destroy($request, $id);
     }
 
     /**
@@ -92,7 +145,7 @@ class AbilityController extends SmartController
      */
     private function storeCrudSet(string $scope, string $resource): JsonResponse
     {
-        $verbs = ['viewAny', 'view', 'create', 'update', 'delete'];
+        $verbs = self::CRUD_VERBS;
 
         $abilities = DB::transaction(function () use ($scope, $resource, $verbs): array {
             $created = [];

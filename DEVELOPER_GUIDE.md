@@ -1054,6 +1054,27 @@ app(AccessGrantGuard::class)->assertCanChangeRole($request->user(), $role, $abil
 Fuera, igual que arriba: quien tiene `*` (salvo el rol fijo) y un rol de otro
 scope que el del actor.
 
+**El CRUD de abilities es la tercera puerta**: roles y grants apuntan a la
+ability por id, así que renombrarla es cambiarles el permiso a todos los que la
+tienen, y borrarla es sacárselo. Medido en RETO: con `{scope}.abilities.update`,
+un admin renombró una ability suya a `{scope}.*` y tuvo el scope entero. Renombrar
+no se prohíbe: se valida. El `AbilityController` generado llama:
+
+```php
+app(AccessGrantGuard::class)->assertCanChangeAbility($request->user(), $ability, $newName); // alta: $ability = null
+app(AccessGrantGuard::class)->assertCanDeleteAbility($request->user(), $ability);
+```
+
+| Regla | Código |
+|---|---|
+| Una ability **fija** (`is_fixed`, y `*` siempre, por nombre: `giveAbilityTo('*')` la crea sin la marca) no se edita ni se borra, ni con `*`. `is_fixed` e `is_baseline` no llegan del body (422) | `ERR_FIXED_ABILITY` |
+| Crear pide tener el nombre (el alta `{scope}.{recurso}` pide los 5 verbos); renombrar, el viejo **y** el nuevo; borrar, el que se borra. Mandar el mismo `name` no es renombrar | `ERR_ACCESS_NOT_HELD` |
+
+Un nombre de **otro** scope conocido (guard de `config/auth.php` cuyo modelo
+extiende `AuthUser`, el criterio de `mk:discover-abilities`) queda afuera. Uno
+sin scope conocido (`kitchen.send`) se exige. El `name` nuevo sigue validado
+con el prefijo del scope, en el alta y en la edición.
+
 ⚠️ **Los scopes ya generados no la tienen**: el paquete no reescribe código
 emitido. Agregar las llamadas a mano, o regenerar el scope.
 

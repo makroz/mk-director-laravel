@@ -7,6 +7,7 @@ namespace Mk\Director\Auth\Access;
 use BackedEnum;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Mk\Director\Auth\Enums\FixedStatus;
+use Mk\Director\Auth\Models\Ability;
 use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Auth\Models\Role;
 
@@ -52,6 +53,8 @@ use Mk\Director\Auth\Models\Role;
  *     app(AccessGrantGuard::class)->assertCanUpdate($request->user(), $target, $input);
  *     app(AccessGrantGuard::class)->assertCanDelete($request->user(), $target);
  *     app(AccessGrantGuard::class)->assertCanChangeRole($request->user(), $role, $abilityNames);
+ *     app(AccessGrantGuard::class)->assertCanChangeAbility($request->user(), $ability, $newName);
+ *     app(AccessGrantGuard::class)->assertCanDeleteAbility($request->user(), $ability);
  *
  * Cada `assert*` tira {@see AccessGrantDeniedException}, que se renderiza 403.
  */
@@ -64,6 +67,8 @@ class AccessGrantGuard
     public const ERR_ACCESS_NOT_HELD = 'ERR_ACCESS_NOT_HELD';
 
     public const ERR_FIXED_ROLE = 'ERR_FIXED_ROLE';
+
+    public const ERR_FIXED_ABILITY = 'ERR_FIXED_ABILITY';
 
     /**
      * Antes de sincronizar roles y/o abilities directas de `$target`.
@@ -200,6 +205,48 @@ class AccessGrantGuard
     }
 
     /**
+     * Antes de crear (`$ability` null) o editar una ability por el CRUD de
+     * abilities. Roles y grants la apuntan por id: renombrarla es cambiarles el
+     * permiso a todos los que la tienen.
+     *
+     * 🔴 Medido en RETO: con `{scope}.abilities.update`, un admin renombró una
+     * ability suya a `{scope}.*` (200) y tuvo el scope entero.
+     *
+     *  - Una ability FIJA no se edita, ni con `*` → `ERR_FIXED_ABILITY`.
+     *  - Crear pide tener el nombre nuevo; renombrar, el viejo Y el nuevo →
+     *    `ERR_ACCESS_NOT_HELD`. Mandar el mismo `name` (un formulario manda el
+     *    objeto entero) no es renombrar. Renombrar no se prohíbe: se valida.
+     *
+     * @param  string|null  $newName  El `name` que llega en el body; null = no viene.
+     *
+     * @throws AccessGrantDeniedException
+     */
+    public function assertCanChangeAbility(?Authenticatable $actor, ?Ability $ability, ?string $newName): void
+    {
+        if ($ability !== null) {
+            $this->assertAbilityNotFixed($ability);
+        }
+
+        if ($newName === null || $newName === $ability?->name) {
+            return;
+        }
+
+        $this->assertHoldsAbilityNames($actor, array_filter([$ability?->name, $newName], 'is_string'));
+    }
+
+    /**
+     * Antes de borrar una ability por el CRUD: borrarla se la saca a todos los
+     * que la tienen, así que sólo la borra quien la tiene. Una fija no se borra.
+     *
+     * @throws AccessGrantDeniedException
+     */
+    public function assertCanDeleteAbility(?Authenticatable $actor, Ability $ability): void
+    {
+        $this->assertAbilityNotFixed($ability);
+        $this->assertHoldsAbilityNames($actor, [$ability->name]);
+    }
+
+    /**
      * ¿`$actor` tiene `$ability` por sus roles o grants directos? Misma
      * semántica que `canMk()` (`*`, exacta, `recurso.*`), sin el atajo del token.
      */
@@ -233,6 +280,69 @@ class AccessGrantGuard
                 throw new AccessGrantDeniedException("No podés conceder ni quitar un acceso que no tenés: {$ability}.", self::ERR_ACCESS_NOT_HELD);
             }
         }
+    }
+
+    /**
+     * 🔴 `*` va también por NOMBRE: la marca `is_fixed` la ponen el seeder y
+     * `mk:auth:create-super-admin`, pero `giveAbilityTo('*')` crea la fila sin
+     * ella, y borrar o renombrar `*` deja a todos los super-admins sin nada.
+     */
+    private function assertAbilityNotFixed(Ability $ability): void
+    {
+        if ($ability->is_fixed === FixedStatus::Fixed || $ability->name === '*') {
+            throw new AccessGrantDeniedException('Es una ability del sistema: no se modifica desde acá.', self::ERR_FIXED_ABILITY);
+        }
+    }
+
+    /**
+     * Cada nombre tiene que estar cubierto por el actor (`holds()`), salvo el de
+     * OTRO scope conocido que el del actor (un admin armando las abilities de
+     * los meseros: lo gatea `mk.ability` en la ruta). Un nombre sin scope
+     * conocido (`kitchen.send`) NO queda afuera: se exige.
+     *
+     * @param  array<int, string>  $names
+     */
+    private function assertHoldsAbilityNames(?Authenticatable $actor, array $names): void
+    {
+        if (! $actor instanceof AuthUser) {
+            return;
+        }
+
+        $scopes = $this->knownScopes();
+
+        foreach ($names as $name) {
+            // El scope es el primer segmento, en singular o plural (`crew.` o `crews.`).
+            $prefix = explode('.', $name, 2)[0];
+            $singular = str_ends_with($prefix, 's') ? substr($prefix, 0, -1) : $prefix;
+            $scope = in_array($prefix, $scopes, true) ? $prefix : (in_array($singular, $scopes, true) ? $singular : null);
+
+            if (($scope === null || $scope === $actor->getAuthScope()) && ! $this->holds($actor, $name)) {
+                throw new AccessGrantDeniedException("No podés crear, renombrar ni borrar un acceso que no tenés: {$name}.", self::ERR_ACCESS_NOT_HELD);
+            }
+        }
+    }
+
+    /**
+     * Los scopes de verdad: guards de `config/auth.php` cuyo modelo extiende
+     * `AuthUser` (el mismo criterio que `mk:discover-abilities`). Sin ninguno,
+     * ningún nombre queda afuera: la regla falla cerrada.
+     *
+     * @return array<int, string>
+     */
+    private function knownScopes(): array
+    {
+        $scopes = [];
+
+        foreach ((array) config('auth.guards', []) as $guard => $definition) {
+            $provider = is_array($definition) ? ($definition['provider'] ?? null) : null;
+            $model = is_string($provider) ? config("auth.providers.{$provider}.model") : null;
+
+            if (is_string($model) && class_exists($model) && is_subclass_of($model, AuthUser::class)) {
+                $scopes[] = (string) $guard;
+            }
+        }
+
+        return $scopes;
     }
 
     private function isSameAccount(AuthUser $actor, AuthUser $target): bool
