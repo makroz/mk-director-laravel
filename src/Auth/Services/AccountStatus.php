@@ -53,22 +53,53 @@ use Illuminate\Contracts\Auth\Authenticatable;
  *    debería cachear (registrarlo como singleton alcanza).
  *  - Si uno revienta, la excepción sube. No se atrapa a propósito: un chequeo
  *    de seguridad que falla en silencio es un chequeo que no está.
+ *
+ * ── EL MOTIVO DE LA NEGATIVA ────────────────────────────────────────────
+ *
+ * {@see denialReason()} dice POR QUÉ niega, para que el login se lo muestre a
+ * quien ya probó la contraseña. El enum del estado y cada chequeo extra pueden
+ * declarar un `denialMessage(): string` con su texto; sin él, sale
+ * {@see DEFAULT_DENIAL}. El motivo NUNCA se muestra antes de verificar la
+ * contraseña: ahí sería un oráculo para saber qué cuentas están bloqueadas.
  */
 final class AccountStatus
 {
+    public const DEFAULT_DENIAL = 'Tu cuenta está deshabilitada.';
+
     public static function allowsAuthentication(Authenticatable $user): bool
     {
+        return self::denialReason($user) === null;
+    }
+
+    /**
+     * Por qué la cuenta no puede autenticarse, o `null` si puede.
+     */
+    public static function denialReason(Authenticatable $user): ?string
+    {
         if (! self::ownStatusAllows($user)) {
-            return false;
+            return self::messageOf($user->status ?? null);
         }
 
         foreach (self::extraChecks() as $check) {
             if (! $check($user)) {
-                return false;
+                return self::messageOf($check);
             }
         }
 
-        return true;
+        return null;
+    }
+
+    private static function messageOf(mixed $source): string
+    {
+        if (is_object($source) && method_exists($source, 'denialMessage')) {
+            $message = $source->denialMessage();
+
+            if (is_string($message) && $message !== '') {
+                return $message;
+            }
+        }
+
+        return self::DEFAULT_DENIAL;
     }
 
     /**

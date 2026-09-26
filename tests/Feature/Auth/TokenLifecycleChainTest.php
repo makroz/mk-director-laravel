@@ -10,6 +10,7 @@ use Laravel\Sanctum\PersonalAccessToken;
 use Mk\Director\Auth\Controllers\BaseAuthController;
 use Mk\Director\Auth\Enums\ScopeStatus;
 use Mk\Director\Auth\Models\AuthUser;
+use Mk\Director\Auth\Services\AccountStatus;
 use Mk\Director\Auth\Support\MorphPivot;
 use Mk\Director\Tests\Concerns\BootsHttpApp;
 use Mk\Director\Tests\MkLaravelTestCase;
@@ -251,4 +252,57 @@ test('logout con el access token emitido por un refresh también revoca el refre
     expect($response->getStatusCode())->toBe(200);
 
     expect(tokenChainRowExists($body['data']['refresh_token']))->toBeFalse();
+});
+
+// ── El login de una cuenta bloqueada: el motivo, sólo con la contraseña buena ──
+
+/** @return array{0:int,1:array<string,mixed>} */
+function tokenChainLoginAttempt(object $test, string $password): array
+{
+    $response = $test->httpPost('/api/admin/auth/login', ['email' => 'admin@test.local', 'password' => $password]);
+
+    return [$response->getStatusCode(), (array) json_decode((string) $response->getContent(), true)];
+}
+
+test('🔴 E: usuario BLOQUEADO con la contraseña buena → 403 ERR_ACCOUNT_DISABLED con el motivo, sin tokens', function () {
+    TokenChainAdmin::query()->update(['status' => ScopeStatus::Blocked->value]);
+
+    [$status, $body] = tokenChainLoginAttempt($this, 'secret');
+
+    expect($status)->toBe(403);
+    expect($body['__extraData']['code'] ?? null)->toBe('ERR_ACCOUNT_DISABLED');
+    expect($body['message'] ?? null)->toBe(AccountStatus::DEFAULT_DENIAL);
+    expect(PersonalAccessToken::query()->count())->toBe(0);
+});
+
+test('🔴 E: usuario BLOQUEADO con la contraseña MALA → el 422 genérico, igual que una cuenta que no existe', function () {
+    TokenChainAdmin::query()->update(['status' => ScopeStatus::Blocked->value]);
+
+    [$status, $body] = tokenChainLoginAttempt($this, 'otra');
+    $statusInexistente = $this->httpPost('/api/admin/auth/login', ['email' => 'nadie@test.local', 'password' => 'otra'])->getStatusCode();
+
+    expect($status)->toBe(422);
+    expect($body['__extraData']['code'] ?? null)->toBe('ERR_VALIDATION');
+    expect($body['message'] ?? null)->toBe('Credenciales inválidas.');
+    expect($statusInexistente)->toBe(422);
+});
+
+test('🔴 E: el motivo lo pone el chequeo extra que negó, si declara denialMessage()', function () {
+    config(['mk_director.auth.account_checks' => [new class
+    {
+        public function __invoke($user): bool
+        {
+            return false;
+        }
+
+        public function denialMessage(): string
+        {
+            return 'La empresa está suspendida.';
+        }
+    }]]);
+
+    [$status, $body] = tokenChainLoginAttempt($this, 'secret');
+
+    expect($status)->toBe(403);
+    expect($body['message'] ?? null)->toBe('La empresa está suspendida.');
 });

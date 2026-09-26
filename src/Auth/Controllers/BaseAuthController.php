@@ -335,8 +335,10 @@ abstract class BaseAuthController extends BaseController
      *   2. `beforeLogin()` hook — modificar credentials / abort.
      *   3. User lookup por `where(loginField, value).first()`.
      *   4. Defense-in-depth: `getAuthScope() === authScope()`.
-     *   5. `userHasValidStatus()` check (enum ScopeStatus o `is_active` legacy).
-     *   6. `Hash::check(password, user->password)`.
+     *   5. `Hash::check(password, user->password)`. Falla 3-5 → 422 genérico.
+     *   6. `userHasValidStatus()` → 403 `ERR_ACCOUNT_DISABLED` con el motivo de
+     *      `AccountStatus::denialReason()`. Va DESPUÉS de la contraseña: antes
+     *      sería un oráculo de qué cuentas están bloqueadas.
      *   7. TokenIssuer::issueTokenPair (access ligado a su refresh, para que logout revoque ambos).
      *   8. `afterLogin()` hook.
      *   9. Return envelope canónico con tokens + user payload (incl. abilities, F7-B02).
@@ -366,10 +368,9 @@ abstract class BaseAuthController extends BaseController
             ->where($loginField, $credentials[$loginField])
             ->first();
 
-        // Defense-in-depth: user existe, scope coincide, status válido, password OK.
+        // Defense-in-depth: user existe, scope coincide, password OK.
         if (! $user
             || $user->getAuthScope() !== $scope
-            || ! $this->userHasValidStatus($user)
             || ! Hash::check($credentials['password'], (string) $user->getAuthPassword())
         ) {
             $this->dispatchAuthEventSafe('auth.login.failed', [
@@ -383,6 +384,30 @@ abstract class BaseAuthController extends BaseController
                 [$loginField => ['Credenciales inválidas.']],
                 422,
                 'ERR_VALIDATION',
+            );
+        }
+
+        // 🔴 EL ESTADO SE MIRA DESPUÉS DE LA CONTRASEÑA, Y ENTONCES SE DICE.
+        // Antes corría antes del `Hash::check` y caía en el mismo «Credenciales
+        // inválidas»: el dueño de un restaurante suspendido creía que se le había
+        // roto la cuenta. Decir el motivo ANTES de verificar la contraseña sería
+        // un oráculo (cualquiera sabría qué cuentas están bloqueadas); después,
+        // quien pregunta ya probó que la cuenta es suya. Y ahora el bcrypt corre
+        // también para la cuenta bloqueada: antes respondía más rápido, que era
+        // el mismo oráculo por el reloj.
+        if (! $this->userHasValidStatus($user)) {
+            $this->dispatchAuthEventSafe('auth.login.failed', [
+                'scope' => $scope,
+                'login_field_value' => $credentials[$loginField] ?? null,
+                'ip' => $request->ip(),
+                'reason' => 'account_disabled',
+            ]);
+
+            return $this->sendError(
+                AccountStatus::denialReason($user) ?? AccountStatus::DEFAULT_DENIAL,
+                [],
+                403,
+                'ERR_ACCOUNT_DISABLED',
             );
         }
 

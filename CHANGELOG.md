@@ -12,6 +12,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — el login dice por qué no entra una cuenta, pero sólo a quien probó la contraseña (hallazgo 60)
+
+`login()` chequeaba el estado de la cuenta **antes** del `Hash::check()` y respondía el mismo
+422 «Credenciales inválidas»: el dueño de una empresa suspendida creía que se le había roto la
+cuenta. Ahora verifica la contraseña primero; si es correcta y la cuenta no puede entrar,
+responde **403 `ERR_ACCOUNT_DISABLED`** con el motivo de `AccountStatus::denialReason()`.
+
+- El enum del estado y cada chequeo de `mk_director.auth.account_checks` pueden declarar
+  `denialMessage(): string`. Sin él sale `AccountStatus::DEFAULT_DENIAL`.
+- Con la contraseña mala sigue el 422 genérico: el estado no se revela a quien no probó la
+  cuenta. Y la cuenta bloqueada ya no se salta el bcrypt, que la delataba por el tiempo de
+  respuesta.
+
+⚠️ **Cambio para los fronts**: el login de una cuenta bloqueada con la contraseña correcta pasa
+de 422 a 403. `MkAuthForm` muestra el `message` igual que antes.
+
 ## [UNRELEASED] — `force_envelope` llega a las rutas de módulo (hallazgo 66)
 
 El flag empujaba `MkEnvelope` al grupo `api`, y los módulos registran sus rutas con
