@@ -15,7 +15,16 @@ class MakeModuleCommand extends Command
      *
      * @var string
      */
-    protected $signature = 'mk:module {name : El nombre del módulo en singular (Ej: Survey)} {--with-rbac : Genera un módulo con trío RBAC completo (User + Role + Ability + 2 pivots + 3 Policies + RbacService + ServiceProvider con Gate bindings)}';
+    protected $signature = 'mk:module {name : El nombre del módulo en singular (Ej: Survey)} {--with-rbac : Genera un módulo con trío RBAC completo (User + Role + Ability + 2 pivots + 3 Policies + RbacService + ServiceProvider con Gate bindings)}
+        {--middleware= : OBLIGATORIO con --with-rbac. Middleware de las rutas generadas, separados por coma (ej: --middleware=api,auth:crew). Tiene que autenticar al usuario del módulo en el guard por defecto: las Policies lo buscan ahí. Un parámetro con coma (throttle:60,1) no entra: agregalo a mano en Routes/api.php}';
+
+    /**
+     * Middleware de `--middleware`, ya validados. Los emite `routes-rbac.stub`
+     * en el token `{{middleware}}`.
+     *
+     * @var array<int, string>
+     */
+    protected array $routeMiddleware = [];
 
     /**
      * The console command description.
@@ -32,6 +41,35 @@ class MakeModuleCommand extends Command
         $name = $this->argument('name');
         $moduleName = Str::studly($name);
         $withRbac = (bool) $this->option('with-rbac');
+
+        // --middleware, ANTES de crear nada. Con --with-rbac es obligatorio:
+        // el pack publica 18 rutas que asignan roles y editan usuarios, y sin
+        // middleware quedan sin autenticar —el actor llega null, y la guarda de
+        // escalada no aplica sin actor—. Falla cerrada, como `--kind=consumer`
+        // sin `--managed-by` en `mk:make:auth-user`.
+        $middleware = array_values(array_filter(array_map('trim', explode(',', (string) $this->option('middleware'))), fn (string $m) => $m !== ''));
+
+        if ($withRbac && $middleware === []) {
+            $this->error('--with-rbac requiere --middleware=<lista>: las rutas del módulo asignan roles y editan usuarios, y sin middleware quedan públicas. Ej: --middleware=api,auth:crew (tiene que autenticar al usuario del módulo en el guard por defecto).');
+
+            return Command::FAILURE;
+        }
+
+        if (! $withRbac && $middleware !== []) {
+            $this->error('--middleware sólo aplica con --with-rbac: el pack estándar no lo emite.');
+
+            return Command::FAILURE;
+        }
+
+        foreach ($middleware as $item) {
+            if (! preg_match('/^[A-Za-z_\\\\][A-Za-z0-9_.\\\\-]*(:[A-Za-z0-9_.\\-:|*=]+)?$/', $item)) {
+                $this->error("--middleware: «{$item}» no es un middleware válido. La lista se separa por coma, así que un parámetro con coma (throttle:60,1) no entra: agregalo a mano en Routes/api.php.");
+
+                return Command::FAILURE;
+            }
+        }
+
+        $this->routeMiddleware = $middleware;
 
         $this->info("🚀 Iniciando generación del módulo MK-API: {$moduleName}");
 
@@ -264,6 +302,7 @@ class MakeModuleCommand extends Command
         $content = str_replace('{{ModuleName}}', $moduleName, $content);
         $content = str_replace('{{moduleNameLower}}', Str::snake($moduleName), $content);
         $content = str_replace('{{moduleNamePluralLower}}', Str::plural(Str::snake($moduleName, '-')), $content);
+        $content = str_replace('{{middleware}}', '['.implode(', ', array_map(fn (string $m) => var_export($m, true), $this->routeMiddleware)).']', $content);
 
         $targetFolder = $this->modulesPath($moduleName);
         if (! empty($folder)) {

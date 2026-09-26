@@ -288,8 +288,22 @@ Policies + RbacService + ServiceProvider con Gate bindings) en un solo paso.
 #### Uso
 
 ```bash
-php artisan mk:module Admin --with-rbac
+php artisan mk:module Admin --with-rbac --middleware=api,auth:admin
 ```
+
+🔴 **`--middleware` es obligatorio con `--with-rbac`.** Las 18 rutas generadas
+asignan roles y editan usuarios; sin middleware quedaban públicas. La lista va
+separada por coma y el `Routes/api.php` generado envuelve TODAS las rutas en
+`Route::middleware([...])->group(...)`. Omitirla (o pasarla vacía) aborta antes
+de escribir nada, como `--kind=consumer` sin `--managed-by` en
+`mk:make:auth-user`. Un middleware con coma en sus parámetros (`throttle:60,1`)
+no entra en la lista: agregalo a mano en `Routes/api.php`. `--middleware` sin
+`--with-rbac` también aborta: el pack estándar no lo emite.
+
+El middleware tiene que **autenticar al usuario del módulo en el guard por
+defecto**: ahí lo buscan las Policies y `ModuleRbacGrantGuard` (ej:
+`auth:admin`, que llama `shouldUse('admin')`, con un guard cuyo provider sea el
+modelo del módulo). Sin actor, la Policy deniega todo.
 
 Genera **20 archivos** en `app/Modules/Admin/`:
 
@@ -320,6 +334,22 @@ Genera **20 archivos** en `app/Modules/Admin/`:
   en todos los métodos. `before()` retorna `true` para users con role
   `super-admin`, `null` para que el chain normal de abilities corra
   (RBAC-004).
+- **El CRUD pasa por la Policy**: los tres controllers prenden
+  `'authorize_with_policy' => true` y NO declaran `service` (`RbacService` no
+  es un `MkModuleServiceInterface`; declararlo daba 500 en los 15 endpoints).
+- **Escalada**: `assignRole`, `revokeRole`, `syncAbilities` y el
+  `update`/`destroy` de usuarios y roles pasan por
+  `Mk\Director\Auth\Access\ModuleRbacGrantGuard` (403, mismos códigos que
+  `AccessGrantGuard`): `super-admin` es fijo (no se sincroniza, renombra ni
+  borra, y ningún rol se renombra a él — `ERR_FIXED_ROLE`); nadie cambia sus
+  roles ni las abilities de un rol que tiene (`ERR_SELF_ACCESS_CHANGE`); nadie
+  toca a un usuario —ni su contraseña— o un rol de alguien con más acceso
+  (`ERR_TARGET_OUTRANKS_ACTOR`); sólo se asigna, quita o sincroniza lo que el
+  actor tiene (`ERR_ACCESS_NOT_HELD`). Un super-admin queda afuera del rango y
+  de lo concedido, no de lo fijo ni de sus propios roles.
+- **Tenant**: usuario y rol se cargan con `findScopedOrFail()` (el del rol,
+  con su tercer argumento `Role::class`): con `MkMultiTenantPlugin`, la fila
+  de otro tenant da 404.
 - **Ability names**: `{scope}.{resource}.{action}` — `admin.admins.view`,
   `admin.roles.syncAbilities`, `admin.abilities.viewAny`, etc. Total: 15
   abilities explícitas en `discoverAbilities()` (D5 — fuente de verdad
@@ -328,7 +358,7 @@ Genera **20 archivos** en `app/Modules/Admin/`:
 #### End-to-end example
 
 ```bash
-$ php artisan mk:module Admin --with-rbac
+$ php artisan mk:module Admin --with-rbac --middleware=api,auth:admin
 🚀 Iniciando generación del módulo MK-API: Admin
   📁 Controllers/, Contracts/, DTOs/, Enums/, Models/, ...
   📄 Generando archivos...
@@ -388,6 +418,8 @@ análisis completo.
 
 - **Spec**: `RBAC-001..005` en
   `openspec/changes/2026-06-24-admin-with-rbac/specs/admin-with-rbac.md`
+- **Por el Kernel, con efecto en la base**: `tests/Feature/MkModuleRbac{Crud,Escalation,TenantIsolation,MiddlewareOption}Test.php`
+  (generan el módulo con `handle()` entero y lo levantan con `BootsGeneratedRbacModule`).
 - **Tests**: 15 Pest tests en `tests/Feature/MkModuleWithRbacTest.php`
   (157 assertions). Cubren: scaffolding genera 20 archivos, FK
   constraints con `cascadeOnDelete` en pivots, `Gate::policy` auto-bind,

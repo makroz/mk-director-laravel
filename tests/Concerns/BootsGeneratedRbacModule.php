@@ -27,9 +27,10 @@ use Symfony\Component\Console\Output\BufferedOutput;
  * archivo de test generara el suyo y lo borrara al final, el siguiente
  * cargaría las rutas de un directorio que ya no existe.
  *
- * El actor viaja en el header `X-Actor` y lo resuelve el guard POR DEFECTO:
- * es donde lo buscan `$this->authorize()` y la Policy del CRUD. El consumer
- * real lo resuelve con el middleware que le pasa a `--middleware`.
+ * Se genera con `--middleware=api` (el grupo del harness). El actor viaja en
+ * el header `X-Actor` y lo resuelve el guard POR DEFECTO: es donde lo buscan
+ * `$this->authorize()`, la Policy del CRUD y la guarda. El consumer real lo
+ * resuelve con el middleware que le pasa a `--middleware`.
  */
 trait BootsGeneratedRbacModule
 {
@@ -56,7 +57,10 @@ trait BootsGeneratedRbacModule
             $this->generateRbacModule();
         }
 
-        $app = $this->bootHttpApp('App\\Modules\\Squad\\Models\\Squad', $mkDirectorConfig);
+        // El harness prende `TenantResolver` (por header) en el grupo `api`, que
+        // es el middleware con el que se genera el módulo. Estos tests no
+        // miden eso: el tenant de `MkMultiTenantPlugin` sale del usuario.
+        $app = $this->bootHttpApp('App\\Modules\\Squad\\Models\\Squad', array_replace_recursive(['tenant' => ['enabled' => false]], $mkDirectorConfig));
 
         foreach (['Models/Squad', 'Models/Role', 'Models/Ability', 'Services/RbacService',
             'Policies/SquadPolicy', 'Policies/RolePolicy', 'Policies/AbilityPolicy',
@@ -181,7 +185,7 @@ trait BootsGeneratedRbacModule
         $command = new MakeModuleCommand;
         $command->setLaravel($app);
         $output = new BufferedOutput;
-        $exit = $command->run(new ArrayInput(['name' => 'Squad', '--with-rbac' => true]), $output);
+        $exit = $command->run(new ArrayInput(['name' => 'Squad', '--with-rbac' => true, '--middleware' => 'api']), $output);
 
         $this->tearDownHttpApp();
 

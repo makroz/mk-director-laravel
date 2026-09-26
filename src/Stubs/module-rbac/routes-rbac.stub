@@ -15,39 +15,46 @@ use Illuminate\Support\Facades\Route;
  * via `Gate::policy()` (ver `provider-rbac.stub`). El Gate ya tiene
  * definidas las abilities por `Gate::define()`.
  *
+ * Todas van dentro del middleware de `--middleware`: las Policies y
+ * `ModuleRbacGrantGuard` buscan al actor en el guard por defecto, así que ese
+ * middleware tiene que autenticar al usuario del módulo. Sin actor, la Policy
+ * deniega todo; la guarda de escalada no aplica.
+ *
  * Spec: RBAC-001 (R-PKG-008).
  */
 
-// ─── CRUD de {{ModuleName}} (User) ────────────────────────────────────
-Route::prefix('api/{{moduleNamePluralLower}}')->group(function () {
-    Route::get('/',         [{{ModuleName}}Controller::class, 'index']);
-    Route::get('/{id}',     [{{ModuleName}}Controller::class, 'show']);
-    Route::post('/',        [{{ModuleName}}Controller::class, 'store']);
-    Route::put('/{id}',     [{{ModuleName}}Controller::class, 'update']);
-    Route::delete('/{id}',  [{{ModuleName}}Controller::class, 'destroy']);
+Route::middleware({{middleware}})->group(function () {
+    // ─── CRUD de {{ModuleName}} (User) ────────────────────────────────────
+    Route::prefix('api/{{moduleNamePluralLower}}')->group(function () {
+        Route::get('/',         [{{ModuleName}}Controller::class, 'index']);
+        Route::get('/{id}',     [{{ModuleName}}Controller::class, 'show']);
+        Route::post('/',        [{{ModuleName}}Controller::class, 'store']);
+        Route::put('/{id}',     [{{ModuleName}}Controller::class, 'update']);
+        Route::delete('/{id}',  [{{ModuleName}}Controller::class, 'destroy']);
 
-    // Asignación / revocación de roles (autorizado por {{ModuleName}}Policy).
-    Route::post('/{id}/roles/{roleId}',         [{{ModuleName}}Controller::class, 'assignRole']);
-    Route::delete('/{id}/roles/{roleId}',      [{{ModuleName}}Controller::class, 'revokeRole']);
-});
+        // Asignación / revocación de roles (autorizado por {{ModuleName}}Policy).
+        Route::post('/{id}/roles/{roleId}',         [{{ModuleName}}Controller::class, 'assignRole']);
+        Route::delete('/{id}/roles/{roleId}',      [{{ModuleName}}Controller::class, 'revokeRole']);
+    });
 
-// ─── CRUD de Roles ────────────────────────────────────────────────────
-Route::prefix('api/{{moduleNameLower}}-roles')->group(function () {
-    Route::get('/',         [RoleController::class, 'index']);
-    Route::get('/{id}',     [RoleController::class, 'show']);
-    Route::post('/',        [RoleController::class, 'store']);
-    Route::put('/{id}',     [RoleController::class, 'update']);
-    Route::delete('/{id}',  [RoleController::class, 'destroy']);
+    // ─── CRUD de Roles ────────────────────────────────────────────────────
+    Route::prefix('api/{{moduleNameLower}}-roles')->group(function () {
+        Route::get('/',         [RoleController::class, 'index']);
+        Route::get('/{id}',     [RoleController::class, 'show']);
+        Route::post('/',        [RoleController::class, 'store']);
+        Route::put('/{id}',     [RoleController::class, 'update']);
+        Route::delete('/{id}',  [RoleController::class, 'destroy']);
 
-    // Sincronización de abilities (autorizado por RolePolicy).
-    Route::put('/{id}/abilities', [RoleController::class, 'syncAbilities']);
-});
+        // Sincronización de abilities (autorizado por RolePolicy).
+        Route::put('/{id}/abilities', [RoleController::class, 'syncAbilities']);
+    });
 
-// ─── CRUD de Abilities (read-only por default) ────────────────────────
-Route::prefix('api/{{moduleNameLower}}-abilities')->group(function () {
-    Route::get('/',         [AbilityController::class, 'index']);
-    Route::get('/{id}',     [AbilityController::class, 'show']);
-    Route::post('/',        [AbilityController::class, 'store']);
-    Route::put('/{id}',     [AbilityController::class, 'update']);
-    Route::delete('/{id}',  [AbilityController::class, 'destroy']);
+    // ─── CRUD de Abilities (read-only por default) ────────────────────────
+    Route::prefix('api/{{moduleNameLower}}-abilities')->group(function () {
+        Route::get('/',         [AbilityController::class, 'index']);
+        Route::get('/{id}',     [AbilityController::class, 'show']);
+        Route::post('/',        [AbilityController::class, 'store']);
+        Route::put('/{id}',     [AbilityController::class, 'update']);
+        Route::delete('/{id}',  [AbilityController::class, 'destroy']);
+    });
 });

@@ -12,6 +12,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `mk:module --with-rbac` exige `--middleware`: las 18 rutas salían sin ninguno
+
+⚠️ **BC**: `mk:module X --with-rbac` sin `--middleware` ahora **aborta** (exit 1) sin escribir nada.
+
+Las 18 rutas del pack (CRUD de usuarios, roles y abilities, más `assignRole`, `revokeRole` y
+`syncAbilities`) salían SIN middleware (medido: `gatherMiddleware()` vacío). Asignar roles y editar
+usuarios quedaba público, y sin actor la guarda de escalada no aplica.
+
+Nueva opción `--middleware=<lista>`, separada por coma (ej. `--middleware=api,auth:admin`): el
+`Routes/api.php` generado envuelve TODAS las rutas en `Route::middleware([...])->group(...)`. El
+middleware tiene que autenticar al usuario del módulo en el guard por defecto, que es donde lo
+buscan las Policies y `ModuleRbacGrantGuard`.
+
+- **Omitida (o vacía) con `--with-rbac`: aborta**, antes de crear un solo directorio. Falla cerrada,
+  como `--kind=consumer` sin `--managed-by` en `mk:make:auth-user`. Se descartó el aviso + TODO en
+  el archivo: un aviso en consola se pierde, y el módulo quedaría andando y público.
+- Cada middleware se valida (nombre o clase, con `:parámetros` opcionales) y se emite con
+  `var_export`. Un parámetro con coma (`throttle:60,1`) no entra en la lista: aborta con un mensaje
+  que dice que se agregue a mano en `Routes/api.php`.
+- `--middleware` sin `--with-rbac` también aborta: el pack estándar no lo emite.
+
+Lo mide `tests/Feature/MkModuleRbacMiddlewareOptionTest.php`.
+
+⚠️ **Los módulos ya generados**: envolvé las rutas de `Routes/api.php` en
+`Route::middleware([...tu auth...])->group(function () { ... });`. Scripts o CI que corran
+`mk:module X --with-rbac` tienen que agregar `--middleware=...`.
+
 ## [UNRELEASED] — `mk:module --with-rbac`: el CRUD daba 500, y arreglarlo sólo lo dejaba abierto
 
 Los 15 endpoints CRUD de los tres controllers del pack (index/show/store/update/destroy de usuarios,
