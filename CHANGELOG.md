@@ -12,6 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `mk:module --with-rbac`: asignar, revocar y sincronizar en otro tenant da 404
+
+`assignRole`, `revokeRole` (controller de usuarios) y `syncAbilities` (`RoleController`) del pack
+`mk:module --with-rbac` cargaban usuario y rol con `findOrFail()` pelado, sin los `beforeQuery` de
+los plugins. Medido por el Kernel con `MkMultiTenantPlugin`: un actor del tenant 1 le asignaba su
+rol a un usuario del tenant 2, le quitaba los suyos y le daba a un usuario propio el rol de otro
+tenant — **200, y escrito**.
+
+`CRUDSmart::findScopedOrFail()` acepta un tercer argumento opcional `?string $modelClass`: carga
+OTRO modelo (el rol, desde el controller de usuarios) por el mismo lookup con los plugins, sin el
+`with`/`withCount` del controller. Los tres endpoints cargan usuario y rol con él: la fila de otro
+tenant da 404 y no se escribe. Lo mide `tests/Feature/MkModuleRbacTenantIsolationTest.php`.
+
+⚠️ **Los módulos ya generados no se regeneran solos.** En `{Modulo}Controller`, `assignRole` y
+`revokeRole` reciben `Request $request` primero y cargan con
+`$this->findScopedOrFail($request, $id)` y `$this->findScopedOrFail($request, $roleId, Role::class)`;
+en `RoleController::syncAbilities`, `$this->findScopedOrFail($request, $id)`.
+
 ## [UNRELEASED] — con un plugin de tenant, el acceso de otro tenant da 404: no 403, y no se escribe
 
 Los controllers generados de roles, abilities y usuarios cargaban la fila para `AccessGrantGuard`

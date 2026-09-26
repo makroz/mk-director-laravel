@@ -18,6 +18,11 @@ use Mk\Director\Controllers\SmartController;
  * Extiende `SmartController` para el CRUD; los endpoints `assignRole` /
  * `revokeRole` son específicos del RBAC triad.
  *
+ * Usuario y rol se cargan con `findScopedOrFail()`, el lookup del CRUD: con un
+ * plugin de tenant, el usuario o el rol de otro tenant da 404. Con un
+ * `findOrFail()` pelado, un tenant le asignaba y quitaba roles a los usuarios
+ * de otro.
+ *
  * Spec: RBAC-001, RBAC-005 (R-PKG-008).
  */
 class {{ModuleName}}Controller extends SmartController
@@ -38,10 +43,10 @@ class {{ModuleName}}Controller extends SmartController
      * POST /api/{{moduleNamePluralLower}}/{id}/roles/{roleId}
      * Asigna un role a un user. Autorizado por `{{ModuleName}}Policy::assignRole`.
      */
-    public function assignRole(int $id, int $roleId, RbacService $rbac): JsonResponse
+    public function assignRole(Request $request, int $id, int $roleId, RbacService $rbac): JsonResponse
     {
-        $user = {{ModuleName}}::findOrFail($id);
-        $role = Role::findOrFail($roleId);
+        $user = $this->findScopedOrFail($request, $id);
+        $role = $this->findScopedOrFail($request, $roleId, Role::class);
 
         $this->authorize('assignRole', $user);
 
@@ -58,10 +63,10 @@ class {{ModuleName}}Controller extends SmartController
      * DELETE /api/{{moduleNamePluralLower}}/{id}/roles/{roleId}
      * Revoca un role de un user. Autorizado por `{{ModuleName}}Policy::revokeRole`.
      */
-    public function revokeRole(int $id, int $roleId, RbacService $rbac): JsonResponse
+    public function revokeRole(Request $request, int $id, int $roleId, RbacService $rbac): JsonResponse
     {
-        $user = {{ModuleName}}::findOrFail($id);
-        $role = Role::findOrFail($roleId);
+        $user = $this->findScopedOrFail($request, $id);
+        $role = $this->findScopedOrFail($request, $roleId, Role::class);
 
         $this->authorize('revokeRole', $user);
 

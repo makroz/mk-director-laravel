@@ -957,12 +957,25 @@ trait CRUDSmart
      * de roles, con un plugin de tenant la guarda veía el rol de OTRO tenant y
      * daba 403 (confirmando que existía) donde el CRUD daba 404, y el sync de
      * abilities —que no pasa por el CRUD— lo escribía.
+     *
+     * `$modelClass` carga OTRO modelo por el mismo lookup (el rol que se le
+     * asigna a un usuario, desde el controller de usuarios). Sin el `with` ni
+     * el `withCount` del controller: son relaciones de SU modelo. 🔴 Medido en
+     * `mk:module --with-rbac`: `assignRole`/`revokeRole` cargaban usuario y rol
+     * con `findOrFail()` pelado, y con `MkMultiTenantPlugin` un tenant le
+     * asignaba y quitaba roles a los usuarios de otro (200, y lo escribía).
+     *
+     * @param  class-string<Model>|null  $modelClass
      */
-    protected function findScopedOrFail(Request $request, string|int $id): Model
+    protected function findScopedOrFail(Request $request, string|int $id, ?string $modelClass = null): Model
     {
-        $query = $this->getModel()::query();
-        $query->with($this->getWith());
-        $query->withCount($this->getWithCount());
+        $ownModel = $modelClass === null || $modelClass === $this->getModel();
+        $query = ($modelClass ?? $this->getModel())::query();
+
+        if ($ownModel) {
+            $query->with($this->getWith());
+            $query->withCount($this->getWithCount());
+        }
 
         // Plugin Hook: beforeQuery — MUST run before findOrFail so plugins
         // like MkMultiTenantPlugin can scope the lookup (LAR-01 IDOR fix).
