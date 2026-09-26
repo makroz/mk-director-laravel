@@ -116,10 +116,17 @@ trait HasMkMedia
      * La columna existe para que el consumer que lo necesite la llene; devolver
      * un cero fingido sería peor que un null honesto.
      *
+     * 🔴 DE DOCUMENTOS, SÓLO PDF. `application/pdf` entra como
+     * {@see MkMediaKind::Document} (planos, documentos legales). Office, zip,
+     * texto plano y el resto siguen rechazados: cada formato nuevo es una
+     * superficie de entrada más, y ninguno tiene hoy un caso que lo pida. Que
+     * un FormRequest acepte o no PDFs lo decide `ValidatesMkMedia` (opt-in);
+     * este método sólo sabe guardarlos.
+     *
      * @param  string|null  $disk  null = el disk default de la app.
      *
-     * @throws InvalidArgumentException si el mime no es imagen ni video. Un
-     *                                  embed NO se sube: no tiene archivo propio.
+     * @throws InvalidArgumentException si el mime no es imagen, video ni PDF.
+     *                                  Un embed NO se sube: no tiene archivo propio.
      */
     public function attachUploadedFile(
         UploadedFile $file,
@@ -147,9 +154,10 @@ trait HasMkMedia
         $kind = match (true) {
             str_starts_with($mime, 'image/') => MkMediaKind::Image,
             str_starts_with($mime, 'video/') => MkMediaKind::Video,
+            $mime === 'application/pdf' => MkMediaKind::Document,
             default => throw new InvalidArgumentException(
                 "No se puede adjuntar un archivo de tipo '{$mime}': `mk_media` sólo guarda "
-                .'imágenes y videos. Un enlace externo se adjunta como embed, sin archivo.'
+                .'imágenes, videos y documentos PDF. Un enlace externo se adjunta como embed, sin archivo.'
             ),
         };
 

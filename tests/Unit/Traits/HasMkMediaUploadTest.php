@@ -110,17 +110,46 @@ test('deduce kind Video y deja duration en null', function () {
         ->and($media->width)->toBeNull();
 });
 
-test('RECHAZA un archivo que no es imagen ni video', function () {
-    // `mk_media` guarda imágenes y videos. Un PDF no tiene dónde ir y aceptarlo
-    // crearía una fila con un `kind` mentido que la UI no sabe mostrar.
+test('guarda un PDF como kind Document, con su archivo en el disk', function () {
+    // RETO necesita planos y documentos legales. Un PDF tiene archivo propio
+    // igual que una imagen, pero no tiene dimensiones ni duración: esas
+    // columnas quedan en null, no en un cero inventado.
+    $owner = UploadOwner::create([]);
+
+    $media = $owner->attachUploadedFile(
+        UploadedFile::fake()->create('plano.pdf', 300, 'application/pdf'),
+        'gallery',
+        'local',
+    );
+
+    expect($media->kind)->toBe(MkMediaKind::Document)
+        ->and($media->kind->hasStoredFile())->toBeTrue()
+        ->and($media->mime_type)->toBe('application/pdf')
+        ->and($media->size)->toBe(300 * 1024)
+        ->and($media->disk)->toBe('local')
+        ->and($media->path)->toStartWith('gallery/')
+        ->and($media->width)->toBeNull()
+        ->and($media->height)->toBeNull()
+        ->and($media->duration)->toBeNull()
+        // El archivo EXISTE en el disk, no sólo la fila.
+        ->and(Storage::disk('local')->exists($media->path))->toBeTrue();
+});
+
+test('RECHAZA cualquier otro archivo que no sea imagen, video o PDF', function (string $nombre, string $mime) {
+    // De documentos, SÓLO PDF. Aceptar texto, zip u Office crearía filas que
+    // ninguna UI sabe mostrar, y cada formato es una superficie de entrada más.
     $owner = UploadOwner::create([]);
 
     expect(fn () => $owner->attachUploadedFile(
-        UploadedFile::fake()->create('contrato.pdf', 10, 'application/pdf')
-    ))->toThrow(InvalidArgumentException::class);
+        UploadedFile::fake()->create($nombre, 10, $mime)
+    ))->toThrow(InvalidArgumentException::class, $mime);
 
     expect(MkMedia::count())->toBe(0);
-});
+})->with([
+    'texto plano' => ['notas.txt', 'text/plain'],
+    'zip' => ['todo.zip', 'application/zip'],
+    'word' => ['contrato.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+]);
 
 test('el kind sale del CONTENIDO, no de la extensión', function () {
     // 🔴 EL TEST QUE JUSTIFICA USAR getMimeType(). Un archivo de video con

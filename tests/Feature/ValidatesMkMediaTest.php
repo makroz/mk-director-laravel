@@ -210,3 +210,78 @@ it('valida embed_url cuando se lo suma', function (): void {
     expect(validarMedia(['embed_url' => 'no-es-una-url'], conEmbed: true)->passes())->toBeFalse()
         ->and(validarMedia(['embed_url' => 'https://youtu.be/abc'], conEmbed: true)->passes())->toBeTrue();
 });
+
+// ─── Documentos PDF: OPT-IN por FormRequest ──────────────────────────────────
+
+/**
+ * Un host que habilita PDFs, como lo haría el FormRequest de planos de RETO.
+ */
+function validarMediaConDocumentos(array $datos): Validator
+{
+    $request = new class
+    {
+        use ValidatesMkMedia;
+
+        protected function mkAllowsDocuments(): bool
+        {
+            return true;
+        }
+
+        public function reglas(): array
+        {
+            return $this->mkMediaRules();
+        }
+    };
+
+    return validador($datos, $request->reglas());
+}
+
+/**
+ * 🔴 EL DEFAULT ES LO QUE PROTEGE A LOS CONSUMIDORES QUE YA EXISTEN. El muro y
+ * los eventos no pidieron PDFs: actualizar el paquete no puede abrirles esa
+ * puerta.
+ */
+it('rechaza un PDF si el request no lo habilita', function (): void {
+    $pdf = UploadedFile::fake()->create('plano.pdf', 100, 'application/pdf');
+
+    $v = validarMedia(['media' => [$pdf]]);
+
+    expect($v->passes())->toBeFalse()
+        ->and($v->errors()->has('media.0'))->toBeTrue();
+});
+
+it('acepta un PDF de 15 MB cuando el request lo habilita', function (): void {
+    // 15 MB: por encima del tope de imagen, dentro del de documento.
+    $pdf = UploadedFile::fake()->create('plano.pdf', 15 * 1024, 'application/pdf');
+
+    expect(validarMediaConDocumentos(['media' => [$pdf]])->passes())->toBeTrue();
+});
+
+/**
+ * 🔴 UN PDF SE MIDE CONTRA SU PROPIO TOPE, NO CONTRA EL DE VIDEO. 21 MB está
+ * por debajo de los 50 MB de video: si el PDF cayera en la rama "no es
+ * imagen", este test pasaría la validación.
+ */
+it('rechaza un PDF que se pasa de 20 MB, con el mensaje de documento', function (): void {
+    $pdf = UploadedFile::fake()->create('pesado.pdf', 21 * 1024, 'application/pdf');
+
+    $v = validarMediaConDocumentos(['media' => [$pdf]]);
+
+    expect($v->passes())->toBeFalse()
+        ->and($v->errors()->first('media.0'))->toBe('Cada documento puede pesar hasta 20 MB.');
+});
+
+it('habilitar PDFs no afloja el tope de video', function (): void {
+    $video = UploadedFile::fake()->create('largo.mp4', 51 * 1024, 'video/mp4');
+
+    $v = validarMediaConDocumentos(['media' => [$video]]);
+
+    expect($v->passes())->toBeFalse()
+        ->and($v->errors()->first('media.0'))->toBe('Cada video puede pesar hasta 50 MB.');
+});
+
+it('habilitar PDFs no abre otros documentos', function (): void {
+    $zip = UploadedFile::fake()->create('todo.zip', 100, 'application/zip');
+
+    expect(validarMediaConDocumentos(['media' => [$zip]])->passes())->toBeFalse();
+});

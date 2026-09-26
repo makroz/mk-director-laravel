@@ -16,8 +16,10 @@ use Mk\Director\Auth\Enums\ScopeStatus;
  * quedado en string y por qué se revirtió: el drift que motivó R-PKG-047 D4
  * lo causaba el flag `--status-values` configurable, no el backing type.
  *
- * Las tres variantes NO son intercambiables en la fila:
- *  - Image / Video → viven en un disk (`disk` + `path` obligatorios).
+ * Las cuatro variantes NO son intercambiables en la fila:
+ *  - Image / Video / Document → viven en un disk (`disk` + `path`
+ *                    obligatorios). Document es SÓLO PDF (planos, documentos
+ *                    legales): no tiene ancho, alto ni duración.
  *  - Embed         → NO tiene archivo propio (`path` null); lo que se guarda
  *                    es `provider` + `provider_id` + `source_url`, y el
  *                    thumbnail es una URL remota.
@@ -30,6 +32,7 @@ enum MkMediaKind: int
     case Image = 1;
     case Video = 2;
     case Embed = 3;
+    case Document = 4;
 
     /**
      * Lista de values int del enum (en orden de declaración).
@@ -79,6 +82,7 @@ enum MkMediaKind: int
             self::Image => 'Imagen',
             self::Video => 'Video',
             self::Embed => 'Enlace externo',
+            self::Document => 'Documento',
         };
     }
 }

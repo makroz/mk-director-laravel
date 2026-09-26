@@ -72,7 +72,7 @@ class MkMedia extends EloquentModel
     /**
      * URL pública de esta media, sea archivo propio o embed.
      *
-     * Para Image/Video resuelve contra el disk de LA FILA — no contra un disk
+     * Para Image/Video/Document resuelve contra el disk de LA FILA — no contra un disk
      * global. Ésa es una de las limitaciones concretas de `FileStoragePlugin`,
      * que lee `$config['disk']` una sola vez para todos los archivos.
      *
