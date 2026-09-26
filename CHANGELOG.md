@@ -12,6 +12,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `mk:module --with-rbac`: asignar, revocar y sincronizar ya no escalan
+
+Las Policies del pack sólo miran si el actor tiene la ability del ENDPOINT, no QUÉ concede. Medido
+por el Kernel en un módulo generado:
+
+- con SÓLO `{modulo}.{usuarios}.assignRole`, un actor se asignaba `super-admin` (200) y roles con
+  abilities que no tenía;
+- con `revokeRole`, le quitaba `super-admin` al dueño o se quitaba su propio rol (200);
+- con `roles.syncAbilities`, reescribía SU rol con todas las abilities, y las del rol
+  `super-admin` (200).
+
+Nuevo `Mk\Director\Auth\Access\ModuleRbacGrantGuard`, el equivalente de `AccessGrantGuard` para
+este pack (aquel está tipado al `AuthUser`/`Role` centrales; acá el usuario extiende
+`Authenticatable`, las abilities salen de sus roles por nombre exacto y el bypass es el rol
+`super-admin` por nombre). Tira la misma `AccessGrantDeniedException` (403) con los mismos códigos:
+
+- `ERR_FIXED_ROLE`: `super-admin` no se sincroniza, no se renombra ni se borra, y ningún rol se
+  renombra a `super-admin`. Ni siquiera un super-admin.
+- `ERR_SELF_ACCESS_CHANGE`: nadie cambia sus roles ni las abilities de un rol que tiene. Los roles
+  propios, tampoco un super-admin (igual que `AccessGrantGuard`: el que se quita el rol queda afuera).
+- `ERR_TARGET_OUTRANKS_ACTOR`: nadie toca a un usuario con más acceso ni un rol que tiene alguien con
+  más acceso; `super-admin` supera a todo el que no lo es.
+- `ERR_ACCESS_NOT_HELD`: sólo se asigna, se quita o se sincroniza lo que el actor tiene; asignar o
+  quitar `super-admin` exige serlo.
+
+Un actor `super-admin` queda afuera del rango y de lo concedido. Sin actor, o con un actor que no es
+el usuario del módulo, la guarda no aplica (la Policy tipada al usuario del módulo lo deniega).
+`assignRole`, `revokeRole` y `syncAbilities` la llaman después de `authorize()`. Lo mide
+`tests/Feature/MkModuleRbacEscalationTest.php`, con los casos que no deben cerrarse.
+
+⚠️ **Los módulos ya generados no se regeneran solos.** Agregá
+`app(\Mk\Director\Auth\Access\ModuleRbacGrantGuard::class)->assertCanChangeUserRole($request->user(), $user, $role);`
+después del `authorize()` de `assignRole` y `revokeRole`, y
+`app(ModuleRbacGrantGuard::class)->assertCanChangeRole($request->user(), $role, $abilityNames);` en
+`syncAbilities` antes de `$rbac->syncAbilities()`.
+
 ## [UNRELEASED] — `mk:module --with-rbac`: asignar, revocar y sincronizar en otro tenant da 404
 
 `assignRole`, `revokeRole` (controller de usuarios) y `syncAbilities` (`RoleController`) del pack

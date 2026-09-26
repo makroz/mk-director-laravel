@@ -8,6 +8,7 @@ use App\Modules\{{ModuleName}}\Models\Role;
 use App\Modules\{{ModuleName}}\Services\RbacService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Mk\Director\Auth\Access\ModuleRbacGrantGuard;
 use Mk\Director\Controllers\SmartController;
 
 /**
@@ -17,6 +18,11 @@ use Mk\Director\Controllers\SmartController;
  *
  * El rol del sync se carga con `findScopedOrFail()`, el lookup del CRUD: con
  * un plugin de tenant, el rol de otro tenant da 404, no se escribe.
+ *
+ * El sync pasa por `ModuleRbacGrantGuard` (403): `super-admin` es fijo, nadie
+ * cambia las abilities de un rol que tiene ni el de alguien con más acceso, y
+ * sólo se agrega o se quita lo que el actor tiene. Si sobreescribís
+ * `syncAbilities()`, conservá la llamada.
  *
  * Spec: RBAC-001, RBAC-005 (R-PKG-008).
  */
@@ -49,6 +55,8 @@ class RoleController extends SmartController
             'abilities'   => ['required', 'array'],
             'abilities.*' => ['required', 'string'],
         ])['abilities'];
+
+        app(ModuleRbacGrantGuard::class)->assertCanChangeRole($request->user(), $role, $abilityNames);
 
         $rbac->syncAbilities($role, $abilityNames);
 

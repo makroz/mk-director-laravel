@@ -9,6 +9,7 @@ use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
 use App\Modules\{{ModuleName}}\Services\RbacService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Mk\Director\Auth\Access\ModuleRbacGrantGuard;
 use Mk\Director\Controllers\SmartController;
 
 /**
@@ -22,6 +23,12 @@ use Mk\Director\Controllers\SmartController;
  * plugin de tenant, el usuario o el rol de otro tenant da 404. Con un
  * `findOrFail()` pelado, un tenant le asignaba y quitaba roles a los usuarios
  * de otro.
+ *
+ * Asignar y revocar pasan por `ModuleRbacGrantGuard` (403): nadie cambia sus
+ * roles, ni toca a alguien con más acceso, ni asigna o quita un rol con
+ * abilities que no tiene (o `super-admin`, sin serlo). La Policy sólo mira si
+ * el actor tiene la ability del endpoint, no QUÉ concede. Si sobreescribís
+ * estos métodos, conservá la llamada.
  *
  * Spec: RBAC-001, RBAC-005 (R-PKG-008).
  */
@@ -49,6 +56,7 @@ class {{ModuleName}}Controller extends SmartController
         $role = $this->findScopedOrFail($request, $roleId, Role::class);
 
         $this->authorize('assignRole', $user);
+        app(ModuleRbacGrantGuard::class)->assertCanChangeUserRole($request->user(), $user, $role);
 
         $rbac->assignRole($user, $role);
 
@@ -69,6 +77,7 @@ class {{ModuleName}}Controller extends SmartController
         $role = $this->findScopedOrFail($request, $roleId, Role::class);
 
         $this->authorize('revokeRole', $user);
+        app(ModuleRbacGrantGuard::class)->assertCanChangeUserRole($request->user(), $user, $role);
 
         $rbac->revokeRole($user, $role);
 
