@@ -12,6 +12,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — la sesión larga: rotación que rota, TTL y rotación por scope, detección de reutilización
+
+Hallazgo 73 de Mozzo (y los restos del 72). Guía: `DEVELOPER_GUIDE.md § 3.23`.
+
+**Fixed**
+- 🔴 **`MK_AUTH_REFRESH_ROTATE_ON_REFRESH=true` no rotaba.** La config guarda un booleano y
+  `TokenIssuer` lo leía con `readConfigInt()`, que sólo acepta enteros: `true` caía a `0`, sin error.
+  Medido por HTTP en Mozzo (sólo el entero `1` rotaba). Ahora `FILTER_VALIDATE_BOOLEAN`.
+- 🔴 **`password/change` deslogueaba a quien cambiaba la clave** a los 15 minutos:
+  `revokeOtherTokens()` conservaba el access de la request y borraba su refresh. Ahora conserva el
+  refresh ligado. Aplica también al confirm del PIN y a los endpoints del segundo factor.
+- **Login: el bcrypt corre aunque el correo no exista** (contra un hash descartable del driver y el
+  costo configurados). Antes el `||` cortaba antes del `Hash::check`: oráculo de enumeración por el reloj.
+- **Login social**: `findUserByVerifiedSocialEmail()` compara sin mayúsculas (`LOWER()` de los dos
+  lados); borrar de verdad un usuario borra sus filas de `mk_social_identities`; los mensajes de 401 y
+  503 quedan en castellano neutro (`"El acceso no es válido."`, sin «Volvé a intentarlo»).
+
+**Added** (aditivo, sin BC; sin migración)
+- `BaseAuthController::refreshTtlSeconds(): ?int` y `rotatesRefreshTokens(): ?bool`: el TTL y la
+  rotación del refresh **por scope**. `null` = la config global, así que un scope que no los declara
+  no cambia. `TokenIssuer` acepta `rotateOnRefresh:` por constructor.
+- **Detección de reutilización**: cada sesión lleva `refresh_family:{f}` en sus tokens; con rotación,
+  el refresh usado queda como lápida (`refresh_rotated`) hasta su vencimiento, y si vuelve se revoca
+  la familia entera → `401 ERR_REFRESH_REUSED`. `TokenIssuer::familyOf()`,
+  `InvalidRefreshTokenException::reused()`.
+
+⚠️ Con rotación prendida, dos refresh simultáneos con el mismo token cierran la sesión (el segundo ve
+la lápida): el cliente tiene que serializar el refresh. Un scope que pisaba `tokenIssuer()` sólo para
+pasar el TTL debería pasar a `refreshTtlSeconds()` (un `tokenIssuer()` propio ignora los hooks).
+
 ## [UNRELEASED] — `mk_media` guarda PDFs como `MkMediaKind::Document`, opt-in por FormRequest
 
 **Added** (aditivo, sin BC): `MkMediaKind::Document = 4` (label `Documento`, `hasStoredFile()` en

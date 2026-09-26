@@ -117,18 +117,14 @@ test('MkServiceProvider does not load config/auth_defaults.php (single source of
     expect($src)->toContain("mergeConfigFrom(__DIR__.'/../config/mk_director.php'");
 });
 
-test('TokenIssuer reads rotate_on_refresh as bool and deletes old token when true', function () {
+test('TokenIssuer reads the canonical rotate_on_refresh key', function () {
     $src = (string) file_get_contents(__DIR__.'/../../src/Auth/Services/TokenIssuer.php');
 
-    // 1. Lee la config key canónica (sin typos).
+    // Lee la config key canónica (sin typos). Lo que HACE con cada valor —y
+    // que `true` rote, que este test antes no medía: pineaba el
+    // `(bool) readConfigInt(...)` que justamente lo rompía— se mide por HTTP
+    // en tests/Feature/Auth/RefreshSessionTest.php.
     expect($src)->toContain("'mk_director.auth.refresh.rotate_on_refresh'");
-
-    // 2. Casteo explícito a (bool) — string "false"/"0" del env debe respetarse.
-    expect($src)->toMatch('/\(bool\)\s*\$this->readConfigInt\(\s*[\'"]mk_director\.auth\.refresh\.rotate_on_refresh[\'"]/');
-
-    // 3. Branch true → borra viejo + emite nuevo.
-    expect($src)->toMatch('/if\s*\(\s*\$rotateOnRefresh\s*\)\s*\{[^}]*\$tokenModel->delete/s');
-    expect($src)->toMatch('/if\s*\(\s*\$rotateOnRefresh\s*\)\s*\{[^}]*\$this->issueRefreshToken/s');
 });
 
 test('TokenIssuer reads auth.ttl.access_seconds and auth.ttl.refresh_seconds from config', function () {
