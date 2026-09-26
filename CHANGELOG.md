@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `mk:discover-abilities` no inventa roles base para prefijos que no son scopes (hallazgo 67)
+
+El discovery tomaba el primer segmento del nombre de una ability como scope. Una ability
+compartida entre scopes se nombra sin prefijo de scope (`kitchen.send`, la misma operación la
+haga el mesero o el encargado), así que una baseline así creaba un rol base con guard `kitchen`
+que no tenía ningún usuario, y la baseline no le llegaba a nadie. Medido en NetPizza: roles
+`base`/`kitchen` y `base`/`printing`.
+
+Ahora un scope es un guard de `config/auth.php` cuyo modelo extiende `AuthUser` —el mismo
+registro que resuelve `mk.auth:{scope}`—. Una baseline con otro prefijo se ignora con un aviso.
+Sin ningún guard así, todo prefijo cuenta como antes.
+
+⚠️ Los roles fantasma que ya existan no se borran solos: el discovery deja de tocarlos.
+
 ## [UNRELEASED] — el login dice por qué no entra una cuenta, pero sólo a quien probó la contraseña (hallazgo 60)
 
 `login()` chequeaba el estado de la cuenta **antes** del `Hash::check()` y respondía el mismo

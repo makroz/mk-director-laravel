@@ -649,13 +649,19 @@ class DiscoverAbilitiesCommand extends Command
                 continue;
             }
 
+            if (! $this->esScopeReal($delNombre)) {
+                $this->warn("   ⚠ `{$a['name']}` está marcada baseline, pero `{$delNombre}` no es un scope (ningún guard de `config/auth.php` con ese nombre usa un modelo `AuthUser`): su rol base no lo tendría nadie. Se ignora.");
+
+                continue;
+            }
+
             $porScope[$delNombre][$a['name']] = true;
         }
 
         // Un scope sin baselines declaradas puede tener igual un rol base de
         // antes que hay que vaciar — por eso también entra el guard del módulo,
         // que es el que se venía sincronizando.
-        if (! isset($porScope[$scope])) {
+        if (! isset($porScope[$scope]) && $this->esScopeReal($scope)) {
             $porScope[$scope] = [];
         }
 
@@ -664,6 +670,37 @@ class DiscoverAbilitiesCommand extends Command
             // que declaró este módulo. Ver `reconciliarRolBase()`.
             $this->reconciliarRolBase($guard, $tablaAbilities);
         }
+    }
+
+    /**
+     * ¿El prefijo es un scope de verdad?
+     *
+     * 🔴 ANTES EL PREFIJO SE CREÍA. Una ability compartida entre scopes se
+     * nombra sin prefijo de scope (`kitchen.send`: la misma operación la haga el
+     * mesero o el encargado), y el primer segmento pasaba por scope. Medido en
+     * NetPizza: el discovery creó roles base con guard `kitchen` y `printing`
+     * que no tenía ningún usuario, y la baseline quedó colgando de ellos.
+     *
+     * Un scope es un guard de `config/auth.php` cuyo modelo extiende
+     * `AuthUser`: es el registro que ya decide quién entra (`mk.auth:{scope}`
+     * resuelve ese guard), así que no hace falta una lista aparte que se
+     * desincronice. Sin ningún guard así —un harness mínimo, un consumidor sin
+     * scopes todavía— todo prefijo cuenta, que es el comportamiento de antes.
+     */
+    private function esScopeReal(string $scope): bool
+    {
+        $reales = [];
+
+        foreach ((array) config('auth.guards', []) as $guard => $definicion) {
+            $provider = is_array($definicion) ? ($definicion['provider'] ?? null) : null;
+            $modelo = is_string($provider) ? config("auth.providers.{$provider}.model") : null;
+
+            if (is_string($modelo) && class_exists($modelo) && is_subclass_of($modelo, AuthUser::class)) {
+                $reales[] = (string) $guard;
+            }
+        }
+
+        return $reales === [] || in_array($scope, $reales, true);
     }
 
     /**

@@ -9,6 +9,7 @@ use Illuminate\Console\OutputStyle;
 use Illuminate\Container\Container;
 use Illuminate\Database\Capsule\Manager as Capsule;
 use Illuminate\Support\Facades\Facade;
+use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Console\Commands\DiscoverAbilitiesCommand;
 use Mk\Director\Tests\MkLaravelTestCase;
 use ReflectionClass;
@@ -355,4 +356,54 @@ it('sacar baseline en un módulo no toca las de los otros', function () {
 
     expect(abilitiesDelRolBase($capsule, 'member'))
         ->toBe(['member.events.rsvp', 'member.wall.viewAny']);
+});
+
+// ─── Un prefijo que no es un scope ──────────────────────────────────────
+
+final class RolBaseMesero extends AuthUser {}
+
+/** Un consumidor con dos scopes reales: `admin` y `mesero`. */
+function conScopesReales(): void
+{
+    config([
+        'auth.guards' => [
+            'web' => ['driver' => 'session', 'provider' => 'users'],
+            'admin' => ['driver' => 'sanctum', 'provider' => 'staff'],
+            'mesero' => ['driver' => 'sanctum', 'provider' => 'staff'],
+        ],
+        'auth.providers' => [
+            'users' => ['driver' => 'eloquent', 'model' => stdClass::class],
+            'staff' => ['driver' => 'eloquent', 'model' => RolBaseMesero::class],
+        ],
+    ]);
+}
+
+it('🔴 una baseline cuyo prefijo no es un scope NO crea un rol fantasma', function () {
+    /*
+     * Medido en NetPizza: `kitchen.send` es de mesero y de admin a la vez, así
+     * que no lleva prefijo de scope. El discovery tomó `kitchen` por scope y
+     * creó un rol base con ese guard, que no tenía ningún usuario.
+     */
+    $capsule = rolBaseCapsule();
+    conScopesReales();
+
+    descubrir(rolBaseCommand(), 'kitchen', [
+        ['name' => 'kitchen.send', 'description' => null, 'baseline' => true],
+    ]);
+
+    expect($capsule->getConnection()->table('roles')->where('guard', 'kitchen')->count())->toBe(0);
+});
+
+it('un scope real sí arma su rol base, y `web` no cuenta como scope', function () {
+    // Contraprueba: sin esto, un filtro que descartara TODO pasaría el de arriba.
+    $capsule = rolBaseCapsule();
+    conScopesReales();
+
+    descubrir(rolBaseCommand(), 'mesero', [
+        ['name' => 'mesero.orders.create', 'description' => null, 'baseline' => true],
+        ['name' => 'web.home.view', 'description' => null, 'baseline' => true],
+    ]);
+
+    expect(abilitiesDelRolBase($capsule, 'mesero'))->toBe(['mesero.orders.create'])
+        ->and($capsule->getConnection()->table('roles')->where('guard', 'web')->count())->toBe(0);
 });
