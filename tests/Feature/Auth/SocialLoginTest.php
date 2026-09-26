@@ -9,6 +9,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Route;
@@ -17,6 +18,7 @@ use Laravel\Sanctum\PersonalAccessToken;
 use Mk\Director\Auth\Controllers\BaseAuthController;
 use Mk\Director\Auth\Enums\ScopeStatus;
 use Mk\Director\Auth\Enums\TwoFactorPolicy;
+use Mk\Director\Auth\Events\AuthEvent;
 use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Auth\Services\TotpService;
 use Mk\Director\Auth\Social\SocialIdentity;
@@ -447,14 +449,25 @@ test('alg none y HS256 con la clave pública como secreto: 401', function () {
         'iat' => now()->getTimestamp(), 'exp' => now()->addHour()->getTimestamp(),
     ];
 
+    // El motivo va al evento de auditoría, no a la respuesta. Se mira acá
+    // porque firebase/php-jwt TAMBIÉN rechaza los dos: sin mirar el motivo,
+    // sacar el chequeo propio de `alg` dejaría este test en verde.
+    $reasons = [];
+    Event::listen(AuthEvent::class, function (AuthEvent $event) use (&$reasons) {
+        $reasons[] = $event->payload['detail'] ?? null;
+    });
+
     $none = JWT::urlsafeB64Encode(json_encode(['alg' => 'none', 'typ' => 'JWT', 'kid' => 'g1']))
         .'.'.JWT::urlsafeB64Encode(json_encode($claims)).'.';
-    [$status] = socialPost($this, 'google', ['id_token' => $none]);
+    [$status, $body] = socialPost($this, 'google', ['id_token' => $none]);
     expect($status)->toBe(401);
+    expect(socialErr($body))->toBe('ERR_SOCIAL_TOKEN_INVALID');
 
     $hs = JWT::encode($claims, socialKeyPair('g1')['public'], 'HS256', 'g1');
     [$status] = socialPost($this, 'google', ['id_token' => $hs]);
     expect($status)->toBe(401);
+
+    expect($reasons)->toBe(['alg no permitido: "none"', 'alg no permitido: "HS256"']);
 
     expectNoSession();
 });
