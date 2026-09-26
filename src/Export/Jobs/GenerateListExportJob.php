@@ -145,6 +145,15 @@ class GenerateListExportJob implements ShouldQueue
 
         $data = $config->beforeExport($filas, $report);
 
+        return $this->renderizar($report, $config, $exportService, $data);
+    }
+
+    private function renderizar(
+        MkReport $report,
+        ExportConfigInterface $config,
+        ExportService $exportService,
+        iterable $data,
+    ): string {
         return match ($report->format) {
             'pdf' => $exportService->renderPdfFromConfig($data, $config, $report),
             'xlsx' => $exportService->renderXlsxFromConfig($data, $config, $report),
@@ -164,6 +173,9 @@ class GenerateListExportJob implements ShouldQueue
      * `completed` un reporte que nunca tuvo datos: un PDF con encabezado y
      * nada debajo, que dice que salió bien. Acá sale el mismo archivo pero
      * queda el aviso en el log con el controller que lo causó.
+     *
+     * 🔴 Y sale en el formato PEDIDO. Escribía siempre un PDF: un reporte en
+     * CSV se guardaba como `<uuid>.csv` con bytes de PDF y no abría.
      */
     private function archivoSinFilas(
         MkReport $report,
@@ -176,7 +188,7 @@ class GenerateListExportJob implements ShouldQueue
             'ayuda' => 'El controller tiene que usar el trait ExportaListados en su index().',
         ]);
 
-        return $exportService->renderPdfFromConfig([], $config, $report);
+        return $this->renderizar($report, $config, $exportService, []);
     }
 
     private function guardar(MkReport $report, string $binary): void

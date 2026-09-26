@@ -9,6 +9,7 @@ use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Http\Request;
+use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Routing\Route;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -18,6 +19,7 @@ use Illuminate\Validation\ValidationException;
 use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Contracts\MkModuleServiceInterface;
 use Mk\Director\DTOs\DTOFactory;
+use Mk\Director\Export\AsyncExportManager;
 use Mk\Director\Export\Concerns\ExportaListados;
 use Mk\Director\Managers\CacheManager;
 use Mk\Director\Managers\ListManager;
@@ -614,7 +616,19 @@ trait CRUDSmart
             'perPage' => $perPage,
         ]);
 
-        $resolver = function () use ($query, $perPage, $listFeatures) {
+        // 🔴 Adentro del job de export se trae el filtro ENTERO, no una
+        // página. El export recibe `$paginator->items()`, y con el paginado
+        // normal el archivo salía con 15 filas —o 100, el tope de `per_page`—
+        // marcado `completed` y sin aviso. Sin caché: la clave es por página.
+        $esElJobDeExport = ! empty($request->input(AsyncExportManager::MARCA_DE_REENTRADA));
+
+        $resolver = function () use ($query, $perPage, $listFeatures, $esElJobDeExport) {
+            if ($esElJobDeExport) {
+                $rows = $query->get();
+
+                return new LengthAwarePaginator($rows, $rows->count(), max(1, $rows->count()), 1);
+            }
+
             $paginationType = $listFeatures['pagination_type'] ?? config('mk_director.features.pagination_type', 'length_aware');
             if ($paginationType === 'cursor') {
                 return $query->cursorPaginate($perPage);
@@ -623,7 +637,7 @@ trait CRUDSmart
             return $query->paginate($perPage);
         };
 
-        $paginator = $this->isCacheEnabled()
+        $paginator = $this->isCacheEnabled() && ! $esElJobDeExport
             ? CacheManager::remember($cacheKey, $this->getCacheTags(), $this->getCacheTTL(), $resolver)
             : $resolver();
 
