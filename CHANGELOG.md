@@ -12,6 +12,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — notificaciones push, corte 1: registro de teléfonos y envío con los drivers `log` y `null`
+
+Plan: `mk-director/docs/plans/push-notifications/`. Todavía no hay servicio real: FCM y OneSignal llegan
+en los cortes siguientes.
+
+**Added** (aditivo, sin BC; **con migración**: `mk_push_devices` y `mk_push_topic_subscriptions`)
+- `MkPush::to($user)->send(new PushMessage($title, $body, $data, url: ...))`: encola `SendPushJob`
+  **después del commit** (`afterCommit`), así que un rollback no avisa algo que no pasó. El job lee las
+  direcciones al correr, sólo las del proveedor activo, y se las da al `PushProvider` que elige
+  `mk_director.push.driver`. Acepta un usuario o una lista; una lista vacía no manda nada.
+- Drivers `log` (escribe en el log qué saldría y a qué teléfonos: todos los del dueño, sea cual sea el
+  servicio con que se registraron) y `null` (el default: no manda nada). `fcm` y `onesignal` todavía
+  tiran «no está implementado», y un driver desconocido explota en vez de caer en `null`. El contrato se
+  registra con `bindIf`: un consumer puede bindear el suyo.
+- Rutas **opt-in** (`MK_PUSH_REGISTER_ROUTES` o `mk_director.push.register_routes`), bajo
+  `push.route_prefix` (default `api/push`) y `push.route_middleware` (default `['api']`, sin auth: el
+  consumer le suma `mk.auth:{scope}`):
+  - `POST devices` `{provider: fcm|onesignal, address (≤4096), platform: ios|android}` → `204`. Es un
+    `upsert` por `(provider, address)`: si el teléfono era de otra persona, pasa al usuario autenticado.
+    El dueño sale de la sesión, nunca del body.
+  - `DELETE devices/{address}` → `204`. Sólo un teléfono **propio**: el de otro da `404` y no se borra.
+  - Sin usuario autenticado, el controller responde `401` aunque falte el middleware de auth.
+- Sección `push` en `config/mk_director.php` y las variables `MK_PUSH_DRIVER`, `MK_PUSH_QUEUE`,
+  `MK_PUSH_FCM_CREDENTIALS`, `MK_PUSH_ONESIGNAL_APP_ID` y `MK_PUSH_ONESIGNAL_API_KEY` (las tres últimas,
+  para los cortes de FCM y OneSignal).
+
+⚠️ `owner_type` guarda el **morph class** del usuario (el alias del morph map si el consumer tiene uno,
+como el `member` de RETO), igual que cualquier `morphTo`.
+
 ## [UNRELEASED] — la sesión larga: rotación que rota, TTL y rotación por scope, detección de reutilización
 
 Hallazgo 73 de Mozzo (y los restos del 72). Guía: `DEVELOPER_GUIDE.md § 3.23`.

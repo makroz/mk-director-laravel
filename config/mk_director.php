@@ -878,6 +878,38 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Notificaciones push
+    |--------------------------------------------------------------------------
+    |
+    | El envío sale SIEMPRE del servidor: `MkPush::to($user)->send(...)`. Las
+    | credenciales del servicio son secretas y nunca viajan a la app.
+    |
+    | `driver` elige el servicio: 'fcm' | 'onesignal' | 'log' | 'null'. El
+    | default es 'null' (no manda nada), así que instalar el paquete no empieza
+    | a mandar avisos. 'log' escribe en el log qué saldría y a qué teléfonos:
+    | sirve para desarrollar sin credenciales.
+    |
+    | Un solo servicio activo a la vez: los teléfonos registrados con otro
+    | dejan de recibir hasta que la app los vuelva a registrar.
+    */
+    'push' => [
+        'driver' => env('MK_PUSH_DRIVER', 'null'),            // fcm | onesignal | log | null
+
+        // 🔴 OPT-IN, como el export: sin esto no se monta ninguna ruta.
+        'register_routes' => env('MK_PUSH_REGISTER_ROUTES', false),
+        'route_prefix' => 'api/push',
+
+        // El scope de auth lo decide el consumer. El controller igual falla
+        // cerrado (401) si no hay un usuario autenticado.
+        'route_middleware' => ['api'],                        // e.g. ['api', 'mk.auth:member']
+
+        'queue' => env('MK_PUSH_QUEUE'),                      // null = default queue
+        'fcm' => ['credentials' => env('MK_PUSH_FCM_CREDENTIALS')],   // path to service-account JSON
+        'onesignal' => ['app_id' => env('MK_PUSH_ONESIGNAL_APP_ID'), 'api_key' => env('MK_PUSH_ONESIGNAL_API_KEY')],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Cache Strategy
     |--------------------------------------------------------------------------
     */
