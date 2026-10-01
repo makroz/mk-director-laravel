@@ -14,7 +14,8 @@ use Mk\Director\Push\Models\MkPushDevice;
 use Mk\Director\Push\PushMessage;
 
 /**
- * Resuelve las direcciones de los dueños y se las entrega al proveedor activo.
+ * Resuelve las direcciones de los dueños, se las entrega al proveedor activo y
+ * borra las que el servicio reportó inválidas.
  *
  * Las direcciones se leen ACÁ y no al llamar `send()`: el job puede correr más
  * tarde, y para entonces el teléfono pudo haber pasado a otra persona.
@@ -43,7 +44,9 @@ final class SendPushJob implements ShouldQueue
         // Un servicio sólo puede usar las direcciones que emitió él. `log` y
         // `null` no son un servicio: no emiten direcciones, así que con ellos
         // se toman todas las del dueño (es lo que el desarrollador quiere ver).
-        if (in_array($provider->name(), MkPushDevice::PROVIDERS, true)) {
+        $isService = in_array($provider->name(), MkPushDevice::PROVIDERS, true);
+
+        if ($isService) {
             $query->where('provider', $provider->name());
         }
 
@@ -53,6 +56,16 @@ final class SendPushJob implements ShouldQueue
             return;
         }
 
-        $provider->send($this->message, $addresses);
+        $result = $provider->send($this->message, $addresses);
+
+        // Lo que el servicio rechazó para siempre se borra, para no volver a
+        // mandarle nunca. Acotado al proveedor activo: la misma dirección de
+        // OTRO servicio es otro teléfono. `log` y `null` no limpian nunca.
+        if ($isService && $result->invalid !== []) {
+            MkPushDevice::query()
+                ->where('provider', $provider->name())
+                ->whereIn('address', $result->invalid)
+                ->delete();
+        }
     }
 }

@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
+use GuzzleHttp\Promise\PromiseInterface;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Mk\Director\Push\Contracts\PushProvider;
 use Mk\Director\Push\Facades\MkPush;
+use Mk\Director\Push\Models\MkPushDevice;
 use Mk\Director\Push\Providers\FcmAccessToken;
 use Mk\Director\Push\Providers\FcmProvider;
 use Mk\Director\Push\PushMessage;
@@ -45,7 +47,7 @@ afterEach(function () {
     @unlink($this->credentials);
 });
 
-/** @param list<\GuzzleHttp\Promise\PromiseInterface> $sends una respuesta por token, en orden */
+/** @param list<PromiseInterface> $sends una respuesta por token, en orden */
 function fakeFcm(array $sends = []): void
 {
     Http::fake([
@@ -63,7 +65,7 @@ function fcmRequests(string $url): array
     return Http::recorded(fn (Request $request) => $request->url() === $url)->map(fn ($pair) => $pair[0])->values()->all();
 }
 
-function fcmError(int $code, string $status, string $message, array $details = []): \GuzzleHttp\Promise\PromiseInterface
+function fcmError(int $code, string $status, string $message, array $details = []): PromiseInterface
 {
     return Http::response(['error' => compact('code', 'status', 'message', 'details')], $code);
 }
@@ -186,4 +188,24 @@ test('MkPush::to sends through fcm to the owner devices only', function () {
     MkPush::to($ana)->send(new PushMessage('Hola', 'Ana'));
 
     expect(array_map(fn (Request $r) => $r['message']['token'], fcmRequests(FCM_SEND_URL)))->toBe(['ana-phone']);
+});
+
+test('prunes addresses the provider reports invalid', function () {
+    $fcmError = ['@type' => 'type.googleapis.com/google.firebase.fcm.v1.FcmError'];
+    fakeFcm([
+        Http::response(['name' => 'ok']),
+        fcmError(404, 'NOT_FOUND', 'Requested entity was not found.', [$fcmError + ['errorCode' => 'UNREGISTERED']]),
+    ]);
+    [$ana, $anaToken] = $this->pushUser('Ana');
+    $this->registerDevice($anaToken, ['provider' => 'fcm', 'address' => 'ana-phone', 'platform' => 'android']);
+    $this->registerDevice($anaToken, ['provider' => 'fcm', 'address' => 'ana-old-phone', 'platform' => 'android']);
+
+    MkPush::to($ana)->send(new PushMessage('Hola', 'Ana'));
+
+    // El orden de envío no está garantizado: lo que se mide es que se borró
+    // exactamente la dirección que FCM respondió con UNREGISTERED.
+    $unregistered = fcmRequests(FCM_SEND_URL)[1]['message']['token'];
+
+    expect(MkPushDevice::query()->pluck('address')->all())
+        ->toBe([$unregistered === 'ana-phone' ? 'ana-old-phone' : 'ana-phone']);
 });

@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — notificaciones push, corte 4: se borran las direcciones inválidas
+
+**Added**
+- `SendPushJob` borra de `mk_push_devices` las direcciones que el servicio devolvió en
+  `PushResult::invalid` (FCM: 404 `UNREGISTERED` o 400 `INVALID_ARGUMENT` sobre el token), así un token
+  muerto no se vuelve a mandar nunca. El borrado va acotado al proveedor activo: la misma dirección
+  registrada con otro servicio no se toca. Los drivers `log` y `null` no borran nunca.
+
 ## [UNRELEASED] — notificaciones push, corte 2: el driver `fcm` (Firebase Cloud Messaging HTTP v1)
 
 **Added**
@@ -24,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `PushResult`: `sent`; `invalid` = tokens con 404 `UNREGISTERED` o 400 `INVALID_ARGUMENT` que señala al
   token (un 400 por un payload mal armado NO cuenta como inválido: borraría todos los teléfonos);
   `failed` = el resto, incluida la falta de red, con un `warning` en el log. Un token malo no corta el
-  envío a los demás. Las direcciones inválidas todavía no se borran: llega en el corte 4.
+  envío a los demás. Las direcciones inválidas se borran desde el corte 4.
 - Sin `MK_PUSH_FCM_CREDENTIALS`, con un archivo que no se puede leer o sin `project_id`, `client_email`,
   `private_key` o `token_uri`, resolver el driver explota con un mensaje claro que nunca incluye el
   contenido del archivo. Si Google rechaza la cuenta, el envío explota y el job se reintenta.

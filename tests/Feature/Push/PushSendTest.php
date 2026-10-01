@@ -30,7 +30,8 @@ final class FakePushProvider implements PushProvider
     /** @var list<list<string>> */
     public array $calls = [];
 
-    public function __construct(private readonly string $name = 'fcm') {}
+    /** @param list<string> $invalid lo que el servicio dice que rechazó para siempre */
+    public function __construct(private readonly string $name = 'fcm', private readonly array $invalid = []) {}
 
     public function name(): string
     {
@@ -41,7 +42,7 @@ final class FakePushProvider implements PushProvider
     {
         $this->calls[] = $addresses;
 
-        return new PushResult(sent: count($addresses));
+        return new PushResult(sent: count($addresses), invalid: $this->invalid);
     }
 }
 
@@ -138,6 +139,51 @@ test('only devices of the active provider are targeted', function () {
 
     expect($this->fake->calls)->toBe([['ana-fcm']]);
 });
+
+/** Las direcciones que quedan en la base, por proveedor. */
+function pushAddresses(): array
+{
+    return MkPushDevice::query()->orderBy('address')->get()
+        ->map(fn (MkPushDevice $d) => $d->provider.':'.$d->address)->all();
+}
+
+test('prunes only the addresses the provider reports invalid, so they are never sent again', function () {
+    [$ana, $anaToken] = $this->pushUser('Ana');
+    [, $betoToken] = $this->pushUser('Beto');
+    pushRegister($this, $anaToken, 'ana-phone');
+    pushRegister($this, $anaToken, 'ana-tablet');
+    pushRegister($this, $betoToken, 'beto-phone');
+    $this->httpApp->instance(PushProvider::class, $fake = new FakePushProvider('fcm', invalid: ['ana-phone']));
+
+    MkPush::to($ana)->send(pushMessage());
+
+    expect(pushAddresses())->toBe(['fcm:ana-tablet', 'fcm:beto-phone']);
+
+    MkPush::to($ana)->send(pushMessage());
+
+    expect($fake->calls[1])->toBe(['ana-tablet']);
+});
+
+test('pruning does not touch the same address of another provider', function () {
+    [$ana, $anaToken] = $this->pushUser('Ana');
+    pushRegister($this, $anaToken, 'shared-address');
+    pushRegister($this, $anaToken, 'shared-address', provider: 'onesignal');
+    $this->httpApp->instance(PushProvider::class, new FakePushProvider('fcm', invalid: ['shared-address']));
+
+    MkPush::to($ana)->send(pushMessage());
+
+    expect(pushAddresses())->toBe(['onesignal:shared-address']);
+});
+
+test('the log and null drivers never prune', function (string $driver) {
+    [$ana, $anaToken] = $this->pushUser('Ana');
+    pushRegister($this, $anaToken, 'ana-phone');
+    $this->httpApp->instance(PushProvider::class, new FakePushProvider($driver, invalid: ['ana-phone']));
+
+    MkPush::to($ana)->send(pushMessage());
+
+    expect(pushAddresses())->toBe(['fcm:ana-phone']);
+})->with(['log', 'null']);
 
 test('no job when the transaction rolls back', function () {
     [$ana, $anaToken] = $this->pushUser('Ana');
