@@ -169,7 +169,7 @@ test('the driver comes from config, and an unknown one throws', function () {
     config(['mk_director.push.driver' => 'log']);
     expect(app(PushProvider::class))->toBeInstanceOf(LogProvider::class);
 
-    config(['mk_director.push.driver' => 'fcm']);
+    config(['mk_director.push.driver' => 'onesignal']);
     expect(fn () => app(PushProvider::class))->toThrow(RuntimeException::class, 'todavía no está implementado');
 
     config(['mk_director.push.driver' => 'fmc']);

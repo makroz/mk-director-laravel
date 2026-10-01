@@ -12,6 +12,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — notificaciones push, corte 2: el driver `fcm` (Firebase Cloud Messaging HTTP v1)
+
+**Added**
+- `MK_PUSH_DRIVER=fcm` + `MK_PUSH_FCM_CREDENTIALS` (la **ruta** al JSON de la cuenta de servicio de
+  Firebase; el archivo nunca se commitea). El token OAuth se arma con un JWT RS256 firmado con la cuenta
+  (`firebase/php-jwt`), se canjea en su `token_uri` y se cachea 55 minutos por proyecto.
+- Un request por token a `POST /v1/projects/{project_id}/messages:send`, con `notification`, `data` (todos
+  los valores como string, más `url` si el mensaje la trae; sin datos no viaja la clave),
+  `android.priority: high` y `apns.payload.aps.sound: default`.
+- `PushResult`: `sent`; `invalid` = tokens con 404 `UNREGISTERED` o 400 `INVALID_ARGUMENT` que señala al
+  token (un 400 por un payload mal armado NO cuenta como inválido: borraría todos los teléfonos);
+  `failed` = el resto, incluida la falta de red, con un `warning` en el log. Un token malo no corta el
+  envío a los demás. Las direcciones inválidas todavía no se borran: llega en el corte 4.
+- Sin `MK_PUSH_FCM_CREDENTIALS`, con un archivo que no se puede leer o sin `project_id`, `client_email`,
+  `private_key` o `token_uri`, resolver el driver explota con un mensaje claro que nunca incluye el
+  contenido del archivo. Si Google rechaza la cuenta, el envío explota y el job se reintenta.
+
+**Fixed**
+- La dirección del teléfono mide hasta **512** caracteres (columna y validación; antes 4096): con 4096 el
+  `UNIQUE (provider, address)` rompía la migración en MySQL y un `INSERT` largo daba 500 en Postgres. La
+  migración del corte 1 cambia en el lugar: no se publicó.
+
 ## [UNRELEASED] — notificaciones push, corte 1: registro de teléfonos y envío con los drivers `log` y `null`
 
 Plan: `mk-director/docs/plans/push-notifications/`. Todavía no hay servicio real: FCM y OneSignal llegan
@@ -23,8 +45,8 @@ en los cortes siguientes.
   direcciones al correr, sólo las del proveedor activo, y se las da al `PushProvider` que elige
   `mk_director.push.driver`. Acepta un usuario o una lista; una lista vacía no manda nada.
 - Drivers `log` (escribe en el log qué saldría y a qué teléfonos: todos los del dueño, sea cual sea el
-  servicio con que se registraron) y `null` (el default: no manda nada). `fcm` y `onesignal` todavía
-  tiran «no está implementado», y un driver desconocido explota en vez de caer en `null`. El contrato se
+  servicio con que se registraron) y `null` (el default: no manda nada). `onesignal` todavía
+  tira «no está implementado» (`fcm` llega en el corte 2), y un driver desconocido explota en vez de caer en `null`. El contrato se
   registra con `bindIf`: un consumer puede bindear el suyo.
 - Rutas **opt-in** (`MK_PUSH_REGISTER_ROUTES` o `mk_director.push.register_routes`), bajo
   `push.route_prefix` (default `api/push`) y `push.route_middleware` (default `['api']`, sin auth: el

@@ -48,6 +48,8 @@ use Mk\Director\ModuleLoader\ModuleLoaderServiceProvider;
 use Mk\Director\Plugins\FileStoragePlugin;
 use Mk\Director\Push\Contracts\PushProvider;
 use Mk\Director\Push\Http\Controllers\MkPushDeviceController;
+use Mk\Director\Push\Providers\FcmAccessToken;
+use Mk\Director\Push\Providers\FcmProvider;
 use Mk\Director\Push\Providers\LogProvider;
 use Mk\Director\Push\Providers\NullProvider;
 use Mk\Director\Tenancy\TenantContext;
@@ -176,8 +178,9 @@ class MkServiceProvider extends ServiceProvider
         return match ($driver) {
             'log' => new LogProvider,
             'null' => new NullProvider,
-            'fcm', 'onesignal' => throw new \RuntimeException(
-                "[mk-director] El driver de push '{$driver}' todavía no está implementado. Por ahora, 'log' o 'null'."
+            'fcm' => new FcmProvider(FcmAccessToken::fromFile(config('mk_director.push.fcm.credentials'))),
+            'onesignal' => throw new \RuntimeException(
+                "[mk-director] El driver de push 'onesignal' todavía no está implementado. Por ahora, 'fcm', 'log' o 'null'."
             ),
             default => throw new \InvalidArgumentException(
                 "[mk-director] Driver de push desconocido: '{$driver}'. Valores válidos: fcm, onesignal, log, null."
