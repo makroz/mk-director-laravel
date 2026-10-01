@@ -29,7 +29,7 @@ en los cortes siguientes.
 - Rutas **opt-in** (`MK_PUSH_REGISTER_ROUTES` o `mk_director.push.register_routes`), bajo
   `push.route_prefix` (default `api/push`) y `push.route_middleware` (default `['api']`, sin auth: el
   consumer le suma `mk.auth:{scope}`):
-  - `POST devices` `{provider: fcm|onesignal, address (≤4096), platform: ios|android}` → `204`. Es un
+  - `POST devices` `{provider: fcm|onesignal, address (≤512), platform: ios|android}` → `204`. Es un
     `upsert` por `(provider, address)`: si el teléfono era de otra persona, pasa al usuario autenticado.
     El dueño sale de la sesión, nunca del body.
   - `DELETE devices/{address}` → `204`. Sólo un teléfono **propio**: el de otro da `404` y no se borra.

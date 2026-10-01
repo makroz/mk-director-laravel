@@ -69,8 +69,15 @@ test('rejects unknown platform and provider', function (array $body) {
     'platform' => [pushDevice('t', platform: 'windows')],
     'provider' => [pushDevice('t', provider: 'apns')],
     'log is not a provider' => [pushDevice('t', provider: 'log')],
-    'address too long' => [pushDevice(str_repeat('a', 4097))],
+    'address too long' => [pushDevice(str_repeat('a', 513))],
 ]);
+
+test('an address of exactly 512 characters is accepted', function () {
+    [, $token] = $this->pushUser('Ana');
+
+    expect($this->registerDevice($token, pushDevice(str_repeat('a', 512))))->toBe(204)
+        ->and(MkPushDevice::query()->count())->toBe(1);
+});
 
 test('unregister only deletes own device', function () {
     [$ana, $anaToken] = $this->pushUser('Ana');

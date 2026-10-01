@@ -25,7 +25,8 @@ final class RegisterPushDeviceRequest extends FormRequest
     {
         return [
             'provider' => ['required', 'string', Rule::in(MkPushDevice::PROVIDERS)],
-            'address' => ['required', 'string', 'max:4096'],
+            // El largo de la columna: más largo no entra en el índice único.
+            'address' => ['required', 'string', 'max:512'],
             'platform' => ['required', 'string', Rule::in(MkPushDevice::PLATFORMS)],
         ];
     }

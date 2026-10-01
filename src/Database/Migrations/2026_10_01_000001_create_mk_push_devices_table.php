@@ -42,7 +42,11 @@ return new class extends Migration
 
             // 'fcm' | 'onesignal' — el servicio que emitió la dirección.
             $table->string('provider', 16);
-            $table->string('address', 4096);
+            // 512 y no más: entra en el UNIQUE de abajo. MySQL con utf8mb4 no
+            // crea un índice de más de 3072 bytes (4096 caracteres rompía la
+            // migración) y Postgres rechaza en el INSERT una clave de índice
+            // de más de ~2700 bytes. Un token de FCM mide ~160.
+            $table->string('address', 512);
 
             // 'ios' | 'android'
             $table->string('platform', 16);
