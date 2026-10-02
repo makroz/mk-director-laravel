@@ -28,8 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `small_icon`, `color` → `android_accent_color` en ARGB (`#16A34A` → `FF16A34A`), `image` → `big_picture` +
   `ios_attachments.id`, `sound` → `ios_sound` (en Android el sonido es del canal).
 - Las inválidas vuelven con 200 en `errors.invalid_player_ids` (el nombre viejo, también para subscription
-  ids) y el job las poda. Si no salió a nadie (`id` vacío, `errors` como lista de textos) se cuentan como
-  fallidas y no se poda nada: no se sabe cuál es cuál.
+  ids) y el job las poda. 🔴 Medido contra la API real (2026-10-02): un id que no existe, sin otro válido en el
+  request, NO vuelve ahí: vuelve `{"id": "", "errors": ["All included players are not subscribed"]}`. Con
+  ese texto se podan todas las del request (el que sólo apagó el permiso se vuelve a registrar al abrir la
+  app con el permiso dado); cualquier otro `id` vacío cuenta como fallido y no poda.
+- 🔴 Una dirección que no es UUID hace 400 el request ENTERO («Incorrect subscription_id format»): se poda
+  sin mandarla, para que un registro basura no deje sin avisos a toda la tanda.
 - 401/403 (clave mala o de otra app) TIRA, para que el job quede fallido a la vista; el mensaje no repite la
   clave. Otro error se loguea y cuenta como fallido.
 - Sin `MK_PUSH_ONESIGNAL_APP_ID` o `MK_PUSH_ONESIGNAL_API_KEY`, resolver el proveedor tira nombrando lo que

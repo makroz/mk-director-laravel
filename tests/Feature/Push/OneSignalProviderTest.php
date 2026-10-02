@@ -28,6 +28,12 @@ beforeEach(function () {
 
 afterEach(fn () => $this->tearDownHttpApp());
 
+/** A subscription id: OneSignal's are UUIDs. */
+function sid(int $n): string
+{
+    return sprintf('00000000-0000-4000-8000-%012d', $n);
+}
+
 /** @param list<PromiseInterface> $responses una por request, en orden */
 function fakeOneSignal(array $responses = []): void
 {
@@ -67,7 +73,7 @@ test('onesignal payload uses include_subscription_ids and Key auth', function ()
 
     $result = app(PushProvider::class)->send(
         new PushMessage('Tu retiro fue pagado', 'Te transferimos BOB 100,00.', ['kind' => 'withdrawal.paid', 'amount' => 100], url: '/wallet'),
-        ['sub-a', 'sub-b'],
+        [sid(1), sid(2)],
     );
 
     $requests = oneSignalRequests();
@@ -78,7 +84,7 @@ test('onesignal payload uses include_subscription_ids and Key auth', function ()
         // La ruta va en data.url; la `url` de OneSignal abre el NAVEGADOR.
         ->and($requests[0]->data())->toBe([
             'app_id' => ONESIGNAL_APP_ID,
-            'include_subscription_ids' => ['sub-a', 'sub-b'],
+            'include_subscription_ids' => [sid(1), sid(2)],
             // `en` es obligatorio: es el texto para todos los idiomas.
             'headings' => ['en' => 'Tu retiro fue pagado'],
             'contents' => ['en' => 'Te transferimos BOB 100,00.'],
@@ -90,8 +96,8 @@ test('onesignal payload maps channel, icon, color, sound and image', function ()
     fakeOneSignal();
     $provider = app(PushProvider::class);
 
-    $provider->send(new PushMessage('Pago', 'Llegó', channel: 'payments', image: 'https://cdn.test/a.png', sound: 'chime.wav', icon: 'ic_payment', color: '#16a34a'), ['sub-a']);
-    $provider->send(new PushMessage('Pago', 'Llegó', channel: '3f2c1b4a-9d8e-4f7a-8b6c-5d4e3f2a1b0c'), ['sub-a']);
+    $provider->send(new PushMessage('Pago', 'Llegó', channel: 'payments', image: 'https://cdn.test/a.png', sound: 'chime.wav', icon: 'ic_payment', color: '#16a34a'), [sid(1)]);
+    $provider->send(new PushMessage('Pago', 'Llegó', channel: '3f2c1b4a-9d8e-4f7a-8b6c-5d4e3f2a1b0c'), [sid(1)]);
 
     [$own, $dashboard] = array_map(fn (Request $r) => $r->data(), oneSignalRequests());
     expect(array_diff_key($own, array_flip(['app_id', 'include_subscription_ids', 'headings', 'contents'])))->toBe([
@@ -111,40 +117,53 @@ test('onesignal payload maps channel, icon, color, sound and image', function ()
 
 test('more than 20,000 addresses go in several requests', function () {
     fakeOneSignal();
-    $addresses = array_map(fn (int $i) => "sub-{$i}", range(1, OneSignalProvider::MAX_PER_REQUEST + 1));
+    $addresses = array_map(sid(...), range(1, OneSignalProvider::MAX_PER_REQUEST + 1));
 
     $result = app(PushProvider::class)->send(new PushMessage('Hola', 'Todos'), $addresses);
 
     $requests = oneSignalRequests();
     expect($requests)->toHaveCount(2)
         ->and($requests[0]['include_subscription_ids'])->toHaveCount(OneSignalProvider::MAX_PER_REQUEST)
-        ->and($requests[1]['include_subscription_ids'])->toBe(['sub-'.(OneSignalProvider::MAX_PER_REQUEST + 1)])
+        ->and($requests[1]['include_subscription_ids'])->toBe([sid(OneSignalProvider::MAX_PER_REQUEST + 1)])
         ->and($result->sent)->toBe(OneSignalProvider::MAX_PER_REQUEST + 1);
 });
 
 test('invalid subscription ids are reported and other failures only counted', function () {
+    [$ok, $gone, $off] = [sid(1), sid(2), sid(3)];
     fakeOneSignal([
-        Http::response(['id' => 'notification-1', 'errors' => ['invalid_player_ids' => ['sub-gone']]]),
-        // Ninguna suscripta: `errors` es una lista de textos, no se sabe cuál es cuál.
+        Http::response(['id' => 'notification-1', 'errors' => ['invalid_player_ids' => [$gone]]]),
+        // Medido contra la API real: un id que no existe, solo en el request, vuelve así.
         Http::response(['id' => '', 'errors' => ['All included players are not subscribed']]),
+        Http::response(['id' => '', 'errors' => ['Otro motivo']]),
         Http::response(['errors' => ['Message Notifications must have English language content']], 400),
     ]);
     $provider = app(PushProvider::class);
 
-    $first = $provider->send(new PushMessage('Hola', 'Uno'), ['sub-ok', 'sub-gone']);
-    $second = $provider->send(new PushMessage('Hola', 'Dos'), ['sub-off']);
-    $third = $provider->send(new PushMessage('Hola', 'Tres'), ['sub-ok']);
+    $first = $provider->send(new PushMessage('Hola', 'Uno'), [$ok, $gone]);
+    $second = $provider->send(new PushMessage('Hola', 'Dos'), [$off]);
+    $third = $provider->send(new PushMessage('Hola', 'Tres'), [$ok]);
+    $fourth = $provider->send(new PushMessage('Hola', 'Cuatro'), [$ok]);
 
-    expect([$first->sent, $first->invalid, $first->failed])->toBe([1, ['sub-gone'], 0])
-        ->and([$second->sent, $second->invalid, $second->failed])->toBe([0, [], 1])
-        ->and([$third->sent, $third->invalid, $third->failed])->toBe([0, [], 1]);
+    expect([$first->sent, $first->invalid, $first->failed])->toBe([1, [$gone], 0])
+        ->and([$second->sent, $second->invalid, $second->failed])->toBe([0, [$off], 0])
+        ->and([$third->sent, $third->invalid, $third->failed])->toBe([0, [], 1])
+        ->and([$fourth->sent, $fourth->invalid, $fourth->failed])->toBe([0, [], 1]);
+});
+
+test('an address that is not a uuid is pruned without sending, so it cannot 400 the rest', function () {
+    fakeOneSignal();
+
+    $result = app(PushProvider::class)->send(new PushMessage('Hola', 'Uno'), ['not-a-uuid', sid(1)]);
+
+    expect(oneSignalRequests()[0]['include_subscription_ids'])->toBe([sid(1)])
+        ->and([$result->sent, $result->invalid, $result->failed])->toBe([1, ['not-a-uuid'], 0]);
 });
 
 test('a rejected key throws, so the job fails visibly, without echoing the key', function () {
     fakeOneSignal([Http::response(['errors' => ['Access denied.  Please include an \'Authorization: ...\' header with a valid API key']], 403)]);
 
     try {
-        app(PushProvider::class)->send(new PushMessage('Hola', 'Uno'), ['sub-a']);
+        app(PushProvider::class)->send(new PushMessage('Hola', 'Uno'), [sid(1)]);
         $this->fail('debió tirar');
     } catch (RuntimeException $e) {
         expect($e->getMessage())->toContain('HTTP 403')->and($e->getMessage())->not->toContain(ONESIGNAL_KEY);
@@ -152,14 +171,15 @@ test('a rejected key throws, so the job fails visibly, without echoing the key',
 });
 
 test('prunes the subscription ids onesignal reports invalid', function () {
-    fakeOneSignal([Http::response(['id' => 'notification-1', 'errors' => ['invalid_player_ids' => ['ana-old-phone']]])]);
+    [$phone, $oldPhone] = [sid(1), sid(2)];
+    fakeOneSignal([Http::response(['id' => 'notification-1', 'errors' => ['invalid_player_ids' => [$oldPhone]]])]);
     [$ana, $anaToken] = $this->pushUser('Ana');
-    $this->registerDevice($anaToken, ['provider' => 'onesignal', 'address' => 'ana-phone', 'platform' => 'android']);
-    $this->registerDevice($anaToken, ['provider' => 'onesignal', 'address' => 'ana-old-phone', 'platform' => 'android']);
+    $this->registerDevice($anaToken, ['provider' => 'onesignal', 'address' => $phone, 'platform' => 'android']);
+    $this->registerDevice($anaToken, ['provider' => 'onesignal', 'address' => $oldPhone, 'platform' => 'android']);
     $this->registerDevice($anaToken, ['provider' => 'fcm', 'address' => 'ana-fcm-phone', 'platform' => 'android']);
 
     MkPush::to($ana)->send(new PushMessage('Hola', 'Ana'));
 
-    expect(oneSignalRequests()[0]['include_subscription_ids'])->toEqualCanonicalizing(['ana-phone', 'ana-old-phone'])
-        ->and(MkPushDevice::query()->orderBy('address')->pluck('address')->all())->toBe(['ana-fcm-phone', 'ana-phone']);
+    expect(oneSignalRequests()[0]['include_subscription_ids'])->toEqualCanonicalizing([$phone, $oldPhone])
+        ->and(MkPushDevice::query()->orderBy('address')->pluck('address')->all())->toBe([$phone, 'ana-fcm-phone']);
 });
