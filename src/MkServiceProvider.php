@@ -32,6 +32,7 @@ use Mk\Director\Console\Commands\MkSkillDeployCommand;
 use Mk\Director\Console\Commands\MkSkillListCommand;
 use Mk\Director\Console\Commands\MkUpdateCommand;
 use Mk\Director\Console\Commands\PruneAbilitiesCommand;
+use Mk\Director\Console\Commands\PrunePushDevicesCommand;
 use Mk\Director\Console\Commands\SecurityLintCommand;
 use Mk\Director\Controllers\OpenApiController;
 use Mk\Director\Embeds\MkEmbedService;
@@ -323,6 +324,9 @@ class MkServiceProvider extends ServiceProvider
                 // Se lleva los reportes vencidos y sus archivos. Programalo
                 // con `Schedule::command('mk:reports-clean')->hourly()`.
                 CleanReportsCommand::class,
+                // Borra los teléfonos de push que no se vieron en N días.
+                // Programalo con `Schedule::command('mk:push:prune')->daily()`.
+                PrunePushDevicesCommand::class,
             ]);
         }
 

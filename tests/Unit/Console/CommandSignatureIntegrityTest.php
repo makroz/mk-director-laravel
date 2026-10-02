@@ -58,6 +58,8 @@ function mkExpectedCommandArguments(): array
         'mk:migrate-status-to-int' => ['scope'],
         'mk:module' => ['name'],
         'mk:prune-abilities' => [],
+        // Sin argumentos: los días salen de la config o de `--days`.
+        'mk:push:prune' => [],
         // Se lleva los reportes vencidos y sus archivos. Sin argumentos: el
         // criterio es `expires_at`, que ya está en cada fila.
         'mk:reports-clean' => [],

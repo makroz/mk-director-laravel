@@ -93,6 +93,7 @@ Los 18 comandos que registra el paquete (`php artisan list mk`).
 | `mk:fix:sanctum-uuids [--dry-run]` | Parchea la migración de Sanctum a `uuidMorphs()`. `mk:make:auth-user` ya lo invoca solo. |
 | `mk:status` | Diagnóstico de los controllers MK y su configuración. |
 | `mk:reports-clean [--dry-run]` | Borra los reportes vencidos **y sus archivos**. Programalo con `Schedule::command('mk:reports-clean')->hourly()`. ⚠️ Sin él el disco crece para siempre con archivos que ya nadie puede pedir. |
+| `mk:push:prune [--days=N] [--dry-run]` | Borra los teléfonos de push que no se vieron en N días (`MK_PUSH_PRUNE_AFTER_DAYS`, default 60; 0 la apaga). Programalo con `Schedule::command('mk:push:prune')->daily()`. ⚠️ OneSignal no siempre avisa de una dirección muerta: sin él quedan para siempre. |
 | `mk:lint:boundaries [--strict]` | Linter de R-MK-001 (imports cross-module). Check de CI obligatorio. |
 | `mk:security-lint` | Auditoría estática: modelos Eloquent y config de `MkMultiTenantPlugin`. |
 | `mk:generate-docs` | OpenAPI estático desde los constructores MK. |
