@@ -46,6 +46,12 @@ use Mk\Director\Managers\PluginManager;
 use Mk\Director\Models\MkReport;
 use Mk\Director\ModuleLoader\ModuleLoaderServiceProvider;
 use Mk\Director\Plugins\FileStoragePlugin;
+use Mk\Director\Push\Contracts\PushProvider;
+use Mk\Director\Push\Http\Controllers\MkPushDeviceController;
+use Mk\Director\Push\Providers\FcmAccessToken;
+use Mk\Director\Push\Providers\FcmProvider;
+use Mk\Director\Push\Providers\LogProvider;
+use Mk\Director\Push\Providers\NullProvider;
 use Mk\Director\Tenancy\TenantContext;
 use Mk\Director\Tenancy\TenantResolver;
 use Mk\Director\Utils\MkDebugConfig;
@@ -154,6 +160,32 @@ class MkServiceProvider extends ServiceProvider
                 cacheTtl: (int) config('mk_director.embeds.cache_ttl', 86400),
             );
         });
+
+        // El servicio de push, según `mk_director.push.driver`. `bindIf` por
+        // lo mismo que `ReportHeaderProvider`: un consumer con un servicio
+        // propio lo bindea en SU provider y gana sin desregistrar nada.
+        $this->app->bindIf(PushProvider::class, fn () => $this->pushProvider());
+    }
+
+    /**
+     * 🔴 Un driver desconocido EXPLOTA en vez de caer en `null`: un typo en el
+     * `.env` de producción dejaría a todos sin avisos y nadie lo vería.
+     */
+    protected function pushProvider(): PushProvider
+    {
+        $driver = (string) config('mk_director.push.driver', 'null');
+
+        return match ($driver) {
+            'log' => new LogProvider,
+            'null' => new NullProvider,
+            'fcm' => new FcmProvider(FcmAccessToken::fromFile(config('mk_director.push.fcm.credentials'))),
+            'onesignal' => throw new \RuntimeException(
+                "[mk-director] El driver de push 'onesignal' todavía no está implementado. Por ahora, 'fcm', 'log' o 'null'."
+            ),
+            default => throw new \InvalidArgumentException(
+                "[mk-director] Driver de push desconocido: '{$driver}'. Valores válidos: fcm, onesignal, log, null."
+            ),
+        };
     }
 
     /**
@@ -281,6 +313,7 @@ class MkServiceProvider extends ServiceProvider
         $this->registerGlobalCacheListener();
         $this->registerOpenApiRoutes();
         $this->registerExportRoutes();
+        $this->registerPushRoutes();
         // 🔴 En `booted`, no acá. El `Artisan::call()` del auto-discover
         // arranca el kernel de consola y marca sus comandos como cargados; si
         // eso pasa durante el boot de los providers, `routes/console.php` —que
@@ -324,6 +357,26 @@ class MkServiceProvider extends ServiceProvider
             Route::post('{type}/export', [MkReportController::class, 'store'])->name('mk.reports.store');
             Route::get('{report}/status', [MkReportController::class, 'status'])->name('mk.reports.status');
             Route::get('{report}/download', [MkReportController::class, 'download'])->name('mk.reports.download');
+        });
+    }
+
+    /**
+     * Registrar y desregistrar el teléfono del usuario autenticado. OPT-IN:
+     * sólo con `mk_director.push.register_routes = true`. El envío no tiene
+     * ruta: sale de código del servidor.
+     */
+    protected function registerPushRoutes(): void
+    {
+        if (! config('mk_director.push.register_routes', false)) {
+            return;
+        }
+
+        Route::group([
+            'prefix' => (string) config('mk_director.push.route_prefix', 'api/push'),
+            'middleware' => (array) config('mk_director.push.route_middleware', ['api']),
+        ], function (): void {
+            Route::post('devices', [MkPushDeviceController::class, 'store'])->name('mk.push.devices.store');
+            Route::delete('devices/{address}', [MkPushDeviceController::class, 'destroy'])->name('mk.push.devices.destroy');
         });
     }
 

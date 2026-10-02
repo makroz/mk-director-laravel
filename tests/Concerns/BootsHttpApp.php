@@ -179,6 +179,16 @@ trait BootsHttpApp
     }
 
     /**
+     * Igual que {@see httpGet()}, con `DELETE`.
+     *
+     * @param  array<string,string>  $headers
+     */
+    public function httpDelete(string $uri, array $headers = []): Response
+    {
+        return $this->httpSend('DELETE', $uri, [], $headers);
+    }
+
+    /**
      * @param  array<string,mixed>  $data
      * @param  array<string,string>  $headers
      */

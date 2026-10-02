@@ -12,6 +12,113 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — notificaciones push, corte 6: canal, imagen, sonido, ícono y color
+
+**Added** (aditivo, sin BC; sin migración)
+- `PushMessage` suma `channel`, `image`, `sound`, `icon` y `color`, todos opcionales y con nombre: un
+  `new PushMessage('Título', 'Texto', $data, url: '/x')` sigue igual. Se validan al construir y el error
+  NO repite el valor: `image` tiene que ser una URL https; `color`, `#RRGGBB`; `icon`, un nombre de
+  recurso (`[a-z0-9_]`); `sound`, `'default'` o un nombre de recurso con `.wav`, `.mp3` u `.ogg` opcional.
+  Otra cosa tira `InvalidArgumentException`.
+- `mk_director.push.channels` (id ⇒ `name`, `sound`, `importance`, `icon`, `color`) y
+  `mk_director.push.default_channel` (`MK_PUSH_DEFAULT_CHANNEL`, default `'default'`; `null` = sin canal).
+  El job resuelve el mensaje UNA vez antes del proveedor con `PushMessage::resolvedWith()`: lo que dice el
+  mensaje, después su canal en la config, después el canal por defecto. Un config publicado sin estas
+  claves manda sin canal, como antes.
+- FCM: `android.notification.{channel_id, icon, color, sound, image}` (el sonido sin extensión: Android lo
+  busca en `res/raw` por nombre de recurso) y `apns.payload.aps.{sound, thread-id}`; con imagen, además
+  `aps.mutable-content: 1` y `apns.fcm_options.image` (los usa la Notification Service Extension de iOS,
+  que llega en el corte 7). El driver `log` escribe estos campos en `style`.
+
+**Ojo**
+- El sonido y el ícono son recursos que vienen DENTRO de la app: el paquete no los baja de una URL. En
+  Android 8+ el sonido y la importancia son del canal y se fijan al crearlo en el teléfono: para otro
+  sonido hace falta otro id de canal (o reinstalar la app).
+- Un job que la cola guardó antes de este cambio sigue corriendo: su mensaje se deserializa sin los campos
+  nuevos y `resolvedWith()` los lee con `??`.
+
+## [UNRELEASED] — notificaciones push, corte 5: grupos y temas
+
+**Added** (aditivo, sin BC; sin migración: `mk_push_topic_subscriptions` existe desde el corte 1)
+- `MkPush::to($grupo)` acepta un array, una Collection o el resultado de una consulta, con dueños de
+  tipos distintos mezclados (miembros y admins): el `owner_type` es el alias del morph map, así que el
+  mismo id con otro tipo es otra persona. Un dueño repetido cuenta una vez, y un grupo vacío no manda
+  nada (nunca «a todos»).
+- Temas: `MkPush::subscribe($user, 'novedades')` (idempotente: el índice único ignora la segunda),
+  `MkPush::unsubscribe($user, 'novedades')` y `MkPush::topic('novedades')->send(...)`. La suscripción es
+  de la persona: cualquier teléfono suyo recibe, y sólo los del proveedor activo. El nombre del tema es un
+  slug (`PushService::TOPIC_PATTERN`: minúsculas, dígitos y `. - _ :`, de 1 a 100); cualquier otro
+  tira `InvalidArgumentException` y no escribe nada.
+- `mk_director.push.chunk` (default 500): el job lee las direcciones de a tandas (`chunkById`) y llama al
+  servicio una vez por tanda, así un tema de miles no se carga entero en memoria. FCM sigue siendo un
+  request por token: para temas muy grandes, el camino son los temas nativos de FCM o los segmentos de
+  OneSignal.
+
+**Changed**
+- La limpieza de direcciones inválidas se acota a la tanda que se mandó: un proveedor no puede borrar un
+  teléfono que no estaba en el envío.
+- `SendPushJob` recibe `($message, $owners = [], $topic = null)`. Un job que la cola guardó con el
+  corte 4 (sin `topic`) sigue corriendo al deserializarse.
+
+## [UNRELEASED] — notificaciones push, corte 4: se borran las direcciones inválidas
+
+**Added**
+- `SendPushJob` borra de `mk_push_devices` las direcciones que el servicio devolvió en
+  `PushResult::invalid` (FCM: 404 `UNREGISTERED` o 400 `INVALID_ARGUMENT` sobre el token), así un token
+  muerto no se vuelve a mandar nunca. El borrado va acotado al proveedor activo: la misma dirección
+  registrada con otro servicio no se toca. Los drivers `log` y `null` no borran nunca.
+
+## [UNRELEASED] — notificaciones push, corte 2: el driver `fcm` (Firebase Cloud Messaging HTTP v1)
+
+**Added**
+- `MK_PUSH_DRIVER=fcm` + `MK_PUSH_FCM_CREDENTIALS` (la **ruta** al JSON de la cuenta de servicio de
+  Firebase; el archivo nunca se commitea). El token OAuth se arma con un JWT RS256 firmado con la cuenta
+  (`firebase/php-jwt`), se canjea en su `token_uri` y se cachea 55 minutos por proyecto.
+- Un request por token a `POST /v1/projects/{project_id}/messages:send`, con `notification`, `data` (todos
+  los valores como string, más `url` si el mensaje la trae; sin datos no viaja la clave),
+  `android.priority: high` y `apns.payload.aps.sound: default`.
+- `PushResult`: `sent`; `invalid` = tokens con 404 `UNREGISTERED` o 400 `INVALID_ARGUMENT` que señala al
+  token (un 400 por un payload mal armado NO cuenta como inválido: borraría todos los teléfonos);
+  `failed` = el resto, incluida la falta de red, con un `warning` en el log. Un token malo no corta el
+  envío a los demás. Las direcciones inválidas se borran desde el corte 4.
+- Sin `MK_PUSH_FCM_CREDENTIALS`, con un archivo que no se puede leer o sin `project_id`, `client_email`,
+  `private_key` o `token_uri`, resolver el driver explota con un mensaje claro que nunca incluye el
+  contenido del archivo. Si Google rechaza la cuenta, el envío explota y el job se reintenta.
+
+**Fixed**
+- La dirección del teléfono mide hasta **512** caracteres (columna y validación; antes 4096): con 4096 el
+  `UNIQUE (provider, address)` rompía la migración en MySQL y un `INSERT` largo daba 500 en Postgres. La
+  migración del corte 1 cambia en el lugar: no se publicó.
+
+## [UNRELEASED] — notificaciones push, corte 1: registro de teléfonos y envío con los drivers `log` y `null`
+
+Plan: `mk-director/docs/plans/push-notifications/`. Todavía no hay servicio real: FCM y OneSignal llegan
+en los cortes siguientes.
+
+**Added** (aditivo, sin BC; **con migración**: `mk_push_devices` y `mk_push_topic_subscriptions`)
+- `MkPush::to($user)->send(new PushMessage($title, $body, $data, url: ...))`: encola `SendPushJob`
+  **después del commit** (`afterCommit`), así que un rollback no avisa algo que no pasó. El job lee las
+  direcciones al correr, sólo las del proveedor activo, y se las da al `PushProvider` que elige
+  `mk_director.push.driver`. Acepta un usuario o una lista; una lista vacía no manda nada.
+- Drivers `log` (escribe en el log qué saldría y a qué teléfonos: todos los del dueño, sea cual sea el
+  servicio con que se registraron) y `null` (el default: no manda nada). `onesignal` todavía
+  tira «no está implementado» (`fcm` llega en el corte 2), y un driver desconocido explota en vez de caer en `null`. El contrato se
+  registra con `bindIf`: un consumer puede bindear el suyo.
+- Rutas **opt-in** (`MK_PUSH_REGISTER_ROUTES` o `mk_director.push.register_routes`), bajo
+  `push.route_prefix` (default `api/push`) y `push.route_middleware` (default `['api']`, sin auth: el
+  consumer le suma `mk.auth:{scope}`):
+  - `POST devices` `{provider: fcm|onesignal, address (≤512), platform: ios|android}` → `204`. Es un
+    `upsert` por `(provider, address)`: si el teléfono era de otra persona, pasa al usuario autenticado.
+    El dueño sale de la sesión, nunca del body.
+  - `DELETE devices/{address}` → `204`. Sólo un teléfono **propio**: el de otro da `404` y no se borra.
+  - Sin usuario autenticado, el controller responde `401` aunque falte el middleware de auth.
+- Sección `push` en `config/mk_director.php` y las variables `MK_PUSH_DRIVER`, `MK_PUSH_QUEUE`,
+  `MK_PUSH_FCM_CREDENTIALS`, `MK_PUSH_ONESIGNAL_APP_ID` y `MK_PUSH_ONESIGNAL_API_KEY` (las tres últimas,
+  para los cortes de FCM y OneSignal).
+
+⚠️ `owner_type` guarda el **morph class** del usuario (el alias del morph map si el consumer tiene uno,
+como el `member` de RETO), igual que cualquier `morphTo`.
+
 ## [UNRELEASED] — la sesión larga: rotación que rota, TTL y rotación por scope, detección de reutilización
 
 Hallazgo 73 de Mozzo (y los restos del 72). Guía: `DEVELOPER_GUIDE.md § 3.23`.
