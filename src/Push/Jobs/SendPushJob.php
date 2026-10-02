@@ -59,6 +59,13 @@ final class SendPushJob implements ShouldQueue
             $query->where('mk_push_devices.provider', $provider->name());
         }
 
+        // El canal se resuelve UNA vez, acá: el proveedor recibe el mensaje ya
+        // completo (mensaje > canal de la config > default) y no lee config.
+        $message = $this->message->resolvedWith(
+            (array) config('mk_director.push.channels', []),
+            config('mk_director.push.default_channel'),
+        );
+
         // De a tandas: un tema de miles no se carga entero en memoria. Por id
         // (keyset), así borrar las inválidas de una tanda no corre a la siguiente.
         //
@@ -68,9 +75,9 @@ final class SendPushJob implements ShouldQueue
         // de OneSignal, que mandan en un solo request.
         $query->select('mk_push_devices.id', 'mk_push_devices.address')->chunkById(
             max(1, (int) config('mk_director.push.chunk', 500)),
-            function (Collection $devices) use ($provider, $isService): void {
+            function (Collection $devices) use ($provider, $isService, $message): void {
                 $addresses = $devices->pluck('address')->all();
-                $result = $provider->send($this->message, $addresses);
+                $result = $provider->send($message, $addresses);
 
                 // Lo que el servicio rechazó para siempre se borra, para no
                 // volver a mandarle nunca. Acotado al proveedor activo (la misma

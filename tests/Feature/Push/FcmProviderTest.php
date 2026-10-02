@@ -209,3 +209,39 @@ test('prunes addresses the provider reports invalid', function () {
     expect(MkPushDevice::query()->pluck('address')->all())
         ->toBe([$unregistered === 'ana-phone' ? 'ana-old-phone' : 'ana-phone']);
 });
+
+test('fcm payload maps channel, icon, color, sound and image', function () {
+    fakeFcm();
+
+    app(PushProvider::class)->send(
+        new PushMessage('Pago', 'Llegó', channel: 'payments', image: 'https://cdn.test/a.png', sound: 'chime.wav', icon: 'ic_payment', color: '#16A34A'),
+        ['token-a'],
+    );
+
+    $message = fcmRequests(FCM_SEND_URL)[0]['message'];
+    expect($message['android'])->toBe([
+        'priority' => 'high',
+        // Android busca el sonido en res/raw por NOMBRE de recurso: sin extensión.
+        'notification' => ['channel_id' => 'payments', 'icon' => 'ic_payment', 'color' => '#16A34A', 'sound' => 'chime', 'image' => 'https://cdn.test/a.png'],
+    ])->and($message['apns'])->toBe([
+        'payload' => ['aps' => ['sound' => 'chime.wav', 'thread-id' => 'payments', 'mutable-content' => 1]],
+        'fcm_options' => ['image' => 'https://cdn.test/a.png'],
+    ]);
+});
+
+test('the job sends the message resolved with its channel config', function () {
+    fakeFcm();
+    config(['mk_director.push.channels' => ['payments' => ['name' => 'Pagos', 'sound' => 'chime.wav', 'importance' => 'high', 'color' => '#16A34A']]]);
+    config(['mk_director.push.default_channel' => 'default']);
+    [$ana, $anaToken] = $this->pushUser('Ana');
+    $this->registerDevice($anaToken, ['provider' => 'fcm', 'address' => 'ana-phone', 'platform' => 'android']);
+
+    MkPush::to($ana)->send(new PushMessage('Pago', 'Llegó', channel: 'payments'));
+    MkPush::to($ana)->send(new PushMessage('Aviso', 'Otro'));
+
+    [$payment, $notice] = array_map(fn (Request $r) => $r['message'], fcmRequests(FCM_SEND_URL));
+    expect($payment['android']['notification'])->toBe(['channel_id' => 'payments', 'color' => '#16A34A', 'sound' => 'chime'])
+        ->and($payment['apns']['payload']['aps'])->toBe(['sound' => 'chime.wav', 'thread-id' => 'payments'])
+        ->and($notice['android']['notification'])->toBe(['channel_id' => 'default'])
+        ->and($notice['apns']['payload']['aps'])->toBe(['sound' => 'default', 'thread-id' => 'default']);
+});

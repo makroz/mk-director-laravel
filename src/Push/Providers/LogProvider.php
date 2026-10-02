@@ -26,6 +26,13 @@ final class LogProvider implements PushProvider
             'body' => $message->body,
             'data' => $message->data,
             'url' => $message->url,
+            'style' => array_filter([
+                'channel' => $message->channel,
+                'image' => $message->image,
+                'sound' => $message->sound,
+                'icon' => $message->icon,
+                'color' => $message->color,
+            ], fn (?string $value): bool => $value !== null),
             'addresses' => $addresses,
         ]);
 

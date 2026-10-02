@@ -12,6 +12,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — notificaciones push, corte 6: canal, imagen, sonido, ícono y color
+
+**Added** (aditivo, sin BC; sin migración)
+- `PushMessage` suma `channel`, `image`, `sound`, `icon` y `color`, todos opcionales y con nombre: un
+  `new PushMessage('Título', 'Texto', $data, url: '/x')` sigue igual. Se validan al construir y el error
+  NO repite el valor: `image` tiene que ser una URL https; `color`, `#RRGGBB`; `icon`, un nombre de
+  recurso (`[a-z0-9_]`); `sound`, `'default'` o un nombre de recurso con `.wav`, `.mp3` u `.ogg` opcional.
+  Otra cosa tira `InvalidArgumentException`.
+- `mk_director.push.channels` (id ⇒ `name`, `sound`, `importance`, `icon`, `color`) y
+  `mk_director.push.default_channel` (`MK_PUSH_DEFAULT_CHANNEL`, default `'default'`; `null` = sin canal).
+  El job resuelve el mensaje UNA vez antes del proveedor con `PushMessage::resolvedWith()`: lo que dice el
+  mensaje, después su canal en la config, después el canal por defecto. Un config publicado sin estas
+  claves manda sin canal, como antes.
+- FCM: `android.notification.{channel_id, icon, color, sound, image}` (el sonido sin extensión: Android lo
+  busca en `res/raw` por nombre de recurso) y `apns.payload.aps.{sound, thread-id}`; con imagen, además
+  `aps.mutable-content: 1` y `apns.fcm_options.image` (los usa la Notification Service Extension de iOS,
+  que llega en el corte 7). El driver `log` escribe estos campos en `style`.
+
+**Ojo**
+- El sonido y el ícono son recursos que vienen DENTRO de la app: el paquete no los baja de una URL. En
+  Android 8+ el sonido y la importancia son del canal y se fijan al crearlo en el teléfono: para otro
+  sonido hace falta otro id de canal (o reinstalar la app).
+- Un job que la cola guardó antes de este cambio sigue corriendo: su mensaje se deserializa sin los campos
+  nuevos y `resolvedWith()` los lee con `??`.
+
 ## [UNRELEASED] — notificaciones push, corte 5: grupos y temas
 
 **Added** (aditivo, sin BC; sin migración: `mk_push_topic_subscriptions` existe desde el corte 1)

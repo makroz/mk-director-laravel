@@ -910,6 +910,21 @@ return [
         // clave usa 500.
         'chunk' => 500,
         'fcm' => ['credentials' => env('MK_PUSH_FCM_CREDENTIALS')],   // path to service-account JSON
+
+        // Canales (grupos de avisos). Un mensaje con `channel: 'payments'`
+        // hereda lo que dice su canal, y lo que diga el mensaje gana. Un
+        // mensaje sin canal va a `default_channel` (null = sin canal).
+        //
+        // `sound` e `icon` son NOMBRES de recursos que vienen dentro de la app
+        // (el plugin de expo-notifications los empaqueta). La app crea los
+        // mismos canales al arrancar (`MkPushProvider` `channels`): en Android
+        // 8+ el sonido y la importancia son del canal, se fijan al crearlo y
+        // no cambian después; otro sonido = otro id de canal.
+        //
+        // 'payments' => ['name' => 'Pagos', 'sound' => 'cash.wav', 'importance' => 'high',
+        //                'icon' => 'ic_payment', 'color' => '#16A34A'],
+        'channels' => [],
+        'default_channel' => env('MK_PUSH_DEFAULT_CHANNEL', 'default'),
         'onesignal' => ['app_id' => env('MK_PUSH_ONESIGNAL_APP_ID'), 'api_key' => env('MK_PUSH_ONESIGNAL_API_KEY')],
     ],
 

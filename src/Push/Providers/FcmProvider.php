@@ -78,8 +78,32 @@ final class FcmProvider implements PushProvider
             'token' => $address,
             'notification' => ['title' => $message->title, 'body' => $message->body],
             'android' => ['priority' => 'high'],
-            'apns' => ['payload' => ['aps' => ['sound' => 'default']]],
+            'apns' => ['payload' => ['aps' => ['sound' => $message->sound ?? 'default']]],
         ];
+
+        // Android busca el sonido en `res/raw` por nombre de recurso, que no
+        // lleva extensión; iOS busca el archivo, que sí la lleva.
+        $android = array_filter([
+            'channel_id' => $message->channel,
+            'icon' => $message->icon,
+            'color' => $message->color,
+            'sound' => $message->sound !== null ? (string) preg_replace('/\.(wav|mp3|ogg)\z/', '', $message->sound) : null,
+            'image' => $message->image,
+        ], fn (?string $value): bool => $value !== null);
+        if ($android !== []) {
+            $payload['android']['notification'] = $android;
+        }
+
+        // `thread-id` agrupa en el centro de notificaciones de iOS como el
+        // canal en Android. La imagen en iOS la baja una Notification Service
+        // Extension (corte 7), que sólo corre con `mutable-content: 1`.
+        if ($message->channel !== null) {
+            $payload['apns']['payload']['aps']['thread-id'] = $message->channel;
+        }
+        if ($message->image !== null) {
+            $payload['apns']['payload']['aps']['mutable-content'] = 1;
+            $payload['apns']['fcm_options'] = ['image' => $message->image];
+        }
 
         // FCM sólo acepta strings en `data`, y un `data` vacío viaja como `[]`
         // (lista, no mapa) y da 400: sin datos, la clave no va.
