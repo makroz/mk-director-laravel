@@ -12,6 +12,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — notificaciones push, corte 5: grupos y temas
+
+**Added** (aditivo, sin BC; sin migración: `mk_push_topic_subscriptions` existe desde el corte 1)
+- `MkPush::to($grupo)` acepta un array, una Collection o el resultado de una consulta, con dueños de
+  tipos distintos mezclados (miembros y admins): el `owner_type` es el alias del morph map, así que el
+  mismo id con otro tipo es otra persona. Un dueño repetido cuenta una vez, y un grupo vacío no manda
+  nada (nunca «a todos»).
+- Temas: `MkPush::subscribe($user, 'novedades')` (idempotente: el índice único ignora la segunda),
+  `MkPush::unsubscribe($user, 'novedades')` y `MkPush::topic('novedades')->send(...)`. La suscripción es
+  de la persona: cualquier teléfono suyo recibe, y sólo los del proveedor activo. El nombre del tema es un
+  slug (`PushService::TOPIC_PATTERN`: minúsculas, dígitos y `. - _ :`, de 1 a 100); cualquier otro
+  tira `InvalidArgumentException` y no escribe nada.
+- `mk_director.push.chunk` (default 500): el job lee las direcciones de a tandas (`chunkById`) y llama al
+  servicio una vez por tanda, así un tema de miles no se carga entero en memoria. FCM sigue siendo un
+  request por token: para temas muy grandes, el camino son los temas nativos de FCM o los segmentos de
+  OneSignal.
+
+**Changed**
+- La limpieza de direcciones inválidas se acota a la tanda que se mandó: un proveedor no puede borrar un
+  teléfono que no estaba en el envío.
+- `SendPushJob` recibe `($message, $owners = [], $topic = null)`. Un job que la cola guardó con el
+  corte 4 (sin `topic`) sigue corriendo al deserializarse.
+
 ## [UNRELEASED] — notificaciones push, corte 4: se borran las direcciones inválidas
 
 **Added**

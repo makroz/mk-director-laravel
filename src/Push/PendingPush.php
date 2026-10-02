@@ -11,8 +11,12 @@ use Mk\Director\Push\Jobs\SendPushJob;
  */
 final class PendingPush
 {
-    /** @param list<array{0: string, 1: string}> $owners [morph class, key] */
-    public function __construct(private readonly array $owners) {}
+    /**
+     * O dueños o un tema: lo arma {@see PushService}.
+     *
+     * @param  list<array{0: string, 1: string}>  $owners  [morph class, key]
+     */
+    public function __construct(private readonly array $owners = [], private readonly ?string $topic = null) {}
 
     /**
      * Queues SendPushJob after the current transaction commits.
@@ -23,7 +27,7 @@ final class PendingPush
      */
     public function send(PushMessage $message): void
     {
-        SendPushJob::dispatch($message, $this->owners)
+        SendPushJob::dispatch($message, $this->owners, $this->topic)
             ->afterCommit()
             ->onQueue(config('mk_director.push.queue'));
     }

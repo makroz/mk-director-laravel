@@ -904,6 +904,11 @@ return [
         'route_middleware' => ['api'],                        // e.g. ['api', 'mk.auth:member']
 
         'queue' => env('MK_PUSH_QUEUE'),                      // null = default queue
+
+        // Cuántas direcciones se leen y se le pasan al servicio por tanda en un
+        // envío a un tema o a un grupo grande. Un config publicado sin esta
+        // clave usa 500.
+        'chunk' => 500,
         'fcm' => ['credentials' => env('MK_PUSH_FCM_CREDENTIALS')],   // path to service-account JSON
         'onesignal' => ['app_id' => env('MK_PUSH_ONESIGNAL_APP_ID'), 'api_key' => env('MK_PUSH_ONESIGNAL_API_KEY')],
     ],
