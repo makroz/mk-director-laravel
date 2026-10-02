@@ -12,6 +12,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — notificaciones push: poda de teléfonos que no se ven
+
+**Added** (aditivo, sin BC; sin migración)
+- `mk:push:prune [--days=N] [--dry-run]`: borra las filas de `mk_push_devices` cuyo `last_seen_at` es más
+  viejo que N días (una fila sin `last_seen_at` se juzga por `created_at`), de a tandas de
+  `mk_director.push.chunk`, e imprime cuántas borró. `--dry-run` sólo cuenta. Programalo una vez por día:
+  `Schedule::command('mk:push:prune')->daily()`.
+- Config `mk_director.push.prune_after_days` (env `MK_PUSH_PRUNE_AFTER_DAYS`, default 60); 0 o null la
+  apaga. Un config publicado sin la clave usa 60.
+- 🔴 Por qué: OneSignal NO devuelve las direcciones inválidas cuando el request mezcla válidas e inválidas,
+  y un teléfono cuya app nunca se volvió a abrir no da error en ningún servicio. Sin la poda esas filas
+  quedan para siempre. Un teléfono activo no se poda: la app (`MkPushProvider`) re-registra en cada
+  arranque con sesión y el registro refresca `last_seen_at`.
+
+## [UNRELEASED] — notificaciones push, corte 8: OneSignal
+
+**Added** (aditivo, sin BC; sin migración)
+- Driver `onesignal` (`MK_PUSH_DRIVER=onesignal`): `OneSignalProvider` manda con
+  `POST https://api.onesignal.com/notifications`, `Authorization: Key <api key>` (las claves `os_v2_app_…`),
+  `app_id` e `include_subscription_ids` (la dirección del teléfono es su subscription id), de a 20.000 por
+  request (el tope de OneSignal).
+- `headings.en` / `contents.en`: OneSignal EXIGE `en` (sin él, 400); es el texto para todos los idiomas, así
+  que el castellano va ahí. `data` en strings, como FCM, con la ruta en `data.url` — nunca el `url` de
+  OneSignal, que abre el navegador.
+- Personalización: un canal propio (`'payments'`) va como `existing_android_channel_id` (el canal que creó
+  la app; si el teléfono no lo tiene, el SDK cae a su canal por defecto) y un UUID como `android_channel_id`
+  (un canal creado en el panel de OneSignal); el canal también va como `thread_id` (iOS). `icon` →
+  `small_icon`, `color` → `android_accent_color` en ARGB (`#16A34A` → `FF16A34A`), `image` → `big_picture` +
+  `ios_attachments.id`, `sound` → `ios_sound` (en Android el sonido es del canal).
+- Las inválidas vuelven con 200 en `errors.invalid_player_ids` (el nombre viejo, también para subscription
+  ids) y el job las poda. 🔴 Medido contra la API real (2026-10-02): un id que no existe, sin otro válido en el
+  request, NO vuelve ahí: vuelve `{"id": "", "errors": ["All included players are not subscribed"]}`. Con
+  ese texto se podan todas las del request (el que sólo apagó el permiso se vuelve a registrar al abrir la
+  app con el permiso dado); cualquier otro `id` vacío cuenta como fallido y no poda.
+- 🔴 Una dirección que no es UUID hace 400 el request ENTERO («Incorrect subscription_id format»): se poda
+  sin mandarla, para que un registro basura no deje sin avisos a toda la tanda.
+- 401/403 (clave mala o de otra app) TIRA, para que el job quede fallido a la vista; el mensaje no repite la
+  clave. Otro error se loguea y cuenta como fallido.
+- Sin `MK_PUSH_ONESIGNAL_APP_ID` o `MK_PUSH_ONESIGNAL_API_KEY`, resolver el proveedor tira nombrando lo que
+  falta (antes, `onesignal` tiraba «todavía no está implementado»).
+
+**Ojo**
+- Un solo servicio activo a la vez: al pasar de `fcm` a `onesignal`, los teléfonos registrados con FCM no
+  reciben hasta que una app con OneSignal se registre.
+
 ## [UNRELEASED] — notificaciones push, corte 6: canal, imagen, sonido, ícono y color
 
 **Added** (aditivo, sin BC; sin migración)

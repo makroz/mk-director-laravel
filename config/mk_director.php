@@ -909,6 +909,12 @@ return [
         // envío a un tema o a un grupo grande. Un config publicado sin esta
         // clave usa 500.
         'chunk' => 500,
+
+        // `mk:push:prune` borra los teléfonos que no se vieron en estos días
+        // (el registro refresca `last_seen_at` cada vez que la app arranca con
+        // sesión). Hace falta porque OneSignal no siempre avisa de una
+        // dirección muerta. 0 o null la apaga. Programalo una vez por día.
+        'prune_after_days' => env('MK_PUSH_PRUNE_AFTER_DAYS', 60),
         'fcm' => ['credentials' => env('MK_PUSH_FCM_CREDENTIALS')],   // path to service-account JSON
 
         // Canales (grupos de avisos). Un mensaje con `channel: 'payments'`
