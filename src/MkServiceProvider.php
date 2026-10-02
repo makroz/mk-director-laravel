@@ -52,6 +52,7 @@ use Mk\Director\Push\Providers\FcmAccessToken;
 use Mk\Director\Push\Providers\FcmProvider;
 use Mk\Director\Push\Providers\LogProvider;
 use Mk\Director\Push\Providers\NullProvider;
+use Mk\Director\Push\Providers\OneSignalProvider;
 use Mk\Director\Tenancy\TenantContext;
 use Mk\Director\Tenancy\TenantResolver;
 use Mk\Director\Utils\MkDebugConfig;
@@ -179,13 +180,28 @@ class MkServiceProvider extends ServiceProvider
             'log' => new LogProvider,
             'null' => new NullProvider,
             'fcm' => new FcmProvider(FcmAccessToken::fromFile(config('mk_director.push.fcm.credentials'))),
-            'onesignal' => throw new \RuntimeException(
-                "[mk-director] El driver de push 'onesignal' todavía no está implementado. Por ahora, 'fcm', 'log' o 'null'."
-            ),
+            'onesignal' => $this->oneSignalProvider(),
             default => throw new \InvalidArgumentException(
                 "[mk-director] Driver de push desconocido: '{$driver}'. Valores válidos: fcm, onesignal, log, null."
             ),
         };
+    }
+
+    /** 🔴 Sin app id o sin clave explota al resolverlo: un `.env` a medias no manda en silencio. */
+    protected function oneSignalProvider(): OneSignalProvider
+    {
+        $appId = (string) config('mk_director.push.onesignal.app_id');
+        $apiKey = (string) config('mk_director.push.onesignal.api_key');
+
+        $missing = array_keys(array_filter([
+            'MK_PUSH_ONESIGNAL_APP_ID' => $appId === '',
+            'MK_PUSH_ONESIGNAL_API_KEY' => $apiKey === '',
+        ]));
+        if ($missing !== []) {
+            throw new \RuntimeException("[mk-director] El driver de push 'onesignal' necesita ".implode(' y ', $missing).'.');
+        }
+
+        return new OneSignalProvider($appId, $apiKey);
     }
 
     /**

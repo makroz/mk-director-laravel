@@ -12,6 +12,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — notificaciones push, corte 8: OneSignal
+
+**Added** (aditivo, sin BC; sin migración)
+- Driver `onesignal` (`MK_PUSH_DRIVER=onesignal`): `OneSignalProvider` manda con
+  `POST https://api.onesignal.com/notifications`, `Authorization: Key <api key>` (las claves `os_v2_app_…`),
+  `app_id` e `include_subscription_ids` (la dirección del teléfono es su subscription id), de a 20.000 por
+  request (el tope de OneSignal).
+- `headings.en` / `contents.en`: OneSignal EXIGE `en` (sin él, 400); es el texto para todos los idiomas, así
+  que el castellano va ahí. `data` en strings, como FCM, con la ruta en `data.url` — nunca el `url` de
+  OneSignal, que abre el navegador.
+- Personalización: un canal propio (`'payments'`) va como `existing_android_channel_id` (el canal que creó
+  la app; si el teléfono no lo tiene, el SDK cae a su canal por defecto) y un UUID como `android_channel_id`
+  (un canal creado en el panel de OneSignal); el canal también va como `thread_id` (iOS). `icon` →
+  `small_icon`, `color` → `android_accent_color` en ARGB (`#16A34A` → `FF16A34A`), `image` → `big_picture` +
+  `ios_attachments.id`, `sound` → `ios_sound` (en Android el sonido es del canal).
+- Las inválidas vuelven con 200 en `errors.invalid_player_ids` (el nombre viejo, también para subscription
+  ids) y el job las poda. Si no salió a nadie (`id` vacío, `errors` como lista de textos) se cuentan como
+  fallidas y no se poda nada: no se sabe cuál es cuál.
+- 401/403 (clave mala o de otra app) TIRA, para que el job quede fallido a la vista; el mensaje no repite la
+  clave. Otro error se loguea y cuenta como fallido.
+- Sin `MK_PUSH_ONESIGNAL_APP_ID` o `MK_PUSH_ONESIGNAL_API_KEY`, resolver el proveedor tira nombrando lo que
+  falta (antes, `onesignal` tiraba «todavía no está implementado»).
+
+**Ojo**
+- Un solo servicio activo a la vez: al pasar de `fcm` a `onesignal`, los teléfonos registrados con FCM no
+  reciben hasta que una app con OneSignal se registre.
+
 ## [UNRELEASED] — notificaciones push, corte 6: canal, imagen, sonido, ícono y color
 
 **Added** (aditivo, sin BC; sin migración)

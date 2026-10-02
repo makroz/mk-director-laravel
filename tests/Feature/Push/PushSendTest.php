@@ -219,8 +219,9 @@ test('the driver comes from config, and an unknown one throws', function () {
     config(['mk_director.push.driver' => 'log']);
     expect(app(PushProvider::class))->toBeInstanceOf(LogProvider::class);
 
+    // Sin app id ni clave: explota nombrando lo que falta (los tests del driver, en OneSignalProviderTest).
     config(['mk_director.push.driver' => 'onesignal']);
-    expect(fn () => app(PushProvider::class))->toThrow(RuntimeException::class, 'todavía no está implementado');
+    expect(fn () => app(PushProvider::class))->toThrow(RuntimeException::class, 'MK_PUSH_ONESIGNAL_APP_ID y MK_PUSH_ONESIGNAL_API_KEY');
 
     config(['mk_director.push.driver' => 'fmc']);
     expect(fn () => app(PushProvider::class))->toThrow(InvalidArgumentException::class, 'desconocido');
