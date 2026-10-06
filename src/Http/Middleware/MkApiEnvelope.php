@@ -23,6 +23,13 @@ use Symfony\Component\HttpFoundation\Response;
  *
  * Las rutas son `mk_director.response.envelope_paths` (default `['api/*']`),
  * con la sintaxis de `Request::is()`.
+ *
+ * Hallazgo 78: `mk_director.response.envelope_except` (default `[]`, misma
+ * sintaxis) GANA sobre `envelope_paths`. Es la salida para una ruta con
+ * contrato de un TERCERO —un webhook de pagos que el banco lee con `result` y
+ * `token` en la raíz—: `Request::is()` no admite negación, y sin esto la única
+ * forma de dejarla afuera era sacar el prefijo entero o devolver una respuesta
+ * que no fuera `JsonResponse`.
  */
 class MkApiEnvelope extends MkEnvelope
 {
@@ -31,6 +38,12 @@ class MkApiEnvelope extends MkEnvelope
         $rutas = (array) config('mk_director.response.envelope_paths', ['api/*']);
 
         if ($rutas === [] || ! $request->is(...$rutas)) {
+            return $next($request);
+        }
+
+        $excluidas = (array) config('mk_director.response.envelope_except', []);
+
+        if ($excluidas !== [] && $request->is(...$excluidas)) {
             return $next($request);
         }
 

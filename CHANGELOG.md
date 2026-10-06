@@ -25,6 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - iOS queda documentado como límite conocido: compila y corre en el simulador, sin probar todavía en un iPhone real.
 - README: la función en «Características Core», con el link a la guía.
 
+## [UNRELEASED] — `envelope_except`: una ruta con contrato de un tercero sale sin sobre (hallazgo 78)
+
+**Added** (aditivo, sin BC; default sin cambios)
+- Config `mk_director.response.envelope_except` (default `[]`): patrones de `Request::is()` que
+  `MkApiEnvelope` (`force_envelope`) NO envuelve, aunque caigan en `envelope_paths`. La exclusión gana.
+- 🔴 Por qué: `Request::is()` no admite negación, así que no había forma de dejar afuera una ruta sin
+  sacar el prefijo entero. Medido en Mozzo con el webhook del Banco Ganadero, que lee `result` y `token`
+  en la RAÍZ del JSON: con el sobre el login contestaba `200 {"success": true, "data": {"result": ...,
+  "token": ...}}` — un «anduvo» para el que mira el status, y un banco que no encuentra el token. El
+  workaround era devolver una `Illuminate\Http\Response` en vez de una `JsonResponse`.
+- El alias de ruta `mk.envelope` no cambia: quien lo pone a mano en una ruta, la envuelve.
+
 ## [UNRELEASED] — notificaciones push: poda de teléfonos que no se ven
 
 **Added** (aditivo, sin BC; sin migración)

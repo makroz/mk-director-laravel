@@ -1021,6 +1021,13 @@ return [
         // Se engancha como middleware GLOBAL (hallazgo 66): las rutas de módulo
         // no pasan por el grupo `api`.
         'envelope_paths' => ['api/*'],
+
+        // Rutas que `force_envelope` NO envuelve aunque caigan en `envelope_paths`
+        // (misma sintaxis; la exclusión gana). Para las que tienen contrato de un
+        // TERCERO: un webhook de pagos que lee `result`/`token` en la raíz del JSON
+        // no puede recibirlos adentro de `data` (hallazgo 78). Ej.:
+        // ['api/webhooks/*'].
+        'envelope_except' => [],
     ],
 
     /*
