@@ -306,6 +306,7 @@ import { PUSH_CHANNELS, PUSH_DEVICES_ENDPOINT, pushClient } from '@/config/push'
 | `endpoint` | Relativo a la base del cliente de API. |
 | `askOnLogin` | Pide el permiso y registra apenas hay sesión. Default `true`. |
 | `onOpen(data)` | Se llama en cada toque, en el acto. Default: `router.push(data.url)` si es una ruta de la app (`/…`; nunca `//host` ni `https://…`), cuando hay sesión y navegador. En arranque en frío la ruta espera al login. |
+| `beforeOpen(data)` | Opcional. Se espera (`await`) con todos los datos del toque justo antes de la navegación por defecto, cuando ya hay sesión y navegador; recién después se abre `data.url`. Si lanza o rechaza, no se abre nada (sólo un `console.warn`: el error lo muestra la app). Cuenta sólo el último toque. Con `onOpen` no se llama. Ejemplo: RETO cambia a la cuenta de la que habla el push antes de abrir su pantalla. |
 | `foreground` | Qué hace un push con la app abierta: `'none'` (default, no se muestra nada), `'system'` (el banner del sistema, en el mismo canal) o una función que recibe el mensaje (por ejemplo, para un toast propio). |
 | `channels` | Los canales de Android que se crean al arrancar, antes de que pueda llegar un push. |
 
