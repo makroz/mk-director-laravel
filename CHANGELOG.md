@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — notificaciones push, corte 10: la guía «push en 30 minutos»
+
+**Docs** (sin cambio de código)
+- `docs/guides/push.md`: de cero a un push que llega con la app cerrada y abre la pantalla al tocarlo. Servidor
+  (tablas, `.env`, rutas opt-in, `MkPush`, la cola y `mk:push:prune`), app Expo con RN Firebase (guarda de Expo Go,
+  handler de segundo plano en `index.js`, `MkPushProvider`, `useMkPush`), canales y personalización, temas, OneSignal,
+  iOS y la tabla de trampas medidas.
+- 🔴 La trampa nueva: `messaging_android_notification_color` en `firebase.json` apuntando a un recurso de la app rompe
+  el build release de Android (`:react-native-firebase_messaging:verifyReleaseResources`). El color va por el plugin
+  de `expo-notifications` más un config plugin con `tools:replace`; la guía trae el código.
+- iOS queda documentado como límite conocido: compila y corre en el simulador, sin probar todavía en un iPhone real.
+- README: la función en «Características Core», con el link a la guía.
+
 ## [UNRELEASED] — notificaciones push: poda de teléfonos que no se ven
 
 **Added** (aditivo, sin BC; sin migración)
