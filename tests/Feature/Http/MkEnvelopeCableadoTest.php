@@ -47,12 +47,12 @@ afterEach(function () {
 });
 
 /** Levanta la app con el flag en el estado pedido y publica una ruta sin sobre. */
-function armarMundoDelSobre(object $test, ?bool $forzar): void
+function armarMundoDelSobre(object $test, ?bool $forzar, array $respuesta = []): void
 {
     $mk = ['tenant' => ['enabled' => false]];
 
     if ($forzar !== null) {
-        $mk['response'] = ['force_envelope' => $forzar];
+        $mk['response'] = ['force_envelope' => $forzar] + $respuesta;
     }
 
     $test->bootHttpApp(EnvelopeAdmin::class, $mk);
@@ -165,4 +165,51 @@ test('CONTROL: sin el flag, la ruta de módulo sigue sin sobre', function () {
     Route::get('api/modulo/pedidos', fn () => new JsonResponse(['data' => ['id' => 9]], 200));
 
     expect(cuerpoDe($this, '/api/modulo/pedidos'))->not->toHaveKey('success');
+});
+
+/*
+|--------------------------------------------------------------------------
+| HALLAZGO 78 — UNA RUTA CON CONTRATO DE UN TERCERO TIENE QUE PODER SALIR SIN SOBRE.
+|--------------------------------------------------------------------------
+|
+| El webhook del Banco Ganadero (mozzo-api) lee `result` y `token` en la RAÍZ
+| del JSON. Con el sobre el login contestaba `200 {"success": true, "data":
+| {"result": ..., "token": ...}}`: un «anduvo» para el que mira el status, y un
+| banco que no encuentra el token. `Request::is()` no admite negación, así que
+| `envelope_paths` solo no alcanza para dejarla afuera.
+*/
+
+test('🔴 una ruta en `envelope_except` sale SIN sobre aunque caiga en `envelope_paths`', function () {
+    armarMundoDelSobre($this, forzar: true, respuesta: [
+        'envelope_paths' => ['api/*'],
+        'envelope_except' => ['api/webhooks/*'],
+    ]);
+
+    Route::get('api/webhooks/banco/eco', fn () => new JsonResponse(['result' => 'COD000', 'token' => 't'], 200));
+
+    expect(cuerpoDe($this, '/api/webhooks/banco/eco'))->toBe(['result' => 'COD000', 'token' => 't']);
+});
+
+test('CONTROL: `envelope_except` sólo saca lo que nombra — el resto de `api/*` sigue con sobre', function () {
+    armarMundoDelSobre($this, forzar: true, respuesta: [
+        'envelope_paths' => ['api/*'],
+        'envelope_except' => ['api/webhooks/*'],
+    ]);
+
+    $cuerpo = cuerpoDe($this, '/api/pedidos');
+
+    expect($cuerpo['success'])->toBeTrue()
+        ->and($cuerpo['data']['id'])->toBe(7);
+});
+
+test('⚠️ CONTROL: el default de `envelope_except` es vacío — sin configurarlo nada cambia', function () {
+    // El archivo de config se lee como texto: `require` necesita la app entera.
+    expect((string) file_get_contents(dirname(__DIR__, 3).'/config/mk_director.php'))
+        ->toContain("'envelope_except' => [],");
+
+    armarMundoDelSobre($this, forzar: true);
+
+    Route::get('api/webhooks/banco/eco', fn () => new JsonResponse(['result' => 'COD000'], 200));
+
+    expect(cuerpoDe($this, '/api/webhooks/banco/eco'))->toHaveKey('success', true);
 });
