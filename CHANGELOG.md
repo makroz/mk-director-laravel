@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `?sort=` desempata por la clave primaria
+
+**Fixed** (sin BC en la forma de la respuesta; cambia el orden sólo entre filas que empataban)
+- `ListManager::applySorting()`: un `?sort=<columna>` terminaba en `ORDER BY <columna>` sin nada más. Con columnas
+  que se repiten (`status`, `created_at`, `occurred_at`) no es un orden total: PostgreSQL devuelve las filas
+  empatadas en cualquier orden en cada ejecución, y con `LIMIT/OFFSET` una fila sale en dos páginas y otra en
+  ninguna. Ahora el orden termina siempre en la clave primaria (`getKeyName()`), con la dirección de la última
+  columna para que `cursorPaginate()` siga teniendo una sola dirección. No se agrega dos veces si el cliente ya
+  ordena por la clave. Sin `sort` válido el orden sigue siendo sólo la clave, `desc`.
+- Medido en los consumidores el 2026-10-13: en mozzo, `StockMovementController` inserta de 25 a 648 movimientos
+  con el mismo `occurred_at`; en reto, 502 de 509 members comparten `created_at` con otra fila.
+- Test: `tests/Unit/ListSortingTieBreakerTest.php`. Afirma el `ORDER BY` y no pagina, porque en SQLite los empates
+  salen siempre igual y un test de paginación quedaría verde con el bug puesto.
+
 ## [UNRELEASED] — notificaciones push, corte 10: la guía «push en 30 minutos»
 
 **Docs** (sin cambio de código)
