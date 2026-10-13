@@ -470,6 +470,7 @@ class ListManager
         // in the allowed-sort set so consumers with custom PK names can
         // sort by their PK.
         $fillable = array_merge($model->getFillable(), [$model->getKeyName(), 'created_at', 'updated_at']);
+        $lastDir = 'desc';
 
         foreach ($sortFields as $field) {
             $field = trim($field);
@@ -484,13 +485,29 @@ class ListManager
             if (in_array($field, $fillable)) {
                 $currentDir = strtolower($currentDir) === 'asc' ? 'asc' : 'desc';
                 $query->orderBy($field, $currentDir);
+                $lastDir = $currentDir;
             }
         }
 
         // Fallback si no hay órdenes válidos
         if (empty($query->getQuery()->orders)) {
             // LAR-13: same getKeyName() rationale as above.
-            $query->orderBy($model->getKeyName(), 'desc');
+            return $query->orderBy($model->getKeyName(), 'desc');
+        }
+
+        // Tie-breaker: `?sort=status` alone is not a total order. Rows that
+        // tie on every sort column come back in whatever order the engine
+        // picks for that execution, so with LIMIT/OFFSET the same row can
+        // show up on two pages and another on none (PostgreSQL does this in
+        // practice). Ending with the primary key makes the order total; it
+        // follows the last column's direction so `cursorPaginate()` keeps
+        // a single direction.
+        $keyName = $model->getKeyName();
+        $alreadyOrdered = collect($query->getQuery()->orders)
+            ->contains(fn (array $order): bool => ($order['column'] ?? null) === $keyName);
+
+        if (! $alreadyOrdered) {
+            $query->orderBy($keyName, $lastDir);
         }
 
         return $query;
