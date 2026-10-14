@@ -12,6 +12,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `?cols=` ya no deja a las relaciones sin su clave
+
+**Fixed** (API pública: se agrega `ListManager::keepRelationKeys()`, nada cambia de firma)
+- `?cols=name` sobre un controller con `'with' => ['category']` (BelongsTo) devolvía cada fila con `category: null`,
+  200 y `success: true`: `applyColumns()` arma el SELECT con lo pedido ANTES de que `index()` agregue los `with`, así
+  que el `category_id` no viajaba y el eager load no tenía con qué emparejar. Lo mismo con un HasMany (sin el PK del
+  padre los hijos salían `[]`) y con `?include=`.
+- Ahora `index()`, con todos los `with` ya puestos (controller, `?include=`, `beforeSearch`, plugins), llama a
+  `ListManager::keepRelationKeys()`: si el SELECT tiene una lista explícita, agrega —calificadas con la tabla y sin
+  duplicar— el PK y la clave que pide cada relación de primer nivel (BelongsTo: la FK; MorphTo: FK y tipo;
+  HasOne/HasMany/MorphOne/MorphMany y los `*Through`: la local key; BelongsToMany/MorphToMany: la parent key).
+  Sin `cols` no toca nada.
+- ⚠️ Esas claves aparecen en el JSON aunque no estén en `cols` (con `?cols=name&with=category`: `id`, `category_id`).
+- `withCount` no estaba roto: su subquery se correlaciona contra la tabla, no contra una columna del SELECT.
+- `show()` no pasa por `applyColumns()`: no aplica.
+- Consumidores (medido 2026-10-13): ni RETO, ni Mozzo, ni `@makroz/*` mandan `cols` hoy.
+
+**Tests**
+- `tests/Feature/Listing/ListColumnsKeepRelationKeysTest.php`, por el `index()` real: BelongsTo, HasMany e
+  `?include=` con `?cols=name` (rojos sin el fix), `withCount` (guarda; verde antes y después), y sin `cols` el
+  SELECT queda en `*`.
+
 ## [UNRELEASED] — `HasMkReactions`: dos reacciones a la vez ya no pierden el contador
 
 **Fixed** (sin cambios de API pública)
