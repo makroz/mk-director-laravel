@@ -673,6 +673,13 @@ return [
         // `sync` eso le recorta la memoria a todo lo que venga después.
         'job_memory_limit' => env('MK_EXPORT_JOB_MEMORY', '2G'),
 
+        // Máximo de filas por export. Con más, el reporte queda `failed` con
+        // un mensaje que pide acotar el filtro, en vez de agotar la memoria
+        // del worker armando el archivo. 0 = sin tope.
+        // ⚠️ Lo aplica el `index()` de CRUDSmart. Un controller con `index()`
+        // propio que use `ExportaListados` arma su consulta y no lo ve.
+        'max_rows' => (int) env('MK_EXPORT_MAX_ROWS', 0),
+
         /*
         | Directorios donde mPDF busca fuentes.
         |

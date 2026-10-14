@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — tope de filas opcional para el export
+
+**Added**
+- `mk_director.export.max_rows` (`MK_EXPORT_MAX_ROWS`, default `0` = sin tope). Dentro del job de export,
+  `CRUDSmart::index()` cuenta el filtro ANTES de traer las filas; si se pasa, el reporte queda `failed` con
+  "El filtro trae N filas y el máximo es M. Acote el filtro para exportar." y el job no se reintenta.
+- Antes, un filtro demasiado ancho se traía entero y el formato armaba el archivo en memoria: el worker se quedaba
+  sin memoria y el reporte moría como "Job failed" sin decir por qué.
+- ⚠️ Sólo lo aplica el `index()` de CRUDSmart. Un controller con `index()` propio que use `ExportaListados` no lo ve.
+
 ## [UNRELEASED] — `mk:make:auth-user` ya no genera el `paginate()` del Repository
 
 **Removed** (sólo afecta al código que se genera de acá en más)

@@ -22,6 +22,7 @@ use Mk\Director\Contracts\MkModuleServiceInterface;
 use Mk\Director\DTOs\DTOFactory;
 use Mk\Director\Export\AsyncExportManager;
 use Mk\Director\Export\Concerns\ExportaListados;
+use Mk\Director\Export\ExportTooLargeException;
 use Mk\Director\Managers\CacheManager;
 use Mk\Director\Managers\ListManager;
 use Mk\Director\Managers\PluginManager;
@@ -629,6 +630,15 @@ trait CRUDSmart
 
         $resolver = function () use ($query, $perPage, $listFeatures, $esElJobDeExport) {
             if ($esElJobDeExport) {
+                // El tope se mide ANTES de traer las filas: el formato arma el
+                // archivo entero en memoria, así que pasarse se descubre tarde
+                // y caro. Un COUNT cuesta una fracción del `get()`.
+                $max = (int) config('mk_director.export.max_rows', 0);
+
+                if ($max > 0 && ($total = $query->toBase()->getCountForPagination()) > $max) {
+                    throw ExportTooLargeException::make($total, $max);
+                }
+
                 $rows = $query->get();
 
                 return new LengthAwarePaginator($rows, $rows->count(), max(1, $rows->count()), 1);

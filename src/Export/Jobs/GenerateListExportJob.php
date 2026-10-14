@@ -20,6 +20,7 @@ use Mk\Director\Export\AsyncExportManager;
 use Mk\Director\Export\Contracts\ExportConfigInterface;
 use Mk\Director\Export\ExportConfigRegistry;
 use Mk\Director\Export\ExportService;
+use Mk\Director\Export\ExportTooLargeException;
 use Mk\Director\Export\FilasDelExport;
 use Mk\Director\Export\Support\MemoryLimit;
 use Mk\Director\Models\MkReport;
@@ -94,6 +95,10 @@ class GenerateListExportJob implements ShouldQueue
             $buzon->vaciar();
 
             $this->guardar($report, $binary);
+        } catch (ExportTooLargeException $e) {
+            // Se registra y NO se relanza: reintentar da lo mismo. Ver la
+            // excepción.
+            $report->markFailed($e->getMessage());
         } catch (Throwable $e) {
             Log::error('[mk-director] export: falló', [
                 'report_id' => $this->reportId,
