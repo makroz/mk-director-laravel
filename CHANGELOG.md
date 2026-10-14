@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `mk:make:auth-user` ya no genera el `paginate()` del Repository
+
+**Removed** (sólo afecta al código que se genera de acá en más)
+- `admin-repository.stub` y `admin-repository-interface.stub` ya no emiten `paginate(array $filters)`. Nadie lo
+  llamaba: el listado del scope pasa por `CRUDSmart::index()` + `ListManager` con el `searchable` del controller.
+  Medido 2026-10-14: en RETO (Member, Admin) y Mozzo (Mesero, Admin) no tenía ningún llamador en `app/`; sólo tests.
+- Era además una segunda búsqueda que divergía de la real: `like` sensible a mayúsculas en PostgreSQL, sin escapar
+  `%`/`_`, y ordenada por `created_at` sin desempate.
+- Los consumidores que ya lo tienen generado lo borran a mano (RETO y Mozzo, en sus propios PRs).
+
 ## [UNRELEASED] — la búsqueda ya no distingue mayúsculas en PostgreSQL
 
 **Fixed** (sin cambios de API)
