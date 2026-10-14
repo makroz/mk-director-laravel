@@ -12,6 +12,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — el listado y el export sin una query por fila; la suite con `preventLazyLoading`
+
+**Fixed** (sin cambios de API pública ni de la forma de la respuesta)
+- `CRUDSmart::index()` sobre un modelo `AuthUser`: el `loadMissing(['roles', 'directAbilities'])` corría dentro de un
+  `foreach`, fila por fila — 2 queries por fila cuando el controller no las tenía en su `with`. Ahora va en lote sobre
+  la página entera. Medido: **8 → 4 queries con 3 filas, 22 → 4 con 10**.
+- Export de un listado con una columna con punto (`category.name`) cuya relación no está en el `with`: `RowValue` leía
+  `$fila->category` y Eloquent la traía de a una por fila (con `preventLazyLoading` prendido, una
+  `LazyLoadingViolationException`). `AsyncExportManager` ahora carga en lote las relaciones que piden las columnas con
+  punto del `ExportConfig` antes de dejar las filas en el buzón del job, todavía con el usuario y el tenant del reporte.
+  Corta en el primer tramo que no es relación, así que un atributo con punto no rompe nada. Medido: **4 → 2 queries
+  con 3 filas, 11 → 2 con 10**. Lo que lee un `renderer()` propio no se puede deducir: ese módulo pone la relación en
+  su `with`.
+- Consumidores (medido 2026-10-13): RETO y Mozzo ya ponen `roles` y `directAbilities` en el `with` de sus listados de
+  `AuthUser`, y ningún `ExportConfig` suyo usa columnas con punto: no cambia nada para ellos hoy.
+
+**Tests**
+- `tests/Pest.php` prende `Model::preventLazyLoading()` para TODA la suite — no en `src/`: prenderlo es decisión de cada
+  app. Con el guard prendido la suite existente dio cero violaciones.
+- `tests/Feature/ListadoSinNMasUnoTest.php`: presupuesto de queries con 3 y con 10 filas para los dos casos. El del
+  `AuthUser` lo atrapa sólo la cuenta: un `loadMissing` en un `foreach` es carga explícita y el guard no la ve.
+
 ## [UNRELEASED] — `?sort=` desempata por la clave primaria
 
 **Fixed** (sin BC en la forma de la respuesta; cambia el orden sólo entre filas que empataban)

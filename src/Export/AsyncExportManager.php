@@ -4,8 +4,12 @@ declare(strict_types=1);
 
 namespace Mk\Director\Export;
 
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Mk\Director\Export\Contracts\CustomReportInterface;
 use Mk\Director\Models\MkReport;
 use Mk\Director\Tenancy\TenantContext;
@@ -67,7 +71,7 @@ final class AsyncExportManager
         // Re-entrada desde el job: acá NO se pide un export nuevo. Ver la
         // constante de arriba.
         if (! empty($request->input(self::MARCA_DE_REENTRADA))) {
-            return $this->entregarleLasFilasAlJob($data);
+            return $this->entregarleLasFilasAlJob($data, $type);
         }
 
         $user = $request->user();
@@ -154,14 +158,86 @@ final class AsyncExportManager
      * Es el otro lado del corte de re-entrada: el job re-ejecutó el controller
      * y lo que salió de ahí es la lista de ESE reporte, no de uno nuevo.
      */
-    private function entregarleLasFilasAlJob(iterable $data): JsonResponse
+    private function entregarleLasFilasAlJob(iterable $data, string $type): JsonResponse
     {
+        $this->precargarLasRelacionesDeLasColumnas($data, $type);
+
         $this->buzon->dejar($data);
 
         // ⚠️ El job no mira esta respuesta —llama al controller sólo para que
         // deje las filas—, pero devolver algo es parte del contrato de
         // `index()`.
         return new JsonResponse(['success' => true, 'filas_entregadas' => true], 200);
+    }
+
+    /**
+     * Carga EN LOTE las relaciones que piden las columnas con punto del
+     * `ExportConfig` (`category.name` → `category`).
+     *
+     * 🔴 Sin esto el motor las traía de a UNA por fila: `RowValue` lee
+     * `$fila->category` y Eloquent hace una query cada vez que la relación no
+     * vino en el `with` del controller: una query más por fila y por relación
+     * (medido: 4 queries con 3 filas, 11 con 10; ahora 2 y 2). Con 2+ modelos y `preventLazyLoading` prendido es
+     * una `LazyLoadingViolationException` (medido en `ListadoSinNMasUnoTest`).
+     *
+     * ⚠️ Va ACÁ, adentro del `index()` que re-ejecuta el job, y no en el
+     * render: acá todavía corre con el usuario y el tenant del reporte, así
+     * que los scopes de la relación ven lo mismo que vería la pantalla.
+     *
+     * ⚠️ Sólo columnas con punto: lo que lee un `renderer()` propio no se
+     * puede deducir. Ese módulo pone la relación en su `with`.
+     */
+    private function precargarLasRelacionesDeLasColumnas(iterable $data, string $type): void
+    {
+        $filas = is_array($data) && isset($data['data']) && is_iterable($data['data']) ? $data['data'] : $data;
+
+        // Un generator se consumiría al recorrerlo: sólo listas ya armadas.
+        if (! is_array($filas) && ! $filas instanceof Collection) {
+            return;
+        }
+
+        $modelo = collect($filas)->first();
+        $config = $this->configRegistry->get($type);
+
+        if (! $modelo instanceof Model || $config === null) {
+            return;
+        }
+
+        $relaciones = [];
+        foreach ($config->columns() as $columna) {
+            if ($ruta = self::rutaDeRelaciones($modelo, $columna->key)) {
+                $relaciones[$ruta] = $ruta;
+            }
+        }
+
+        if ($relaciones !== []) {
+            (new EloquentCollection(collect($filas)->whereInstanceOf($modelo::class)->all()))
+                ->loadMissing(array_values($relaciones));
+        }
+    }
+
+    /**
+     * El tramo de relaciones de una clave con punto: `category.parent.name`
+     * → `category.parent`. Corta en el primer tramo que NO es relación
+     * (`meta.color` sobre un atributo → `''`), así un atributo con punto no
+     * termina en un `loadMissing` de una relación que no existe.
+     */
+    private static function rutaDeRelaciones(Model $modelo, string $clave): string
+    {
+        $ruta = [];
+
+        foreach (array_slice(explode('.', $clave), 0, -1) as $tramo) {
+            $relacion = $modelo->isRelation($tramo) ? $modelo->{$tramo}() : null;
+
+            if (! $relacion instanceof Relation) {
+                break;
+            }
+
+            $ruta[] = $tramo;
+            $modelo = $relacion->getRelated();
+        }
+
+        return implode('.', $ruta);
     }
 
     /**
