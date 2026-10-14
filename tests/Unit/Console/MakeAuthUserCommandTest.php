@@ -847,8 +847,10 @@ test('F10-B16: PluginManager::registerPlugins() skip non-string values (defense-
 // falla (regression guard contra la knowledge regresión).
 
 /**
- * Busca el SKILL.md canónico subiendo desde el paquete hasta encontrar el
- * workspace `.makromania/`. Devuelve null si no está.
+ * Busca el SKILL.md canónico subiendo desde el paquete. La fuente única es el
+ * repo makroz/claude-skills (`claude-skills/skills/...`, clonado junto al
+ * monorepo); `.makromania/agency/skills/...` queda como respaldo para setups
+ * viejos (hoy es un symlink a lo mismo). Devuelve null si no está.
  *
  * El SKILL.md NO vive en este repo: vive en el workspace Makromania. Antes acá
  * había la ruta ABSOLUTA de la máquina de Mario hardcodeada
@@ -861,10 +863,12 @@ function findMakromaniaSkillMd(): ?string
     $dir = dirname(__DIR__, 3);
 
     for ($i = 0; $i < 8; $i++) {
-        $candidate = $dir.'/.makromania/agency/skills/mk-director-laravel/SKILL.md';
+        foreach (['/claude-skills/skills', '/.makromania/agency/skills'] as $base) {
+            $candidate = $dir.$base.'/mk-director-laravel/SKILL.md';
 
-        if (file_exists($candidate)) {
-            return $candidate;
+            if (file_exists($candidate)) {
+                return $candidate;
+            }
         }
 
         $parent = dirname($dir);
@@ -887,7 +891,7 @@ test('F10-B15: SKILL.md documenta gotcha de RefreshDatabase + SQLite in-memory',
         // Skip explícito en vez de un rojo que no dice nada: el guard tiene
         // valor donde el archivo existe, y donde no, no hay nada que verificar.
         test()->markTestSkipped(
-            'SKILL.md no encontrado: requiere el workspace .makromania/, que no forma parte de este repo.',
+            'SKILL.md no encontrado: requiere el repo claude-skills clonado junto al monorepo, que no forma parte de este repo.',
         );
     }
 
@@ -899,8 +903,9 @@ test('F10-B15: SKILL.md documenta gotcha de RefreshDatabase + SQLite in-memory',
     // Pin 2: el workaround `DatabaseMigrations` está pineado.
     expect($source)->toContain('DatabaseMigrations');
 
-    // Pin 3: el antipatrón `RefreshDatabase` está marcado como NO usar.
-    expect($source)->toContain('NO HACER ESTO');
+    // Pin 3: el antipatrón `RefreshDatabase` está marcado como NO usar. La
+    // skill está en inglés desde que vive en claude-skills.
+    expect($source)->toContain('DO NOT DO THIS');
 });
 
 // ── FEEDBACK10 (R-PKG-050, Mario 2026-07-10) — file fields: dynamic scaffolding ─
