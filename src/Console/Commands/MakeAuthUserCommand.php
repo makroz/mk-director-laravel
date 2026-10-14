@@ -1919,10 +1919,9 @@ PHP;
         $fieldRules = $this->buildProfileFieldRules($profileFields, $requiredFields, $scopePlural, $loginField, $fileFieldNames);
         $crudReplacements = array_merge([
             // Columnas de la búsqueda de texto libre (el `searchable` del
-            // controller y el `paginate()` del Repository). Salen de las
-            // columnas que la migración CREA: el Repository buscaba en
-            // `full_name` y `ci` fijos, y en un scope sin esas columnas la
-            // búsqueda era un 500 de SQL.
+            // controller, que usa el listado vía ListManager). Salen de las
+            // columnas que la migración CREA: con `full_name` y `ci` fijos,
+            // en un scope sin esas columnas la búsqueda era un 500 de SQL.
             '{{searchableColumns}}' => $this->buildSearchableColumns($profileFields, $loginField),
             /*
              * Prefijo de las abilities que consulta `{Scope}Policy`.

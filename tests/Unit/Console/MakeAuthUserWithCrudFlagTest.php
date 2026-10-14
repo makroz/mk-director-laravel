@@ -173,7 +173,10 @@ test('AdminRepository stub implementa interface y tiene CRUD methods', function 
     $stub = (string) file_get_contents(packageRootCrud().'/src/Stubs/auth-user/admin-repository.stub');
 
     expect($stub)->toContain('class {{ModuleName}}Repository implements {{ModuleName}}RepositoryInterface');
-    expect($stub)->toContain('public function paginate(array $filters): LengthAwarePaginator');
+    // No paginate(): the listing goes through CRUDSmart + ListManager (the
+    // controller's `searchable`). The generated paginate() had no caller in
+    // any consumer and still searched with a case-sensitive LIKE on pg.
+    expect($stub)->not->toContain('function paginate(');
     expect($stub)->toContain('public function findById(string $id, array $with = []): ?{{ModuleName}}');
     expect($stub)->toContain('public function create(array $data): {{ModuleName}}');
     expect($stub)->toContain('public function update({{ModuleName}} ${{moduleNameLower}}, array $data): {{ModuleName}}');

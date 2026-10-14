@@ -14,12 +14,12 @@ use Mk\Director\Tests\MkLaravelTestCase;
  *
  * El Repository generado buscaba en `full_name` y `ci`, y filtraba por
  * `is_active`: columnas de un consumer viejo, no de un scope por default (name,
- * email, phone, status). Con la primera letra tipeada en el buscador, el SQL
- * reventaba contra una columna inexistente. Y el `searchable` del controller
- * (el que usa el listado de verdad, vía `ListManager`) estaba fijo en
- * `['name', 'email']`: con `--login-field=ci` no se podía buscar por CI.
+ * email, phone, status). Y el `searchable` del controller (el que usa el
+ * listado de verdad, vía `ListManager`) estaba fijo en `['name', 'email']`:
+ * con `--login-field=ci` no se podía buscar por CI. El `paginate()` del
+ * Repository ya no se genera (nadie lo llamaba); queda el listado.
  *
- * Ahora las dos listas salen de las columnas reales: nombre, campo de login y
+ * Ahora el `searchable` sale de las columnas reales: nombre, campo de login y
  * los profile fields de texto (no los de archivo, no `status`, que es un filtro
  * de enum y no texto libre).
  *
@@ -113,7 +113,12 @@ function listSearch(string $modelClass, array $searchable, string $term): int
     return ListManager::apply(Request::create('/', 'GET', ['search' => $term]), new $modelClass, $searchable)->count();
 }
 
-test('scope por default: el Repository y el listado buscan por nombre y email sin tocar columnas inexistentes', function () {
+function listSearchQueries(string $modelClass, array $searchable, string $term): \Closure
+{
+    return fn () => ListManager::apply(Request::create('/', 'GET', ['search' => $term]), new $modelClass, $searchable)->get();
+}
+
+test('scope por default: el listado busca por nombre y email sin tocar columnas inexistentes', function () {
     [, $table] = generateAndLoadSearchableScope($this, ['scope' => 'Seeker'], 'seekers');
 
     $model = 'App\\Modules\\Seeker\\Models\\Seeker';
@@ -126,14 +131,10 @@ test('scope por default: el Repository y el listado buscan por nombre y email si
         expect(Schema::hasColumn($table, $column))->toBeTrue("`{$column}` no existe en `{$table}`");
     }
 
-    // Repository: encuentra, y sus consultas no citan columnas inexistentes
-    // (antes: `full_name`, `ci`, e `is_active` al filtrar).
-    $repository = new ('App\\Modules\\Seeker\\Repositories\\SeekerRepository');
-    expect($repository->paginate(['search' => 'Pérez'])->total())->toBe(1);
-    expect($repository->paginate(['search' => 'ana@example'])->total())->toBe(1);
-    assertQueriesOnlyReferenceExistingColumns($table, fn () => $repository->paginate(['search' => 'Pérez', 'is_active' => true]));
+    // Las consultas del listado no citan columnas inexistentes.
+    assertQueriesOnlyReferenceExistingColumns($table, listSearchQueries($model, $searchable, 'Pérez'));
 
-    // Listado (el camino de CRUDSmart): mismo resultado con el `searchable` generado.
+    // Listado (el camino de CRUDSmart) con el `searchable` generado.
     expect(listSearch($model, $searchable, 'Pérez'))->toBe(1);
     expect(listSearch($model, $searchable, 'otro@example'))->toBe(1);
 });
@@ -157,10 +158,8 @@ test('--login-field=ci + profile fields: busca por CI y por los de texto; no por
         expect(Schema::hasColumn($table, $column))->toBeTrue("`{$column}` no existe en `{$table}`");
     }
 
-    $repository = new ('App\\Modules\\Finder\\Repositories\\FinderRepository');
-    assertQueriesOnlyReferenceExistingColumns($table, fn () => $repository->paginate(['search' => 'betito', 'is_active' => true]));
+    assertQueriesOnlyReferenceExistingColumns($table, listSearchQueries($model, $searchable, 'betito'));
     foreach (['4455667', 'betito', 'pizzas'] as $term) {
-        expect($repository->paginate(['search' => $term])->total())->toBe(1, "Repository no encontró «{$term}»");
         expect(listSearch($model, $searchable, $term))->toBe(1, "el listado no encontró «{$term}»");
     }
 });

@@ -6,8 +6,6 @@ namespace App\Modules\{{ModuleName}}\Repositories;
 
 use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
 use App\Modules\{{ModuleName}}\Repositories\Contracts\{{ModuleName}}RepositoryInterface;
-use Illuminate\Contracts\Pagination\LengthAwarePaginator;
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Mk\Director\Auth\Models\Ability;
@@ -24,32 +22,6 @@ use Mk\Director\Auth\Models\Role;
  */
 class {{ModuleName}}Repository implements {{ModuleName}}RepositoryInterface
 {
-    public function paginate(array $filters): LengthAwarePaginator
-    {
-        $query = {{ModuleName}}::query()->with(['roles', 'directAbilities']);
-
-        if (! empty($filters['search'])) {
-            $search = (string) $filters['search'];
-            // Las mismas columnas que el `searchable` del controller: sólo las
-            // de texto que la tabla tiene.
-            $query->where(function (Builder $q) use ($search) {
-                foreach ({{searchableColumns}} as $column) {
-                    $q->orWhere($column, 'like', "%{$search}%");
-                }
-            });
-        }
-
-        if (! empty($filters['role_ids'])) {
-            $roleIds = (array) $filters['role_ids'];
-            $query->whereHas('roles', fn (Builder $q) => $q->whereIn('roles.id', $roleIds));
-        }
-
-        $perPage = (int) ($filters['per_page'] ?? 15);
-        $perPage = max(1, min($perPage, 100));
-
-        return $query->orderByDesc('created_at')->paginate($perPage);
-    }
-
     public function findById(string $id, array $with = []): ?{{ModuleName}}
     {
         $query = {{ModuleName}}::query();

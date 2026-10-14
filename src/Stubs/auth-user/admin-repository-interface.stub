@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Modules\{{ModuleName}}\Repositories\Contracts;
 
 use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
-use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 
 /**
  * Contrato del Repository de {{ModuleName}} users.
@@ -18,18 +17,6 @@ use Illuminate\Contracts\Pagination\LengthAwarePaginator;
  */
 interface {{ModuleName}}RepositoryInterface
 {
-    /**
-     * Lista {{moduleNamePluralLower}} con paginación + filtros.
-     *
-     * @param  array{
-     *     search?: string|null,
-     *     role_ids?: array<int, int>|null,
-     *     per_page?: int,
-     *     page?: int,
-     * }  $filters
-     */
-    public function paginate(array $filters): LengthAwarePaginator;
-
     /**
      * Encuentra un {{ModuleName}} por ID con relaciones opcionales.
      *
