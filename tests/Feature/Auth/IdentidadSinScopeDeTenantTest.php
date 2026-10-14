@@ -178,7 +178,6 @@ beforeEach(function () {
         'email' => 'super@local',
         'password' => Hash::make('secret'),
         'auth_scope' => 'admin',
-        'tenant_id' => null,
     ]);
 });
 

@@ -27,3 +27,16 @@ use Illuminate\Database\Eloquent\Model;
 // EXPLÍCITA, no lazy, y hace igual una query por fila. Eso lo atrapan los
 // tests de presupuesto de queries (`tests/Feature/ListadoSinNMasUnoTest.php`).
 Model::preventLazyLoading();
+
+// Y el resto de `Model::shouldBeStrict()`, por la misma razón: lo que el
+// paquete lee o escribe tiene que andar en un consumer que prenda el modo
+// estricto entero.
+//
+// 🔴 `preventAccessingMissingAttributes` reventaba en el paquete: el login leía
+// `two_factor_secret` en scopes sin 2FA (RETO: 1165 de 1575 tests en rojo),
+// `getTenantId()` leía `client_id` en modelos sin tenant (mozzo: 237) y
+// `MkAbilityResource` leía `module`, que la tabla no tiene. Ninguno se veía
+// sin el flag: `getAttribute()` de una columna ausente devuelve null en
+// silencio. Hallazgo 82 de mozzo-api.
+Model::preventAccessingMissingAttributes();
+Model::preventSilentlyDiscardingAttributes();

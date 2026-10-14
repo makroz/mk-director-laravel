@@ -38,10 +38,24 @@ trait HasTenantMembership
      *
      * String semantics: empty string and null both normalize to null so
      * the caller does not have to distinguish "absent" from "empty".
+     *
+     * A model whose table has no tenant column also returns null. It is asked
+     * with `hasAttribute()` first because, under Eloquent strict mode
+     * (`Model::preventAccessingMissingAttributes()`), reading a missing column
+     * throws `MissingAttributeException` instead of returning null. Measured
+     * in mozzo-api: 237 tests red on `CustomerAccount` and `Operator`.
+     *
+     * ⚠️ `hasAttribute()` cannot tell "the table has no such column" from "the
+     * query did not select it". The callers read the authenticated user, which
+     * is always loaded with every column, so here it means the former.
      */
     public function getTenantId(): string|int|null
     {
         $column = $this->getTenantColumn();
+
+        if (! $this->hasAttribute($column)) {
+            return null;
+        }
 
         $value = $this->getAttribute($column);
 

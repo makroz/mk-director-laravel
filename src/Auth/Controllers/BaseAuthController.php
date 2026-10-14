@@ -2226,9 +2226,17 @@ abstract class BaseAuthController extends BaseController
     /**
      * Lee un atributo del segundo factor tolerando que la columna no exista
      * (scope generado sin `--two-factor`) y que el modelo no sea un Eloquent.
+     *
+     * ⚠️ Con `hasAttribute()` y no sólo `getAttribute()`: con el modo estricto
+     * de Eloquent una columna ausente tira en vez de devolver null. Ver
+     * {@see \Mk\Director\Auth\Models\AuthUser::hasConfirmedTwoFactor()}.
      */
     protected function twoFactorAttribute(Authenticatable $user, string $column): mixed
     {
+        if (method_exists($user, 'hasAttribute') && ! $user->hasAttribute($column)) {
+            return null;
+        }
+
         return method_exists($user, 'getAttribute') ? $user->getAttribute($column) : null;
     }
 

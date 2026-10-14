@@ -332,13 +332,20 @@ abstract class AuthUser extends Authenticatable implements AuthenticatableContra
      *
      * Tolera la ausencia de las columnas (scope generado sin `--two-factor`) y
      * un secreto vacío o en blanco.
+     *
+     * 🔴 La tolerancia se pregunta con `hasAttribute()`, no se deja en manos de
+     * `getAttribute()`: con `Model::preventAccessingMissingAttributes()` (parte
+     * de `shouldBeStrict()`) leer una columna que no está tira
+     * `MissingAttributeException`, y el login entero respondía 500. Medido en
+     * RETO: 1165 de 1575 tests en rojo con el modo estricto prendido.
      */
     public function hasConfirmedTwoFactor(): bool
     {
-        $secret = $this->getAttribute('two_factor_secret');
+        $secret = $this->hasAttribute('two_factor_secret') ? $this->getAttribute('two_factor_secret') : null;
 
         return is_string($secret)
             && trim($secret) !== ''
+            && $this->hasAttribute('two_factor_confirmed_at')
             && $this->getAttribute('two_factor_confirmed_at') !== null;
     }
 
