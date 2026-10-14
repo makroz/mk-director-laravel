@@ -6,6 +6,11 @@ namespace Mk\Director\Managers;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasOneOrMany;
+use Illuminate\Database\Eloquent\Relations\HasOneOrManyThrough;
+use Illuminate\Database\Eloquent\Relations\MorphTo;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Cache;
@@ -104,6 +109,68 @@ class ListManager
 
         if (! empty($validColumns)) {
             return $query->select($validColumns);
+        }
+
+        return $query;
+    }
+
+    /**
+     * Agrega al SELECT las claves que necesitan las relaciones a cargar.
+     *
+     * 🔴 `applyColumns()` corre ANTES de que el controller agregue su `with`,
+     * así que con `?cols=name` y `'with' => ['category']` el `category_id` no
+     * viajaba: el eager load no tenía con qué emparejar y cada fila salía con
+     * `category: null` — 200, sin error. Con un HasMany faltaba el PK del padre
+     * y los hijos salían `[]`. Por eso esto se llama al FINAL, con todos los
+     * `with` ya puestos (los del controller, los de `?include=`, los de un
+     * `beforeSearch` o un plugin).
+     *
+     * Sólo actúa con una lista explícita de columnas: sin `cols` el SELECT es
+     * `*` y no hay nada que agregar. `withCount` no lo necesita (su subquery se
+     * correlaciona contra la tabla, no contra una columna del SELECT).
+     *
+     * ⚠️ Las claves agregadas aparecen en la respuesta aunque no estén en `cols`.
+     */
+    public static function keepRelationKeys(Builder $query): Builder
+    {
+        $columns = $query->getQuery()->columns;
+
+        if ($columns === null || in_array('*', $columns, true)) {
+            return $query;
+        }
+
+        $model = $query->getModel();
+        $table = $model->getTable();
+
+        if (in_array($table.'.*', $columns, true)) {
+            return $query;
+        }
+
+        $needed = [$model->getKeyName()];
+        $relations = array_unique(array_map(
+            static fn (string $name): string => explode('.', $name)[0],
+            array_keys($query->getEagerLoads()),
+        ));
+
+        foreach ($relations as $name) {
+            $relation = $query->getRelation($name);
+
+            // MorphTo hereda de BelongsTo (y MorphToMany de BelongsToMany):
+            // el orden de los `instanceof` importa. Una relación propia que no
+            // calza en ninguno se queda con el PK, que siempre va.
+            $needed = [...$needed, ...match (true) {
+                $relation instanceof MorphTo => [$relation->getForeignKeyName(), $relation->getMorphType()],
+                $relation instanceof BelongsTo => [$relation->getForeignKeyName()],
+                $relation instanceof BelongsToMany => [$relation->getParentKeyName()],
+                $relation instanceof HasOneOrMany, $relation instanceof HasOneOrManyThrough => [$relation->getLocalKeyName()],
+                default => [],
+            }];
+        }
+
+        foreach (array_unique($needed) as $column) {
+            if (! in_array($column, $columns, true) && ! in_array($table.'.'.$column, $columns, true)) {
+                $query->addSelect($table.'.'.$column);
+            }
         }
 
         return $query;

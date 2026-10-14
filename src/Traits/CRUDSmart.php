@@ -608,6 +608,10 @@ trait CRUDSmart
         // Plugin Hook: beforeQuery
         $this->getPluginManager()->fireBeforeQuery($query, $request);
 
+        // `?cols=` armó el SELECT antes de todos los `with`: sin esto, la FK
+        // o el PK que necesita cada relación no viajan y llegan vacías.
+        ListManager::keepRelationKeys($query);
+
         $perPage = ListManager::getPerPage($request);
         $page = $request->query('page', 1);
         $cursor = $request->query('cursor', '');
