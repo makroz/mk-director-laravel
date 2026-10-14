@@ -11,7 +11,6 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\UniqueConstraintViolationException;
-use Illuminate\Support\Facades\DB;
 use Mk\Director\Enums\MkCommentReportReason;
 use Mk\Director\Enums\MkCommentReportStatus;
 use Mk\Director\Traits\HasMkReactions;
@@ -145,7 +144,7 @@ class MkComment extends EloquentModel
      * con un SELECT porque entre el SELECT y el INSERT hay una ventana en la que
      * el otro request ya insertó; la única defensa real es el UNIQUE.
      *
-     * 🔴 EL INSERT VA EN `DB::transaction`, NO SUELTO. Si el reporte corre
+     * 🔴 EL INSERT VA EN UNA TRANSACCIÓN, NO SUELTO. Si el reporte corre
      * dentro de una transacción externa (un request con varias escrituras, o
      * `RefreshDatabase` en los tests contra Postgres), un INSERT que falla por
      * el UNIQUE aborta la transacción ENTERA —"current transaction is aborted"—
@@ -153,12 +152,16 @@ class MkComment extends EloquentModel
      * SAVEPOINT anidado y la transacción externa sobrevive, así que el catch
      * puede consultar el reporte existente. Es el mismo motivo por el que
      * `react()` hace el toggle adentro de una transacción.
+     *
+     * ⚠️ En la conexión DEL MODELO, no con `DB::transaction()`: el reporte la
+     * hereda, y un savepoint abierto en la conexión por defecto no protege
+     * nada en otra. Lo mismo vale para la moderación de abajo.
      */
     public function reportBy(EloquentModel $reporter, MkCommentReportReason $reason, ?string $note = null): MkCommentReport
     {
         try {
             /** @var MkCommentReport $report */
-            $report = DB::transaction(fn (): MkCommentReport => $this->reports()->create([
+            $report = $this->getConnection()->transaction(fn (): MkCommentReport => $this->reports()->create([
                 'reporter_type' => $reporter->getMorphClass(),
                 'reporter_id' => (string) $reporter->getKey(),
                 'reason' => $reason,
@@ -189,7 +192,7 @@ class MkComment extends EloquentModel
      */
     public function hideForModeration(EloquentModel $moderator, MkCommentReportReason $reason, ?string $note = null): void
     {
-        DB::transaction(function () use ($moderator, $reason, $note): void {
+        $this->getConnection()->transaction(function () use ($moderator, $reason, $note): void {
             $this->forceFill([
                 'hidden_at' => now(),
                 'moderation_reason' => $reason,
@@ -218,7 +221,7 @@ class MkComment extends EloquentModel
      */
     public function deleteForModeration(EloquentModel $moderator): void
     {
-        DB::transaction(function () use ($moderator): void {
+        $this->getConnection()->transaction(function () use ($moderator): void {
             $this->resolvePendingReports($moderator, MkCommentReportStatus::Actioned);
             $this->delete();
         });

@@ -192,11 +192,17 @@ trait HasMkReactions
      * El cuerpo del toggle. Separado de `react()` para poder reintentarlo
      * entero — ver el catch de allá.
      *
+     * 🔴 La transacción va en la conexión DEL MODELO, no en la por defecto:
+     * las reacciones la heredan (`newRelatedInstance()`). Con
+     * `DB::transaction()`, un modelo en otra conexión corría el
+     * `lockForUpdate` en autocommit —el lock se soltaba al instante y volvía la
+     * carrera del contador— y un error a mitad de camino no deshacía el INSERT.
+     *
      * @return array{action: 'added'|'removed'|'switched', reaction: MkReaction|null}
      */
     protected function runMkReactionToggle(EloquentModel $author, MkReactionType $type): array
     {
-        return DB::transaction(function () use ($author, $type): array {
+        return $this->getConnection()->transaction(function () use ($author, $type): array {
             $this->lockMkReactable();
 
             /** @var MkReaction|null $existing */
