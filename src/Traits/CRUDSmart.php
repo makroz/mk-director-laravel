@@ -6,6 +6,7 @@ namespace Mk\Director\Traits;
 
 use Illuminate\Contracts\Pagination\CursorPaginator;
 use Illuminate\Contracts\Pagination\Paginator;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Http\Request;
@@ -648,13 +649,17 @@ trait CRUDSmart
         // pineado en v1.8.3-rc0) funcione en el index, NO solo en
         // single resource (show/me). Defense-in-depth: ZERO costo runtime
         // para non-AuthUser models (instanceof check).
+        //
+        // 🔴 En LOTE, sobre la página entera: un `$item->loadMissing()` dentro
+        // de un `foreach` son 2 queries POR FILA (medido: 8 queries con 3
+        // filas, 22 con 10). Así son 2 en total, sean 3 filas o 100. El guard
+        // de lazy loading no lo ve —es carga explícita—; lo pinea la cuenta de
+        // queries de `ListadoSinNMasUnoTest`.
         if (
             is_subclass_of($modelClass, AuthUser::class)
             || $modelClass === AuthUser::class
         ) {
-            foreach ($paginator->items() as $item) {
-                $item->loadMissing(['roles', 'directAbilities']);
-            }
+            (new EloquentCollection($paginator->items()))->loadMissing(['roles', 'directAbilities']);
         }
 
         // R-PKG-024 (v1.7.0 GA) — single-level envelope. We pass the
