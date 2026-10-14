@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `MkAbilityResource` (`module`, que la tabla `abilities` no tiene).
 - La suite del paquete corre ahora con `preventAccessingMissingAttributes` y `preventSilentlyDiscardingAttributes`
   (`tests/Pest.php`), además de `preventLazyLoading`. Hallazgo 82 de mozzo-api.
+- `BaseAuthController::dispatchAuthEventSafe()` ahora hace `report($e)` en vez de tragarse la excepción del
+  listener. El listener es el que manda el mail de recuperación: en mozzo-api, con el modo estricto prendido,
+  `forgot` respondía 200, el mail no salía y el log quedaba vacío. Sigue sin romper el login.
 
 ## [UNRELEASED] — tope de filas opcional para el export
 

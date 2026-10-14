@@ -2381,6 +2381,11 @@ abstract class BaseAuthController extends BaseController
     /**
      * Wrapper seguro sobre `AuthEvent::dispatch()` — si la clase no existe
      * en un entorno minimalista (test setup sin package), swallow el error.
+     *
+     * 🔴 Una falla del listener no rompe el login, pero se REPORTA. Antes se
+     * tragaba sin rastro, y el listener es el que manda el mail de
+     * recuperación: medido en mozzo-api con el modo estricto de Eloquent, el
+     * mail dejaba de salir, `forgot` respondía 200 y el log quedaba vacío.
      */
     private function dispatchAuthEventSafe(string $eventName, array $payload = []): void
     {
@@ -2390,8 +2395,9 @@ abstract class BaseAuthController extends BaseController
 
         try {
             AuthEvent::dispatch($eventName, $payload);
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
             // Defense-in-depth: nunca romper login por un audit event faltante.
+            report($e);
         }
     }
 }
