@@ -304,17 +304,9 @@ test('R-PKG-047 D1: BaseAuthController es SSoT — pinean los 6 métodos canóni
 // Fix: (1) agregar 'Http/Requests' al array $directories, y (2) defense-in-
 // depth en generateStub() con File::ensureDirectoryExists(dirname($targetPath))
 // antes de File::put.
-
-test('F10-B03: $directories array en fase base incluye Http/Requests (regression guard)', function () {
-    $source = commandSource();
-
-    // El array $directories de fase base debe incluir 'Http/Requests'
-    // para que la creación de carpetas sea completa y consistente con el
-    // output "📁 Creando estructura de directorios:".
-    expect($source)->toMatch(
-        '/\$directories\s*=\s*\[[^\]]*\'Http\/Requests\'[^\]]*\]/s',
-    );
-});
+//
+// Hoy la fase base ya no genera LoginRequest/MeRequest (eran código muerto, ver
+// MakeAuthUserScaffoldSummaryTest), así que (1) se fue; queda (2).
 
 test('F10-B03: generateStub() llama File::ensureDirectoryExists ANTES de File::put (defense-in-depth)', function () {
     $source = commandSource();
@@ -333,16 +325,6 @@ test('F10-B03: generateStub() llama File::ensureDirectoryExists ANTES de File::p
     expect($ensurePos)->toBeGreaterThan(0)
         ->and($putPos)->toBeGreaterThan(0)
         ->and($ensurePos)->toBeLessThan($putPos);
-});
-
-test('F10-B03: fase base pinea Http/Requests/LoginRequest.php y Http/Requests/MeRequest.php (no se pierde)', function () {
-    $source = commandSource();
-
-    // Sanity check: la fase base debe seguir pineando LoginRequest y MeRequest
-    // en Http/Requests/. Si alguien refactorea y mueve estos stubs, debe
-    // actualizar este test (no el array $directories).
-    expect($source)->toContain("'auth-user.login-request.stub', 'Http/Requests', 'LoginRequest.php'");
-    expect($source)->toContain("'auth-user.me-request.stub', 'Http/Requests', 'MeRequest.php'");
 });
 
 // ── F10-B04 regression tests (R-PKG-050) ─────────────────────────────────

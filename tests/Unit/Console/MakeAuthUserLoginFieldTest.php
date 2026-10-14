@@ -15,7 +15,7 @@ use Mk\Director\Tests\MkLaravelTestCase;
  *   - El command pasa el campo a todos los stubs via `generateStub()`.
  *   - Los stubs tienen los placeholders correctos: `{{loginField}}`,
  *     `{{emailVerifiedAtColumn}}`, `{{emailVerifiedAtCastEntry}}`,
- *     `{{mustVerifyEmailUse}}`, `{{loginFieldValidationRule}}`.
+ *     `{{mustVerifyEmailUse}}`.
  *   - El stub de model genera `$fillable`, `$loginField` y `$casts` propios
  *     con el campo dinámico (GAP-001 descubierto en design.md).
  *   - BC: sin flag, el comportamiento es idéntico a v1.4.0.
@@ -74,7 +74,6 @@ test('command passes loginField to generateStub via $extraReplacements', functio
     // (`{{emailVerifiedAtColumn}}` se borró: la migración crea la columna siempre.)
     expect($source)->toContain("'{{emailVerifiedAtCastEntry}}'");
     expect($source)->toContain("'{{mustVerifyEmailUse}}'");
-    expect($source)->toContain("'{{loginFieldValidationRule}}'");
 
     // generateStub() acepta $extraReplacements y los aplica via str_replace.
     expect($source)->toContain('array $extraReplacements = []');
