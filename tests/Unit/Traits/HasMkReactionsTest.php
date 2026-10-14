@@ -7,6 +7,8 @@ namespace Mk\Director\Tests\Unit\Traits;
 use Illuminate\Database\Eloquent\Model as EloquentModel;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Database\Query\Builder;
+use Illuminate\Database\Query\Grammars\SQLiteGrammar;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
@@ -313,6 +315,60 @@ it('no toca el contador al cambiar de tipo', function () {
     $post->react($author, MkReactionType::Love);
 
     expect($post->fresh()->reactions_count)->toBe(1);
+});
+
+// ─── El lock de la fila dueña ─────────────────────────────────────────────────
+
+/**
+ * sqlite no tiene row locks y su grammar compila `lockForUpdate()` como NADA:
+ * el SQL sale igual con o sin lock. Este grammar lo deja como comentario —
+ * sqlite lo ignora y el query log lo muestra—, así el test ve el lock pedido.
+ *
+ * Lo que prueba: el PROTOCOLO (qué se bloquea y en qué orden). Lo que NO
+ * prueba: que eso serialice dos requests — eso lo mide RETO contra Postgres
+ * con dos conexiones (`tests/Feature/Communications/ReactionsConcurrencyTest.php`).
+ *
+ * @return list<string>
+ */
+function toggleQueries(EloquentModel $post, EloquentModel $author): array
+{
+    $connection = DB::connection();
+    $connection->setQueryGrammar(new class($connection) extends SQLiteGrammar
+    {
+        protected function compileLock(Builder $query, $value): string
+        {
+            return $value === true ? '/* for update */' : '';
+        }
+    });
+
+    $connection->flushQueryLog();
+    $connection->enableQueryLog();
+    $post->react($author);
+
+    return array_column($connection->getQueryLog(), 'query');
+}
+
+it('con contador, bloquea la fila dueña como PRIMERA sentencia del toggle', function () {
+    // 🔴 El lock sobre la reacción del autor NO serializa un alta: la fila no
+    // existe todavía. Sin el lock del dueño primero, dos autores a la vez
+    // cuentan sin verse y el último deja el contador en 1 con dos filas.
+    $post = ReactableCounted::create([]);
+
+    $queries = toggleQueries($post, ReactionAuthorBigint::create([]));
+
+    expect($queries[0])->toBe('select "id" from "posts_counted" where "id" = ? limit 1 /* for update */')
+        ->and($queries[1])->toContain('from "mk_reactions"')->toEndWith('/* for update */');
+});
+
+it('sin contador, no bloquea la fila dueña', function () {
+    // No hay número que proteger: una fila por autor la garantizan el UNIQUE y
+    // el reintento. Bloquear acá serializaría un post caliente para nada.
+    $post = ReactablePost::create([]);
+
+    $queries = toggleQueries($post, ReactionAuthorBigint::create([]));
+
+    expect($queries[0])->toContain('from "mk_reactions"')
+        ->and(collect($queries)->filter(fn (string $q): bool => str_contains($q, 'from "posts"')))->toBeEmpty();
 });
 
 // ─── Borrado del dueño ────────────────────────────────────────────────────────

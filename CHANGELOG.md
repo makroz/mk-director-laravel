@@ -12,6 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `HasMkReactions`: dos reacciones a la vez ya no pierden el contador
+
+**Fixed** (sin cambios de API pública)
+- `react()` sobre un modelo con contador materializado (`$mkReactionsCountColumn`): el toggle bloqueaba sólo la fila
+  de la reacción del autor, que en un alta NO existe. Dos autores distintos reaccionando a la vez insertaban cada uno su
+  fila, contaban sin ver la del otro (READ COMMITTED) y el último en escribir dejaba el contador viejo: **dos filas,
+  `reactions_count` en 1**, para siempre. Ahora la primera sentencia de la transacción es un `SELECT … FOR UPDATE`
+  sobre la fila dueña (sin scopes globales): el segundo espera el commit del primero y recién entonces cuenta.
+  Un `UPDATE … SET col = (SELECT count(*) …)` atómico NO lo arreglaba: en Postgres la subconsulta conserva el
+  snapshot del inicio de la sentencia aunque el UPDATE haya esperado el lock.
+- Sin contador no se bloquea nada nuevo: una fila por autor la siguen garantizando el UNIQUE y el reintento.
+- Consumidores (medido 2026-10-13): sólo RETO usa el trait (`Post`, con `reactions_count`). Mozzo no lo usa.
+
+**Tests**
+- `HasMkReactionsTest`: el primer query del toggle es el `FOR UPDATE` sobre la tabla dueña con contador, y no hay lock
+  sin contador. sqlite compila `lockForUpdate()` como nada, así que el test pone un grammar que lo deja como
+  comentario. Prueba el PROTOCOLO, no la carrera: la carrera la mide RETO contra Postgres con dos conexiones y un
+  segundo proceso (`tests/Feature/Communications/ReactionsConcurrencyTest.php`).
+
 ## [UNRELEASED] — el listado y el export sin una query por fila; la suite con `preventLazyLoading`
 
 **Fixed** (sin cambios de API pública ni de la forma de la respuesta)

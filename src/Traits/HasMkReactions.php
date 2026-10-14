@@ -56,6 +56,10 @@ use Mk\Director\Models\MkReaction;
  *     fila existente.
  *  3. El reintento de `react()`, para el perdedor de la carrera que NO la vio.
  * Sacá cualquiera de las tres y volvés al bug del legacy.
+ *
+ * Y si el modelo materializa el contador, una cuarta: el lock sobre la fila
+ * DUEÑA como primera sentencia — ver {@see lockMkReactable()}. Sin él, dos
+ * autores distintos a la vez dejan el contador en 1 con dos filas.
  */
 trait HasMkReactions
 {
@@ -193,6 +197,8 @@ trait HasMkReactions
     protected function runMkReactionToggle(EloquentModel $author, MkReactionType $type): array
     {
         return DB::transaction(function () use ($author, $type): array {
+            $this->lockMkReactable();
+
             /** @var MkReaction|null $existing */
             $existing = $this->mkReactionQueryFor($author)->lockForUpdate()->first();
 
@@ -223,6 +229,51 @@ trait HasMkReactions
             // una query menos en el caso más común después del alta.
             return ['action' => 'switched', 'reaction' => $existing];
         });
+    }
+
+    /**
+     * 🔴 Bloquea la fila DUEÑA antes de tocar nada, si el modelo materializa el
+     * contador. Es la PRIMERA sentencia de la transacción, a propósito.
+     *
+     * El lock sobre la reacción del autor no alcanza: en un alta esa fila NO
+     * existe, así que no serializa a nadie. Dos autores distintos reaccionando
+     * a la vez (READ COMMITTED) insertaban cada uno su fila, contaban sin ver
+     * la del otro, y el último en escribir pisaba `reactions_count` con un
+     * número viejo: dos likes, contador en 1, para siempre.
+     *
+     * Con la fila dueña bloqueada primero, el segundo espera al commit del
+     * primero y recién entonces cuenta: su `count(*)` es una sentencia nueva,
+     * con snapshot nuevo, y ve la fila del otro.
+     *
+     * NO sirve hacer atómico el `UPDATE ... SET col = (SELECT count(*) ...)`:
+     * en Postgres, el UPDATE que esperó un lock re-evalúa la fila, pero la
+     * subconsulta sigue con el snapshot del inicio de la sentencia — cuenta
+     * igual de viejo.
+     *
+     * Sin contador no se bloquea: lo único que hay que garantizar es una fila
+     * por autor, y eso lo hacen el UNIQUE y el reintento de `react()` (el doble
+     * tap del mismo autor termina igual con o sin lock). Bloquear serializaría
+     * todas las reacciones de un post caliente sin proteger nada.
+     *
+     * Sin scopes globales: `$this` ya se resolvió con los del caller, y un
+     * scope (tenant, SoftDeletes) que la esconda acá dejaría la fila sin
+     * bloquear sin avisar. Por clave primaria de esta misma instancia, no hay
+     * nada ajeno que se pueda alcanzar.
+     *
+     * Orden de locks: dueño → reacción. Todo escritor del contador sigue este
+     * protocolo porque el único escritor es este trait.
+     */
+    protected function lockMkReactable(): void
+    {
+        if ($this->mkReactionsCountColumn() === null) {
+            return;
+        }
+
+        $this->newModelQuery()
+            ->toBase()
+            ->where($this->getKeyName(), $this->getKey())
+            ->lockForUpdate()
+            ->first([$this->getKeyName()]);
     }
 
     /**
