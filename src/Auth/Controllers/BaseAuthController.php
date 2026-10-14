@@ -55,8 +55,9 @@ use Mk\Director\Controllers\BaseController;
  *   - D3: Auto-wire FileStoragePlugin via suffix :file en --profile-fields.
  *   - D4: ScopeStatus enum reemplaza is_active boolean (Active/Inactive/
  *         Suspended/Pending).
- *   - D5: login-field pineado en 9 artifacts (LoginRequest, MeRequest,
- *         StoreRequest, UpdateRequest, Resource, Data, FilterData, Migration).
+ *   - D5: login-field pineado en los artifacts del scope (StoreRequest,
+ *         UpdateRequest, Resource, Data, FilterData, Migration). LoginRequest y
+ *         MeRequest ya no se generan: login()/me() validan inline acá.
  *   - D6: 30 tests source-parsing + e2e SQLite in-memory (per HALLAZGO-NEW-03).
  *   - D7: Triple code review (auto judgment-day + self-review + Mario sign-off).
  *   - D8: R-G-032 sync 16+ locations (código en paquete, docs+skills+CHANGELOG
@@ -223,7 +224,7 @@ abstract class BaseAuthController extends BaseController
      *
      * Default expectation: subclases con `email` se validan con `email` rule;
      * subclases con otros campos se validan con `string` rule (consumer puede
-     * override via LoginRequest generado o vía `customizeLoginValidationRules`).
+     * override vía `customizeLoginValidationRules`).
      */
     abstract protected function loginField(): string;
 

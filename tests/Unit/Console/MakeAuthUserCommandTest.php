@@ -304,17 +304,9 @@ test('R-PKG-047 D1: BaseAuthController es SSoT — pinean los 6 métodos canóni
 // Fix: (1) agregar 'Http/Requests' al array $directories, y (2) defense-in-
 // depth en generateStub() con File::ensureDirectoryExists(dirname($targetPath))
 // antes de File::put.
-
-test('F10-B03: $directories array en fase base incluye Http/Requests (regression guard)', function () {
-    $source = commandSource();
-
-    // El array $directories de fase base debe incluir 'Http/Requests'
-    // para que la creación de carpetas sea completa y consistente con el
-    // output "📁 Creando estructura de directorios:".
-    expect($source)->toMatch(
-        '/\$directories\s*=\s*\[[^\]]*\'Http\/Requests\'[^\]]*\]/s',
-    );
-});
+//
+// Hoy la fase base ya no genera LoginRequest/MeRequest (eran código muerto, ver
+// MakeAuthUserScaffoldSummaryTest), así que (1) se fue; queda (2).
 
 test('F10-B03: generateStub() llama File::ensureDirectoryExists ANTES de File::put (defense-in-depth)', function () {
     $source = commandSource();
@@ -333,16 +325,6 @@ test('F10-B03: generateStub() llama File::ensureDirectoryExists ANTES de File::p
     expect($ensurePos)->toBeGreaterThan(0)
         ->and($putPos)->toBeGreaterThan(0)
         ->and($ensurePos)->toBeLessThan($putPos);
-});
-
-test('F10-B03: fase base pinea Http/Requests/LoginRequest.php y Http/Requests/MeRequest.php (no se pierde)', function () {
-    $source = commandSource();
-
-    // Sanity check: la fase base debe seguir pineando LoginRequest y MeRequest
-    // en Http/Requests/. Si alguien refactorea y mueve estos stubs, debe
-    // actualizar este test (no el array $directories).
-    expect($source)->toContain("'auth-user.login-request.stub', 'Http/Requests', 'LoginRequest.php'");
-    expect($source)->toContain("'auth-user.me-request.stub', 'Http/Requests', 'MeRequest.php'");
 });
 
 // ── F10-B04 regression tests (R-PKG-050) ─────────────────────────────────
@@ -865,8 +847,10 @@ test('F10-B16: PluginManager::registerPlugins() skip non-string values (defense-
 // falla (regression guard contra la knowledge regresión).
 
 /**
- * Busca el SKILL.md canónico subiendo desde el paquete hasta encontrar el
- * workspace `.makromania/`. Devuelve null si no está.
+ * Busca el SKILL.md canónico subiendo desde el paquete. La fuente única es el
+ * repo makroz/claude-skills (`claude-skills/skills/...`, clonado junto al
+ * monorepo); `.makromania/agency/skills/...` queda como respaldo para setups
+ * viejos (hoy es un symlink a lo mismo). Devuelve null si no está.
  *
  * El SKILL.md NO vive en este repo: vive en el workspace Makromania. Antes acá
  * había la ruta ABSOLUTA de la máquina de Mario hardcodeada
@@ -879,10 +863,12 @@ function findMakromaniaSkillMd(): ?string
     $dir = dirname(__DIR__, 3);
 
     for ($i = 0; $i < 8; $i++) {
-        $candidate = $dir.'/.makromania/agency/skills/mk-director-laravel/SKILL.md';
+        foreach (['/claude-skills/skills', '/.makromania/agency/skills'] as $base) {
+            $candidate = $dir.$base.'/mk-director-laravel/SKILL.md';
 
-        if (file_exists($candidate)) {
-            return $candidate;
+            if (file_exists($candidate)) {
+                return $candidate;
+            }
         }
 
         $parent = dirname($dir);
@@ -905,7 +891,7 @@ test('F10-B15: SKILL.md documenta gotcha de RefreshDatabase + SQLite in-memory',
         // Skip explícito en vez de un rojo que no dice nada: el guard tiene
         // valor donde el archivo existe, y donde no, no hay nada que verificar.
         test()->markTestSkipped(
-            'SKILL.md no encontrado: requiere el workspace .makromania/, que no forma parte de este repo.',
+            'SKILL.md no encontrado: requiere el repo claude-skills clonado junto al monorepo, que no forma parte de este repo.',
         );
     }
 
@@ -917,8 +903,9 @@ test('F10-B15: SKILL.md documenta gotcha de RefreshDatabase + SQLite in-memory',
     // Pin 2: el workaround `DatabaseMigrations` está pineado.
     expect($source)->toContain('DatabaseMigrations');
 
-    // Pin 3: el antipatrón `RefreshDatabase` está marcado como NO usar.
-    expect($source)->toContain('NO HACER ESTO');
+    // Pin 3: el antipatrón `RefreshDatabase` está marcado como NO usar. La
+    // skill está en inglés desde que vive en claude-skills.
+    expect($source)->toContain('DO NOT DO THIS');
 });
 
 // ── FEEDBACK10 (R-PKG-050, Mario 2026-07-10) — file fields: dynamic scaffolding ─

@@ -686,7 +686,7 @@ php artisan mk:make:auth-user Member --login-field=phone
 - **D1**: Solo string fields. NO int, json, composite.
 - **D2**: Default `email` (BC). Sin flag, idéntico a v1.4.0.
 - **D3**: Columna DB = nombre del campo (`ci`, NO `login_field`).
-- **D4**: Validación mínima. Consumer customiza vía `LoginRequest` override.
+- **D4**: Validación mínima. Consumer customiza sobreescribiendo `customizeLoginValidationRules()` en el `AuthController` del scope (el scaffolder ya no genera `LoginRequest`: nada lo usaba).
 - **D5**: `MustVerifyEmail` interface solo se importa cuando loginField=email.
 - **D6**: `AuthUser::scopeWhereLoginField($value)` para queries dinámicas.
 

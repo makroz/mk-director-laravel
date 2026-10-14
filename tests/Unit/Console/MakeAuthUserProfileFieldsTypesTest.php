@@ -240,13 +240,6 @@ test('command signature mantiene los 5 flags combinables', function () {
     expect($source)->toContain('--verify-email');
 });
 
-test('--profile-fields con tipos no afecta --login-field validation rule', function () {
-    $source = commandSource012Pft();
-
-    // La lógica de loginFieldValidationRule no depende del profile fields.
-    expect($source)->toContain('{{loginFieldValidationRule}}');
-});
-
 test('--profile-fields con tipos es ortogonal con --verify-email', function () {
     $source = commandSource012Pft();
 

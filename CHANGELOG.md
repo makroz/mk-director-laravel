@@ -12,6 +12,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `mk:make:auth-user` imprime lo que genera, y deja de generar `LoginRequest`/`MeRequest`
+
+**Fixed** (sólo la salida del comando)
+- El resumen listaba `/api/{scope}/auth/{login,refresh,logout,me,forgot,reset}`: las rutas reales son
+  `password/forgot` y `password/reset`, y faltaban `logout-all`, `password/change`, las del PIN, `PATCH me` y las
+  que suman los flags (`register`, 2FA, verificación de email). Ahora la lista se lee del `Http/Routes/api.php`
+  recién generado (antes de que `--with-crud` le agregue el CRUD), así que sigue al stub (`manager` o `consumer`)
+  y a los flags. El "(rate limited)" que sólo salía con RBAC también mentía: las públicas llevan throttle siempre.
+- Con `--skip-auth-wire` (o un `config/auth.php` que no se pudo cablear), los pasos siguientes mandaban a
+  "implementar los TODOs del AuthController (login, refresh, forgot, reset)". El `AuthController` generado extiende
+  `BaseAuthController` y no tiene ningún TODO: el paso ahora apunta a sus hooks, y es opcional.
+
+**Removed** (sólo afecta al código que se genera de acá en más)
+- `auth-user.login-request.stub` y `auth-user.me-request.stub`, y los placeholders `{{loginFieldValidationRule}}`
+  que sólo usaba el primero. `BaseAuthController::login()` y `me()` reciben `Request` y validan inline; nada
+  ruteaba ni inyectaba los FormRequests generados. Y no se podía arreglar haciéndolos usar: una subclase no puede
+  declarar `login(LoginRequest $r)` sobre `login(Request $r)` (PHP rechaza angostar el tipo de un parámetro), y
+  resolver un FormRequest por scope desde el base es un cambio de diseño, no un fix. Las reglas propias del login
+  van en `customizeLoginValidationRules()`; los query params de `/me`, en un override de `me()`.
+- Sin `--with-crud`, la fase base ya no crea una carpeta `Http/Requests/` vacía.
+- BC: el scaffolder se niega a correr sobre un módulo que ya existe, así que los `LoginRequest.php`/`MeRequest.php`
+  ya generados no se tocan. Como nadie los usa, se pueden borrar a mano.
+
 ## [UNRELEASED] — las transacciones de reacciones y moderación van en la conexión del modelo
 
 **Fixed** (sin cambios de API)

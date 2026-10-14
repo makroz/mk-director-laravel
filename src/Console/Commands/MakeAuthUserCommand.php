@@ -26,7 +26,7 @@ use Mk\Director\Auth\Services\AuthScopeResolver;
  *
  * Genera:
  *   - app/Modules/{Scope}/Models/{Scope}.php              (extends AuthUser)
- *   - app/Modules/{Scope}/Http/Controllers/AuthController.php (login/refresh/logout/me/forgot/reset)
+ *   - app/Modules/{Scope}/Http/Controllers/AuthController.php (extends BaseAuthController)
  *   - app/Modules/{Scope}/Http/Routes/api.php              (con prefix /api/{scope}/auth)
  *   - app/Modules/{Scope}/Database/Migrations/{ts}_create_{scope_plural}_table.php
  *   - app/Modules/{Scope}/Providers/{Scope}ServiceProvider.php
@@ -38,9 +38,9 @@ use Mk\Director\Auth\Services\AuthScopeResolver;
  *     `config/auth.php` es invasivo y se respeta el principio de least surprise.
  *   - Configurar `mk_director.auth.user_model`: el command imprime la sugerencia,
  *     pero el default queda en null hasta que el consumer lo defina.
- *   - Implementar la lógica de login/refresh/forgot/reset: el AuthController
- *     se entrega como skeleton con TODOs explícitos. La integración con
- *     `Mk\Director\Auth\Services\TokenIssuer` queda en manos del consumer.
+ *   (La lógica de login/refresh/logout/me/forgot/reset NO la escribe el dev:
+ *   vive en `BaseAuthController`. El AuthController generado sólo declara
+ *   modelo, scope, campo de login y tabla de reset; lo propio va en sus hooks.)
  *
  * ## Flags
  *
@@ -459,9 +459,6 @@ class MakeAuthUserCommand extends Command
             '{{mustVerifyEmailUse}}' => $verifyEmail
                 ? "use Illuminate\\Contracts\\Auth\\MustVerifyEmail;\n"
                 : '',
-            '{{loginFieldValidationRule}}' => $isEmail
-                ? "['required', 'email', 'max:255']"
-                : "['required', 'string', 'max:255']",
             // R-PKG-047 D5 — loginFieldValidationRuleStore con `unique` scope.
             // Para POST /api/{scope}/{loginField} (crear user via AdminController).
             // El `unique:{scopePlural},{loginField}` rule pinea que el consumer NO
@@ -971,13 +968,6 @@ PHP,
         $directories = [
             'Models',
             'Http/Controllers',
-            // F10-B03 (R-PKG-050): 'Http/Requests' faltaba del array. Sin esta
-            // entrada, el scaffolder pineaba Http/Requests/LoginRequest.php y
-            // Http/Requests/MeRequest.php sin crear la carpeta → File::put
-            // reventaba. (El defense-in-depth de generateStub() ahora también
-            // lo cubre, pero lo dejamos acá para que el output de
-            // "📁 Creando estructura de directorios" sea completo).
-            'Http/Requests',
             'Http/Routes',
             'Database/Migrations',
             'Providers',
@@ -1001,26 +991,15 @@ PHP,
         // el path `manager` (BC) con la lógica `consumer`.
         $ownRoutesStub = $isConsumer ? 'auth-user.routes.consumer.stub' : 'auth-user.routes.stub';
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, $ownRoutesStub, 'Http/Routes', 'api.php', $extraReplacements);
+        // Se leen ACÁ, antes de que --with-crud agregue sus rutas al mismo archivo:
+        // el resumen lista lo que el stub y los flags generaron, no una lista fija.
+        $authRoutes = $this->listGeneratedRoutes("{$basePath}/Http/Routes/api.php");
         $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.service-provider.stub', 'Providers', "{$scope}ServiceProvider.php");
 
-        // R-PKG-047 D5 — FormRequests pineados por el scaffolder:
-        //
-        // - LoginRequest: validación de `loginField + password` para POST /auth/login.
-        //   El BaseAuthController absorbe la lógica real (beforeLogin hook), pero
-        //   pineamos el FormRequest para consumers que necesitan override de
-        //   validation rules (e.g. regex CI Bolivia custom).
-        // - MeRequest: stub vacío que sirve como placeholder de expansión para
-        //   query params custom (e.g. `?expand=permissions`). Default rules=[].
-        //
-        // Estos FormRequests pinean el campo `{{loginField}}` dinámicamente via
-        // placeholder `{{loginFieldValidationRule}}` (pinea `['required','email','max:255']`
-        // o `['required','string','max:255']` según loginField).
-        //
-        // Post-D5, los controllers per-scope (AuthController thin wrapper) usan
-        // type-hint `LoginRequest $request` en lugar de `Request $request` con
-        // validación inline (BC pre-D5).
-        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.login-request.stub', 'Http/Requests', 'LoginRequest.php', $extraReplacements);
-        $this->generateStub($scope, $scopeLower, $scopePlural, $loginField, 'auth-user.me-request.stub', 'Http/Requests', 'MeRequest.php', $extraReplacements);
+        // Ya NO se generan LoginRequest ni MeRequest: `BaseAuthController::login()`
+        // y `me()` reciben `Request` y validan inline, y una subclase no puede
+        // angostar el tipo del parámetro (PHP lo rechaza). Eran código muerto.
+        // Las reglas propias del login van en `customizeLoginValidationRules()`.
 
         // A8 — enum {Scope}Status (int-backed). Ortogonal a --with-crud: si
         // --with-crud está activo el dir `Enums/` lo crea el pack CRUD, pero el
@@ -1111,7 +1090,7 @@ PHP,
         $this->line("   • Model:        app/Modules/{$scope}/Models/{$scope}.php (extends AuthUser, loginField={$loginField})");
         $this->line("   • Migration:    app/Modules/{$scope}/Database/Migrations/{$this->migrationFilename($scopePlural)}");
         $this->line("   • AuthCtrl:     app/Modules/{$scope}/Http/Controllers/AuthController.php".($withAuthRbac ? ' (RBAC enabled)' : ''));
-        $this->line("   • Routes:       /api/{$scopeLower}/auth/{login,refresh,logout,me,forgot,reset}".($withAuthRbac ? ' (rate limited)' : ''));
+        $this->line("   • Routes:       /api/{$scopeLower}/auth/ → ".implode(', ', $authRoutes).' (las públicas con throttle)');
         $this->line("   • ServiceProv:  app/Modules/{$scope}/Providers/{$scope}ServiceProvider.php");
         if ($withCrud) {
             $this->line('   • CRUD:         Controllers + DTOs + Repository + Service + Factory + Seeder + Requests + Resources + Enums/CrudAction'.((bool) $this->option('skip-policies') ? '' : ' + Policies (default-deny)'));
@@ -1964,9 +1943,6 @@ PHP;
             '{{profileFieldsResourceEntry}}' => $this->buildProfileFieldsToArray($profileFields, $loginField),
             '{{profileFieldsUniqueRules}}' => $fieldRules['store'],
             '{{profileFieldsUniqueRulesUpdate}}' => $fieldRules['update'],
-            '{{loginFieldValidationRule}}' => $loginField === 'email'
-                ? "['required', 'email', 'max:255', 'unique:{$scopePlural},{$loginField}']"
-                : "['required', 'string', 'max:255', 'unique:{$scopePlural},{$loginField}']",
             // F10-B17 (R-PKG-050): pine las variantes Store/Update que usan
             // los stubs de CRUD (store-admin-request.stub, update-admin-request.stub).
             // Pre-fix, estos placeholders solo estaban en $loginFieldReplacements
@@ -5205,6 +5181,20 @@ PHP,
     }
 
     /**
+     * `VERBO path` de cada `Route::verbo('path', …)` del archivo de rutas
+     * generado, en orden. Así el resumen no puede desfasarse del stub ni de
+     * los flags (register, 2FA, verificación de email, PATCH me).
+     *
+     * @return list<string>
+     */
+    protected function listGeneratedRoutes(string $routesFile): array
+    {
+        preg_match_all("/Route::(get|post|put|patch|delete)\\('([^']+)'/", (string) @file_get_contents($routesFile), $m, PREG_SET_ORDER);
+
+        return array_map(static fn (array $r): string => strtoupper($r[1]).' '.$r[2], $m);
+    }
+
+    /**
      * Imprime (no escribe) los snippets a agregar a config/auth.php.
      * Decisión consciente: el command no modifica config/auth.php del consumer
      * porque ese archivo es del proyecto y editarlo programáticamente es invasivo.
@@ -5235,14 +5225,11 @@ PHP,
         $this->warn('📌 Pasos siguientes:');
         $this->line('   1. php artisan migrate');
         $this->line('   2. Pegá los snippets de arriba en config/auth.php');
-        $this->line('   3. Implementá los TODOs del AuthController (login, refresh, forgot, reset)');
-        $this->line('      usando Mk\\Director\\Auth\\Services\\TokenIssuer');
+        $this->line('   3. (Opcional) El AuthController ya funciona: extiende BaseAuthController.');
+        $this->line('      Para comportamiento propio, sobreescribí sus hooks (beforeLogin,');
+        $this->line('      customizeLoginValidationRules, customizeMePayload, …).');
         $this->line('   4. (Opcional) Definí mk_director.auth.user_model si querés que mk-director');
         $this->line('      apunte a este modelo. NO se hace automáticamente — respetar DDD.');
-        if (func_num_args() >= 4) {
-            // Print extra step for RBAC if applicable.
-            // (Detected by checking the actual generated controller contents later.)
-        }
     }
 
     /**
