@@ -377,8 +377,8 @@ class DiscoverAbilitiesCommand extends Command
      * command leía el attribute literal y pineaba `'{scope}.auth.login'`
      * (string con corchetes) en la DB. Post-fix: str_replace('{scope}',
      * $scope, $attr->name) para que el nombre final sea `admin.auth.login`
-     * (o `member.auth.login`, etc.) — matchea el `mk.ability:{scope}.auth.*`
-     * route middleware pineado por el scaffolder.
+     * (o `member.auth.login`, etc.). Es catálogo: las rutas de auth que
+     * genera el scaffolder no llevan `mk.ability`.
      *
      * @param  array{path: string, classes: array<int, string>}  $moduleInfo
      * @return array<int, array{name: string, description: ?string}>

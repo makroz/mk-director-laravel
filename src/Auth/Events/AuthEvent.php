@@ -8,8 +8,8 @@ use Illuminate\Foundation\Events\Dispatchable;
 use Mk\Director\Plugins\Enterprise\MkAuditLoggerPlugin;
 
 /**
- * AuthEvent — evento emitido por el AuthController cuando `--with-auth-rbac`
- * está habilitado.
+ * AuthEvent — evento que emite BaseAuthController en cada paso del flujo de
+ * auth, con o sin `--no-rbac`.
  *
  * Consumido por `MkAuditLoggerPlugin` (si está activo) para generar
  * un audit log B2B inmutable de los eventos de autenticación.

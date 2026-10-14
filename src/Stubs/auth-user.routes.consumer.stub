@@ -18,6 +18,13 @@ use Illuminate\Support\Facades\Route;
  * Por eso acá están sólo las rutas de auth y del propio perfil: el CRUD de
  * usuarios, roles y abilities de este scope lo expone el manager.
  *
+ * Las rutas de auth son las MISMAS que las de un manager (`auth-user.routes.stub`),
+ * incluidas las cuatro del PIN por email: `password/reset/code/*` (públicas,
+ * "olvidé mi contraseña") y `password/code/*` (autenticadas). Los métodos son
+ * de BaseAuthController y sirven a cualquier scope. Lo que el consumer pierde
+ * es el CRUD, no su autoservicio. Una ruta de auth que se agregue a uno de
+ * los dos stubs va también al otro.
+ *
  * Las rutas protegidas usan `mk.auth:{{moduleNameLower}}` (del paquete) que
  * valida en 3 capas que el token pertenece al scope correcto (ver
  * docs/guides/AUTH.md § "The 4 defense layers against cross-scope mix-up").
@@ -36,6 +43,12 @@ Route::prefix('api/{{moduleNameLower}}/auth')->group(function () {
     Route::post('refresh', [AuthController::class, 'refresh']){{refreshThrottle}};
     {{registerRoute}}Route::post('password/forgot', [AuthController::class, 'forgotPassword']){{rbacForgotThrottle}};
     Route::post('password/reset', [AuthController::class, 'resetPassword']){{rbacResetThrottle}};
+    // forgot-vía-OTP: variante por PIN de 6 dígitos del reset (públicas, como
+    // forgot/reset). Reusan EmailOtpService con purpose='password_reset'.
+    Route::post('password/reset/code/request', [AuthController::class, 'requestPasswordResetCode'])
+        ->middleware('throttle:'.config('mk_director.auth.rate_limits.password_reset_code_request', '3,10').',{{moduleNameLower}}-reset-code-req');
+    Route::post('password/reset/code/confirm', [AuthController::class, 'confirmPasswordResetCode'])
+        ->middleware('throttle:'.config('mk_director.auth.rate_limits.password_reset_code_confirm', '5,10').',{{moduleNameLower}}-reset-code-confirm');
 {{twoFactorPublicRoutes}}{{emailVerifyRoutes}}
     // ── Protegidas (auth: scope) — solo self-profile, SIN CRUD/roles/abilities ──
     Route::middleware('mk.auth:{{moduleNameLower}}'){{verifiedMiddleware}}->group(function () {
@@ -43,6 +56,11 @@ Route::prefix('api/{{moduleNameLower}}/auth')->group(function () {
         Route::post('logout-all', [AuthController::class, 'logoutAll']);
         Route::get('me', [AuthController::class, 'me']);
         Route::post('password/change', [AuthController::class, 'changePassword']);
+        // Cambio de contraseña con código de un solo uso enviado por email.
+        Route::post('password/code/request', [AuthController::class, 'requestPasswordCode'])
+            ->middleware('throttle:'.config('mk_director.auth.rate_limits.password_code_request', '3,10').',{{moduleNameLower}}-pwd-code-req');
+        Route::post('password/code/confirm', [AuthController::class, 'confirmPasswordCode'])
+            ->middleware('throttle:'.config('mk_director.auth.rate_limits.password_code_confirm', '5,10').',{{moduleNameLower}}-pwd-code-confirm');
 {{twoFactorProtectedRoutes}}{{updateProfileRoute}}
     });
 });
