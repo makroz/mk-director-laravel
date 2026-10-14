@@ -12,6 +12,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — el scope `consumer` recupera las rutas del PIN, y el hint de RBAC deja de mandar a configurar abilities
+
+**Fixed**
+- **`--kind=consumer` generaba el scope sin las cuatro rutas del PIN por email**: `password/reset/code/{request,confirm}`
+  (públicas, "olvidé mi contraseña") y `password/code/{request,confirm}` (autenticadas). El stub consumer
+  (`auth-user.routes.consumer.stub`, 2026-07-13) es anterior al PIN (2026-07-15), y las dos entregas del PIN sólo
+  tocaron `auth-user.routes.stub`. No era intencional: los métodos son de `BaseAuthController` y su entrada dice
+  «inherited by every scaffolded thin wrapper» y «emitted unconditionally»; el feature se cableó primero, a mano, en
+  el `Member` de RETO —un scope consumer, `--managed-by=Admin`—; y `@makroz/core` arma esas rutas para cualquier scope
+  (`passwordResetCodeRequestPath(scope)`…) mientras que el `password/forgot` clásico que el consumer sí tenía no tiene
+  builder en el cliente. Ahora el consumer las emite con el mismo middleware que un manager: las de reset con su
+  `throttle:` por IP y prefijo propio (`{scope}-reset-code-req`, `{scope}-reset-code-confirm`), las de cambio dentro
+  de `mk.auth:{scope}` con el suyo. Test: `tests/Feature/MakeAuthUserConsumerAuthParityTest.php` compara el
+  `Http/Routes/api.php` generado de los dos kinds.
+- **El hint de `mk:make:auth-user` mandaba a configurar `'abilities' => ['me' => 'auth.{scope}.me', …]`**. Ninguna
+  ruta de auth exige ability —sólo `mk.auth:{scope}`—, el `#[Ability('{scope}.auth.*')]` de `BaseAuthController` es
+  catálogo que siembra `mk:discover-abilities`, y `mk_director.auth.abilities` lo lee únicamente `mk:prune-abilities`
+  como nombres a conservar. Seguir el hint no protegía nada. El hint ahora dice eso y deja los tres pasos que sí existen (rate limits,
+  publicar config, listener de `AuthEvent`). Corregidos también los comentarios que afirmaban el check: el bloque
+  `auth.abilities` de `config/mk_director.php`, el docblock de `BaseAuthController` y sus líneas «Ability:», el de
+  `DiscoverAbilitiesCommand`, el de `AuthEvent` (se emite con o sin `--no-rbac`), la descripción de `--no-rbac` y
+  `DEVELOPER_GUIDE.md` § 3.8.
+
+### ⚠️ Notas para consumers
+- Un scope consumer ya generado **no se regenera solo**: si lo querés con el PIN, agregá las cuatro rutas a su
+  `Http/Routes/api.php` (copiá el bloque del stub). Son endpoints de reset de contraseña sin sesión: llevan el
+  `throttle:` por IP y la anti-enumeración de `BaseAuthController`; no las agregues sin el throttle.
+
 ## [UNRELEASED] — `mk:make:auth-user` imprime lo que genera, y deja de generar `LoginRequest`/`MeRequest`
 
 **Fixed** (sólo la salida del comando)

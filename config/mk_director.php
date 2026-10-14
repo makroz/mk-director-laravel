@@ -356,21 +356,15 @@ return [
         // cachear (registrarlo como singleton alcanza).
         'account_checks' => [],
 
-        // R-PKG-010: ability checks opcionales en endpoints privados del
-        // AuthController generado con `mk:make:auth-user --with-auth-rbac`.
+        // 🔴 NO es un ability check. Ninguna ruta de auth exige ability: `/me`,
+        // `/logout` y el resto sólo piden `mk.auth:{scope}`. Este bloque lo lee
+        // ÚNICAMENTE `mk:prune-abilities`, como nombres que no debe borrar
+        // aunque ningún atributo ni ruta los declare. Poner acá un nombre no
+        // protege ningún endpoint.
         //
-        // Default BC: `null` en TODAS las abilities → no se hace check
-        // (idem v1.4.0 / v1.5.0-rc3 sin --with-auth-rbac).
-        //
-        // Configurar via env o publicando config:
-        //   MK_AUTH_ABILITY_ME=auth.me.read
-        //   MK_AUTH_ABILITY_LOGOUT=auth.logout
-        //
-        // El consumer puede usar cualquier naming convention. Convención
-        // recomendada: `{scope}.{endpoint}.{action}` (ej: `admin.me.read`).
-        //
-        // El ability check usa `Mk\Director\Auth\Services\AbilityResolver`
-        // (existente, con cache por user + Sanctum short-circuit).
+        // Era el check opcional de `/me` y `/logout` del AuthController
+        // generado (R-PKG-010); ese check se fue cuando el controller pasó a
+        // heredar de BaseAuthController, y la clave quedó para el prune.
         'abilities' => [
             'me' => env('MK_AUTH_ABILITY_ME'),
             'logout' => env('MK_AUTH_ABILITY_LOGOUT'),

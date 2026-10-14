@@ -166,7 +166,7 @@ class MakeAuthUserCommand extends Command
         {--login-field=email : Campo usado para login (default: email). El scaffolder pine `protected function loginField(): string` retornando el <valor> elegido, en el thin-wrapper AuthController. Valores comunes: email, ci, phone, username, documento.}
         {--profile-fields= : (D2) Campos adicionales para el perfil del scope (CSV con sintaxis key[:type], default: ninguno = BC). Default ON: el scaffolder pine automáticamente `name, email (nullable si login-field≠email), <loginField>, phone, status` como baseline (5 columnas). --profile-fields AGREGA sobre el baseline, NO pisa (fail-fast si intenta pisar `name`). Tipos soportados: string, text, int, decimal, bool, date, datetime, json.}
         {--no-crud : (D2 opt-out) NO generar el CRUD pack completo del scope. Default: CRUD ON (AdminController + RoleController + AbilityController + DTOs + Repository + Service + Factory + Seeder + Requests + Resources + ServiceProvider). Si el scope no necesita CRUD (login-only flows), pinear este flag.}
-        {--no-rbac : (D2 opt-out) NO integrar RBAC (ability checks en /me y /logout, audit log via AuthEvent). El rate limiting de las rutas públicas se emite IGUAL. Default: RBAC ON. Pinear solo si tu app no usa roles/abilities (e.g. trivial login-only).}
+        {--no-rbac : (D2 opt-out) NO integrar RBAC (sección de roles/abilities en Docs/api_contract.md, setup de Sanctum sin CRUD, `sanctum/csrf-cookie` en CORS). Las rutas de auth no exigen ability con o sin el flag, y AuthEvent se despacha igual. El rate limiting de las rutas públicas se emite IGUAL. Default: RBAC ON. Pinear solo si tu app no usa roles/abilities (e.g. trivial login-only).}
         {--no-status : (D2 opt-out) NO generar el enum <Scope>Status ni la columna `status` en la migración. Default: status ON (enum de 4 estados post-D4: Active/Inactive/Blocked/Pending). Pinear solo si tu scope no necesita status (e.g. login-only sin admin gating).}
         {--with-register : Genera POST /api/<scope>/auth/register + AuthController::register() (alta de usuarios, throttle `rate_limits.register` con prefijo propio). OPT-IN: sin CRUD el endpoint es PÚBLICO — cualquiera se crea una cuenta. Con CRUD queda gateado por mk.auth + ability create. Incompatible con --multi-tenant (sería un alta sin tenant).}
         {--verify-email : Habilita verificación por email: columna email_verified_at, endpoints /email/verify/<id>/<hash> y /email/resend, y dispatch de Illuminate\Auth\Notifications\VerifyEmail en /register si además se pasa --with-register (sin él, el primer email sale por /email/resend). Default BC: false. Aplican cuando --login-field=email. Se ignora con warning si --login-field≠email.}
@@ -1098,12 +1098,17 @@ PHP,
 
         if ($withAuthRbac) {
             $this->newLine();
-            $this->warn('🔐 RBAC integration habilitada. Siguientes pasos:');
-            $this->line('   1. Configurar abilities en config/mk_director.php:');
-            $this->line("      'abilities' => ['me' => 'auth.{$scopeLower}.me', 'logout' => 'auth.{$scopeLower}.logout'],");
-            $this->line('   2. (Opcional) Customizar rate limits via MK_AUTH_RATE_LIMIT_* env vars.');
-            $this->line('   3. (Opcional) Publicar config/mk_director.php si necesitás overrides granulares.');
-            $this->line('   4. Registrar un listener para Mk\\Director\\Auth\\Events\\AuthEvent si querés audit log.');
+            // Las rutas de auth no llevan `mk.ability`: el `#[Ability]` de cada
+            // método de BaseAuthController sólo alimenta el catálogo que siembra
+            // `mk:discover-abilities`. No hay nada que configurar para que
+            // `/me` o `/logout` funcionen (`mk_director.auth.abilities` sólo lo
+            // lee `mk:prune-abilities`, como lista de nombres a conservar).
+            $this->warn('🔐 RBAC integration habilitada. Siguientes pasos (opcionales):');
+            $this->line("   • Las rutas de auth sólo exigen mk.auth:{$scopeLower}; ninguna pide ability. Las {$scopeLower}.auth.* que");
+            $this->line('     declara BaseAuthController son catálogo: las registra mk:discover-abilities.');
+            $this->line('   1. Customizar rate limits via MK_AUTH_RATE_LIMIT_* env vars.');
+            $this->line('   2. Publicar config/mk_director.php si necesitás overrides granulares.');
+            $this->line('   3. Registrar un listener para Mk\\Director\\Auth\\Events\\AuthEvent si querés audit log.');
         }
 
         if ($withCrud) {

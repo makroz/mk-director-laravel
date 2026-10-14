@@ -116,17 +116,16 @@ use Mk\Director\Controllers\BaseController;
  *   `$user->getAuthScope() === $this->authScope()` para no emitir tokens a
  *   user de otro scope.
  *
- * - **Capacidades (R-PKG-007 + R-PKG-045 + R-PKG-046 FASE18-C)**: cada método
- *   público declara `#[Ability('{scope}.auth.{action}')]`. El command
- *   `mk:discover-abilities` los recolecta y pre-bumpear `--force` post-merge
- *   los pineá en `config/mk_director.abilities`. Las rutas per-endpoint pinean
- *   `mk.ability:{scope}.auth.{action}` per-route (HALLAZGO-NEW-FASE18-C fix).
+ * - **Capacidades (R-PKG-007)**: cada método público declara
+ *   `#[Ability('{scope}.auth.{action}')]`. Es CATÁLOGO: `mk:discover-abilities`
+ *   las siembra en la tabla de abilities, pero ninguna ruta de auth las exige
+ *   —las rutas generadas no llevan `mk.ability`—. Las líneas «Ability:» de cada
+ *   método nombran esa entrada del catálogo, no un check.
  *
  * - **Per-route middleware** (R-PKG-046 F9-B10): el constructor queda vacío.
- *   Las rutas pinean `mk.auth:{scope}` + `mk.ability:{scope}.auth.{action}`
- *   per-endpoint (ver D2 R-PKG-047 + HALLAZGO-NEW-FASE18-C). No pinear
- *   `mk.auth:{scope}` en el constructor para evitar doble-auth cuando el
- *   controller es invocado desde un managed-routes provider.
+ *   Las rutas protegidas pinean `mk.auth:{scope}`; las públicas, su `throttle:`.
+ *   No pinear `mk.auth:{scope}` en el constructor para evitar doble-auth cuando
+ *   el controller es invocado desde un managed-routes provider.
  *
  * - **`is_active` deprecated** (R-PKG-047 D4): pre-D4 `is_active` boolean se
  *   se chequeaba via `Schema::hasColumn`. Post-D4 se prefiere `ScopeStatus` enum.
@@ -335,7 +334,7 @@ abstract class BaseAuthController extends BaseController
      * Body: `{loginField: <value>, password: <string>}`.
      *
      * Auth: público (sin middleware mk.auth).
-     * Ability: `mk.ability:{scope}.auth.login` (per-route, HALLAZGO-NEW-FASE18-C).
+     * Ability (catálogo, la ruta no la exige): `{scope}.auth.login`.
      *
      * Pipeline:
      *   1. Validate loginField + password (con `customizeLoginValidationRules`).
@@ -509,7 +508,7 @@ abstract class BaseAuthController extends BaseController
      * Body: `{refresh_token: <id|plaintext>}`.
      *
      * Auth: público (sin middleware mk.auth).
-     * Ability: `mk.ability:{scope}.auth.refresh` (per-route).
+     * Ability (catálogo, la ruta no la exige): `{scope}.auth.refresh`.
      *
      * Sanctum v4 parsing + SHA256 hash (R-PKG-014 BUG-07 + R-PKG-018 BUG-NEW-26).
      * Anti scope-escalation: TokenIssuer::rotateRefreshToken($token, $scope).
@@ -562,7 +561,7 @@ abstract class BaseAuthController extends BaseController
      * GET /api/{scope}/auth/me
      *
      * Auth: `mk.auth:{scope}` (per-route).
-     * Ability: `mk.ability:{scope}.auth.me` (per-route).
+     * Ability (catálogo, la ruta no la exige): `{scope}.auth.me`.
      *
      * F7-B02: pinea `abilities` flat top-level para parity cross-stack.
      * F2 (R-PKG-014 BUG-06): eager-load `roles` + `directAbilities` antes
@@ -606,7 +605,7 @@ abstract class BaseAuthController extends BaseController
      * POST /api/{scope}/auth/logout
      *
      * Auth: `mk.auth:{scope}` (per-route).
-     * Ability: `mk.ability:{scope}.auth.logout` (per-route).
+     * Ability (catálogo, la ruta no la exige): `{scope}.auth.logout`.
      *
      * Revoca el access token actual y el refresh token de ESA sesión
      * (`safeLogoutCurrentToken()` con null-safety, R-PKG-027 PKG-NEW-08 +
@@ -639,7 +638,7 @@ abstract class BaseAuthController extends BaseController
      * POST /api/{scope}/auth/logout-all
      *
      * Auth: `mk.auth:{scope}` (per-route).
-     * Ability: `mk.ability:{scope}.auth.logout-all` (per-route).
+     * Ability (catálogo, la ruta no la exige): `{scope}.auth.logout-all`.
      *
      * Revoca TODOS los tokens del user via `$user->tokens()->delete()`.
      * Defense-in-depth post password reset + uso multi-device.
@@ -671,7 +670,7 @@ abstract class BaseAuthController extends BaseController
      * POST /api/{scope}/auth/password/forgot
      *
      * Auth: público.
-     * Ability: `mk.ability:{scope}.auth.password-forgot` (per-route).
+     * Ability (catálogo, la ruta no la exige): `{scope}.auth.password-forgot`.
      *
      * Anti-enumeración: si el user no existe o no es válido, retorna OK 200
      * sin hacer nada (R-PKG-027 PKG-NEW-05).
@@ -746,7 +745,7 @@ abstract class BaseAuthController extends BaseController
      * POST /api/{scope}/auth/password/reset
      *
      * Auth: público.
-     * Ability: `mk.ability:{scope}.auth.password-reset` (per-route).
+     * Ability (catálogo, la ruta no la exige): `{scope}.auth.password-reset`.
      *
      * Pipeline:
      *   1. Validate loginField + token + password (confirmed, min 8).
@@ -824,7 +823,7 @@ abstract class BaseAuthController extends BaseController
      * POST /api/{scope}/auth/password/change
      *
      * Auth: `mk.auth:{scope}` (per-route).
-     * Ability: `mk.ability:{scope}.auth.password-change` (per-route).
+     * Ability (catálogo, la ruta no la exige): `{scope}.auth.password-change`.
      *
      * Cambia la contraseña del user autenticado verificando la contraseña actual
      * + opcionalmente invalida todos los tokens (config `password_change.revoke_other_sessions`,
@@ -876,7 +875,7 @@ abstract class BaseAuthController extends BaseController
      * POST /api/{scope}/auth/password/code/request
      *
      * Auth: `mk.auth:{scope}` (per-route).
-     * Ability: `mk.ability:{scope}.auth.password-code-request` (per-route).
+     * Ability (catálogo, la ruta no la exige): `{scope}.auth.password-code-request`.
      *
      * Spec: 2026-07-15-profile-edit-password-otp, ADR-2 + ADR-3 (design.md).
      *
@@ -937,7 +936,7 @@ abstract class BaseAuthController extends BaseController
      * POST /api/{scope}/auth/password/code/confirm
      *
      * Auth: `mk.auth:{scope}` (per-route).
-     * Ability: `mk.ability:{scope}.auth.password-code-confirm` (per-route).
+     * Ability (catálogo, la ruta no la exige): `{scope}.auth.password-code-confirm`.
      *
      * Spec: 2026-07-15-profile-edit-password-otp, ADR-2 + ADR-3 (design.md).
      *
@@ -1014,7 +1013,7 @@ abstract class BaseAuthController extends BaseController
      * POST /api/{scope}/auth/password/reset/code/request
      *
      * Auth: público (flujo NO autenticado — "olvidé mi contraseña").
-     * Ability: `mk.ability:{scope}.auth.password-reset-code-request` (per-route).
+     * Ability (catálogo, la ruta no la exige): `{scope}.auth.password-reset-code-request`.
      *
      * Spec: 2026-07-15-profile-edit-password-otp, forgot-vía-OTP.
      *
@@ -1082,7 +1081,7 @@ abstract class BaseAuthController extends BaseController
      * POST /api/{scope}/auth/password/reset/code/confirm
      *
      * Auth: público (flujo NO autenticado).
-     * Ability: `mk.ability:{scope}.auth.password-reset-code-confirm` (per-route).
+     * Ability (catálogo, la ruta no la exige): `{scope}.auth.password-reset-code-confirm`.
      *
      * Body: `{<loginField>, code, password, password_confirmation}`. Verifica el
      * PIN vía `EmailOtpService::verify(purpose='password_reset')` y, si es
@@ -1171,7 +1170,7 @@ abstract class BaseAuthController extends BaseController
      * GET /api/{scope}/auth/email/verify/{id}/{hash}
      *
      * Auth: signed URL (sin middleware mk.auth; verificación via `hasValidSignature()`).
-     * Ability: `mk.ability:{scope}.auth.email-verify` (per-route).
+     * Ability (catálogo, la ruta no la exige): `{scope}.auth.email-verify`.
      *
      * Solo aplicable cuando `loginField() === 'email'` (MustVerifyEmail interface).
      * Marcar `email_verified_at = now()` y refrescar user.
@@ -1215,7 +1214,7 @@ abstract class BaseAuthController extends BaseController
      * POST /api/{scope}/auth/email/resend
      *
      * Auth: `mk.auth:{scope}` (per-route).
-     * Ability: `mk.ability:{scope}.auth.email-resend` (per-route).
+     * Ability (catálogo, la ruta no la exige): `{scope}.auth.email-resend`.
      *
      * Reenvía el email de verificación. Rate limit aplicado per-route
      * (`throttle:3,1` default).
@@ -1549,7 +1548,7 @@ abstract class BaseAuthController extends BaseController
      *
      * Auth: público, con el DESAFÍO que devolvió el login (no es un token: no
      * autentica ninguna ruta y no se puede refrescar).
-     * Ability: `mk.ability:{scope}.auth.two-factor-challenge` (per-route).
+     * Ability (catálogo, la ruta no la exige): `{scope}.auth.two-factor-challenge`.
      *
      * Body: `{challenge, code}` o `{challenge, recovery_code}`.
      * Éxito: EXACTAMENTE el mismo sobre que habría devuelto el login.
@@ -1637,7 +1636,7 @@ abstract class BaseAuthController extends BaseController
      *
      * Auth: público, con la credencial de ENROLAMIENTO que devolvió el login
      * cuando la política es `required` y el usuario no tenía segundo factor.
-     * Ability: `mk.ability:{scope}.auth.two-factor-setup-confirm` (per-route).
+     * Ability (catálogo, la ruta no la exige): `{scope}.auth.two-factor-setup-confirm`.
      *
      * Body: `{setup, code}`. Éxito: el sobre del login + `recovery_codes`, que
      * es la ÚNICA vez que esos códigos existen en claro.
@@ -1703,7 +1702,7 @@ abstract class BaseAuthController extends BaseController
      * POST /api/{scope}/auth/two-factor/enable
      *
      * Auth: `mk.auth:{scope}` (per-route).
-     * Ability: `mk.ability:{scope}.auth.two-factor-enable` (per-route).
+     * Ability (catálogo, la ruta no la exige): `{scope}.auth.two-factor-enable`.
      *
      * Body: `{current_password}` cuando la política es `optional` — un token
      * robado no puede enrolar el dispositivo del atacante.
@@ -1767,7 +1766,7 @@ abstract class BaseAuthController extends BaseController
      * POST /api/{scope}/auth/two-factor/confirm
      *
      * Auth: `mk.auth:{scope}` (per-route).
-     * Ability: `mk.ability:{scope}.auth.two-factor-confirm` (per-route).
+     * Ability (catálogo, la ruta no la exige): `{scope}.auth.two-factor-confirm`.
      *
      * Body: `{code}`. Confirma el secreto pendiente, devuelve los códigos de
      * recuperación (la única vez que se ven) y cierra las OTRAS sesiones.
@@ -1811,7 +1810,7 @@ abstract class BaseAuthController extends BaseController
      * POST /api/{scope}/auth/two-factor/recovery-codes
      *
      * Auth: `mk.auth:{scope}` (per-route).
-     * Ability: `mk.ability:{scope}.auth.two-factor-recovery-codes` (per-route).
+     * Ability (catálogo, la ruta no la exige): `{scope}.auth.two-factor-recovery-codes`.
      *
      * Body: `{code}` — un código del autenticador. Sin esa prueba, cualquiera
      * con el token podría pedir una tanda nueva de códigos y llevarse ocho
@@ -1851,7 +1850,7 @@ abstract class BaseAuthController extends BaseController
      * POST /api/{scope}/auth/two-factor/disable
      *
      * Auth: `mk.auth:{scope}` (per-route).
-     * Ability: `mk.ability:{scope}.auth.two-factor-disable` (per-route).
+     * Ability (catálogo, la ruta no la exige): `{scope}.auth.two-factor-disable`.
      *
      * Body: `{current_password, code}` — las dos pruebas. Con la política
      * `required` responde 403: el scope lo exige, y sacárselo es decisión de un

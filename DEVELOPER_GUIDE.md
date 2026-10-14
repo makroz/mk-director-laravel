@@ -734,7 +734,18 @@ php artisan mk:make:auth-user Admin --login-field=ci --with-auth-rbac
 
 ### Qué cambia cuando pasás `--with-auth-rbac`
 
-1. **Ability checks en `/me` y `/logout`** vía `authorizeAbility()` helper:
+> 🔴 **Hoy las rutas de auth NO tienen ability check.** `/me`, `/logout` y el
+> resto de las protegidas sólo piden `mk.auth:{scope}`; las rutas generadas no llevan `mk.ability`.
+> Cada método de `BaseAuthController` declara `#[Ability('{scope}.auth.{acción}')]`,
+> pero eso es catálogo: lo siembra `mk:discover-abilities` y nada lo exige. El
+> `authorizeAbility()` de abajo se fue cuando el `AuthController` generado pasó a
+> heredar de `BaseAuthController`. `mk_director.auth.abilities` quedó, y lo lee
+> SÓLO `mk:prune-abilities` como lista de nombres a no borrar: configurarlo no
+> protege ningún endpoint. Lo que sigue en esta sección es histórico salvo el
+> rate limit (punto 2) y los `AuthEvent` (punto 3), que siguen vigentes y se
+> emiten con o sin `--no-rbac`.
+
+1. ~~**Ability checks en `/me` y `/logout`**~~ (histórico, ya no existe) vía `authorizeAbility()` helper:
    ```php
    public function me(Request $request): JsonResponse
    {
@@ -815,9 +826,10 @@ php artisan mk:make:auth-user Admin --login-field=ci --with-auth-rbac
 // config/mk_director.php
 'auth' => [
     // ... login_field, user_model, default_user_type ...
+    // Sólo lo lee `mk:prune-abilities` (nombres a conservar). NO es un check.
     'abilities' => [
-        'me' => env('MK_AUTH_ABILITY_ME'),          // null = sin check (BC)
-        'logout' => env('MK_AUTH_ABILITY_LOGOUT'),  // null = sin check (BC)
+        'me' => env('MK_AUTH_ABILITY_ME'),
+        'logout' => env('MK_AUTH_ABILITY_LOGOUT'),
     ],
     'rate_limits' => [
         'login' => env('MK_AUTH_RATE_LIMIT_LOGIN', '5,1'),
@@ -834,29 +846,14 @@ php artisan mk:make:auth-user Admin --login-field=ci --with-auth-rbac
 ],
 ```
 
-### Ability naming convention for `--with-auth-rbac`
+### Nombres de las abilities de auth
 
-**v1.6.0-rc4 (R-PKG-014 MEJORA-05)**. Convención recomendada:
-
-```php
-'abilities' => [
-    'me' => 'auth.{scope}.me',
-    'logout' => 'auth.{scope}.logout',
-],
-```
-
-Donde `{scope}` es el nombre del scope en snake_case (`admin`, `member`, `partner`, etc.).
-
-**Por qué `auth.{scope}.{endpoint}`**:
-- `auth.*` agrupa abilities del flow de autenticación (no de la lógica de negocio).
-- `{scope}` previene colisiones entre scopes (`auth.admin.me` vs `auth.member.me`).
-- `{endpoint}` es el verbo del endpoint (`me`, `logout`).
-
-**Discovery automático**: después de generar el scope con `--with-auth-rbac`, el scaffolder corre `mk:discover-abilities` automáticamente (MEJORA-03). Si querés registrar estas abilities manualmente:
-
-```bash
-php artisan tinker --execute='\Mk\Director\Auth\Events\AuthEvent::dispatch("auth.ability.register", ["name" => "auth.admin.me", "description" => "View own admin profile"]);'
-```
+Los fija `BaseAuthController`: `{scope}.auth.{acción}` (`admin.auth.me`,
+`member.auth.logout`, `admin.auth.password-reset-code-request`…). No se
+configuran. `mk:discover-abilities` las siembra —corrélo después de `migrate`, o
+scaffoldeá con `--migrate --discover`—. Quedan en el catálogo: se pueden
+asignar a roles, o pedir con `mk.ability:` si la app quiere gatear una ruta,
+pero ninguna ruta generada las exige.
 
 **Wildcard para super-admin**: el role `super-admin` que crea `mk:auth:create-super-admin --roles=super-admin,admin,editor,viewer` recibe automáticamente la ability wildcard `*` que matchea cualquier otra ability (incluyendo `auth.*`).
 
@@ -2374,7 +2371,7 @@ php artisan mk:make:auth-user Member --kind=consumer --managed-by=Admin --with-c
 ```
 
 - `--kind=consumer` **requiere** `--managed-by=<Scope>` — aborta con error claro si se omite, ANTES de generar nada. El manager debe scaffoldearse primero (el comando valida que `App\Modules\{Manager}` ya exista).
-- Con `--kind=consumer`, `Http/Routes/api.php` propio queda reducido a auth + self-profile (`login`, `refresh`, `logout`, `logout-all`, `me`, `PATCH me`, `password/forgot`, `password/reset`, `password/change`) — SIN CRUD propio, SIN `/roles`, SIN `/abilities`. Stub dedicado `auth-user.routes.consumer.stub` (no string-surgery sobre el stub full).
+- Con `--kind=consumer`, `Http/Routes/api.php` propio queda reducido a auth + self-profile (`login`, `refresh`, `logout`, `logout-all`, `me`, `PATCH me`, `password/forgot`, `password/reset`, `password/change` y las cuatro del PIN por email: `password/reset/code/{request,confirm}` públicas y `password/code/{request,confirm}` autenticadas, con el mismo throttle que en un manager) — SIN CRUD propio, SIN `/roles`, SIN `/abilities`. Stub dedicado `auth-user.routes.consumer.stub` (no string-surgery sobre el stub full).
 - NO se generan `RoleController`/`AbilityController` propios ni sus Policies (quedarían sin rutas que los gateen).
 - `{Scope}Controller`, DTOs, Repository, Service, Factory, Seeder y `{Scope}Policy` SÍ se generan igual — los usa el recurso managed (`--managed-by`) para exponer el CRUD bajo el guard del manager (`/api/{manager}/{scopePlural}`).
 - El path `manager` (default, sin `--kind`) es idéntico al comportamiento pre-existente.
