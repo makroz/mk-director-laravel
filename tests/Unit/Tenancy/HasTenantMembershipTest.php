@@ -71,6 +71,16 @@ test('HasTenantMembership: getTenantId returns null when the column is missing',
     expect($user->getTenantId())->toBeNull();
 });
 
+test('🔴 HasTenantMembership: a model LOADED without the tenant column returns null under strict mode', function () {
+    // `newFromBuilder()` marks it as coming from the database (`exists`), the
+    // only case where `preventAccessingMissingAttributes` (on in tests/Pest.php)
+    // throws. A `new` model never does, so the test above does not measure it.
+    $user = (new TenantUserDefault())->newFromBuilder(['name' => 'Ana']);
+
+    expect(Model::preventsAccessingMissingAttributes())->toBeTrue()
+        ->and($user->getTenantId())->toBeNull();
+});
+
 test('HasTenantMembership: getTenantId returns null when the column is empty string', function () {
     $user = new TenantUserDefault(['client_id' => '']);
 

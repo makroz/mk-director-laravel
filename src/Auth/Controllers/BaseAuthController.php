@@ -2226,9 +2226,17 @@ abstract class BaseAuthController extends BaseController
     /**
      * Lee un atributo del segundo factor tolerando que la columna no exista
      * (scope generado sin `--two-factor`) y que el modelo no sea un Eloquent.
+     *
+     * ⚠️ Con `hasAttribute()` y no sólo `getAttribute()`: con el modo estricto
+     * de Eloquent una columna ausente tira en vez de devolver null. Ver
+     * {@see \Mk\Director\Auth\Models\AuthUser::hasConfirmedTwoFactor()}.
      */
     protected function twoFactorAttribute(Authenticatable $user, string $column): mixed
     {
+        if (method_exists($user, 'hasAttribute') && ! $user->hasAttribute($column)) {
+            return null;
+        }
+
         return method_exists($user, 'getAttribute') ? $user->getAttribute($column) : null;
     }
 
@@ -2373,6 +2381,11 @@ abstract class BaseAuthController extends BaseController
     /**
      * Wrapper seguro sobre `AuthEvent::dispatch()` — si la clase no existe
      * en un entorno minimalista (test setup sin package), swallow el error.
+     *
+     * 🔴 Una falla del listener no rompe el login, pero se REPORTA. Antes se
+     * tragaba sin rastro, y el listener es el que manda el mail de
+     * recuperación: medido en mozzo-api con el modo estricto de Eloquent, el
+     * mail dejaba de salir, `forgot` respondía 200 y el log quedaba vacío.
      */
     private function dispatchAuthEventSafe(string $eventName, array $payload = []): void
     {
@@ -2382,8 +2395,9 @@ abstract class BaseAuthController extends BaseController
 
         try {
             AuthEvent::dispatch($eventName, $payload);
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
             // Defense-in-depth: nunca romper login por un audit event faltante.
+            report($e);
         }
     }
 }

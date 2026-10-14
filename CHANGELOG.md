@@ -12,6 +12,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — el paquete anda con el modo estricto de Eloquent prendido
+
+**Fixed** (sin cambios de API)
+- Un consumer no podía prender `Model::shouldBeStrict()`: con `preventAccessingMissingAttributes` cuatro lecturas
+  del paquete tiraban `MissingAttributeException` sobre columnas que el modelo no tiene, donde sin el flag
+  `getAttribute()` devuelve null en silencio. Ahora preguntan con `hasAttribute()` antes de leer:
+  - `AuthUser::hasConfirmedTwoFactor()` (`two_factor_secret`, `two_factor_confirmed_at`): el login respondía 500 en
+    todo scope sin 2FA. RETO: 1165 de 1575 tests en rojo.
+  - `BaseAuthController::twoFactorAttribute()`, que arma `two_factor_confirmed_at` del `me`.
+  - `HasTenantMembership::getTenantId()` en un modelo sin columna de tenant. mozzo-api: 237 tests.
+  - `MkAbilityResource` (`module`, que la tabla `abilities` no tiene).
+- La suite del paquete corre ahora con `preventAccessingMissingAttributes` y `preventSilentlyDiscardingAttributes`
+  (`tests/Pest.php`), además de `preventLazyLoading`. Hallazgo 82 de mozzo-api.
+- `BaseAuthController::dispatchAuthEventSafe()` ahora hace `report($e)` en vez de tragarse la excepción del
+  listener. El listener es el que manda el mail de recuperación: en mozzo-api, con el modo estricto prendido,
+  `forgot` respondía 200, el mail no salía y el log quedaba vacío. Sigue sin romper el login.
+
 ## [UNRELEASED] — tope de filas opcional para el export
 
 **Added**

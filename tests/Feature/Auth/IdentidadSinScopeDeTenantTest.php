@@ -2,13 +2,16 @@
 
 declare(strict_types=1);
 
+use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Foundation\Providers\FoundationServiceProvider;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 use Mk\Director\Auth\Controllers\BaseAuthController;
 use Mk\Director\Auth\Enums\ScopeStatus;
+use Mk\Director\Auth\Events\AuthEvent;
 use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Auth\Support\MorphPivot;
 use Mk\Director\Tenancy\HasTenantScope;
@@ -178,7 +181,6 @@ beforeEach(function () {
         'email' => 'super@local',
         'password' => Hash::make('secret'),
         'auth_scope' => 'admin',
-        'tenant_id' => null,
     ]);
 });
 
@@ -212,6 +214,40 @@ test('🔴 la recuperación de contraseña guarda su token, no lo tira en silenc
     expect($response->getStatusCode())->toBe(200)
         ->and(DB::table('admin_password_reset_tokens')
             ->where('email', 'admin@napoli.local')->count())->toBe(1);
+});
+
+test('🔴 si el listener del evento falla, forgot sigue respondiendo 200 pero la falla queda REPORTADA', function () {
+    // El listener es el que manda el mail. `dispatchAuthEventSafe()` se tragaba
+    // su excepción sin dejar rastro: medido en mozzo-api con el modo estricto
+    // de Eloquent, el mail de recuperación dejaba de salir y nada lo decía.
+    $reportadas = [];
+    app()->instance(ExceptionHandler::class, new class($reportadas) implements ExceptionHandler
+    {
+        public function __construct(private array &$reportadas) {}
+
+        public function report(Throwable $e): void
+        {
+            $this->reportadas[] = $e->getMessage();
+        }
+
+        public function shouldReport(Throwable $e): bool
+        {
+            return true;
+        }
+
+        public function render($request, Throwable $e)
+        {
+            throw $e;
+        }
+
+        public function renderForConsole($output, Throwable $e): void {}
+    });
+    Event::listen(AuthEvent::class, fn () => throw new RuntimeException('el listener se cayó'));
+
+    $response = $this->httpPost('/api/admin/auth/password/forgot', ['email' => 'admin@napoli.local']);
+
+    expect($response->getStatusCode())->toBe(200)
+        ->and($reportadas)->toBe(['el listener se cayó']);
 });
 
 /*

@@ -73,6 +73,7 @@ beforeEach(function () {
     ]);
 
     (require __DIR__.'/../../src/Database/Migrations/2026_08_11_000001_create_mk_reports_table.php')->up();
+    (require __DIR__.'/../../src/Database/Migrations/2026_09_26_000001_add_user_type_to_mk_reports_table.php')->up();
 
     Storage::fake('local');
     // Como en un worker: el guard necesita un request en el container.

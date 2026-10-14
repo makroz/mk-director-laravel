@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Mk\Director\Http\Resources;
 
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 use Mk\Director\Auth\Enums\FixedStatus;
@@ -39,6 +40,8 @@ class MkAbilityResource extends JsonResource
      * `module` NO tiene columna en la tabla `abilities` del paquete: hoy
      * serializa null para todo consumer que no la agregue por su cuenta. Se
      * mantiene porque los fronts ya la reciben y sacarla sería breaking.
+     * Por eso se pregunta con `hasAttribute()` antes de leerla: con el modo
+     * estricto de Eloquent, leer una columna ausente tira en vez de dar null.
      *
      * @return array<string, mixed>
      */
@@ -49,7 +52,7 @@ class MkAbilityResource extends JsonResource
             'name' => $this->name,
             'description' => $this->description,
             'is_fixed' => $this->is_fixed instanceof FixedStatus ? $this->is_fixed->value : (int) ($this->is_fixed ?? 0),
-            'module' => $this->module,
+            'module' => $this->resource instanceof Model && ! $this->resource->hasAttribute('module') ? null : $this->module,
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
         ];
