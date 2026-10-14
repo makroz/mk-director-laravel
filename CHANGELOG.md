@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — la búsqueda ya no distingue mayúsculas en PostgreSQL
+
+**Fixed** (sin cambios de API)
+- `?q=juan` no encontraba a "Juan" en PostgreSQL: la búsqueda armaba `where($col, 'like', …)`, que en MySQL es
+  insensible a mayúsculas (collation `_ci`) y en PostgreSQL no. RETO y Mozzo corren sobre PostgreSQL.
+- Ahora `applySearch()` (columnas y columnas de relación), el operador `like` de los filtros y `LikeSearchStrategy`
+  usan `whereLike()`/`orWhereLike()`: `ILIKE` en PostgreSQL, `LIKE` igual que antes en MySQL y SQLite.
+- En PostgreSQL Laravel compila `"col"::text ilike ?`: buscar sobre una columna numérica ya no revienta con
+  `operator does not exist: integer ~~ unknown`.
+- El escape de comodines (`50%` busca el literal) no cambia. Los acentos sí siguen contando ("jose" no encuentra
+  "José"): eso pide `unaccent` y queda fuera.
+- Rendimiento: `%término%` no usa un índice B-tree ni con `LIKE` ni con `ILIKE`; no hay regresión.
+
 ## [UNRELEASED] — `?cols=` ya no deja a las relaciones sin su clave
 
 **Fixed** (API pública: se agrega `ListManager::keepRelationKeys()`, nada cambia de firma)

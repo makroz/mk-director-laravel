@@ -512,8 +512,11 @@ class ListManager
             // as a literal string. Without this, a user typing '50%'
             // would match every row that contains '50' because '%' is a
             // SQL LIKE wildcard.
+            // whereLike(): case-insensitive on every engine (ILIKE on
+            // PostgreSQL). A plain 'like' is case-sensitive on PostgreSQL,
+            // so the same filter matched differently than on MySQL.
             $escaped = self::escapeLikeWildcards((string) $val);
-            $query->where($field, 'like', "%{$escaped}%", 'and');
+            $query->whereLike($field, "%{$escaped}%");
         } else {
             $query->where($field, $sqlOp, $val);
         }
@@ -599,9 +602,13 @@ class ListManager
         $search = mb_substr((string) $search, 0, $maxLength);
 
         // R2-014: escape LIKE wildcards so the search term is treated
-        // as a literal string. The ESCAPE '\\' clause tells MySQL/PG
-        // that the backslash is the escape character; SQLite respects
-        // it natively in LIKE.
+        // as a literal string. MySQL and PostgreSQL use the backslash as
+        // the default LIKE escape character; SQLite has no default one,
+        // so on SQLite (package tests only) the escape is not honored.
+        //
+        // whereLike()/orWhereLike() keep the search case-insensitive on
+        // every engine: they compile to ILIKE on PostgreSQL, where a plain
+        // 'like' is case-sensitive and "juan" never found "Juan".
         $escaped = self::escapeLikeWildcards($search);
 
         $query->where(function (Builder $q) use ($searchable, $escaped) {
@@ -614,7 +621,7 @@ class ListManager
                     $relationName = implode('.', $parts);
 
                     $clause = function ($relQuery) use ($relationColumn, $escaped) {
-                        $relQuery->where($relationColumn, 'like', "%{$escaped}%");
+                        $relQuery->whereLike($relationColumn, "%{$escaped}%");
                     };
 
                     if ($isFirst) {
@@ -624,9 +631,9 @@ class ListManager
                     }
                 } else {
                     if ($isFirst) {
-                        $q->where($field, 'like', "%{$escaped}%");
+                        $q->whereLike($field, "%{$escaped}%");
                     } else {
-                        $q->orWhere($field, 'like', "%{$escaped}%");
+                        $q->orWhereLike($field, "%{$escaped}%");
                     }
                 }
             }
