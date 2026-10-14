@@ -393,3 +393,49 @@ it('conserva las reacciones en un soft delete y las borra en un forceDelete', fu
     $post->forceDelete();
     expect(MkReaction::count())->toBe(0);
 });
+
+// ─── La conexión del modelo ───────────────────────────────────────────────────
+
+/**
+ * Contenido con contador que vive en OTRA conexión, y anota en qué nivel de
+ * transacción está SU conexión cuando el toggle recalcula el contador.
+ */
+class ReactableOnOtherConnection extends ReactableCounted
+{
+    protected $connection = 'otra';
+
+    public ?int $transactionLevelAtSync = null;
+
+    protected function syncMkReactionsCount(): void
+    {
+        $this->transactionLevelAtSync = $this->getConnection()->transactionLevel();
+
+        parent::syncMkReactionsCount();
+    }
+}
+
+it('🔴 abre la transacción en la conexión DEL MODELO, no en la por defecto', function () {
+    // Las reacciones heredan la conexión del modelo (`newRelatedInstance()`).
+    // Con `DB::transaction()` la transacción se abría en la por defecto: en
+    // la del modelo el `lockForUpdate` corría en autocommit —soltaba el lock
+    // al instante y volvía la carrera del contador— y un error a mitad de
+    // camino no deshacía el INSERT.
+    $this->capsule->addConnection(['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => ''], 'otra');
+    $otra = $this->capsule->getConnection('otra');
+
+    $schemaPorDefecto = app('db.schema');
+    app()->instance('db.schema', $otra->getSchemaBuilder());
+    $this->runPackageMigration('2026_07_20_000001_create_mk_reactions_table.php');
+    app()->instance('db.schema', $schemaPorDefecto);
+
+    $otra->getSchemaBuilder()->create('posts_counted', function (Blueprint $table): void {
+        $table->id();
+        $table->unsignedInteger('reactions_count')->default(0);
+    });
+
+    $post = ReactableOnOtherConnection::create([]);
+    $post->react(ReactionAuthorBigint::create([]));
+
+    expect($post->transactionLevelAtSync)->toBe(1)
+        ->and($post->fresh()->reactions_count)->toBe(1);
+});

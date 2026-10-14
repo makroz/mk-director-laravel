@@ -239,3 +239,50 @@ it('borrar FÍSICAMENTE el comentario se lleva sus reportes por FK', function ()
 
     expect(MkCommentReport::count())->toBe(0);
 });
+
+// ─── La conexión del modelo ─────────────────────────────────────────────────
+
+/** El mismo contenido, en OTRA conexión: comentarios y reportes la heredan. */
+class ModeratedPostOnOtherConnection extends ModeratedPost
+{
+    protected $connection = 'otra';
+}
+
+it('🔴 reportar, ocultar y borrar abren su transacción en la conexión DEL MODELO', function () {
+    // Con `DB::transaction()` la transacción iba a la conexión por defecto y
+    // las escrituras a la del modelo, en autocommit: ni la atomicidad de la
+    // moderación ni el savepoint de `reportBy()` existían en esa conexión.
+    $this->capsule->addConnection(['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => ''], 'otra');
+    $otra = $this->capsule->getConnection('otra');
+
+    $schemaPorDefecto = app('db.schema');
+    app()->instance('db.schema', $otra->getSchemaBuilder());
+    $this->runPackageMigration('2026_07_20_000002_create_mk_comments_table.php');
+    $this->runPackageMigration('2026_07_22_000002_add_moderation_to_mk_comments_table.php');
+    $this->runPackageMigration('2026_07_22_000001_create_mk_comment_reports_table.php');
+    Schema::create('m_posts', function (Blueprint $table): void {
+        $table->id();
+    });
+    app()->instance('db.schema', $schemaPorDefecto);
+
+    $niveles = [];
+    MkCommentReport::creating(function (MkCommentReport $r) use (&$niveles): void {
+        $niveles['reportBy'] = $r->getConnection()->transactionLevel();
+    });
+    MkComment::saving(function (MkComment $c) use (&$niveles): void {
+        if ($c->hidden_at !== null) {
+            $niveles['hideForModeration'] = $c->getConnection()->transactionLevel();
+        }
+    });
+    MkComment::deleting(function (MkComment $c) use (&$niveles): void {
+        $niveles['deleteForModeration'] = $c->getConnection()->transactionLevel();
+    });
+
+    $comment = ModeratedPostOnOtherConnection::create([])->addComment($this->author, 'Ofensivo');
+    $comment->reportBy($this->reporter, MkCommentReportReason::Offensive);
+    $comment->hideForModeration($this->admin, MkCommentReportReason::Offensive);
+    $comment->deleteForModeration($this->admin);
+
+    expect($comment->getConnectionName())->toBe('otra')
+        ->and($niveles)->toBe(['reportBy' => 1, 'hideForModeration' => 1, 'deleteForModeration' => 1]);
+});

@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — las transacciones de reacciones y moderación van en la conexión del modelo
+
+**Fixed** (sin cambios de API)
+- `HasMkReactions::react()` y `MkComment::reportBy()`, `hideForModeration()` y `deleteForModeration()` abrían la
+  transacción con `DB::transaction()`, o sea en la conexión POR DEFECTO, mientras las filas que escriben (reacciones,
+  reportes, el propio comentario) heredan la conexión del modelo (`newRelatedInstance()`). Con el modelo en otra
+  conexión, todo corría en autocommit:
+  - el `lockForUpdate` del toggle soltaba el lock al instante y volvía la carrera del contador de reacciones;
+  - la moderación podía quedar a medias (oculto con reportes pendientes);
+  - el savepoint que protege la transacción externa en `reportBy()` no existía en esa conexión.
+- Ahora usan `$this->getConnection()->transaction()`. Con un solo modelo en la conexión por defecto (RETO, Mozzo) no
+  cambia nada.
+- `CRUDSmart` y `BaseAuthController` siguen con `DB::transaction()`: escriben en tablas de varias conexiones
+  posibles (tokens, resets) y la elección no es mecánica.
+
 ## [UNRELEASED] — el paquete anda con el modo estricto de Eloquent prendido
 
 **Fixed** (sin cambios de API)
