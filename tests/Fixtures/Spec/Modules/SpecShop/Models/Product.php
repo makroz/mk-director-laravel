@@ -13,6 +13,9 @@ class Product extends Model
 {
     protected $table = 'spec_products';
 
+    /** Reported by the introspector as `apiResource` (only a public one is used by `autoTransform()`). */
+    public $apiResource = 'App\\Modules\\SpecShop\\Http\\Resources\\ProductResource';
+
     protected $fillable = ['name', 'price'];
 
     protected $attributes = ['status' => 1];

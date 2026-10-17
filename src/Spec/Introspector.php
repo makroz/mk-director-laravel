@@ -37,18 +37,20 @@ final class Introspector
     /** @param  list<string>  $modulePaths  folders whose children are modules (`app/Modules`) */
     public function __construct(private array $modulePaths) {}
 
-    /** @return array{models: list<array>, tables: list<array>, enums: list<array>, abilities: list<array>, routes: list<array>, crud: list<array>} */
+    /** @return array{models: list<array>, tables: list<array>, enums: list<array>, abilities: list<array>, routes: list<array>, crud: list<array>, storedAbilities: list<array>} */
     public function collect(): array
     {
         $models = $this->models();
+        $routes = $this->routes();
 
         return [
             'models' => $models,
             'tables' => $this->tables($models),
             'enums' => $this->enums(),
             'abilities' => $this->abilities(),
-            'routes' => $this->routes(),
+            'routes' => $routes,
             'crud' => $this->crud(),
+            'storedAbilities' => $this->storedAbilities($routes),
         ];
     }
 
@@ -80,6 +82,11 @@ final class Introspector
                 'attributes' => (object) $model->getAttributes(),
                 'traits' => $traits,
                 'relations' => (object) $this->relations($model),
+                // Only a public one counts: `autoTransform()` reads `$model->apiResource`, and Eloquent
+                // answers a protected property with a (null) attribute.
+                'apiResource' => $reflection->hasProperty('apiResource') && $reflection->getProperty('apiResource')->isPublic()
+                    ? $model->apiResource
+                    : null,
             ];
         }
 
@@ -247,6 +254,32 @@ final class Introspector
         foreach ($report as $module) {
             foreach ($module['abilities'] as $a) {
                 $out[] = ['module' => $module['module'], 'source' => $module['source'], ...$a];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * The rows of the ability table each route scope writes to (`{scope}_abilities` when it exists,
+     * else `abilities`, as `mk:discover-abilities` resolves it): the description of an ability that
+     * only a seeder created. Read only.
+     *
+     * @param  list<array{scopes: list<string>}>  $routes
+     * @return list<array{table: string, name: string, description: ?string}>
+     */
+    private function storedAbilities(array $routes): array
+    {
+        $scopes = array_unique(array_merge(...array_column($routes, 'scopes')));
+        $tables = array_unique(array_map(static fn (string $s): string => Schema::hasTable("{$s}_abilities") ? "{$s}_abilities" : 'abilities', $scopes));
+        sort($tables);
+        $out = [];
+        foreach ($tables as $table) {
+            if (! Schema::hasTable($table)) {
+                continue;
+            }
+            foreach (DB::table($table)->orderBy('name')->get(['name', 'description']) as $row) {
+                $out[] = ['table' => $table, 'name' => $row->name, 'description' => $row->description];
             }
         }
 

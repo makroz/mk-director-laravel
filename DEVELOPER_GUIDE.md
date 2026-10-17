@@ -630,12 +630,13 @@ Lo consumen `mk spec import` (la adopción, una vez) y `mk spec check` (el drift
 
 | clave | de dónde sale |
 |---|---|
-| `models` | cada modelo Eloquent concreto en `<Módulo>/Models` (los `*Base` abstractos se saltean): `getTable()`, `getKeyType()`, `usesTimestamps()`, SoftDeletes, **`getFillable()`**, `getGuarded()`, `getCasts()`, los `$attributes` de una instancia nueva, `class_uses_recursive()` y las relaciones (métodos públicos sin argumentos cuyo tipo de retorno es un `Relation`, llamados sobre una instancia nueva: no corre ninguna query; `declaredIn` dice qué clase la declara) |
+| `models` | cada modelo Eloquent concreto en `<Módulo>/Models` (los `*Base` abstractos se saltean): `getTable()`, `getKeyType()`, `usesTimestamps()`, SoftDeletes, **`getFillable()`**, `getGuarded()`, `getCasts()`, los `$attributes` de una instancia nueva, `class_uses_recursive()` y las relaciones (métodos públicos sin argumentos cuyo tipo de retorno es un `Relation`, llamados sobre una instancia nueva: no corre ninguna query; `declaredIn` dice qué clase la declara) y `apiResource` (sólo si es **público**: `autoTransform()` lee `$model->apiResource`, y Eloquent contesta uno `protected` como un atributo nulo) |
 | `tables` | `Schema::getColumns/getIndexes/getForeignKeys` de cada tabla de modelo (`type_name`, `type`, `nullable`, `default` crudos) + `partial` por índice (Postgres/sqlite) |
 | `enums` | los backed enums de `<Módulo>/Enums`: casos, `label()` si existe, el caso de `default()` si existe, y el docblock de la clase como texto |
 | `abilities` | **el mismo** discovery de `mk:discover-abilities` (corre el comando en `--dry-run --json`): `source` `provider` o `fallback` |
 | `routes` | `Route::getRoutes()`: uri, métodos, acción y los argumentos de `mk.ability:` y `mk.auth:` |
 | `crud` | cada `SmartController` concreto de `<Módulo>/Http/Controllers`: su `$mkConfig` por reflexión (`getDefaultProperties()`, heredado incluido) |
+| `storedAbilities` | las filas (`name`, `description`) de la tabla de abilities de cada scope de las rutas, resuelta como `mk:discover-abilities` (`{scope}_abilities` si existe, si no `abilities`): la descripción de una ability que sólo creó un seeder (`admin.members.*` en RETO) |
 
 🔴 **El `$fillable` sale de `getFillable()`, nunca de leer el archivo**: un grep se corta y lo que se pierde es justo la columna que importa.
 

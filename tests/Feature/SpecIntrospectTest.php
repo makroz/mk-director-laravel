@@ -52,7 +52,26 @@ test('fillable_comes_from_getFillable', function () {
         ->and($model['guarded'])->toBe(['*'])
         ->and((array) $model['attributes'])->toBe(['status' => 1])
         ->and((array) $model['casts'])->toMatchArray(['status' => 'App\\Modules\\SpecShop\\Enums\\ProductStatus'])
-        ->and((array) $model['relations'])->toBe(['children' => ['type' => 'HasMany', 'related' => Product::class, 'declaredIn' => Product::class, 'foreignKey' => 'parent_id']]);
+        ->and((array) $model['relations'])->toBe(['children' => ['type' => 'HasMany', 'related' => Product::class, 'declaredIn' => Product::class, 'foreignKey' => 'parent_id']])
+        ->and($model['apiResource'])->toBe('App\\Modules\\SpecShop\\Http\\Resources\\ProductResource');
+});
+
+test('stored_abilities_from_the_scope_table', function () {
+    // An ability only a seeder created: its description lives in the table the route's scope writes to.
+    if (! Schema::hasTable('abilities')) {
+        Schema::create('abilities', function ($t) {
+            $t->id();
+            $t->string('name')->unique();
+            $t->string('description')->nullable();
+            $t->timestamps();
+        });
+    }
+    DB::table('abilities')->insert(['name' => 'admin.spec_shop.seeded', 'description' => 'Sembrada por un seeder.']);
+
+    $stored = (new Introspector([__DIR__.'/../Fixtures/Spec/Modules']))->collect()['storedAbilities'];
+
+    expect(collect($stored)->firstWhere('name', 'admin.spec_shop.seeded'))
+        ->toBe(['table' => 'abilities', 'name' => 'admin.spec_shop.seeded', 'description' => 'Sembrada por un seeder.']);
 });
 
 test('enum_cases_and_labels', function () {
