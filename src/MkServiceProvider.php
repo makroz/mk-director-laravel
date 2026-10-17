@@ -34,6 +34,7 @@ use Mk\Director\Console\Commands\MkUpdateCommand;
 use Mk\Director\Console\Commands\PruneAbilitiesCommand;
 use Mk\Director\Console\Commands\PrunePushDevicesCommand;
 use Mk\Director\Console\Commands\SecurityLintCommand;
+use Mk\Director\Console\Commands\SpecIntrospectCommand;
 use Mk\Director\Controllers\OpenApiController;
 use Mk\Director\Embeds\MkEmbedService;
 use Mk\Director\Export\Contracts\ReportHeaderProvider;
@@ -315,6 +316,8 @@ class MkServiceProvider extends ServiceProvider
                 AuthTwoFactorResetCommand::class,
                 DiscoverAbilitiesCommand::class,
                 PruneAbilitiesCommand::class,
+                // The running app as JSON for `mk spec import|check` (@makroz/spec).
+                SpecIntrospectCommand::class,
                 // R-PKG-015 BUG-NEW-09: helper command para parche de Sanctum UUIDs.
                 FixSanctumUuidsCommand::class,
                 // R-PKG-047 D4: helper command para migrar `is_active` boolean
