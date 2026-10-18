@@ -135,9 +135,11 @@ class MkAuthenticate
         // vivo. Misma regla que login y refresh: `AccountStatus`. El motivo va
         // en el mensaje porque el front lo muestra en el login al echarlo; no
         // es un oráculo: quien llega acá ya presentó un token válido.
-        $denial = AccountStatus::denialReason($user);
+        // El código y el estado los puede poner el chequeo que negó (`denialCode()`,
+        // `denialStatus()`): `ERR_ACCOUNT_DISABLED` y 401 si no dice nada.
+        $denial = AccountStatus::denial($user);
         if ($denial !== null) {
-            return $this->unauthorizedResponse($request, $scope, $denial, 'ERR_ACCOUNT_DISABLED');
+            return $this->unauthorizedResponse($request, $scope, $denial->message, $denial->code, [], $denial->status ?? 401);
         }
 
         // 🔴 AISLAMIENTO MULTI-TENANT — acá y no en otro lado.
@@ -204,6 +206,7 @@ class MkAuthenticate
         ?string $message = null,
         string $code = 'ERR_UNAUTHENTICATED',
         array $extraData = [],
+        int $status = 401,
     ): JsonResponse {
         // API request: retornar JsonResponse con envelope canónico.
         if ($request->expectsJson() || $request->is('api/*')) {
@@ -219,7 +222,7 @@ class MkAuthenticate
                     $extraData,
                 ),
                 'debugMsg' => [],
-            ], 401);
+            ], $status);
         }
 
         // Web request: LANZAR AuthenticationException (legacy BC).

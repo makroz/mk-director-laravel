@@ -447,11 +447,11 @@ class TokenIssuer
             throw InvalidRefreshTokenException::notFound();
         }
 
-        $denial = AccountStatus::denialReason($user);
+        $denial = AccountStatus::denial($user);
         if ($denial !== null) {
             $tokenModel->delete();
 
-            throw InvalidRefreshTokenException::accountDisabled($denial);
+            throw InvalidRefreshTokenException::accountDisabled($denial->message, $denial->code, $denial->status);
         }
 
         // Un refresh anterior a las familias estrena una con su propio id.

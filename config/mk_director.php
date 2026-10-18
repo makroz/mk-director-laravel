@@ -354,6 +354,10 @@ return [
         //
         // Corren en cada request autenticado: el que consulte la base debería
         // cachear (registrarlo como singleton alcanza).
+        //
+        // Cada chequeo puede declarar `denialMessage()`, `denialCode()` y
+        // `denialStatus()` (4xx). Sin ellos: el texto genérico,
+        // `ERR_ACCOUNT_DISABLED`, 403 en el login y 401 en el request y el refresh.
         'account_checks' => [],
 
         // 🔴 NO es un ability check. Ninguna ruta de auth exige ability: `/me`,

@@ -1044,6 +1044,22 @@ final class TenantIsActive
   cachear — registrarlo como singleton alcanza.
 - Si uno revienta, la excepción sube: un chequeo de seguridad que falla en
   silencio es un chequeo que no está.
+- Cada uno puede decir **por qué**, con qué **código** y con qué **estado**:
+  `denialMessage(): string`, `denialCode(): string` y `denialStatus(): int`
+  (sólo 4xx; otro valor se ignora). Sin ellos: `AccountStatus::DEFAULT_DENIAL`,
+  `ERR_ACCOUNT_DISABLED`, y el estado de cada puerta (403 en el login, 401 en
+  el request y el refresh). Hace falta cuando la negativa no es «se cerró la
+  sesión»: un 401 hace que el front reintente o pida la contraseña, y un
+  dispositivo que dejó de estar autorizado necesita otra cosa —volver a
+  vincularlo— (`ERR_DEVICE_REVOKED`, 403).
+
+**Una condición más antes de emitir la sesión que mira el REQUEST, no sólo la
+cuenta** (de qué dispositivo entra, una cabecera): override
+`issueSessionResponse()` en el controller del scope, decidí, y llamá al padre.
+Es el paso único por el que pasan el login, el login social y el desafío de
+2FA, siempre con la identidad ya probada. `beforeLogin()` corre antes de la
+contraseña (no sabe de quién es la cuenta) y `afterLogin()` con los tokens ya
+emitidos: ninguno de los dos sirve para esto.
 
 **Impacto en consumers:**
 

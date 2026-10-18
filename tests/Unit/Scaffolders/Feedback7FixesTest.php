@@ -93,7 +93,9 @@ test('R-PKG-047 D1: BaseAuthController::login() pinea `abilities` en el response
     // armado dejaría a uno de los dos sin `abilities`. Por eso se mide ahí, más
     // la delegación — sin ese segundo `expect`, el método podría estar muerto y
     // el test seguiría en verde.
-    if (! preg_match('/protected function issueSessionResponse\(.*?\n    \}/s', $base, $matches)) {
+    // Anclado al inicio de línea: el docblock de la clase lista el gancho con
+    // la misma firma, y sin el ancla el regex agarraba ese comentario.
+    if (! preg_match('/^    protected function issueSessionResponse\(.*?\n    \}/sm', $base, $matches)) {
         test()->fail('Could not locate issueSessionResponse() in BaseAuthController.');
     }
 
