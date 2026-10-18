@@ -918,8 +918,14 @@ class DiscoverAbilitiesCommand extends Command
     /**
      * Descubre los módulos en `mk_director.paths.modules`.
      *
-     * Cada carpeta inmediata que contenga `Http/Controllers/` o `Models/`
-     * cuenta como módulo.
+     * Cada carpeta inmediata que contenga `Http/Controllers/` o `Models/`, o
+     * cuyo ServiceProvider implemente `discoverAbilities()`, cuenta como módulo.
+     *
+     * El tercer caso es un módulo recién generado: declara sus abilities en
+     * `Generated/abilities.php` (que su provider devuelve) antes de tener un
+     * solo modelo o controller. Con la regla vieja se lo salteaba sin aviso y
+     * sus abilities no llegaban nunca a la tabla. Este es el único lugar que
+     * decide qué es un módulo: el comando y `Spec\Introspector` pasan por acá.
      *
      * @return array<string, array{path: string, classes: array<int, string>}>
      */
@@ -934,20 +940,21 @@ class DiscoverAbilitiesCommand extends Command
 
             $moduleName = $item->getFilename();
             $modulePath = $item->getPathname();
-            $classes = $this->discoverClassesInDir($modulePath);
+            $moduleInfo = [
+                'path' => $modulePath,
+                'classes' => $this->discoverClassesInDir($modulePath),
+            ];
 
-            // Only treat as a module if it has Controllers or Models.
             $hasControllers = is_dir($modulePath.'/Http/Controllers');
             $hasModels = is_dir($modulePath.'/Models');
+            $provider = $this->resolveProviderClass($moduleName, $moduleInfo);
+            $declaresAbilities = $provider !== null && method_exists($provider, 'discoverAbilities');
 
-            if (! $hasControllers && ! $hasModels) {
+            if (! $hasControllers && ! $hasModels && ! $declaresAbilities) {
                 continue;
             }
 
-            $modules[$moduleName] = [
-                'path' => $modulePath,
-                'classes' => $classes,
-            ];
+            $modules[$moduleName] = $moduleInfo;
         }
 
         return $modules;
