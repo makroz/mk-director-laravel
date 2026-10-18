@@ -9,8 +9,8 @@ use Illuminate\Support\Facades\Schema;
 /**
  * Migración del paquete mk-director-laravel — tabla `mk_reports`.
  *
- * Origen: `condaty-api/database/migrations/..._create_reports_table.php`,
- * el motor de export que se porta al paquete (plan
+ * Origen: la tabla `reports` de una implementación anterior del motor de
+ * export, que se porta al paquete (plan
  * `2026-08-11-mk-director-motor-de-reportes.md`).
  *
  * QUÉ GUARDA
@@ -23,8 +23,8 @@ use Illuminate\Support\Facades\Schema;
  * ---------------------------------------------------------------------------
  * Es la MISMA decisión que ya tomó `mk_media` para `mediable_id`, y por la
  * misma razón: el paquete tiene consumers de los dos tipos —RETO usa modelos
- * uuid, Condaty usa bigint en varias tablas— y una tabla del paquete no puede
- * elegir por ellos. El origen en Condaty usaba `foreignUuid` porque ahí
+ * uuid, otros usan bigint en varias tablas— y una tabla del paquete no puede
+ * elegir por ellos. El origen usaba `foreignUuid` porque ahí
  * `users.id` y `clients.id` son uuid por contrato propio; acá eso sería
  * imponerle el tipo de PK a todo consumer futuro.
  *
@@ -78,7 +78,7 @@ return new class extends Migration
             // reconstruye la MISMA lista que veía el usuario.
             //
             // 🔴 Acá NO va la data. Serializar la lista entera fue lo que
-            // reventó con accesos en Condaty (198.004 filas, ~422 MB de JSON):
+            // reventó con accesos en producción (198.004 filas, ~422 MB de JSON):
             // el request se quedaba sin memoria antes de responder.
             $blueprint->json('params')->nullable();
 

@@ -26,7 +26,7 @@ use Throwable;
  * ## 🔴 Y la zona horaria se convierte POR DEFECTO
  *
  * La base guarda en UTC. Sin convertir no corre sólo la hora: corre el DÍA.
- * Medido en Condaty (UTC-4), **629 de 10169 pagos y 11 de 70 alertas** caen en
+ * Medido en producción (UTC-4), **629 de 10169 pagos y 11 de 70 alertas** caen en
  * una fecha distinta según se lean en UTC o en la zona local — un pago de las
  * 21:00 aparecía al día siguiente.
  *

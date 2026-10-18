@@ -8,8 +8,8 @@ use Mk\Director\Tests\MkLaravelTestCase;
 
 /**
  * Hallazgo 48 de NetPizza: el motor de reportes montaba 7 rutas en
- * `v3/reports` en TODO consumer —`v3` es la versión de API de Condaty, que
- * ni siquiera usa el paquete—. Ahora es opt-in y su prefijo no trae versión.
+ * `v3/reports` en TODO consumer —`v3` es una versión de API que el paquete
+ * ni siquiera define—. Ahora es opt-in y su prefijo no trae versión.
  *
  * Se mide con la app real (`BootsHttpApp`): el provider bootea contra el
  * `config/mk_director.php` del paquete, así que lo que se afirma es el

@@ -31,7 +31,7 @@ use Illuminate\Support\Facades\Schema;
  *
  * `reporter_id` / `resolved_by_id` son `string()` por lo mismo que
  * `commentable_id` en `mk_comments`: el paquete tiene consumers con PK uuid
- * (RETO) y bigint (Condaty), y clavar uno rompe el otro.
+ * (RETO) y bigint, y clavar uno rompe el otro.
  */
 return new class extends Migration
 {

@@ -782,7 +782,7 @@ PHP,
             // docblock de `Mk\Director\Auth\Enums\ScopeStatus` para el análisis
             // completo: el drift que D4 arreglaba lo causaba el flag
             // `--status-values` configurable, no el backing type, y el cambio
-            // a string creó drift con Condaty (épica S6.5, char → numérico).
+            // a string creó drift con los consumers numéricos (épica S6.5, char → numérico).
             //
             // El valor literal `1` es `ScopeStatus::Active->value`. Va
             // hardcodeado a propósito: una migración es un artefacto

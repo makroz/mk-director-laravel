@@ -461,7 +461,7 @@ manda a `POST {scope}/auth/social/{provider}`. Guía: `DEVELOPER_GUIDE.md § 3.2
   `mk:discover-abilities` agrega como el resto de las de `BaseAuthController`.
 - **Dependencia nueva: `firebase/php-jwt` (`^6.10 || ^7.0`)**. Verificar firmas RSA y el formato JWK
   a mano es exactamente el código que no conviene escribir. Es la librería que usa el SDK oficial de
-  Google para PHP, y ya estaba en `condaty-api` (v7.1.0), así que no le agrega un paquete nuevo.
+  Google para PHP, y ya corría en producción (v7.1.0), así que no es una dependencia sin probar.
 
 Lo mide `tests/Feature/Auth/SocialLoginTest.php` (20 tests, cadena HTTP real, sin red: claves RSA
 generadas en el test y JWKS por `Http::fake()`), con cada guarda reinyectada.
@@ -715,11 +715,11 @@ movelo a un Service propio de esos dos controllers y declará ese. Pasó en RETO
 un scope mostraba los del otro. RETO lo movió a `AccessCatalogService`. Después sacá el `use` que
 quede sin uso en `AbilityController`.
 
-## [UNRELEASED] — el motor de reportes es opt-in y su prefijo no trae el `v3` de Condaty (hallazgo 48)
+## [UNRELEASED] — el motor de reportes es opt-in y su prefijo no trae versión de API (hallazgo 48)
 
 `mk_director.export.register_routes` venía en `true` y `route_prefix` en `'v3/reports'`: todo
-consumer que instalaba el paquete montaba 7 rutas en `/api/v3/reports`, las usara o no. `v3` es la
-versión de API de Condaty —que ni usa el paquete—; NetPizza nunca tuvo un v3 y tuvo que apagarlas
+consumer que instalaba el paquete montaba 7 rutas en `/api/v3/reports`, las usara o no. `v3` es una
+versión de API que el paquete no define; NetPizza nunca tuvo un v3 y tuvo que apagarlas
 a mano.
 
 Ahora `register_routes` es `env('MK_EXPORT_REGISTER_ROUTES', false)` y el prefijo por defecto es
@@ -5816,7 +5816,7 @@ this 1.1.1 is what makes the scaffoldeado de proyectos actually
 
 - `Mk\Director\Middleware\MkAuthMiddleware` references a non-existent
   `Mk\Director\Utils\MkResponse` class (a pre-0.0.1 stub that was never
-  extracted from the original `condaty` code base). The middleware is
+  extracted from the original code base). The middleware is
   not auto-registered anywhere and is not loaded by the sandbox
   application, so it does not block 1.0.0 — but the file should be
   either completed (with a proper `MkResponse` utility) or removed in
