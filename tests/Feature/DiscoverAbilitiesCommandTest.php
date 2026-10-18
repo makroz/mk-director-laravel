@@ -760,6 +760,55 @@ test('R-PKG-019 OBS-NEW-02: discoverClassesInDir uses require_once to force-load
     expect($src)->toMatch('/foreach\s*\(\s*get_declared_classes\(\)\s+as\s+\$declared\s*\)/');
 });
 
+test('end-to-end: a module with only a provider and Generated/abilities.php is discovered', function () {
+    // A freshly generated module declares its abilities before it has any model or
+    // controller: `Providers/{Name}ServiceProvider::discoverAbilities()` returns
+    // `Generated/abilities.php`. With the old "Http/Controllers or Models" rule the
+    // folder was skipped and its abilities never reached the table, silently.
+    $moduleName = 'Fresh'.uniqid();
+    $uid = str_replace('.', '', uniqid('', true));
+    $ns = "TestNs\\{$moduleName}_{$uid}";
+    $tempDir = sys_get_temp_dir()."/mk-discover-fresh-{$uid}";
+    mkdir("{$tempDir}/{$moduleName}/Providers", 0755, true);
+    mkdir("{$tempDir}/{$moduleName}/Generated", 0755, true);
+
+    file_put_contents("{$tempDir}/{$moduleName}/Generated/abilities.php", <<<'PHP'
+<?php
+return [
+    ['name' => 'admin.fresh.viewAny', 'description' => 'List fresh'],
+    ['name' => 'admin.fresh.create', 'description' => 'Create fresh'],
+];
+PHP);
+    file_put_contents("{$tempDir}/{$moduleName}/Providers/{$moduleName}ServiceProvider.php", <<<PHP
+<?php
+namespace {$ns}\\Providers;
+class {$moduleName}ServiceProvider
+{
+    public function discoverAbilities(): array
+    {
+        return require __DIR__.'/../Generated/abilities.php';
+    }
+}
+PHP);
+    // A folder with neither records nor declared abilities is still not a module.
+    mkdir("{$tempDir}/Shared/Support", 0755, true);
+
+    setupSqliteWithAbilities();
+    $command = makeTestCommand($tempDir);
+    $command->setOutput(new OutputStyle(new \Symfony\Component\Console\Input\StringInput(''), new NullOutput()));
+
+    $modules = invokeProtected($command, 'discoverModules', [$tempDir]);
+
+    expect($modules)->toHaveKey($moduleName);
+    expect($modules)->not->toHaveKey('Shared');
+
+    $report = invokeProtected($command, 'processModule', [$moduleName, $modules[$moduleName], false, true]);
+    expect($report['source'])->toBe('provider');
+    expect(array_column($report['abilities'], 'name'))->toBe(['admin.fresh.viewAny', 'admin.fresh.create']);
+
+    (new Filesystem)->deleteDirectory($tempDir);
+});
+
 test('end-to-end: R-PKG-019 OBS-NEW-02 — files on disk (NOT loaded) are discovered via require_once', function () {
     // Crea archivos PHP REALES en disco (no eval). Sin el fix
     // `require_once`, el command solo vería el ServiceProvider (si

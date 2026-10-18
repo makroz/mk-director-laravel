@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `mk:discover-abilities` ve el módulo que sólo declara abilities
+
+**Fixed**
+- **Un módulo sin `Models/` ni `Http/Controllers/` cuyo ServiceProvider implementa `discoverAbilities()` ahora es un
+  módulo.** La regla vieja («tiene `Http/Controllers` o `Models`») salteaba sin aviso al módulo recién generado, que
+  declara sus abilities en `Generated/abilities.php` antes de tener un solo modelo: sus abilities no llegaban nunca
+  a la tabla. El arreglo está en `discoverModules()`, el único lugar que decide qué es un módulo, así que también lo
+  ve `mk:spec:introspect`. Una carpeta sin registros ni abilities declaradas sigue sin ser un módulo.
+  Test: `DiscoverAbilitiesCommandTest` («a module with only a provider and Generated/abilities.php»).
+
 ## [UNRELEASED] — un chequeo de `account_checks` puede decir su código y su estado
 
 **Added**
