@@ -27,7 +27,7 @@ use Illuminate\Support\Facades\Schema;
  * DECISIÓN: `mediable_id` es string(), no `morphs()` ni `uuidMorphs()`
  * ---------------------------------------------------------------------
  * `morphs()` clava la FK a bigint y `uuidMorphs()` a uuid. El paquete tiene
- * consumers de los dos tipos (RETO usa modelos uuid; Condaty usa bigint en
+ * consumers de los dos tipos (unos usan modelos uuid; otros usan bigint en
  * varias tablas), y una tabla del paquete no puede elegir por ellos.
  * `string` soporta ambos, al costo de un índice más gordo y de perder la FK
  * declarativa — que de todos modos NO existe en una relación polimórfica.

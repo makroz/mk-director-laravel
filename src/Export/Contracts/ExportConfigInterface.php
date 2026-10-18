@@ -76,7 +76,7 @@ interface ExportConfigInterface extends ReportChromeAware
      * de exportar. Default: `false`.
      *
      * ⚠️ El motor restaura el request ENTERO al salir de esa llamada, no sólo
-     * el flag de export. En Condaty restaurar de a partes dejaba el request en
+     * el flag de export. En la versión anterior restaurar de a partes dejaba el request en
      * modo estadísticas y el PDF de Ingresos salía con 3 filas en lugar de
      * 200+ páginas.
      */

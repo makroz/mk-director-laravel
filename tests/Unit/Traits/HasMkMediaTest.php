@@ -20,7 +20,7 @@ use Mk\Director\Traits\HasMkMedia;
 uses(TestCase::class, UsesDatabase::class);
 
 /**
- * Dueño con PK bigint — el caso de Condaty.
+ * Dueño con PK bigint — el caso de los consumers con ids autoincrementales.
  */
 class MediaOwnerBigint extends EloquentModel
 {

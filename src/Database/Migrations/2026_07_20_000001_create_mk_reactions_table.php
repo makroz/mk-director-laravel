@@ -35,7 +35,7 @@ use Mk\Director\Enums\MkReactionType;
  *
  * `reactable_id` / `author_id` son string() por la misma razón que
  * `mediable_id` en `mk_media`: el paquete tiene consumers con PKs uuid (RETO)
- * y bigint (Condaty), y `morphs()`/`uuidMorphs()` clavan uno de los dos.
+ * y bigint, y `morphs()`/`uuidMorphs()` clavan uno de los dos.
  *
  * El autor es polimórfico porque en RETO puede reaccionar un `Admin` o un
  * `Member` — dos tablas distintas, dos guards distintos. El legacy asumía un

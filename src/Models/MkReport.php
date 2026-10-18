@@ -14,8 +14,9 @@ use RuntimeException;
 /**
  * MkReport — un pedido de export y su ciclo de vida.
  *
- * Tabla: {@see mk_reports} (configurable). Origen: `App\Models\Report` de
- * Condaty, que en realidad siempre fue del motor y estaba mal ubicada.
+ * Tabla: {@see mk_reports} (configurable). Origen: un modelo `Report` de una
+ * implementación anterior, que en realidad siempre fue del motor y estaba
+ * mal ubicado.
  *
  * Flujo de estados:
  *
@@ -34,7 +35,7 @@ use RuntimeException;
  *
  * Tenancy vía {@see HasTenantScope}, opt-in por `mk_director.tenant.enabled`
  * (ADR-003). En una app single-tenant el trait es un no-op y la columna queda
- * vacía. El origen en Condaty usaba su `ClientTrait`, que no viaja al paquete.
+ * vacía. El origen usaba un trait de tenancy propio, que no viaja al paquete.
  */
 class MkReport extends EloquentModel
 {
@@ -93,8 +94,8 @@ class MkReport extends EloquentModel
      * Cuánto vive un reporte antes de que el limpiador se lo lleve, con su
      * archivo.
      *
-     * 🔴 Este es el ÚNICO lugar donde vive el número. En Condaty estaba
-     * escrito cuatro veces por separado —dos dispatchers sellando `expires_at`
+     * 🔴 Este es el ÚNICO lugar donde vive el número. En la versión anterior
+     * estaba escrito cuatro veces por separado —dos dispatchers sellando `expires_at`
      * y un command barriendo por antigüedad—. Como los dos criterios se
      * aplican, ganaba el más corto: cambiar uno solo no cambiaba nada visible,
      * y quien lo intentara iba a creer que subió la retención cuando no la

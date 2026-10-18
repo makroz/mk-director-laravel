@@ -608,13 +608,13 @@ return [
     |
     | Un export sync se muere de dos maneras distintas y las dos son invisibles
     | hasta que el listado crece: el request se pasa de `max_execution_time`, o
-    | se queda sin memoria armando el HTML. Medido en Condaty con la lista de
+    | se queda sin memoria armando el HTML. Medido en producción con la lista de
     | accesos —198.004 filas, ~422 MB de JSON— el request ni siquiera llegaba a
     | responder: el browser mostraba "Failed to fetch". Encolar hace que apretar
     | "Exportar" cueste lo mismo con 20 filas que con 200.000.
     |
-    | `retention_hours` es el ÚNICO lugar donde vive la retención. En Condaty
-    | ese número estaba escrito cuatro veces por separado (dos dispatchers que
+    | `retention_hours` es el ÚNICO lugar donde vive la retención. En la versión
+    | anterior ese número estaba escrito cuatro veces por separado (dos dispatchers que
     | sellan `expires_at` y un command que barre por antigüedad); como los dos
     | criterios se aplican, ganaba el más corto, y quien cambiara uno solo iba a
     | creer que subió la retención cuando no la subió.
@@ -804,7 +804,7 @@ return [
         | Zona horaria con la que se MUESTRAN las fechas.
         |
         | 🔴 La base guarda en UTC. Sin convertir no corre sólo la hora: corre
-        | el DÍA. Medido en Condaty (UTC-4): **629 de 10169 pagos y 11 de 70
+        | el DÍA. Medido en producción (UTC-4): **629 de 10169 pagos y 11 de 70
         | alertas** caen en una fecha distinta según se lean en UTC o en la
         | zona local — un pago de las 21:00 aparecía al día siguiente.
         |
@@ -837,7 +837,7 @@ return [
         //
         // El default NO lleva versión de API: el paquete no sabe si el
         // consumer versiona sus rutas ni con qué nombre. Traía `v3/reports`,
-        // el prefijo de Condaty, y se montaba así en proyectos que nunca
+        // un prefijo versionado, y se montaba así en proyectos que nunca
         // tuvieron un v3 (hallazgo 48 de NetPizza). El que versiona lo pone
         // acá: `MK_EXPORT_ROUTE_PREFIX=v2/reports`.
         'route_prefix' => env('MK_EXPORT_ROUTE_PREFIX', 'reports'),

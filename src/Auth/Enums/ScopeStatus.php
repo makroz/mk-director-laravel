@@ -29,9 +29,8 @@ namespace Mk\Director\Auth\Enums;
  * La revisión del 2026-07-19 no encontró NINGÚN bug que motivara (2): todas
  * las menciones de "int-backed" en el paquete son descriptivas o notas de BC,
  * ninguna reporta un defecto. Y el cambio, que decía eliminar drift, lo creó
- * un nivel más arriba: la épica S6.5 de Condaty migró todo `char → numérico`,
- * así que el paquete quedó apuntando al lado contrario del otro sistema de
- * la agencia.
+ * un nivel más arriba: otro sistema de la agencia migró todo `char → numérico` (épica S6.5),
+ * así que el paquete quedó apuntando al lado contrario.
  *
  * Por eso este enum vuelve a int-backed, conservando (1): los 4 estados
  * siguen pineados como SSoT y `--status-values` sigue eliminado.
