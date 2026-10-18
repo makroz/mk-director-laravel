@@ -18,6 +18,9 @@ class InvalidRefreshTokenException extends AuthorizationException
 {
     public string $errorCode = 'ERR_UNAUTHENTICATED';
 
+    /** El estado HTTP, si quien negó lo pidió (`denialStatus()`); `null` = 401. */
+    public ?int $httpStatus = null;
+
     public static function malformed(): self
     {
         return new self('Refresh token malformed (expected `<id>|<plaintext>` format).');
@@ -66,10 +69,14 @@ class InvalidRefreshTokenException extends AuthorizationException
      * `$reason` es el de `AccountStatus::denialReason()`: el front lo muestra
      * en el login al cortar la sesión.
      */
-    public static function accountDisabled(string $reason = AccountStatus::DEFAULT_DENIAL): self
-    {
+    public static function accountDisabled(
+        string $reason = AccountStatus::DEFAULT_DENIAL,
+        string $code = AccountStatus::DEFAULT_CODE,
+        ?int $status = null,
+    ): self {
         $e = new self($reason);
-        $e->errorCode = 'ERR_ACCOUNT_DISABLED';
+        $e->errorCode = $code;
+        $e->httpStatus = $status;
 
         return $e;
     }

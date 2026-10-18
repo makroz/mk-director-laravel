@@ -17,6 +17,7 @@ use Laravel\Sanctum\PersonalAccessToken;
 use Mk\Director\Auth\Attributes\Ability;
 use Mk\Director\Auth\Enums\TwoFactorPolicy;
 use Mk\Director\Auth\Events\AuthEvent;
+use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Auth\Services\AccountStatus;
 use Mk\Director\Auth\Services\EmailOtpService;
 use Mk\Director\Auth\Services\InvalidRefreshTokenException;
@@ -74,7 +75,7 @@ use Mk\Director\Controllers\BaseController;
  *   protected function loginField(): string;           // 'email', 'ci', 'phone', etc.
  *   protected function passwordResetTable(): string;   // 'admin_password_reset_tokens'
  *
- * # Hook methods (5) — opcionalmente override en la subclase:
+ * # Hook methods (6) — opcionalmente override en la subclase:
  *
  *   protected function beforeLogin(Request $r, array $c): ?array
  *       Modifica las credentials antes del lookup. Si retorna `null`, rechaza el login.
@@ -95,6 +96,12 @@ use Mk\Director\Controllers\BaseController;
  *   protected function shouldSendResetNotification(Authenticatable $u, string $token): bool
  *       Gate pre-emisión de email de reset (test mode lo desactiva típicamente).
  *       Default: true.
+ *
+ *   protected function issueSessionResponse(Request $r, Authenticatable $u, ...): JsonResponse
+ *       El paso único antes de emitir la sesión (login, social y 2FA, con la
+ *       identidad ya probada). Override, decidí, y llamá al padre: una
+ *       condición más que mira el request. Lo que depende sólo de la cuenta y
+ *       tiene que cortar también los tokens vivos va en `account_checks`.
  *
  * ============================================================
  *  Compat / BC notes
@@ -418,12 +425,7 @@ abstract class BaseAuthController extends BaseController
                 'reason' => 'account_disabled',
             ]);
 
-            return $this->sendError(
-                AccountStatus::denialReason($user) ?? AccountStatus::DEFAULT_DENIAL,
-                [],
-                403,
-                'ERR_ACCOUNT_DISABLED',
-            );
+            return $this->accountDeniedResponse($user);
         }
 
         // 🔴 EL ÚNICO PUNTO entre «las credenciales son buenas» y «se emiten
@@ -441,6 +443,25 @@ abstract class BaseAuthController extends BaseController
     }
 
     /**
+     * La cuenta no autentica, con la contraseña ya probada: el motivo, y el
+     * código y el estado que declaró quien negó (`AccountStatus::denial()`).
+     *
+     * `null` de `denial()` pasa cuando la subclase override
+     * `userHasValidStatus()` y niega por su cuenta: sale el genérico.
+     */
+    private function accountDeniedResponse(Authenticatable $user): JsonResponse
+    {
+        $denial = AccountStatus::denial($user);
+
+        return $this->sendError(
+            $denial?->message ?? AccountStatus::DEFAULT_DENIAL,
+            [],
+            $denial?->status ?? 403,
+            $denial?->code ?? AccountStatus::DEFAULT_CODE,
+        );
+    }
+
+    /**
      * Emite la sesión (par de tokens) y arma el sobre del login.
      *
      * Vive aparte porque hay DOS caminos que terminan en la misma sesión: el
@@ -448,6 +469,13 @@ abstract class BaseAuthController extends BaseController
      * segundo sin `afterLogin()`, sin el evento de auditoría o con otra forma de
      * respuesta — y un front que funciona sin 2FA y se rompe con 2FA prendido no
      * apunta a ninguna de las dos.
+     *
+     * 🔴 ES TAMBIÉN EL GANCHO «UNA CONDICIÓN MÁS ANTES DE EMITIR». Por acá pasan
+     * el login, el login social y el desafío de 2FA, siempre DESPUÉS de probar
+     * la identidad. Una subclase que necesita mirar el request además de la
+     * cuenta (de qué dispositivo entra, por ejemplo) lo override, decide, y
+     * llama al padre. Si la condición es sólo de la cuenta y tiene que cortar
+     * también los tokens vivos, va en `mk_director.auth.account_checks`.
      *
      * @param  array<string, mixed>  $extraPayload  campos extra dentro de `data`
      * @param  array<string, mixed>  $extraData  campos para `__extraData`
@@ -540,7 +568,7 @@ abstract class BaseAuthController extends BaseController
                 'reason' => $e->getMessage(),
             ]);
 
-            return $this->sendError($e->getMessage(), [], 401, $e->errorCode);
+            return $this->sendError($e->getMessage(), [], $e->httpStatus ?? 401, $e->errorCode);
         }
 
         $this->dispatchAuthEventSafe('auth.refresh.success', [
@@ -1330,12 +1358,7 @@ abstract class BaseAuthController extends BaseController
                 'reason' => 'account_disabled',
             ]);
 
-            return $this->sendError(
-                AccountStatus::denialReason($user) ?? AccountStatus::DEFAULT_DENIAL,
-                [],
-                403,
-                'ERR_ACCOUNT_DISABLED',
-            );
+            return $this->accountDeniedResponse($user);
         }
 
         if ($gate = $this->twoFactorGate($request, $user)) {
@@ -2229,7 +2252,7 @@ abstract class BaseAuthController extends BaseController
      *
      * ⚠️ Con `hasAttribute()` y no sólo `getAttribute()`: con el modo estricto
      * de Eloquent una columna ausente tira en vez de devolver null. Ver
-     * {@see \Mk\Director\Auth\Models\AuthUser::hasConfirmedTwoFactor()}.
+     * {@see AuthUser::hasConfirmedTwoFactor()}.
      */
     protected function twoFactorAttribute(Authenticatable $user, string $column): mixed
     {

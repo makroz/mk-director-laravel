@@ -61,10 +61,26 @@ use Illuminate\Contracts\Auth\Authenticatable;
  * declarar un `denialMessage(): string` con su texto; sin él, sale
  * {@see DEFAULT_DENIAL}. El motivo NUNCA se muestra antes de verificar la
  * contraseña: ahí sería un oráculo para saber qué cuentas están bloqueadas.
+ *
+ * ── EL CÓDIGO, Y EL ESTADO HTTP ─────────────────────────────────────────
+ *
+ * El mismo `$source` puede declarar `denialCode(): string` y
+ * `denialStatus(): int` (4xx). Sin ellos: {@see DEFAULT_CODE}, y cada puerta
+ * su estado de siempre (403 en el login, 401 en un request y en el refresh).
+ *
+ * Existe porque un 401 `ERR_ACCOUNT_DISABLED` le dice al front «se cerró la
+ * sesión», y no siempre es eso. El caso que lo pidió (Mozzo, 2026-10-18): el
+ * teléfono del mesero dejó de estar autorizado; la app tiene que volver a
+ * vincularlo, no reintentar ni pedir la contraseña. Con un código fijo, el
+ * chequeo sólo podía cambiar el texto, y el consumidor terminaba repitiendo la
+ * condición en un middleware propio — lo que este punto existe para evitar.
+ * Lo usan las cuatro puertas: login, login social, refresh y `mk.auth`.
  */
 final class AccountStatus
 {
     public const DEFAULT_DENIAL = 'Tu cuenta está deshabilitada.';
+
+    public const DEFAULT_CODE = 'ERR_ACCOUNT_DISABLED';
 
     public static function allowsAuthentication(Authenticatable $user): bool
     {
@@ -76,30 +92,45 @@ final class AccountStatus
      */
     public static function denialReason(Authenticatable $user): ?string
     {
+        return self::denial($user)?->message;
+    }
+
+    /**
+     * La negativa entera —texto, código y estado HTTP—, o `null` si puede.
+     */
+    public static function denial(Authenticatable $user): ?AccountDenial
+    {
         if (! self::ownStatusAllows($user)) {
-            return self::messageOf($user->status ?? null);
+            return self::denialOf($user->status ?? null);
         }
 
         foreach (self::extraChecks() as $check) {
             if (! $check($user)) {
-                return self::messageOf($check);
+                return self::denialOf($check);
             }
         }
 
         return null;
     }
 
-    private static function messageOf(mixed $source): string
+    private static function denialOf(mixed $source): AccountDenial
     {
-        if (is_object($source) && method_exists($source, 'denialMessage')) {
-            $message = $source->denialMessage();
+        $message = self::declared($source, 'denialMessage');
+        $code = self::declared($source, 'denialCode');
+        $status = is_object($source) && method_exists($source, 'denialStatus') ? $source->denialStatus() : null;
 
-            if (is_string($message) && $message !== '') {
-                return $message;
-            }
-        }
+        return new AccountDenial(
+            is_string($message) && $message !== '' ? $message : self::DEFAULT_DENIAL,
+            is_string($code) && $code !== '' ? $code : self::DEFAULT_CODE,
+            // Sólo un 4xx: negar no es un error del servidor, y un 2xx/3xx
+            // dejaría pasar al front como si nada.
+            is_int($status) && $status >= 400 && $status < 500 ? $status : null,
+        );
+    }
 
-        return self::DEFAULT_DENIAL;
+    private static function declared(mixed $source, string $method): mixed
+    {
+        return is_object($source) && method_exists($source, $method) ? $source->{$method}() : null;
     }
 
     /**

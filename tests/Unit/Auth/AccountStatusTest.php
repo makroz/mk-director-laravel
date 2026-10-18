@@ -117,3 +117,59 @@ test('sin chequeos configurados se comporta igual que antes de que existieran', 
 
     expect(AccountStatus::allowsAuthentication(accountStatusUser(['name' => 'x'])))->toBeTrue();
 });
+
+test('🔴 denial(): el código y el estado los declara quien niega; sin ellos, los de siempre', function () {
+    $activo = accountStatusUser(['status' => ScopeStatus::Active->value], ['status' => ScopeStatus::class]);
+
+    config(['mk_director.auth.account_checks' => [new class
+    {
+        public function __invoke($user): bool
+        {
+            return false;
+        }
+
+        public function denialCode(): string
+        {
+            return 'ERR_DEVICE_REVOKED';
+        }
+
+        public function denialStatus(): int
+        {
+            return 403;
+        }
+    }]]);
+    $denial = AccountStatus::denial($activo);
+    expect($denial?->code)->toBe('ERR_DEVICE_REVOKED')
+        ->and($denial?->status)->toBe(403)
+        ->and($denial?->message)->toBe(AccountStatus::DEFAULT_DENIAL);
+
+    config(['mk_director.auth.account_checks' => [ChequeoQueNiega::class]]);
+    $denial = AccountStatus::denial($activo);
+    expect($denial?->code)->toBe(AccountStatus::DEFAULT_CODE)->and($denial?->status)->toBeNull();
+
+    config(['mk_director.auth.account_checks' => []]);
+    expect(AccountStatus::denial($activo))->toBeNull();
+});
+
+test('denial(): un estado que no es 4xx se ignora — negar nunca sale como 200 ni como 500', function () {
+    $activo = accountStatusUser(['status' => ScopeStatus::Active->value], ['status' => ScopeStatus::class]);
+
+    foreach ([200, 302, 500] as $raro) {
+        config(['mk_director.auth.account_checks' => [new class($raro)
+        {
+            public function __construct(private int $status) {}
+
+            public function __invoke($user): bool
+            {
+                return false;
+            }
+
+            public function denialStatus(): int
+            {
+                return $this->status;
+            }
+        }]]);
+
+        expect(AccountStatus::denial($activo)?->status)->toBeNull();
+    }
+});

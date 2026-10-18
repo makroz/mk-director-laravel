@@ -311,6 +311,90 @@ test('🔴 E: el motivo lo pone el chequeo extra que negó, si declara denialMes
     expect($body['message'] ?? null)->toBe('La empresa está suspendida.');
 });
 
+// ── El chequeo que niega puede decir su código y su estado (hallazgo 84 de Mozzo) ──
+
+/**
+ * Un chequeo que niega con código y estado propios —el teléfono del mesero que
+ * dejó de estar autorizado—. `$deny` arranca en `false` para poder entrar
+ * primero y medir después el token vivo y el refresh.
+ */
+final class TokenChainDeviceCheck
+{
+    public static bool $deny = false;
+
+    public function __invoke($user): bool
+    {
+        return ! self::$deny;
+    }
+
+    public function denialMessage(): string
+    {
+        return 'Este teléfono ya no está autorizado.';
+    }
+
+    public function denialCode(): string
+    {
+        return 'ERR_DEVICE_REVOKED';
+    }
+
+    public function denialStatus(): int
+    {
+        return 403;
+    }
+}
+
+test('🔴 F: el chequeo que niega pone su código y su estado en el request, el refresh y el login', function () {
+    TokenChainDeviceCheck::$deny = false;
+    config(['mk_director.auth.account_checks' => [TokenChainDeviceCheck::class]]);
+    $tokens = tokenChainLogin($this);
+    TokenChainDeviceCheck::$deny = true;
+
+    // El token vivo: 403 con su código, no el 401 que el front lee como «se venció».
+    [$status, $body] = tokenChainMe($this, $tokens['access_token']);
+    expect($status)->toBe(403)
+        ->and($body['__extraData']['code'] ?? null)->toBe('ERR_DEVICE_REVOKED')
+        ->and($body['message'] ?? null)->toBe('Este teléfono ya no está autorizado.');
+
+    // El refresh: lo mismo, y el refresh token igual queda borrado.
+    [$status, $body] = tokenChainRefresh($this, $tokens['refresh_token']);
+    expect($status)->toBe(403)
+        ->and($body['__extraData']['code'] ?? null)->toBe('ERR_DEVICE_REVOKED')
+        ->and(tokenChainRowExists($tokens['refresh_token']))->toBeFalse();
+
+    // El login con la contraseña buena: su código, y sin tokens nuevos.
+    $antes = PersonalAccessToken::query()->count();
+    [$status, $body] = tokenChainLoginAttempt($this, 'secret');
+    expect($status)->toBe(403)
+        ->and($body['__extraData']['code'] ?? null)->toBe('ERR_DEVICE_REVOKED')
+        ->and(PersonalAccessToken::query()->count())->toBe($antes);
+
+    TokenChainDeviceCheck::$deny = false;
+});
+
+test('F: sin denialCode()/denialStatus() cada puerta sigue como siempre (BC)', function () {
+    config(['mk_director.auth.account_checks' => [new class
+    {
+        public static bool $deny = false;
+
+        public function __invoke($user): bool
+        {
+            return ! self::$deny;
+        }
+    }]]);
+    $check = config('mk_director.auth.account_checks')[0];
+    $tokens = tokenChainLogin($this);
+    $check::$deny = true;
+
+    [$status, $body] = tokenChainMe($this, $tokens['access_token']);
+    expect($status)->toBe(401)->and($body['__extraData']['code'] ?? null)->toBe('ERR_ACCOUNT_DISABLED');
+
+    [$status, $body] = tokenChainRefresh($this, $tokens['refresh_token']);
+    expect($status)->toBe(401)->and($body['__extraData']['code'] ?? null)->toBe('ERR_ACCOUNT_DISABLED');
+
+    [$status, $body] = tokenChainLoginAttempt($this, 'secret');
+    expect($status)->toBe(403)->and($body['__extraData']['code'] ?? null)->toBe('ERR_ACCOUNT_DISABLED');
+});
+
 // ── Borrar la cuenta se lleva su acceso ──
 
 test('🔴 borrar la cuenta se lleva sus tokens y sus roles', function () {

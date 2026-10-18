@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — un chequeo de `account_checks` puede decir su código y su estado
+
+**Added**
+- **`denialCode(): string` y `denialStatus(): int` en los chequeos de `mk_director.auth.account_checks`** (y en el
+  enum del estado), junto al `denialMessage()` que ya existía. Los usan el login, el login social, el refresh y
+  `mk.auth`. Hasta ahora el código era fijo (`ERR_ACCOUNT_DISABLED`, 401 en el request): un chequeo podía cambiar el
+  texto y no el código, y un 401 le dice al front «se venció la sesión». Pagado en Mozzo con el teléfono del mesero
+  que dejó de estar autorizado, que tiene que volver a vincularse y no reintentar (hallazgo 84 de mozzo-api).
+  `AccountStatus::denial()` devuelve la negativa entera (`AccountDenial`: texto, código, estado); `denialReason()`
+  sigue igual. `denialStatus()` fuera de 4xx se ignora. **BC**: un chequeo sin los métodos se comporta como antes.
+  Tests: `TokenLifecycleChainTest` (F) y `AccountStatusTest`.
+- **`issueSessionResponse()` documentado como gancho** («una condición más antes de emitir la sesión que mira el
+  request»): ya era el paso único del login, el social y el 2FA, pero no estaba en la lista de ganchos.
+
 ## [UNRELEASED] — el scope `consumer` recupera las rutas del PIN, y el hint de RBAC deja de mandar a configurar abilities
 
 **Fixed**
