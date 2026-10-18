@@ -67,6 +67,8 @@ function mkExpectedCommandArguments(): array
         'mk:service' => ['name'],
         'mk:skill:deploy' => ['name'],
         'mk:skill:list' => [],
+        // Sólo lee: la app que corre, en JSON para `@makroz/spec`.
+        'mk:spec:introspect' => [],
         'mk:status' => [],
         'mk:update' => ['version'],
     ];
