@@ -21,6 +21,17 @@ uses(MkLaravelTestCase::class, BootsHttpApp::class);
 
 beforeEach(function () {
     $modules = __DIR__.'/../Fixtures/Spec/Modules';
+    // A real app autoloads `App\` through composer (PSR-4); without it the fixture's classes load
+    // only in whatever order the introspector requires their files, which differs between systems.
+    spl_autoload_register(static function (string $class) use ($modules): void {
+        $prefix = 'App\\Modules\\';
+        if (str_starts_with($class, $prefix)) {
+            $file = $modules.'/'.str_replace('\\', '/', substr($class, strlen($prefix))).'.php';
+            if (is_file($file)) {
+                require_once $file;
+            }
+        }
+    });
     $this->bootHttpApp(Product::class, ['tenant' => ['enabled' => false], 'paths' => ['modules' => $modules]]);
 
     Schema::create('spec_products', function ($t) {
