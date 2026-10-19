@@ -12,6 +12,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Storage: el servidor no le cree al cliente
+
+**Added**
+- **`Mk\Director\Storage\MkFileInspector`**: `sniff($head)` da el tipo REAL por los primeros bytes (`image/jpeg`,
+  `image/png`, `image/webp`, `image/gif`, `application/pdf`, `video/mp4`, `video/quicktime` —`ftyp qt` o un QuickTime
+  viejo que arranca con `moov`/`mdat`/`wide`/`free`— y `video/webm`), o null; `dimensions($headerBytes)` lee ancho y
+  alto de la cabecera con `getimagesizefromstring`, sin el archivo entero.
+- Código **`ERR_UPLOAD_DIMENSIONS`** (422) en `MkUploadException`.
+- Estado **`MkUploadStatus::Completing` (5)**: la subida que un `complete()` está uniendo y revisando.
+- Columna **`mk_uploads.parts`**: las partes firmadas en el `start()`. Va en la migración de creación (la tabla todavía
+  no salió en un release).
+
+**Changed**
+- **`MkDirectUpload::complete()` revisa lo GUARDADO**, después de unir las partes: los bytes reales (HEAD) contra el
+  máximo del perfil (`ERR_UPLOAD_TOO_LARGE`); la firma de los primeros 16 bytes tiene que ser un MIME del perfil
+  (`ERR_UPLOAD_TYPE`); en un perfil de imágenes, ancho × alto de la cabecera (64 KB, y una lectura de hasta 1 MiB si un
+  EXIF grande empuja el marcador más allá) contra `max_megapixels` (`ERR_UPLOAD_DIMENSIONS`; una imagen sin medidas
+  legibles es `ERR_UPLOAD_TYPE`). Lo que no pasa se BORRA del storage y la fila queda Aborted, con 422.
+- La fila guarda los bytes, el MIME y las medidas MEDIDOS: `bytes` queda null hasta el `complete()` (lo declarado ya no
+  se guarda) y `mime` pasa a ser el de la firma. `attachUpload()` los copia a `mk_media`.
+- **Dos `complete()` simultáneos**: la fila se toma con un UPDATE condicional (Started → Completing) antes de hablar con
+  el storage; el segundo recibe 404 sin llegar al storage. Si el storage rechaza la unión (un ETag mal), la fila vuelve
+  a Started y se puede reintentar.
+- El `complete()` exige tantos ETags como `parts` guardó el `start()`: cambiar `part_size` ya no rompe las subidas en
+  vuelo.
+- **`ValidatesMkMedia` lee los perfiles `image`, `video` y `document`**: `mkAllowedMimeTypes()`, `mkImageMaxBytes()`,
+  `mkVideoMaxBytes()`, `mkDocumentMaxBytes()` y los MIME de documento salen de `mk_director.storage.profiles`, así que
+  el formulario y la subida directa aceptan lo mismo. Los métodos siguen siendo sobrescribibles.
+
+⚠️ **Cambio de comportamiento: el tope de imagen de `ValidatesMkMedia` pasa de 5 MB a 10 MB** (el `max_bytes` del perfil
+`image`). Una app que quiera seguir en 5 MB baja ese perfil o sobrescribe `mkImageMaxBytes()`.
+
+⚠️ Una app con `config/mk_director.php` publicado necesita los perfiles `image`, `video` y `document` en su bloque
+`storage`: sin ellos, `ValidatesMkMedia` explota nombrando el perfil que falta.
+
 ## [UNRELEASED] — Storage: la subida directa al storage (`MkDirectUpload`)
 
 **Added**
