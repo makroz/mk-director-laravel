@@ -22,6 +22,8 @@ final class MkUploadException extends RuntimeException
 
     public const ERR_UPLOAD_TOO_LARGE = 'ERR_UPLOAD_TOO_LARGE';
 
+    public const ERR_UPLOAD_DIMENSIONS = 'ERR_UPLOAD_DIMENSIONS';
+
     public const ERR_UPLOAD_STATE = 'ERR_UPLOAD_STATE';
 
     public const ERR_UPLOAD_PARTS = 'ERR_UPLOAD_PARTS';
@@ -44,6 +46,22 @@ final class MkUploadException extends RuntimeException
     public static function tooLarge(string $profile, int $maxBytes): self
     {
         return new self("El archivo supera el máximo del perfil '{$profile}' ({$maxBytes} bytes).", self::ERR_UPLOAD_TOO_LARGE, 422);
+    }
+
+    /** Lo GUARDADO no es lo que se declaró: su firma no es ninguno de los tipos del perfil. */
+    public static function storedType(string $profile): self
+    {
+        return new self("El archivo subido no es de un tipo que acepte el perfil '{$profile}'.", self::ERR_UPLOAD_TYPE, 422);
+    }
+
+    public static function unreadableImage(): self
+    {
+        return new self('No se pudo leer la imagen: no se encontraron su ancho y su alto.', self::ERR_UPLOAD_TYPE, 422);
+    }
+
+    public static function dimensions(string $profile, int $maxMegapixels): self
+    {
+        return new self("La imagen supera los {$maxMegapixels} megapíxeles del perfil '{$profile}'.", self::ERR_UPLOAD_DIMENSIONS, 422);
     }
 
     public static function state(): self

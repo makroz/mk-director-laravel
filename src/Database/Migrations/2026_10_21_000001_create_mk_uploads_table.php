@@ -37,8 +37,13 @@ return new class extends Migration
             $blueprint->string('disk');
             $blueprint->string('key');
             $blueprint->text('multipart_id');
+            // Cuántas partes se firmaron: el `complete()` exige ese número de
+            // ETags. Se guarda y no se recalcula con el `part_size` actual, que
+            // puede cambiar con subidas en vuelo.
+            $blueprint->unsignedInteger('parts');
             $blueprint->string('profile');
             $blueprint->string('mime')->nullable();
+            // Los bytes REALES (HEAD del objeto), escritos al completar.
             $blueprint->unsignedBigInteger('bytes')->nullable();
             $blueprint->unsignedInteger('width')->nullable();
             $blueprint->unsignedInteger('height')->nullable();

@@ -61,6 +61,25 @@ final class FakeS3
         return $response instanceof Throwable ? Create::rejectionFor($response) : Create::promiseFor(new Result($response));
     }
 
+    /**
+     * El objeto que el storage tiene guardado: `HeadObject` contesta su tamaño
+     * (o `$size`, para un storage que dice otra cosa que el cliente) y
+     * `GetObject` sus bytes, respetando el `Range` como lo hace S3.
+     */
+    public function stores(string $body, ?int $size = null): self
+    {
+        $this->responses['HeadObject'] = ['ContentLength' => $size ?? strlen($body)];
+        $this->responses['GetObject'] = function (CommandInterface $command) use ($body): array {
+            if (preg_match('/^bytes=(\d+)-(\d+)$/', (string) ($command['Range'] ?? ''), $range) === 1) {
+                return ['Body' => substr($body, (int) $range[1], (int) $range[2] - (int) $range[1] + 1)];
+            }
+
+            return ['Body' => $body];
+        };
+
+        return $this;
+    }
+
     /** @return list<CommandInterface> */
     public function named(string $name): array
     {

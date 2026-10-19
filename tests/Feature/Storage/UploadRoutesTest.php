@@ -7,6 +7,7 @@ use Mk\Director\Enums\MkUploadStatus;
 use Mk\Director\Models\MkUpload;
 use Mk\Director\Tests\Concerns\BootsPushApp;
 use Mk\Director\Tests\Concerns\FakeS3;
+use Mk\Director\Tests\Concerns\FileBytes;
 use Mk\Director\Tests\MkLaravelTestCase;
 
 /**
@@ -141,9 +142,12 @@ test('complete of another user\'s upload through the route is 404 and leaves it 
         ->and($s3->named('AbortMultipartUpload'))->toBe([])
         ->and(MkUpload::query()->sole()->status)->toBe(MkUploadStatus::Started);
 
+    $s3->stores(FileBytes::jpeg(1200, 800));
     $done = $this->httpPost("/api/admin/uploads/{$id}/complete", ['etags' => ['"e1"']], ['HTTP_AUTHORIZATION' => 'Bearer '.$anaToken]);
     expect($done->getStatusCode())->toBe(200)
-        ->and(json_decode((string) $done->getContent(), true)['data'])->toMatchArray(['upload_id' => $id, 'mime' => 'image/jpeg', 'bytes' => 10]);
+        ->and(json_decode((string) $done->getContent(), true)['data'])->toMatchArray([
+            'upload_id' => $id, 'mime' => 'image/jpeg', 'bytes' => strlen(FileBytes::jpeg(1200, 800)), 'width' => 1200, 'height' => 800,
+        ]);
 });
 
 test('unauthenticated start is 401 and opens nothing', function (array $middleware) {

@@ -24,9 +24,10 @@ use Mk\Director\Storage\DirectUpload\MkDirectUpload;
  * @property string $disk
  * @property string $key
  * @property string $multipart_id
+ * @property int $parts
  * @property string $profile
  * @property string|null $mime
- * @property int|null $bytes
+ * @property int|null $bytes los REALES del objeto guardado; null hasta el `complete()`
  * @property int|null $width
  * @property int|null $height
  * @property MkUploadStatus $status
@@ -43,6 +44,7 @@ class MkUpload extends EloquentModel
         'disk',
         'key',
         'multipart_id',
+        'parts',
         'profile',
         'mime',
         'bytes',
@@ -56,6 +58,7 @@ class MkUpload extends EloquentModel
 
     protected $casts = [
         'status' => MkUploadStatus::class,
+        'parts' => 'integer',
         'bytes' => 'integer',
         'width' => 'integer',
         'height' => 'integer',
