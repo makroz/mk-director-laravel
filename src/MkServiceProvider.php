@@ -316,7 +316,7 @@ class MkServiceProvider extends ServiceProvider
                 AuthTwoFactorResetCommand::class,
                 DiscoverAbilitiesCommand::class,
                 PruneAbilitiesCommand::class,
-                // The running app as JSON for `mk spec import|check` (@makroz/spec).
+                // The running app as JSON for `mk-studio spec import|check` (@makroz/spec).
                 SpecIntrospectCommand::class,
                 // R-PKG-015 BUG-NEW-09: helper command para parche de Sanctum UUIDs.
                 FixSanctumUuidsCommand::class,

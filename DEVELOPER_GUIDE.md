@@ -619,14 +619,14 @@ beforeEach(function () {
 
 **Spec**: HALLAZGO-NEW-FASE14-01, feedback RETO fase 14 (2026-06-29). Cross-ref: R-PKG-007 D4 (auto-discover en boot), BUG-NEW-auto-discover-serve (skip long-running CLI contexts).
 
-### 3.6.6. `mk:spec:introspect` — la app que corre, en JSON (para `@makroz/spec`)
+### 3.6.6. `mk-studio:introspect` — la app que corre, en JSON (para `@makroz/spec`)
 
 ```bash
-php artisan mk:spec:introspect            # JSON en una línea, a stdout (nada más)
-php artisan mk:spec:introspect --pretty   # indentado
+php artisan mk-studio:introspect            # JSON en una línea, a stdout (nada más)
+php artisan mk-studio:introspect --pretty   # indentado
 ```
 
-Lo consumen `mk spec import` (la adopción, una vez) y `mk spec check` (el drift, siempre) del paquete npm `@makroz/spec`. **Sólo lee**: no escribe filas ni archivos. Recorre los módulos de `mk_director.paths.modules` (default `app_path('Modules')`) y saca:
+Lo consumen `mk-studio spec import` (la adopción, una vez) y `mk-studio spec check` (el drift, siempre) del paquete npm `@makroz/spec`. **Sólo lee**: no escribe filas ni archivos. Recorre los módulos de `mk_director.paths.modules` (default `app_path('Modules')`) y saca:
 
 | clave | de dónde sale |
 |---|---|

@@ -7,14 +7,17 @@ use App\Modules\SpecShop\Models\Product;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
+use Mk\Director\Console\Commands\SpecIntrospectCommand;
 use Mk\Director\Spec\Introspector;
 use Mk\Director\Tests\Concerns\BootsHttpApp;
 use Mk\Director\Tests\MkLaravelTestCase;
+use Symfony\Component\Console\Input\ArrayInput;
+use Symfony\Component\Console\Output\BufferedOutput;
 
 /**
- * `mk:spec:introspect` reads the RUNNING app: a booted app with a real (sqlite) database, a
+ * `mk-studio:introspect` reads the RUNNING app: a booted app with a real (sqlite) database, a
  * fixture module under `tests/Fixtures/Spec/Modules/SpecShop` and real routes. What the
- * introspector reports is what `mk spec check` compares the spec against, so every fact has
+ * introspector reports is what `mk-studio spec check` compares the spec against, so every fact has
  * to come from the runtime (getFillable, Schema, reflection), never from a parse of the source.
  */
 uses(MkLaravelTestCase::class, BootsHttpApp::class);
@@ -140,4 +143,15 @@ test('table_columns_from_schema', function () {
             'spec_products_one_active' => [['status'], true, true],
             'sqlite_autoindex_spec_products_1' => [['id'], true, false],
         ]);
+});
+
+test('command_is_mk_studio_introspect_and_prints_the_app_as_json', function () {
+    // `@makroz/spec` runs it by this name (`introspect.ts`): a rename on one side only breaks import and check.
+    $command = new SpecIntrospectCommand;
+    $command->setLaravel(app());
+    $out = new BufferedOutput;
+
+    expect($command->getName())->toBe('mk-studio:introspect')
+        ->and($command->run(new ArrayInput([]), $out))->toBe(0)
+        ->and(collect(json_decode($out->fetch(), true)['models'])->pluck('class')->all())->toContain(Product::class);
 });

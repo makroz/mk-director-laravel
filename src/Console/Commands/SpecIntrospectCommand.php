@@ -9,13 +9,13 @@ use Mk\Director\Spec\Introspector;
 use Symfony\Component\Console\Output\OutputInterface;
 
 /**
- * `mk:spec:introspect` — the running app as JSON on stdout, for `mk spec import` and
- * `mk spec check` (`@makroz/spec`). Read-only: models, real DB columns, enums, abilities,
+ * `mk-studio:introspect` — the running app as JSON on stdout, for `mk-studio spec import` and
+ * `mk-studio spec check` (`@makroz/spec`). Read-only: models, real DB columns, enums, abilities,
  * routes with their `mk.ability:`/`mk.auth:` middleware, and every SmartController's `$mkConfig`.
  */
 final class SpecIntrospectCommand extends Command
 {
-    protected $signature = 'mk:spec:introspect {--pretty : Indented JSON}';
+    protected $signature = 'mk-studio:introspect {--pretty : Indented JSON}';
 
     protected $description = 'Prints the running app (models, tables, enums, abilities, routes, CRUD configs) as JSON for @makroz/spec.';
 
