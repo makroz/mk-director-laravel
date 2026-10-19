@@ -263,7 +263,7 @@ test('complete rejects and deletes bytes that are not the declared type', functi
     // La firma lo rechaza sola: ni siquiera se pide la cabecera de imagen.
     expect($error->errorCode)->toBe(MkUploadException::ERR_UPLOAD_TYPE)
         ->and($error->status)->toBe(422)
-        ->and($error->getMessage())->toContain('no es de un tipo que acepte')
+        ->and($error->getMessage())->toContain('no es del tipo que dice ser')
         ->and(array_map(fn (CommandInterface $c) => $c['Range'], $this->s3->named('GetObject')))->toBe(['bytes=0-15']);
     expectRejectedAndDeleted($this, $id);
 });

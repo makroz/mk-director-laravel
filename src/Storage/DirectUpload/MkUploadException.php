@@ -40,18 +40,22 @@ final class MkUploadException extends RuntimeException
 
     public static function type(string $profile, string $mime): self
     {
-        return new self("El perfil '{$profile}' no acepta archivos de tipo '{$mime}' con esa extensión.", self::ERR_UPLOAD_TYPE, 422);
+        // El mensaje lo lee la persona que eligió el archivo: sin nombres internos
+        // (el perfil y el mime quedan en el log de quien depure, no en pantalla).
+        return new self('Ese tipo de archivo no se puede subir acá.', self::ERR_UPLOAD_TYPE, 422);
     }
 
     public static function tooLarge(string $profile, int $maxBytes): self
     {
-        return new self("El archivo supera el máximo del perfil '{$profile}' ({$maxBytes} bytes).", self::ERR_UPLOAD_TOO_LARGE, 422);
+        $mb = rtrim(rtrim(number_format($maxBytes / 1_048_576, 1, ',', ''), '0'), ',');
+
+        return new self("El archivo supera el máximo de {$mb} MB.", self::ERR_UPLOAD_TOO_LARGE, 422);
     }
 
     /** Lo GUARDADO no es lo que se declaró: su firma no es ninguno de los tipos del perfil. */
     public static function storedType(string $profile): self
     {
-        return new self("El archivo subido no es de un tipo que acepte el perfil '{$profile}'.", self::ERR_UPLOAD_TYPE, 422);
+        return new self('El contenido del archivo no es del tipo que dice ser: no se puede subir.', self::ERR_UPLOAD_TYPE, 422);
     }
 
     public static function unreadableImage(): self
@@ -61,7 +65,7 @@ final class MkUploadException extends RuntimeException
 
     public static function dimensions(string $profile, int $maxMegapixels): self
     {
-        return new self("La imagen supera los {$maxMegapixels} megapíxeles del perfil '{$profile}'.", self::ERR_UPLOAD_DIMENSIONS, 422);
+        return new self("La imagen es demasiado grande: supera los {$maxMegapixels} megapíxeles.", self::ERR_UPLOAD_DIMENSIONS, 422);
     }
 
     public static function state(): self
