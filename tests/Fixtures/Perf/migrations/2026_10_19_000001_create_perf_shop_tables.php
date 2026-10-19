@@ -22,9 +22,11 @@ return new class extends Migration
         Schema::create('perf_items', function (Blueprint $t): void {
             $t->id();
             $t->foreignId('owner_id')->constrained('perf_owners');
-            $t->string('name', 80);
+            $t->string('name', 80)->index();
             $t->unsignedTinyInteger('status');
             $t->timestamps();
+            // No screen filters, sorts or counts by it, and it is wider than the others: no plan uses it on either engine.
+            $t->index(['created_at', 'updated_at', 'name']);
         });
         // uuid keys, like the package's auth users (its RBAC pivots and Sanctum's tokens point at them).
         Schema::create('perf_admins', function (Blueprint $t): void {
