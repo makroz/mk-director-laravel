@@ -69,6 +69,8 @@ function mkExpectedCommandArguments(): array
         'mk:skill:list' => [],
         // Sólo lee: la app que corre, en JSON para `@makroz/spec`.
         'mk-studio:introspect' => [],
+        // Options only: creates, measures and drops its own scratch database.
+        'mk-studio:perf' => [],
         'mk:status' => [],
         'mk:update' => ['version'],
     ];
