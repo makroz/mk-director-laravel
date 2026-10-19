@@ -644,6 +644,24 @@ Lo consumen `mk-studio spec import` (la adopción, una vez) y `mk-studio spec ch
 
 Necesita la app booteada con su base (las columnas salen de la base real). Tests: `tests/Feature/SpecIntrospectTest.php` con el módulo de prueba `tests/Fixtures/Spec/Modules/SpecShop`.
 
+### 3.6.7. `mk-studio:perf` — un módulo medido sobre una base descartable (para MK Studio)
+
+```bash
+php artisan mk-studio:perf --module=School             # JSON en una línea, a stdout (nada más)
+php artisan mk-studio:perf --module=School --runs=10 --keep --pretty
+```
+
+Lo corre la pestaña «Rendimiento» de MK Studio en el worktree del estudio, nunca en el checkout. Pasos:
+
+1. **`ScratchDatabase`**: crea `<db>_mk_studio_perf` (vacía) en el servidor de la app y la migra con `migrate --database`. Mientras dura la corrida, la conexión por defecto y el nombre de la conexión de la app apuntan ahí; al final la borra (`--keep` la deja) y devuelve la app a su base.
+2. **`VolumeSeeder`**: 1.000 filas en cada tabla de los modelos del módulo, padres primero; una tabla de afuera a la que apunta una FK recibe unas pocas filas, así cada FK lleva un id real. Llena sólo lo obligatorio (NOT NULL sin default), las FK y los timestamps; un enum toma el primer caso del cast. Lo que no puede llenar va a `notes`, nunca corta la corrida.
+3. **`PerfAdmin`**: un usuario del scope `admin` con `'*'` y un token Sanctum con `'*'` y el scope (lo que piden `mk.auth` y `mk.ability`; no hay bypass).
+4. **`ScreenRunner`** + **`QueryRecorder`**: cada ruta GET `index` de un `SmartController` del módulo, por el kernel HTTP en el mismo proceso, con el rate limit apagado y la caché en `array`. Un calentamiento y `--runs` repeticiones; las consultas se cuentan por nombre de base (`*_mk_studio_perf`).
+
+🔴 **Las guardas**: un nombre que no termine en `_mk_studio_perf` (o `_mk_studio_perf_tests`) se rechaza antes de crear nada, `APP_ENV=production` se rechaza, y el borrado vuelve a chequear el nombre. El usuario de la base tiene que poder `CREATE DATABASE`.
+
+`plan`, `queriesAt` y `unusedIndexes` todavía no se miden: van neutros y `notes` lo dice. Tests: `tests/Feature/Perf/PerfCommandTest.php`, contra un servidor real (`MK_PERF_TEST_DRIVER=pgsql|mariadb`, `MK_PERF_TEST_HOST`, `_PORT`, `_USERNAME`, `_PASSWORD`; sin ellas se saltean): cada guarda se afirma en el servidor con un PDO propio, no por el código de salida.
+
 ## ⚙️ 3.7. Login field configurable (`--login-field=<campo>`)
 
 `mk:make:auth-user` ahora soporta campos de login no-email. Útil para:

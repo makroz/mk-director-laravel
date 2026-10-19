@@ -12,6 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `mk-studio:perf`: un módulo medido sobre una base descartable
+
+**Added**
+- **`php artisan mk-studio:perf --module=<Módulo> [--volume=small] [--runs=50] [--keep] [--pretty]`** imprime en stdout
+  una medición `mk-perf/v1` para la pestaña «Rendimiento» de MK Studio. Crea `<db>_mk_studio_perf` en el mismo
+  servidor (PostgreSQL 14+ o MariaDB 10.6+), la migra, llena las tablas del módulo (1.000 filas, padres primero, ids
+  reales en cada FK), crea un admin con `'*'` y su token Sanctum, pide cada listado CRUD del módulo por el kernel HTTP
+  (un calentamiento y `--runs` repeticiones: mediana, p95, consultas por request, formas repetidas y la consulta más
+  lenta), y borra la base al final (`--keep` la deja).
+- **La base de la app no se escribe nunca**: un nombre que no termine en `_mk_studio_perf` se rechaza antes de crear
+  nada, `APP_ENV=production` se rechaza, mientras dura la corrida la conexión por defecto **y** el nombre de la
+  conexión de la app apuntan a la base descartable, y el borrado vuelve a chequear el nombre.
+- Migra con `migrate`, no con `migrate:fresh`: la base se acaba de crear vacía, y una app que llama
+  `DB::prohibitDestructiveCommands()` rechaza `migrate:fresh` para cualquier conexión.
+- Esta versión mide sólo los listados; el plan, el N+1 por `per_page` y los índices sin uso quedan en `notes`, igual
+  que las tablas que el volumen genérico no pudo llenar (un CHECK, por ejemplo). Tests:
+  `tests/Feature/Perf/PerfCommandTest.php` (contra un servidor real: `MK_PERF_TEST_DRIVER=pgsql|mariadb` y
+  `MK_PERF_TEST_HOST/_PORT/_USERNAME/_PASSWORD`; sin ellas se saltean).
+
 ## [UNRELEASED] — `mk:spec:introspect` pasa a llamarse `mk-studio:introspect`
 
 **Changed (BC break)**

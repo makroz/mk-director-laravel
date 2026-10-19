@@ -31,6 +31,7 @@ use Mk\Director\Console\Commands\MkMigrateStatusToIntCommand;
 use Mk\Director\Console\Commands\MkSkillDeployCommand;
 use Mk\Director\Console\Commands\MkSkillListCommand;
 use Mk\Director\Console\Commands\MkUpdateCommand;
+use Mk\Director\Console\Commands\PerfCommand;
 use Mk\Director\Console\Commands\PruneAbilitiesCommand;
 use Mk\Director\Console\Commands\PrunePushDevicesCommand;
 use Mk\Director\Console\Commands\SecurityLintCommand;
@@ -318,6 +319,8 @@ class MkServiceProvider extends ServiceProvider
                 PruneAbilitiesCommand::class,
                 // The running app as JSON for `mk-studio spec import|check` (@makroz/spec).
                 SpecIntrospectCommand::class,
+                // One module measured on a scratch copy of the schema, as JSON for MK Studio's «Rendimiento».
+                PerfCommand::class,
                 // R-PKG-015 BUG-NEW-09: helper command para parche de Sanctum UUIDs.
                 FixSanctumUuidsCommand::class,
                 // R-PKG-047 D4: helper command para migrar `is_active` boolean
