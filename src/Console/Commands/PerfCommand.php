@@ -7,7 +7,10 @@ namespace Mk\Director\Console\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 use Mk\Director\Perf\PerfAdmin;
+use Mk\Director\Perf\Plans\MariaDbPlanReader;
+use Mk\Director\Perf\Plans\PostgresPlanReader;
 use Mk\Director\Perf\QueryRecorder;
 use Mk\Director\Perf\ScratchDatabase;
 use Mk\Director\Perf\ScreenRunner;
@@ -25,13 +28,17 @@ use Throwable;
  *   1. read the app ({@see Introspector}): its models, foreign keys and polymorphic pairs, on its own database (read
  *      only: the pairs' targets are the aliases its rows store);
  *   2. create `<db>_mk_studio_perf` (empty) on the app's own server and migrate it ({@see ScratchDatabase});
- *   3. fill the module's relation graph at the volume asked ({@see VolumeSeeder});
+ *   3. fill the module's relation graph at the volume asked ({@see VolumeSeeder}) and refresh the planner's statistics;
  *   4. create an admin with `'*'` and its token ({@see PerfAdmin});
- *   5. request each list screen through the HTTP kernel, a warm-up and `--runs` times ({@see ScreenRunner});
- *   6. drop the scratch database (kept with `--keep`) and print the run.
+ *   5. request every screen of each record (list, each filter, search, each sort, count, show) through the HTTP
+ *      kernel, a warm-up and `--runs` times, and the list-like ones at per_page 1/8/20 ({@see ScreenRunner});
+ *   6. read the plan of each distinct SELECT the screens ran, once ({@see PlanReader}), and list the module's
+ *      indexes no plan used;
+ *   7. drop the scratch database (kept with `--keep`) and print the run.
  *
- * The app's database is never written. This version measures the list screens only: plans, the per_page
- * slope, unused indexes and hand-written code are not measured yet, and their fields say so (`notes`).
+ * The app's database is never written. Hand-written code outside the screens is not measured yet (`notes`).
+ *
+ * @see \Mk\Director\Perf\Plans\PlanReader
  */
 final class PerfCommand extends Command
 {
@@ -127,27 +134,50 @@ final class PerfCommand extends Command
         }
 
         $filled = $seed->fill($connection, $tables, $volume, $graph);
+        $this->analyze($connection, array_keys($filled));
         $token = (new PerfAdmin)->make($seed, $connection);
         $queries = [];
+        $shapes = [];
         foreach ($screens->screens($module, $token, $intro) as $screen) {
             $m = $screens->measure($screen, $runs, $rec);
+            $shapes += $m['shapes'];
+            $origin = ['kind' => 'screen', 'record' => $screen['record'], 'screen' => $screen['screen'], ...($screen['param'] === null ? [] : ['param' => $screen['param']])];
             $queries[] = [
-                'id' => substr(sha1("screen:{$screen['record']}:{$screen['screen']}:{$m['sql']}"), 0, 12),
-                'origin' => ['kind' => 'screen', 'record' => $screen['record'], 'screen' => $screen['screen']],
+                'id' => substr(sha1("screen:{$screen['record']}:{$screen['screen']}:{$screen['param']}:{$screen['uri']}:{$m['sql']}"), 0, 12),
+                'origin' => $origin,
                 'uri' => $screen['uri'],
                 'status' => $m['status'],
                 'sql' => $m['sql'],
                 'medianMs' => $m['medianMs'],
                 'p95Ms' => $m['p95Ms'],
                 'queryCount' => $m['queryCount'],
-                'queriesAt' => null,
+                'queriesAt' => $m['queriesAt'],
                 'duplicates' => $m['duplicates'],
-                'plan' => ['fullScan' => false, 'index' => null, 'rowsRead' => 0, 'sort' => false, 'temp' => false, 'raw' => null],
+                'plan' => null,
             ];
         }
 
+        // Each distinct SELECT of the run, once, on the volume: the screens' main queries and everything else they ran.
+        $reader = $engine === 'pgsql' ? new PostgresPlanReader : new MariaDbPlanReader;
+        $plans = [];
+        $notes = [];
+        foreach ($shapes as $sql => $s) {
+            try {
+                $plans[$sql] = $reader->read($connection, $s['raw'], $s['bindings']);
+            } catch (Throwable $e) {
+                $notes[] = 'Sin plan para '.Str::limit($sql, 120).': '.Str::limit(strtok($e->getMessage(), "\n") ?: $e::class, 200);
+            }
+        }
+        foreach ($queries as &$q) {
+            $plan = $plans[$q['sql']] ?? null;
+            unset($plan['indexes']);
+            $q['plan'] = $plan ?? ['fullScan' => false, 'index' => null, 'rowsRead' => 0, 'sort' => false, 'temp' => false, 'raw' => null];
+        }
+        unset($q);
+        $tableInfo = array_map(fn (string $t): array => $this->tableInfo($connection, $t), array_keys($filled));
+
         // Shown as is in the studio's «Rendimiento» tab: in Spanish, like the rest of its copy.
-        $notes = ['Esta versión mide sólo los listados: el plan de cada consulta, el N+1 (queriesAt) y los índices sin uso todavía no se miden.'];
+        $notes[] = 'El código escrito a mano fuera de las pantallas (servicios, jobs) todavía no se mide.';
         foreach ($seed->skipped() as $table => $why) {
             $notes[] = "La tabla {$table} no se pudo llenar: {$why}";
         }
@@ -159,18 +189,65 @@ final class PerfCommand extends Command
         }
         foreach ($queries as $q) {
             if ($q['status'] >= 300) {
-                $notes[] = "{$q['origin']['record']}: GET /{$q['uri']} respondió {$q['status']}: su tiempo no es el de un listado.";
+                $notes[] = "{$q['origin']['record']}: GET /{$q['uri']} respondió {$q['status']}: su tiempo no es el de la pantalla.";
+            }
+            if ($q['origin']['screen'] === 'count' && $q['sql'] === '') {
+                $notes[] = "{$q['origin']['record']}: el listado no hizo un count(*): su total no se midió.";
             }
         }
 
         return [
             'engine' => $engine,
             'engineVersion' => $version,
-            'tables' => array_map(fn (string $t): array => $this->tableInfo($connection, $t), array_keys($filled)),
+            'tables' => $tableInfo,
             'queries' => $queries,
-            'unusedIndexes' => [],
+            'unusedIndexes' => $this->unused($tableInfo, array_keys($tables), $plans),
             'notes' => $notes,
         ];
+    }
+
+    /**
+     * Fresh statistics for the planner: rows inserted in bulk a moment ago are not in them yet, and a plan read on
+     * stale statistics is not the plan the same data gets in production.
+     *
+     * @param  list<string>  $tables
+     */
+    private function analyze(string $connection, array $tables): void
+    {
+        $db = DB::connection($connection);
+        foreach ($tables as $table) {
+            $db->getDriverName() === 'pgsql'
+                ? $db->statement('analyze '.$db->getQueryGrammar()->wrapTable($table))
+                : $db->select('analyze table '.$db->getQueryGrammar()->wrapTable($table));
+        }
+    }
+
+    /**
+     * The module's own indexes that no plan of the run used. A primary key or a unique index is never listed: it
+     * enforces a rule whether a query reads it or not.
+     *
+     * @param  list<array{name: string, indexes: list<array<string, mixed>>}>  $tableInfo
+     * @param  list<string>  $moduleTables
+     * @param  array<string, array{indexes: list<string>}>  $plans
+     * @return list<array{table: string, index: string}>
+     */
+    private function unused(array $tableInfo, array $moduleTables, array $plans): array
+    {
+        // MariaDB's plans say `PRIMARY` where its schema says `primary`.
+        $used = array_flip(array_map('strtolower', array_merge([], ...array_column($plans, 'indexes'))));
+        $out = [];
+        foreach ($tableInfo as $t) {
+            if (! in_array($t['name'], $moduleTables, true)) {
+                continue;
+            }
+            foreach ($t['indexes'] as $i) {
+                if (! $i['unique'] && ! isset($used[strtolower("{$t['name']}.{$i['name']}")])) {
+                    $out[] = ['table' => $t['name'], 'index' => $i['name']];
+                }
+            }
+        }
+
+        return $out;
     }
 
     /** @return array{0: 'pgsql'|'mariadb', 1: string} refuses MySQL and the versions the design does not support */
