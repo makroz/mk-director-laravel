@@ -24,7 +24,7 @@ use Symfony\Component\Console\Output\BufferedOutput;
 use Throwable;
 
 /**
- * The running app's facts for `@makroz/spec` (`mk spec import` / `mk spec check`).
+ * The running app's facts for `@makroz/spec` (`mk-studio spec import` / `mk-studio spec check`).
  *
  * Everything is read from the booted app, never parsed from source: `$fillable` comes from
  * `getFillable()`, casts from `getCasts()`, columns from the real database, `$mkConfig` by

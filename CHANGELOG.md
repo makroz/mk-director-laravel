@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `mk:spec:introspect` pasa a llamarse `mk-studio:introspect`
+
+**Changed (BC break)**
+- **El comando que lee la app para `@makroz/spec` se llama `mk-studio:introspect`.** El spec, su carpeta y su CLI
+  existen sólo para MK Studio, así que llevan su nombre; los demás comandos del paquete (`mk:status`,
+  `mk:lint:boundaries` …) no cambian. Sin alias: `mk-studio spec import|check` ya lo llaman con el nombre nuevo.
+  Test: `SpecIntrospectTest` («command_is_mk_studio_introspect_and_prints_the_app_as_json»).
+
 ## [UNRELEASED] — `mk:discover-abilities` ve el módulo que sólo declara abilities
 
 **Fixed**
