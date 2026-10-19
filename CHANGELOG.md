@@ -12,6 +12,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Cada relación de un módulo: introspección polimórfica y volumen sobre el grafo
+
+**Added**
+- **`mk-studio:introspect` informa las relaciones que el spec no ve.** Suma `driver` y `version` (MariaDB también
+  detrás del driver `mysql`), `morphMap` (alias => clase y tabla) y `morphs`: cada par `<nombre>_type` +
+  `<nombre>_id` de **cada tabla de la base** (ahora `tables` trae también las del paquete y los pivots) con sus
+  destinos — los alias que guardan sus filas y las de otras tablas con el mismo nombre (sólo lectura), los modelos
+  que declaran la inversa, o todo el morph map (`guessed`). Cada relación trae `table`; un `morphTo`, `morphType`,
+  `morphId` y `targets`; un `morphMany`/`morphOne`, el alias que escribe (`morphClass`). Llamar a un método de
+  relación sigue sin tocar datos. Test: `introspection_reports_morph_targets_from_the_morph_map`.
+- **`mk-studio:perf --volume=small|medium|large`** (1.000 / 20.000 / 200.000 filas en las tablas hoja del módulo;
+  default `medium`). El volumen cubre el **grafo** del módulo: sus tablas, las hijas de sus modelos y todo lo que
+  apuntan, transitivamente, en orden de FK; los pares polimórficos llevan el alias y el id de una fila real de su
+  tabla. Valores sesgados con semilla fija, inserts de a 500. Test:
+  `volume_respects_fk_order_and_fills_morph_columns_with_real_ids`.
+- **El volumen respeta los CHECK** (`Mk\Director\Perf\CheckConstraint`): formato (`~`/`REGEXP`), listas, rangos,
+  «exactamente uno de estos no nulo», booleanos y sus AND/OR/NOT, leídos de cada motor. Lo que no puede cumplir se
+  reintenta y, en el peor caso, la tabla queda en `notes`; nunca corta la corrida. Test: `volume_honors_check_constraints`.
+
+**Changed**
+- La introspección de `mk-studio:perf` corre **antes** de crear la base descartable, sobre la base de la app (sólo
+  lectura): los destinos de un par polimórfico salen de sus filas.
+- `tables` de la corrida lista todas las tablas llenadas (el grafo), no sólo las del módulo.
+- En RETO, `medium`: School pasa de 7 de 14 tablas con filas a 18 de 18 (12 s); Communications llena `posts`, sus
+  comentarios, media y reacciones y sus autores (8 de 8, 6 s).
+
 ## [UNRELEASED] — `mk-studio:perf`: un módulo medido sobre una base descartable
 
 **Added**
