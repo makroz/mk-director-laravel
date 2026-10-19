@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Storage;
 use InvalidArgumentException;
 use Mk\Director\Enums\MkMediaKind;
 use Mk\Director\Models\MkMedia;
+use Mk\Director\Storage\MkStorage;
 use RuntimeException;
 
 /**
@@ -123,7 +124,9 @@ trait HasMkMedia
      * un FormRequest acepte o no PDFs lo decide `ValidatesMkMedia` (opt-in);
      * este método sólo sabe guardarlos.
      *
-     * @param  string|null  $disk  null = el disk default de la app.
+     * @param  string|null  $disk  null = el disk del rol `public` ({@see MkStorage}): una galería es
+     *                             contenido público, y el default de la app (`local` en RETO) daría
+     *                             un archivo que nadie puede pedir.
      *
      * @throws InvalidArgumentException si el mime no es imagen, video ni PDF.
      *                                  Un embed NO se sube: no tiene archivo propio.
@@ -134,7 +137,7 @@ trait HasMkMedia
         ?string $disk = null,
         ?int $position = null,
     ): MkMedia {
-        $disk ??= config('filesystems.default');
+        $disk ??= app(MkStorage::class)->diskName('public');
 
         // 🔴 UN DISK NULL NO SE GUARDA NUNCA. La columna `disk` es lo que usa
         // `MkMedia::getUrlAttribute()` para resolver la URL: una fila con disk
@@ -144,7 +147,7 @@ trait HasMkMedia
         if (! is_string($disk) || $disk === '') {
             throw new InvalidArgumentException(
                 'No hay disk donde guardar: pasá uno explícito o configurá '
-                .'`filesystems.default`. Guardar la fila con `disk` null produce media '
+                .'`mk_director.storage.public_disk`. Guardar la fila con `disk` null produce media '
                 .'cuya URL no resuelve, y el error recién se ve como una imagen rota.'
             );
         }
@@ -160,6 +163,12 @@ trait HasMkMedia
                 .'imágenes, videos y documentos PDF. Un enlace externo se adjunta como embed, sin archivo.'
             ),
         };
+
+        // Las dimensiones se leen del TEMPORAL y ANTES de guardar: después de
+        // `store()` el temporal puede haberse movido (y `getimagesize()` sobre
+        // la ruta vieja falla en silencio), y releer lo guardado de un disk
+        // remoto (R2, S3) es bajar entero el archivo que se acaba de subir.
+        $dimensions = $kind === MkMediaKind::Image ? $this->readImageDimensions($file) : [];
 
         $path = $file->store($collection, ['disk' => $disk]);
 
@@ -183,13 +192,7 @@ trait HasMkMedia
             $attributes['position'] = $position;
         }
 
-        // Las dimensiones se leen del archivo YA GUARDADO y no del temporal:
-        // después de `store()` el temporal puede haberse movido, y en ese caso
-        // `getimagesize()` sobre la ruta vieja falla en silencio devolviendo
-        // false — dejando ancho y alto en null sin que nadie se entere.
-        if ($kind === MkMediaKind::Image) {
-            $attributes += $this->readImageDimensions($disk, $path);
-        }
+        $attributes += $dimensions;
 
         return $this->attachMedia($attributes);
     }
@@ -252,7 +255,7 @@ trait HasMkMedia
         if ($media->kind instanceof MkMediaKind
             && $media->kind->hasStoredFile()
             && $media->path !== null) {
-            Storage::disk($media->disk ?: config('filesystems.default'))
+            Storage::disk($media->disk ?: app(MkStorage::class)->diskName('public'))
                 ->delete($media->path);
         }
 
@@ -260,7 +263,7 @@ trait HasMkMedia
     }
 
     /**
-     * Ancho y alto de una imagen guardada, o array vacío si no se pudieron leer.
+     * Ancho y alto de la imagen subida, o array vacío si no se pudieron leer.
      *
      * Devolver vacío en vez de null-por-clave es deliberado: así las columnas
      * ni se tocan y conservan su default, en lugar de escribir null explícito
@@ -268,18 +271,13 @@ trait HasMkMedia
      *
      * @return array<string, int>
      */
-    protected function readImageDimensions(string $disk, string $path): array
+    protected function readImageDimensions(UploadedFile $file): array
     {
         try {
-            $contents = Storage::disk($disk)->get($path);
-
-            if ($contents === null) {
-                return [];
-            }
-
-            $size = @getimagesizefromstring($contents);
+            // `getimagesize()` lee sólo el encabezado: no carga la imagen entera.
+            $size = @getimagesize($file->getRealPath());
         } catch (\Throwable) {
-            // Un SVG, un disk remoto que no responde o un archivo corrupto no
+            // Un SVG o un archivo corrupto no
             // pueden tumbar la subida: las dimensiones son un dato accesorio y
             // la fila vale igual sin ellas.
             return [];

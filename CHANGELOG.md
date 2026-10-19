@@ -12,6 +12,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Storage: los roles `public` y `private`, y `MkStorage`
+
+**Added**
+- **`mk_director.storage`**: `public_disk` (`MK_STORAGE_PUBLIC_DISK`, default `public`), `private_disk`
+  (`MK_STORAGE_PRIVATE_DISK`, default `local`) y `signed_url_ttl` (`MK_STORAGE_SIGNED_URL_TTL`, 7200 s). El paquete
+  guarda por ROL; qué proveedor cumple cada rol lo decide la app con un disk de `filesystems.php` (un disk `s3` cubre
+  Cloudflare R2, S3 y MinIO).
+- **`Mk\Director\Storage\MkStorage`**: `diskName($role)`, `disk($role)`, `isPrivate($disk)` y `url($disk, $path)`, el
+  único lugar que arma el link de un archivo guardado. Disk público: `url()`; disk privado (el del rol, o uno con
+  `visibility: private`): `temporaryUrl()` firmado que vence. Un path que ya es una URL absoluta pasa tal cual.
+- `league/flysystem-aws-s3-v3` en `suggest` (y en `require-dev` para los tests de links firmados).
+
+**Changed**
+- **`HasMkMedia::attachUploadedFile()` sin `$disk` guarda en el disk del rol `public`**, ya no en
+  `filesystems.default`. Una app con default `local` guardaba las galerías donde nadie podía pedirlas; por eso RETO
+  pasaba `'public'` a mano. Quien dependía del default de la app: pasá el disk explícito o configurá el rol.
+- `HasMkMedia` mide ancho y alto del TEMPORAL antes de guardar: ya no relee el archivo guardado (en un disk remoto
+  era bajar entero lo recién subido).
+- `MkMedia::url` y `FileStoragePlugin` (default del disk y `auto_url`) pasan por `MkStorage`: en un disk privado
+  devuelven un link firmado en vez de uno que no abre.
+
 ## [UNRELEASED] — `mk-studio:perf`: un módulo medido sobre una base descartable
 
 **Added**

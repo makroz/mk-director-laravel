@@ -179,6 +179,25 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Storage: los dos roles de disk
+    |--------------------------------------------------------------------------
+    | El paquete no nombra proveedores: guarda en el disk del rol `public`
+    | (avatares, galerías) o del rol `private` (documentos que sólo ve quien
+    | tiene permiso). Cada rol es un disk de `config/filesystems.php`: un disk
+    | `s3` cubre Cloudflare R2, S3 y MinIO sólo con variables de entorno.
+    |
+    | Sin configurar quedan `public` y `local`, lo que el paquete usaba antes.
+    | `Mk\Director\Storage\MkStorage` es el único que arma el link de un
+    | archivo: público con `url()`, privado firmado por `signed_url_ttl` segundos.
+    */
+    'storage' => [
+        'public_disk' => env('MK_STORAGE_PUBLIC_DISK', 'public'),
+        'private_disk' => env('MK_STORAGE_PRIVATE_DISK', 'local'),
+        'signed_url_ttl' => (int) env('MK_STORAGE_SIGNED_URL_TTL', 7200),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Reacciones (tabla polimórfica `mk_reactions`)
     |--------------------------------------------------------------------------
     | Usada por el trait `HasMkReactions`. Contenido y autor son ambos
