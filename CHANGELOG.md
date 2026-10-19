@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ⚠️ Una app con `config/mk_director.php` publicado no recibe los perfiles nuevos: Laravel mezcla sólo el primer nivel,
 así que su bloque `storage` reemplaza entero al del paquete. Copiá `profiles`, `routes` y los demás keys nuevos.
+- **`ValidatesMkMedia::mkUploadIdsRules()`** (opt-in): `upload_ids` array (tope `mkMediaMaxFiles()`) de uuids distintos, para el servicio que adjunta con `attachUpload()`. La pertenencia no se valida ahí: la garantiza `attachUpload()`.
 
 ## [UNRELEASED] — Storage: los roles `public` y `private`, y `MkStorage`
 

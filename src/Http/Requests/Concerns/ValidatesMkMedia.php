@@ -184,6 +184,25 @@ trait ValidatesMkMedia
     }
 
     /**
+     * Regla de `upload_ids`: archivos que el front ya subió DIRECTO al storage
+     * (`POST {scope}/uploads`). OPT-IN: sumala sólo si el servicio los adjunta
+     * con `attachUpload()`; si no, el campo se validaría y se ignoraría.
+     *
+     * 🔴 LA PERTENENCIA NO SE VALIDA ACÁ, igual que en `remove_media`: la
+     * garantiza `attachUpload()`, que sólo toma una subida COMPLETA del mismo
+     * dueño (otra cosa es 404, sin confirmar que el id existe).
+     *
+     * @return array<string, mixed>
+     */
+    protected function mkUploadIdsRules(): array
+    {
+        return [
+            'upload_ids' => ['sometimes', 'array', 'max:'.$this->mkMediaMaxFiles()],
+            'upload_ids.*' => ['uuid', 'distinct'],
+        ];
+    }
+
+    /**
      * Regla de `embed_url`. OPT-IN: sumala sólo si el modelo acepta embeds.
      *
      * Una URL de un proveedor DESCONOCIDO no es un error — se guarda como link
