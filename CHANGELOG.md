@@ -12,6 +12,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `mk-studio:perf`: cada pantalla y cada plan
+
+**Added**
+- **Cada pantalla de cada registro**: además del listado, cada filtro de `allowed_filters` (con su valor más frecuente),
+  la búsqueda (las primeras letras de un valor de la primera columna `searchable`), cada filtro por el que se puede
+  ordenar, el `count(*)` del paginador (`count`) y el detalle (`show`, ruta `show` del `SmartController`, con la
+  primera fila). `origin.param` lleva la columna, el término o el id. Test:
+  `screens_cover_list_each_filter_search_sort_count_show`.
+- **N+1 por la pendiente** (`queriesAt`): cada pantalla de listado se pide con `per_page` 1, 8 y 20; si la cuenta de
+  consultas crece, hay una por fila. Test: `slope_flags_an_n_plus_one` (y su gemelo en lote, plano).
+- **El plan de cada consulta** (`Mk\Director\Perf\Plans\PlanReader`): `PostgresPlanReader`
+  (`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` en una transacción READ ONLY que se deshace) y `MariaDbPlanReader`
+  (`ANALYZE FORMAT=JSON`), normalizados a `{fullScan, index, rowsRead, sort, temp, raw}`. Sólo SELECT: los dos motores
+  ejecutan lo que analizan. Se lee una vez por SELECT distinto de la corrida. Tests:
+  `plan_reader_marks_a_full_scan`, `plan_reader_marks_an_index`, `plan_reader_refuses_a_write`, en los dos motores.
+- **`unusedIndexes`**: los índices de las tablas del módulo que ningún plan medido usó (sin la clave primaria ni los
+  únicos).
+- `QueryRecorder` guarda lo que corrió de verdad (`raw` + `bindings`) junto a la forma normalizada, y cuenta
+  `duplicates`.
+
+**Changed**
+- La consulta principal (`sql`) de una pantalla es la más lenta que lee la tabla del registro y no es su total: la
+  búsqueda del token y las abilities de cada request ya no la tapan.
+- Después de llenar el volumen, `ANALYZE` de cada tabla: un plan sobre estadísticas viejas no es el de producción.
+- En RETO (PostgreSQL 18.1, `medium`): School, 10 pantallas en 19 s; Communications, 6 en 10 s.
+
 ## [UNRELEASED] — Cada relación de un módulo: introspección polimórfica y volumen sobre el grafo
 
 **Added**
