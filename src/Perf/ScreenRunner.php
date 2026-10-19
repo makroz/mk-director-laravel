@@ -31,7 +31,7 @@ final class ScreenRunner
     private bool $isolated = false;
 
     /**
-     * @param  array{models: list<array>, routes: list<array>, crud: list<array>}  $intro  `Introspector::collect()` on the scratch
+     * @param  array{models: list<array>, routes: list<array>, crud: list<array>}  $intro  `Introspector::collect()` of the app
      * @return list<array{record: string, screen: string, param: ?string, uri: string, token: string}>
      */
     public function screens(string $module, string $token, array $intro, string $scope = 'admin'): array

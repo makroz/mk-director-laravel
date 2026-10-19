@@ -22,11 +22,13 @@ use Throwable;
  * `mk-studio:perf` — measures one module on a throwaway copy of the schema and prints one `mk-perf/v1` run as
  * JSON on stdout, for MK Studio's «Rendimiento» tab.
  *
- *   1. create `<db>_mk_studio_perf` (empty) on the app's own server and migrate it ({@see ScratchDatabase});
- *   2. fill the module's tables ({@see VolumeSeeder});
- *   3. create an admin with `'*'` and its token ({@see PerfAdmin});
- *   4. request each list screen through the HTTP kernel, a warm-up and `--runs` times ({@see ScreenRunner});
- *   5. drop the scratch database (kept with `--keep`) and print the run.
+ *   1. read the app ({@see Introspector}): its models, foreign keys and polymorphic pairs, on its own database (read
+ *      only: the pairs' targets are the aliases its rows store);
+ *   2. create `<db>_mk_studio_perf` (empty) on the app's own server and migrate it ({@see ScratchDatabase});
+ *   3. fill the module's relation graph at the volume asked ({@see VolumeSeeder});
+ *   4. create an admin with `'*'` and its token ({@see PerfAdmin});
+ *   5. request each list screen through the HTTP kernel, a warm-up and `--runs` times ({@see ScreenRunner});
+ *   6. drop the scratch database (kept with `--keep`) and print the run.
  *
  * The app's database is never written. This version measures the list screens only: plans, the per_page
  * slope, unused indexes and hand-written code are not measured yet, and their fields say so (`notes`).
@@ -35,7 +37,7 @@ final class PerfCommand extends Command
 {
     protected $signature = 'mk-studio:perf
         {--module= : The module to measure (as its folder: School)}
-        {--volume=small : small (only small is measured in this version)}
+        {--volume=medium : small, medium or large (rows of the module\'s leaf tables: 1,000, 20,000 or 200,000)}
         {--runs=50 : Measured requests per screen, after one warm-up}
         {--keep : Keep the scratch database after the run}
         {--pretty : Indented JSON}';
@@ -51,7 +53,7 @@ final class PerfCommand extends Command
             return $this->refuse('--module=<Module> is required (the module folder, e.g. School).');
         }
         if (! isset(VolumeSeeder::ROWS[$volume])) {
-            return $this->refuse("--volume={$volume}: only small is measured in this version.");
+            return $this->refuse("--volume={$volume}: small, medium or large.");
         }
         if ($runs < 1 || $runs > 1000) {
             return $this->refuse('--runs must be between 1 and 1000.');
@@ -60,10 +62,12 @@ final class PerfCommand extends Command
         $started = hrtime(true);
         $startedAt = gmdate('Y-m-d\TH:i:s\Z');
         try {
+            // Before the scratch database: the pairs' targets are read from the app's rows.
+            $intro = (new Introspector([config('mk_director.paths.modules', app_path('Modules'))]))->collect();
             $connection = $db->create();
             try {
                 $db->migrate($connection);
-                $run = $this->measure($connection, $module, $volume, $runs, $seed, $screens, $rec);
+                $run = $this->measure($connection, $module, $volume, $runs, $intro, $seed, $screens, $rec);
             } finally {
                 $this->option('keep') ? $db->release($connection) : $db->drop($connection);
             }
@@ -89,21 +93,40 @@ final class PerfCommand extends Command
     }
 
     /** @return array<string, mixed> the run's measured part */
-    private function measure(string $connection, string $module, string $volume, int $runs, VolumeSeeder $seed, ScreenRunner $screens, QueryRecorder $rec): array
+    private function measure(string $connection, string $module, string $volume, int $runs, array $intro, VolumeSeeder $seed, ScreenRunner $screens, QueryRecorder $rec): array
     {
         [$engine, $version] = $this->engine($connection);
-        $intro = (new Introspector([config('mk_director.paths.modules', app_path('Modules'))]))->collect();
         $tables = [];
+        $graph = ['casts' => [], 'children' => [], 'morphs' => []];
         foreach ($intro['models'] as $model) {
-            if ($model['module'] === $module) {
-                $tables[$model['table']] = [...($tables[$model['table']] ?? []), ...(array) $model['casts']];
+            $casts = [...($graph['casts'][$model['table']] ?? []), ...(array) $model['casts']];
+            $graph['casts'][$model['table']] = $casts;
+            if ($model['module'] !== $module) {
+                continue;
+            }
+            $tables[$model['table']] = $casts;
+            // Its children: the rows that hang on the module's records (has-many, morph-many, a pivot).
+            foreach ((array) $model['relations'] as $r) {
+                if (in_array($r['type'], ['HasMany', 'HasOne', 'MorphMany', 'MorphOne'], true)) {
+                    $graph['children'][] = $r['table'];
+                } elseif (isset($r['pivot'])) {
+                    $graph['children'][] = $r['pivot'];
+                }
             }
         }
         if ($tables === []) {
             throw new RuntimeException("the module {$module} has no models.");
         }
+        $morphMap = (array) $intro['morphMap'];
+        foreach ($intro['morphs'] as $m) {
+            $targets = [];
+            foreach ($m['targets'] as $alias) {
+                $targets[$alias] = $morphMap[$alias]['table'] ?? null; // null: an alias the morph map does not name
+            }
+            $graph['morphs'][] = [...$m, 'targets' => $targets];
+        }
 
-        $seed->fill($connection, $tables, $volume);
+        $filled = $seed->fill($connection, $tables, $volume, $graph);
         $token = (new PerfAdmin)->make($seed, $connection);
         $queries = [];
         foreach ($screens->screens($module, $token, $intro) as $screen) {
@@ -128,6 +151,9 @@ final class PerfCommand extends Command
         foreach ($seed->skipped() as $table => $why) {
             $notes[] = "La tabla {$table} no se pudo llenar: {$why}";
         }
+        foreach ($seed->short() as $table => $s) {
+            $notes[] = "La tabla {$table} quedó con {$s['written']} de {$s['wanted']} filas: {$s['reason']}";
+        }
         foreach ($screens->skipped() as $why) {
             $notes[] = "Pantalla sin medir: {$why}";
         }
@@ -140,7 +166,7 @@ final class PerfCommand extends Command
         return [
             'engine' => $engine,
             'engineVersion' => $version,
-            'tables' => array_map(fn (string $t): array => $this->tableInfo($connection, $t), array_keys($tables)),
+            'tables' => array_map(fn (string $t): array => $this->tableInfo($connection, $t), array_keys($filled)),
             'queries' => $queries,
             'unusedIndexes' => [],
             'notes' => $notes,

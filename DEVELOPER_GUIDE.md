@@ -626,12 +626,15 @@ php artisan mk-studio:introspect            # JSON en una línea, a stdout (nada
 php artisan mk-studio:introspect --pretty   # indentado
 ```
 
-Lo consumen `mk-studio spec import` (la adopción, una vez) y `mk-studio spec check` (el drift, siempre) del paquete npm `@makroz/spec`. **Sólo lee**: no escribe filas ni archivos. Recorre los módulos de `mk_director.paths.modules` (default `app_path('Modules')`) y saca:
+Lo consumen `mk-studio spec import` (la adopción, una vez), `mk-studio spec check` (el drift, siempre) y el grafo de relaciones del estudio (`relationGraph()` de `@makroz/spec`). **Sólo lee**: no escribe filas ni archivos. Recorre los módulos de `mk_director.paths.modules` (default `app_path('Modules')`) y saca:
 
 | clave | de dónde sale |
 |---|---|
-| `models` | cada modelo Eloquent concreto en `<Módulo>/Models` (los `*Base` abstractos se saltean): `getTable()`, `getKeyType()`, `usesTimestamps()`, SoftDeletes, **`getFillable()`**, `getGuarded()`, `getCasts()`, los `$attributes` de una instancia nueva, `class_uses_recursive()` y las relaciones (métodos públicos sin argumentos cuyo tipo de retorno es un `Relation`, llamados sobre una instancia nueva: no corre ninguna query; `declaredIn` dice qué clase la declara) y `apiResource` (sólo si es **público**: `autoTransform()` lee `$model->apiResource`, y Eloquent contesta uno `protected` como un atributo nulo) |
-| `tables` | `Schema::getColumns/getIndexes/getForeignKeys` de cada tabla de modelo (`type_name`, `type`, `nullable`, `default` crudos) + `partial` por índice (Postgres/sqlite) |
+| `driver`, `version` | el motor (`pgsql`, `mariadb` —también detrás del driver `mysql` de Laravel—, `mysql`, `sqlite`) y la versión del servidor |
+| `models` | cada modelo Eloquent concreto en `<Módulo>/Models` (los `*Base` abstractos se saltean): `getTable()`, `getKeyType()`, `usesTimestamps()`, SoftDeletes, **`getFillable()`**, `getGuarded()`, `getCasts()`, los `$attributes` de una instancia nueva, `class_uses_recursive()` y las relaciones (métodos públicos sin argumentos cuyo tipo de retorno es un `Relation`, llamados sobre una instancia nueva: no corre ninguna query; `declaredIn` dice qué clase la declara, `table` la tabla del modelo relacionado; un `morphTo` trae `morphType`, `morphId` y `targets`, y un `morphMany`/`morphOne` trae `morphType`, `morphId` y el alias que escribe, `morphClass`) y `apiResource` (sólo si es **público**: `autoTransform()` lee `$model->apiResource`, y Eloquent contesta uno `protected` como un atributo nulo) |
+| `tables` | `Schema::getColumns/getIndexes/getForeignKeys` de **cada tabla de la base** —las de los modelos y las demás: las del paquete (`mk_comments`), los pivots— (`type_name`, `type`, `nullable`, `default` crudos) + `partial` por índice (Postgres/sqlite) |
+| `morphMap` | el morph map: alias => `{class, table}` |
+| `morphs` | cada par `<nombre>_type` + `<nombre>_id` de cada tabla (una relación polimórfica, no dos) y sus `targets`, en este orden de evidencia: los alias que guardan sus filas y las de otras tablas con el mismo nombre (`select distinct … limit 50`, sólo lectura: `author` es el mismo rol en `posts`, `mk_comments` y `mk_reactions`), los modelos que declaran la inversa (`morphMany(MkComment::class, 'commentable')`), y si no hay nada, todo el morph map (`guessed: true`) |
 | `enums` | los backed enums de `<Módulo>/Enums`: casos, `label()` si existe, el caso de `default()` si existe, y el docblock de la clase como texto |
 | `abilities` | **el mismo** discovery de `mk:discover-abilities` (corre el comando en `--dry-run --json`): `source` `provider` o `fallback` |
 | `routes` | `Route::getRoutes()`: uri, métodos, acción y los argumentos de `mk.ability:` y `mk.auth:` |
@@ -642,25 +645,32 @@ Lo consumen `mk-studio spec import` (la adopción, una vez) y `mk-studio spec ch
 
 🔴 **Un índice parcial no es un `unique`**: `Schema::getIndexes()` informa `lands_single_active` (`… WHERE is_active`) igual que un unique entero. Sin el flag `partial`, la importación lo convertía en `unique: true` y el generador habría impedido dos terrenos inactivos. En RETO hay 9.
 
-Necesita la app booteada con su base (las columnas salen de la base real). Tests: `tests/Feature/SpecIntrospectTest.php` con el módulo de prueba `tests/Fixtures/Spec/Modules/SpecShop`.
+🔴 **Los destinos de un `morphTo` no salen del código**: Eloquent lee el alias de la fila. En RETO, `Post::author()` no nombra a nadie (R-MK-001); lo que dice `admin`/`member` son las filas de `posts`, `mk_comments` y `mk_reactions`. Dos roles distintos con el mismo nombre (`reference` en RETO) mezclan sus destinos: es el techo de la heurística.
+
+Necesita la app booteada con su base (las columnas salen de la base real). Tests: `tests/Feature/SpecIntrospectTest.php` con el módulo de prueba `tests/Fixtures/Spec/Modules/SpecShop` (`introspection_reports_morph_targets_from_the_morph_map`).
 
 ### 3.6.7. `mk-studio:perf` — un módulo medido sobre una base descartable (para MK Studio)
 
 ```bash
-php artisan mk-studio:perf --module=School             # JSON en una línea, a stdout (nada más)
-php artisan mk-studio:perf --module=School --runs=10 --keep --pretty
+php artisan mk-studio:perf --module=School                       # medium, JSON en una línea, a stdout (nada más)
+php artisan mk-studio:perf --module=School --volume=small --runs=10 --keep --pretty
 ```
 
 Lo corre la pestaña «Rendimiento» de MK Studio en el worktree del estudio, nunca en el checkout. Pasos:
 
-1. **`ScratchDatabase`**: crea `<db>_mk_studio_perf` (vacía) en el servidor de la app y la migra con `migrate --database`. Mientras dura la corrida, la conexión por defecto y el nombre de la conexión de la app apuntan ahí; al final la borra (`--keep` la deja) y devuelve la app a su base.
-2. **`VolumeSeeder`**: 1.000 filas en cada tabla de los modelos del módulo, padres primero; una tabla de afuera a la que apunta una FK recibe unas pocas filas, así cada FK lleva un id real. Llena sólo lo obligatorio (NOT NULL sin default), las FK y los timestamps; un enum toma el primer caso del cast. Lo que no puede llenar va a `notes`, nunca corta la corrida.
-3. **`PerfAdmin`**: un usuario del scope `admin` con `'*'` y un token Sanctum con `'*'` y el scope (lo que piden `mk.auth` y `mk.ability`; no hay bypass).
-4. **`ScreenRunner`** + **`QueryRecorder`**: cada ruta GET `index` de un `SmartController` del módulo, por el kernel HTTP en el mismo proceso, con el rate limit apagado y la caché en `array`. Un calentamiento y `--runs` repeticiones; las consultas se cuentan por nombre de base (`*_mk_studio_perf`).
+1. **`Introspector`**, antes de tocar nada: los modelos, las FK y los pares polimórficos con sus destinos, leídos de la base de la app (sólo lectura).
+2. **`ScratchDatabase`**: crea `<db>_mk_studio_perf` (vacía) en el servidor de la app y la migra con `migrate --database`. Mientras dura la corrida, la conexión por defecto y el nombre de la conexión de la app apuntan ahí; al final la borra (`--keep` la deja) y devuelve la app a su base.
+3. **`VolumeSeeder`**: llena el **grafo de relaciones** del módulo: sus tablas, las hijas que listan sus modelos (`comments()` → `mk_comments`) y todo lo que esas apuntan, transitivamente, por FK o como destino de un par polimórfico; padres primero, así cada FK y cada `*_type` + `*_id` nombran una fila real (el alias del morph map y el id de su tabla). Un par cuyos destinos incluyen una tabla del módulo apunta sólo ahí. Filas: `--volume=small|medium|large` = 1.000 / 20.000 / 200.000 en cada tabla hoja del módulo y en cada hija; las demás, un décimo de su hija más grande (mínimo 10). Valores **sesgados** (unos pocos padres se llevan la mayoría, uno más que todos; lo mismo los casos de un enum y los destinos de un par), con semilla fija: dos corridas llenan lo mismo. Una relación o un enum dentro de un índice único recorre sus valores en orden en vez de sesgarse (una fila de stats por alumno). Inserta de a 500.
+   - 🔴 **Respeta los CHECK** (`CheckConstraint`): los lee de `pg_constraint` (PostgreSQL) o `information_schema.CHECK_CONSTRAINTS` (MariaDB) y escribe filas que los cumplen: formato (`~`, `REGEXP`: genera un texto que la expresión acepta, distinto por fila), listas (`= ANY (ARRAY[…])`, `IN`), rangos, nulidad (`(a IS NULL) <> (b IS NULL)`: exactamente uno), booleanos, `col = <expresión de otras columnas>` y sus AND/OR/NOT. Lo que no entiende lo decide la base.
+   - Una fila rechazada se escribe sola y se reintenta una vez con otros valores (un unique). Una tabla que rechaza 20 filas seguidas sin escribir ninguna se abandona; una que ya escribió y rechaza 200 seguidas se da por llena (sus uniques se agotaron). Las dos van a `notes` con el motivo, nunca cortan la corrida.
+4. **`PerfAdmin`**: un usuario del scope `admin` con `'*'` y un token Sanctum con `'*'` y el scope (lo que piden `mk.auth` y `mk.ability`; no hay bypass).
+5. **`ScreenRunner`** + **`QueryRecorder`**: cada ruta GET `index` de un `SmartController` del módulo, por el kernel HTTP en el mismo proceso, con el rate limit apagado y la caché en `array`. Un calentamiento y `--runs` repeticiones; las consultas se cuentan por nombre de base (`*_mk_studio_perf`).
 
 🔴 **Las guardas**: un nombre que no termine en `_mk_studio_perf` (o `_mk_studio_perf_tests`) se rechaza antes de crear nada, `APP_ENV=production` se rechaza, y el borrado vuelve a chequear el nombre. El usuario de la base tiene que poder `CREATE DATABASE`.
 
-`plan`, `queriesAt` y `unusedIndexes` todavía no se miden: van neutros y `notes` lo dice. Tests: `tests/Feature/Perf/PerfCommandTest.php`, contra un servidor real (`MK_PERF_TEST_DRIVER=pgsql|mariadb`, `MK_PERF_TEST_HOST`, `_PORT`, `_USERNAME`, `_PASSWORD`; sin ellas se saltean): cada guarda se afirma en el servidor con un PDO propio, no por el código de salida.
+`plan`, `queriesAt` y `unusedIndexes` todavía no se miden: van neutros y `notes` lo dice. Tests: `tests/Feature/Perf/PerfCommandTest.php`, contra un servidor real (`MK_PERF_TEST_DRIVER=pgsql|mariadb`, `MK_PERF_TEST_HOST`, `_PORT`, `_USERNAME`, `_PASSWORD`; sin ellas se saltean): cada guarda se afirma en el servidor con un PDO propio, no por el código de salida. El volumen (`volume_respects_fk_order_and_fills_morph_columns_with_real_ids`, `volume_honors_check_constraints`) se afirma en la base descartable que deja `--keep`, con el módulo de prueba `PerfGraph`.
+
+Medido en RETO (PostgreSQL 18.1, `medium`): School llena sus 14 tablas y 4 padres (18 de 18) en 12 s, Communications `posts` + `mk_comments`/`mk_media`/`mk_reactions` + autores (8 de 8) en 6 s. Antes de los CHECK, School llenaba 7 de 14.
 
 ## ⚙️ 3.7. Login field configurable (`--login-field=<campo>`)
 
