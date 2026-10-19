@@ -20,6 +20,9 @@ use InvalidArgumentException;
  * suelto sobre un disk privado devuelve un link que no abre (un bucket privado
  * no sirve nada sin firma) y el error recién se ve como una imagen rota. Acá el
  * disk privado recibe un link firmado que vence.
+ *
+ * También arma los perfiles de subida (`profile()`): qué tipos, cuántos bytes
+ * y en qué rol guarda cada clase de archivo.
  */
 final class MkStorage
 {
@@ -75,5 +78,37 @@ final class MkStorage
         }
 
         return Storage::disk($disk)->url($path);
+    }
+
+    /**
+     * El perfil de subida `$name` de `mk_director.storage.profiles`.
+     *
+     * Un nombre que no existe explota: caer a un perfil por defecto dejaría
+     * entrar un archivo con límites que nadie eligió.
+     */
+    public function profile(string $name): MkUploadProfile
+    {
+        $config = config("mk_director.storage.profiles.{$name}");
+
+        if (! is_array($config)) {
+            throw new InvalidArgumentException("Perfil de subida desconocido '{$name}': no está en `mk_director.storage.profiles`.");
+        }
+
+        $mimes = [];
+        foreach ((array) ($config['mimes'] ?? []) as $mime => $extensions) {
+            $mimes[strtolower((string) $mime)] = array_values(array_map(
+                static fn ($extension): string => strtolower((string) $extension),
+                (array) $extensions,
+            ));
+        }
+
+        return new MkUploadProfile(
+            name: $name,
+            role: (string) ($config['role'] ?? 'public'),
+            mimes: $mimes,
+            maxBytes: (int) ($config['max_bytes'] ?? 0),
+            maxMegapixels: isset($config['max_megapixels']) ? (int) $config['max_megapixels'] : null,
+            prefix: trim((string) ($config['prefix'] ?? $name), '/'),
+        );
     }
 }

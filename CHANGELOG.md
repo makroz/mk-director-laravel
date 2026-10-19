@@ -12,6 +12,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Storage: la subida directa al storage (`MkDirectUpload`)
+
+**Added**
+- **`Mk\Director\Storage\DirectUpload\MkDirectUpload`**: el navegador sube el archivo en partes a links firmados y la
+  API nunca ve los bytes. `start($owner, $profile, $filename, $bytes, $mime, ?$keyPrefix)` valida tipo y tamaño contra
+  el perfil ANTES de tocar el storage (422 `ERR_UPLOAD_TYPE` / `ERR_UPLOAD_TOO_LARGE`), arma la key en el servidor
+  (`{prefijo}/{Y}/{m}/{uuid}.{ext}`, la extensión la pone el perfil; del nombre del cliente no se copia nada), abre el
+  multipart y firma un link por parte. `complete($owner, $id, $etags)`, `abort($owner, $id)` y
+  `claim($owner, $id, ?$profile)`. Toda búsqueda va por id **y** dueño: una subida ajena es 404
+  (`ERR_UPLOAD_NOT_FOUND`), nunca 403.
+- Sólo sobre un disk `s3` (S3, Cloudflare R2, MinIO), por `S3DirectUploadDriver` detrás de la interfaz
+  `MkDirectUploadDriver`; otro driver explota nombrando el disk.
+- **Tabla `mk_uploads`** (`MK_UPLOADS_TABLE`) con su migración, el modelo `MkUpload` y el enum `MkUploadStatus`
+  (Started 1, Completed 2, Attached 3, Aborted 4). `multipart_id` es TEXT: el id de R2 mide 343 caracteres.
+- **`mk_director.storage`** suma `upload_ttl` (6 h), `part_size` (8 MiB), `uploads_table`, los perfiles `avatar`,
+  `image`, `video` y `document` (MIME => extensiones, bytes máximos, rol y prefijo) y `routes`. `MkStorage::profile()`
+  arma un `MkUploadProfile`; un perfil que no existe explota.
+- **Rutas opt-in** (`MK_UPLOADS_REGISTER_ROUTES` + `storage.routes.scopes`, un grupo por scope con su prefijo y su
+  middleware): `POST uploads` (201 `{upload_id, part_size, part_urls, expires_at}`), `POST uploads/{upload}/complete`
+  (`{upload_id, mime, bytes, width, height}`) y `DELETE uploads/{upload}` (204), nombres `mk.uploads.{scope}.*`. El
+  dueño es el usuario de la sesión; sin usuario, 401 aunque el scope no tenga `mk.auth`.
+- **`HasMkMedia::attachUpload($owner, $uploadId, $collection, $position)`**: convierte una subida Completed del dueño
+  en una fila de `mk_media` y la marca Attached, en una transacción con la subida bloqueada. Una subida ajena, todavía
+  Started o ya adjuntada da 404 y no crea nada.
+
+⚠️ Una app con `config/mk_director.php` publicado no recibe los perfiles nuevos: Laravel mezcla sólo el primer nivel,
+así que su bloque `storage` reemplaza entero al del paquete. Copiá `profiles`, `routes` y los demás keys nuevos.
+
 ## [UNRELEASED] — Storage: los roles `public` y `private`, y `MkStorage`
 
 **Added**

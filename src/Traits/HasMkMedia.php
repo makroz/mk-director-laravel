@@ -4,12 +4,16 @@ declare(strict_types=1);
 
 namespace Mk\Director\Traits;
 
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 use InvalidArgumentException;
 use Mk\Director\Enums\MkMediaKind;
+use Mk\Director\Enums\MkUploadStatus;
 use Mk\Director\Models\MkMedia;
+use Mk\Director\Storage\DirectUpload\MkDirectUpload;
+use Mk\Director\Storage\DirectUpload\MkUploadException;
 use Mk\Director\Storage\MkStorage;
 use RuntimeException;
 
@@ -153,16 +157,7 @@ trait HasMkMedia
         }
 
         $mime = $file->getMimeType() ?? 'application/octet-stream';
-
-        $kind = match (true) {
-            str_starts_with($mime, 'image/') => MkMediaKind::Image,
-            str_starts_with($mime, 'video/') => MkMediaKind::Video,
-            $mime === 'application/pdf' => MkMediaKind::Document,
-            default => throw new InvalidArgumentException(
-                "No se puede adjuntar un archivo de tipo '{$mime}': `mk_media` sólo guarda "
-                .'imágenes, videos y documentos PDF. Un enlace externo se adjunta como embed, sin archivo.'
-            ),
-        };
+        $kind = $this->mkMediaKindFor($mime);
 
         // Las dimensiones se leen del TEMPORAL y ANTES de guardar: después de
         // `store()` el temporal puede haberse movido (y `getimagesize()` sobre
@@ -195,6 +190,48 @@ trait HasMkMedia
         $attributes += $dimensions;
 
         return $this->attachMedia($attributes);
+    }
+
+    /**
+     * Adjunta una subida DIRECTA ya completada ({@see MkDirectUpload}): el
+     * archivo ya está en el storage, acá sólo nace la fila de `mk_media`.
+     *
+     * 🔴 `$owner` ES QUIEN SUBIÓ, y lo pasa el consumer desde la sesión (el
+     * admin autenticado), nunca del body. `claim()` busca la subida por id Y
+     * dueño: un id ajeno, uno todavía Started o uno ya adjuntado dan 404 y no
+     * crean nada.
+     *
+     * Todo en una transacción con la subida bloqueada: dos requests con el
+     * mismo id no pueden crear dos filas de media sobre el mismo objeto.
+     *
+     * @throws MkUploadException 404
+     */
+    public function attachUpload(Model $owner, string $uploadId, string $collection = 'default', ?int $position = null): MkMedia
+    {
+        return $this->getConnection()->transaction(function () use ($owner, $uploadId, $collection, $position): MkMedia {
+            $upload = app(MkDirectUpload::class)->claim($owner, $uploadId);
+            $mime = (string) $upload->mime;
+
+            $attributes = [
+                'kind' => $this->mkMediaKindFor($mime),
+                'disk' => $upload->disk,
+                'path' => $upload->key,
+                'mime_type' => $mime,
+                'size' => $upload->bytes,
+                'width' => $upload->width,
+                'height' => $upload->height,
+                'collection' => $collection,
+            ];
+
+            if ($position !== null) {
+                $attributes['position'] = $position;
+            }
+
+            $media = $this->attachMedia($attributes);
+            $upload->update(['status' => MkUploadStatus::Attached]);
+
+            return $media;
+        });
     }
 
     /**
@@ -260,6 +297,25 @@ trait HasMkMedia
         }
 
         $media->delete();
+    }
+
+    /**
+     * El `kind` de `mk_media` para un MIME: imagen, video o PDF. Cualquier otro
+     * tipo explota en vez de guardarse como algo que después no se puede mostrar.
+     *
+     * @throws InvalidArgumentException
+     */
+    protected function mkMediaKindFor(string $mime): MkMediaKind
+    {
+        return match (true) {
+            str_starts_with($mime, 'image/') => MkMediaKind::Image,
+            str_starts_with($mime, 'video/') => MkMediaKind::Video,
+            $mime === 'application/pdf' => MkMediaKind::Document,
+            default => throw new InvalidArgumentException(
+                "No se puede adjuntar un archivo de tipo '{$mime}': `mk_media` sólo guarda "
+                .'imágenes, videos y documentos PDF. Un enlace externo se adjunta como embed, sin archivo.'
+            ),
+        };
     }
 
     /**

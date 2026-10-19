@@ -23,10 +23,13 @@ trait BootsPushApp
 {
     use BootsHttpApp;
 
-    /** @param array<string,mixed> $push overrides de `mk_director.push` */
-    public function bootPushApp(array $push = []): void
+    /**
+     * @param  array<string,mixed>  $push  overrides de `mk_director.push`
+     * @param  array<string,mixed>  $mkDirector  otros bloques de `mk_director` (las subidas usan `storage`)
+     */
+    public function bootPushApp(array $push = [], array $mkDirector = []): void
     {
-        $this->bootHttpApp(PushTestUser::class, [
+        $this->bootHttpApp(PushTestUser::class, $mkDirector + [
             'tenant' => ['enabled' => false],
             'push' => array_replace([
                 'driver' => 'null',
