@@ -21,3 +21,6 @@
 
 # Cache de PHPUnit (cacheDirectory en phpunit.xml)
 .phpunit.cache/
+
+# Local skill registry written by the agent tooling
+.atl/
