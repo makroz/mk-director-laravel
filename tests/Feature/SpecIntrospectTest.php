@@ -3,7 +3,9 @@
 declare(strict_types=1);
 
 use App\Modules\SpecShop\Http\Controllers\ProductController;
+use App\Modules\SpecShop\Models\Note;
 use App\Modules\SpecShop\Models\Product;
+use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
@@ -54,6 +56,7 @@ beforeEach(function () {
 });
 
 afterEach(function () {
+    Relation::morphMap([], false);
     $this->tearDownHttpApp();
 });
 
@@ -66,7 +69,7 @@ test('fillable_comes_from_getFillable', function () {
         ->and($model['guarded'])->toBe(['*'])
         ->and((array) $model['attributes'])->toBe(['status' => 1])
         ->and((array) $model['casts'])->toMatchArray(['status' => 'App\\Modules\\SpecShop\\Enums\\ProductStatus'])
-        ->and((array) $model['relations'])->toBe(['children' => ['type' => 'HasMany', 'related' => Product::class, 'declaredIn' => Product::class, 'foreignKey' => 'parent_id']])
+        ->and((array) $model['relations'])->toBe(['children' => ['type' => 'HasMany', 'related' => Product::class, 'table' => 'spec_products', 'declaredIn' => Product::class, 'foreignKey' => 'parent_id']])
         ->and($model['apiResource'])->toBe('App\\Modules\\SpecShop\\Http\\Resources\\ProductResource');
 });
 
@@ -154,4 +157,40 @@ test('command_is_mk_studio_introspect_and_prints_the_app_as_json', function () {
     expect($command->getName())->toBe('mk-studio:introspect')
         ->and($command->run(new ArrayInput([]), $out))->toBe(0)
         ->and(collect(json_decode($out->fetch(), true)['models'])->pluck('class')->all())->toContain(Product::class);
+});
+
+test('introspection_reports_morph_targets_from_the_morph_map', function () {
+    // `spec_notes` is empty and nothing declares the inverse: the morph map is all that is known of `subject`.
+    Relation::morphMap(['product' => Product::class, 'note' => Note::class]);
+    Schema::create('spec_notes', function ($t) {
+        $t->id();
+        $t->morphs('subject');
+    });
+    // A table no model owns (a package's): its pair is found too, and its rows say what it points at.
+    Schema::create('spec_tags', function ($t) {
+        $t->id();
+        $t->string('taggable_type');
+        $t->string('taggable_id', 36);
+    });
+    DB::table('spec_tags')->insert(['taggable_type' => 'product', 'taggable_id' => 'p-1']);
+
+    $intro = (new Introspector([__DIR__.'/../Fixtures/Spec/Modules']))->collect();
+    $note = collect($intro['models'])->firstWhere('class', Note::class);
+
+    expect($intro['driver'])->toBe('sqlite')
+        ->and($intro['version'])->not->toBe('')
+        ->and((array) $intro['morphMap'])->toBe([
+            'note' => ['class' => Note::class, 'table' => 'spec_notes'],
+            'product' => ['class' => Product::class, 'table' => 'spec_products'],
+        ])
+        ->and(((array) $note['relations'])['subject'])->toMatchArray([
+            'type' => 'MorphTo',
+            'morphType' => 'subject_type',
+            'morphId' => 'subject_id',
+            'targets' => ['note', 'product'],
+        ])
+        ->and($intro['morphs'])->toBe([
+            ['table' => 'spec_notes', 'name' => 'subject', 'type' => 'subject_type', 'id' => 'subject_id', 'targets' => ['note', 'product'], 'guessed' => true],
+            ['table' => 'spec_tags', 'name' => 'taggable', 'type' => 'taggable_type', 'id' => 'taggable_id', 'targets' => ['product'], 'guessed' => false],
+        ]);
 });
