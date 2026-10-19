@@ -3,8 +3,11 @@
 declare(strict_types=1);
 
 use App\Modules\PerfShop\Http\Controllers\ItemController;
+use App\Modules\PerfShop\Models\Item;
 use Illuminate\Console\Application;
 use Illuminate\Contracts\Console\Kernel as ConsoleKernelContract;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
 use Illuminate\Foundation\Providers\ConsoleSupportServiceProvider;
 use Illuminate\Support\Facades\Artisan;
@@ -42,6 +45,12 @@ final class PerfTestAdmin extends AuthUser
     {
         return 'user_id';
     }
+}
+
+/** `perf_owners` has no module: a parent the items point at, and a polymorphic target of the notes (PerfGraph). */
+final class PerfOwner extends Model
+{
+    protected $table = 'perf_owners';
 }
 
 const PERF_APP_DB = 'mk_director_perf_app';
@@ -115,7 +124,7 @@ function perfRowCounts(): array
 function perfRun(array $options = []): array
 {
     // Its own buffer: the nested `migrate:fresh` replaces what `Artisan::output()` returns.
-    $code = Artisan::call('mk-studio:perf', ['--module' => 'PerfShop', '--runs' => 3, ...$options], $out = new BufferedOutput);
+    $code = Artisan::call('mk-studio:perf', ['--module' => 'PerfShop', '--runs' => 3, '--volume' => 'small', ...$options], $out = new BufferedOutput);
 
     return [$code, $out->fetch()];
 }
@@ -132,7 +141,7 @@ beforeEach(function () {
     $root = __DIR__.'/../../Fixtures/Perf';
     spl_autoload_register(static function (string $class) use ($root): void {
         $file = $root.'/Modules/'.str_replace('\\', '/', substr($class, strlen('App\\Modules\\'))).'.php';
-        if (str_starts_with($class, 'App\\Modules\\PerfShop\\') && is_file($file)) {
+        if (str_starts_with($class, 'App\\Modules\\') && is_file($file)) {
             require_once $file;
         }
     });
@@ -164,6 +173,7 @@ afterEach(function () {
     if (perfServer() === null) {
         return;
     }
+    Relation::morphMap([], false);
     $this->tearDownHttpApp();
     Application::forgetBootstrappers();
     foreach (['', '_mk_studio_perf', '_perf'] as $suffix) {
@@ -208,13 +218,9 @@ test('scratch_db_is_dropped_after_the_run', function () {
     expect($code)->toBe(0, $output);
 
     $run = json_decode($output, true, flags: JSON_THROW_ON_ERROR);
-    // The run happened on a database with the volume in it, and it is gone.
+    // The run happened on a database with the volume in it (the items and the owners they point at), and it is gone.
     expect($run['schema'])->toBe('mk-perf/v1')
-        ->and($run['tables'])->toBe([[
-            'name' => 'perf_items',
-            'rows' => 1000,
-            'indexes' => $run['tables'][0]['indexes'],
-        ]])
+        ->and(array_column($run['tables'], 'rows', 'name'))->toBe(['perf_owners' => 100, 'perf_items' => 1000])
         ->and($run['queries'])->toHaveCount(1)
         ->and($run['queries'][0]['status'])->toBe(200)
         ->and($run['queries'][0]['queryCount'])->toBeGreaterThan(0)
@@ -240,5 +246,58 @@ test('the_run_never_touches_the_app_database', function () {
     expect(perfRowCounts())->toBe($before);
     // 1000 items, an admin, its ability and its token were written: all of it on the scratch database.
     expect($code)->toBe(0, $output)
-        ->and(json_decode($output, true)['tables'][0]['rows'])->toBe(1000);
+        ->and(array_column(json_decode($output, true)['tables'], 'rows', 'name')['perf_items'])->toBe(1000);
+});
+
+/** @return list<array<string, mixed>> rows of a query on the kept scratch database */
+function perfScratch(string $sql): array
+{
+    return perfPdo(PERF_APP_DB.'_mk_studio_perf')->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+}
+
+test('volume_respects_fk_order_and_fills_morph_columns_with_real_ids', function () {
+    Relation::morphMap(['owner' => PerfOwner::class, 'item' => Item::class]);
+
+    [$code, $output] = perfRun(['--module' => 'PerfGraph', '--keep' => true]);
+    expect($code)->toBe(0, $output);
+    $run = json_decode($output, true, flags: JSON_THROW_ON_ERROR);
+    $rows = array_column($run['tables'], 'rows', 'name');
+    $at = array_flip(array_keys($rows));
+
+    // The module's tables, their parents two levels up, and both targets of the pair; parents written first.
+    expect($rows)->toBe([
+        'perf_regions' => 10, 'perf_teams' => 100, 'perf_owners' => 100, 'perf_items' => 100, 'perf_notes' => 1000, 'perf_tags' => 1000,
+    ])
+        ->and($at['perf_regions'])->toBeLessThan($at['perf_teams'])
+        ->and($at['perf_teams'])->toBeLessThan($at['perf_notes'])
+        ->and($at['perf_owners'])->toBeLessThan($at['perf_items'])
+        ->and($at['perf_items'])->toBeLessThan($at['perf_notes']);
+    // Every pair names a real row of the table its alias names, and both aliases are used.
+    $pairs = perfScratch("select n.author_type as type, count(*) as n, sum(case when o.id is null and i.id is null then 1 else 0 end) as orphans
+        from perf_notes n
+        left join perf_owners o on n.author_type = 'owner' and o.id = n.author_id
+        left join perf_items i on n.author_type = 'item' and i.id = n.author_id
+        group by n.author_type order by n.author_type");
+    expect(array_column($pairs, 'type'))->toBe(['item', 'owner'])
+        ->and(array_sum(array_column($pairs, 'orphans')))->toEqual(0);
+    // Skewed: the busiest team holds far more notes than an even share (1000 / 100 = 10).
+    expect((int) perfScratch('select max(c) as m from (select count(*) as c from perf_notes group by team_id) x')[0]['m'])->toBeGreaterThan(50);
+});
+
+test('volume_honors_check_constraints', function () {
+    Relation::morphMap(['owner' => PerfOwner::class, 'item' => Item::class]);
+
+    [$code, $output] = perfRun(['--module' => 'PerfGraph', '--keep' => true]);
+    expect($code)->toBe(0, $output);
+
+    // The format CHECK on a unique code, and exactly one owner per tag: every row written honors both.
+    $tags = perfScratch('select code, item_id, owner_id from perf_tags');
+    $codes = array_column($tags, 'code');
+    expect($tags)->toHaveCount(1000)
+        ->and(array_filter($codes, static fn (string $c): bool => preg_match('/^[A-Z]{3}-[0-9]{2}$/', $c) !== 1))->toBe([])
+        ->and(array_unique($codes))->toHaveCount(1000)
+        ->and(array_filter($tags, static fn (array $t): bool => ($t['item_id'] === null) === ($t['owner_id'] === null)))->toBe([])
+        ->and(array_filter($tags, static fn (array $t): bool => $t['item_id'] !== null))->not->toBe([])
+        ->and(array_filter($tags, static fn (array $t): bool => $t['owner_id'] !== null))->not->toBe([])
+        ->and(implode("\n", json_decode($output, true)['notes']))->not->toContain('perf_tags');
 });
