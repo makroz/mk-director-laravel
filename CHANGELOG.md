@@ -40,6 +40,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `mk-studio:perf` borra al final también `<db>_mk_studio_perf_tests` (salvo `--keep`): la de los tests, quede o no
   una captura.
 
+**Fixed** (ruido medido en RETO School: 141 consultas de código)
+- Los marcos de **preparación de los tests** no son código del módulo: migraciones, factories y seeders
+  (`Database/Migrations|Factories|Seeders/` de cualquier módulo y `database/` en la raíz) se saltean al buscar el marco.
+  Una consulta que sólo corrieron ellos no se escribe; la de un servicio que una migración llama, sí, en la línea del
+  servicio.
+- Las consultas al **catálogo del motor** no se capturan (`QueryRecorder::isCatalog()`: `information_schema`,
+  `performance_schema`, `mysql.`, `SHOW`, `pg_catalog` y tablas `pg_*`; `Schema::getColumns()` desde un modelo era una).
+- 🔴 `QueryRecorder::isSelect()` ya no toma por lectura un `with … update` (un CTE que modifica datos): una lectura no
+  tiene `insert`/`update`/`delete`/`merge` en ninguna parte (fuera de literales y nombres entre comillas); `for update` y
+  `for share` siguen siendo lecturas. Lo usan también los lectores de planes, que ejecutan lo que analizan.
+  Test: `capture_skips_setup_frames_catalog_queries_and_writes`.
+
 ## [UNRELEASED] — `mk-studio:perf`: cada pantalla y cada plan
 
 **Added**

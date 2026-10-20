@@ -19,12 +19,15 @@ use RuntimeException;
  *
  *  - `file`/`line`: the innermost stack frame in the measured module (`<modules>/<Module>/…`), the line that called
  *    the query; with none, the innermost frame of the app's own code (`app/` or another module) and `outside: true`.
- *    A query no app code ran (the test itself, a migration, the framework) is not written: it is not the module's;
+ *    A query no app code ran (the test itself, the framework) is not written: it is not the module's. Neither is a
+ *    frame of test setup: migrations, factories and seeders (`Database/Migrations|Factories|Seeders/` of any module,
+ *    `database/` at the root), which `RefreshDatabase` and the tests run before the code under test;
  *  - `group`: one per app instance (a test) and per HTTP request handled, so a shape repeated from one line inside one
  *    group is a query per row;
  *  - `database`: where it ran. The runner refuses a capture with any database but its `*_mk_studio_perf_tests`.
  *
- * Only SELECTs are written (the replay runs only those) and only their bindings: the tests' own data.
+ * Only reads are written ({@see QueryRecorder::isSelect()}: a `with … update` is a write), never a lookup of the
+ * engine's catalog ({@see QueryRecorder::isCatalog()}), and only their bindings: the tests' own data.
  *
  * Registered by `MkServiceProvider` only when `MK_PERF_CAPTURE` names the file (set by MK Studio's runner, never in
  * `.env`), and it refuses to start unless the default connection is a `*_mk_studio_perf_tests` database: the
@@ -37,6 +40,9 @@ final class CaptureListener
 
     /** The module measured (its folder: School). */
     public const MODULE_ENV = 'MK_PERF_MODULE';
+
+    /** Test setup: frames here are skipped, as if they were the framework's. */
+    private const SETUP = '#/database/(migrations|factories|seeders)/#i';
 
     public static function register(string $file, string $module): void
     {
@@ -55,12 +61,15 @@ final class CaptureListener
         });
 
         DB::listen(static function (QueryExecuted $q) use ($file, $own, $modules, $app, $base, $state): void {
-            if (! QueryRecorder::isSelect($q->sql)) {
+            if (! QueryRecorder::isSelect($q->sql) || QueryRecorder::isCatalog($q->sql)) {
                 return;
             }
             $module = $outside = null;
             foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as $f) {
                 $path = $f['file'] ?? '';
+                if (preg_match(self::SETUP, $path) === 1) {
+                    continue;
+                }
                 if (str_starts_with($path, $own)) {
                     $module = $f;
                     break;

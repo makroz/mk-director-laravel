@@ -58,8 +58,31 @@ final class QueryRecorder
         return count($log) - count(array_unique(array_column($log, 'sql')));
     }
 
+    /**
+     * A read: it starts with SELECT or WITH and modifies nothing anywhere in it, a data-modifying CTE included
+     * (`with x as (…) update …`, which PostgreSQL runs). A `for update` / `for share` lock is still a read. Literals and
+     * quoted names are left out of the check.
+     */
     public static function isSelect(string $sql): bool
     {
-        return preg_match('/^\s*\(?\s*(select|with)\b/i', $sql) === 1;
+        if (preg_match('/^\s*\(?\s*(select|with)\b/i', $sql) !== 1) {
+            return false;
+        }
+        $bare = (string) preg_replace(
+            ["/'(?:[^']|'')*'/", '/"(?:[^"]|"")*"/', '/`[^`]*`/', '/\bfor\s+(?:no\s+key\s+)?(?:update|share)\b/i'],
+            ' ',
+            $sql,
+        );
+
+        return preg_match('/\b(insert|update|delete|merge)\b/i', $bare) !== 1;
+    }
+
+    /**
+     * A lookup of the engine's catalog, not of the app's data: `information_schema`, `performance_schema`, `mysql.`,
+     * `SHOW …`, PostgreSQL's `pg_catalog` and `pg_*` tables (Laravel's `Schema::getColumns()` reads `pg_attribute`).
+     */
+    public static function isCatalog(string $sql): bool
+    {
+        return preg_match('/^\s*show\b|\b(?:information_schema|performance_schema|pg_catalog|mysql)\s*\.|\b(?:from|join)\s+"?pg_\w+/i', $sql) === 1;
     }
 }

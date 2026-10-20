@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Modules\PerfGraph\Services\OwnerCount;
 use App\Modules\PerfScreens\Http\Controllers\ProductController;
+use App\Modules\PerfShop\Database\Factories\ItemFactory;
 use App\Modules\PerfShop\Http\Controllers\ItemController;
 use App\Modules\PerfShop\Models\Item;
 use App\Modules\PerfShop\Services\ItemReport;
@@ -26,6 +27,7 @@ use Mk\Director\Perf\CaptureListener;
 use Mk\Director\Perf\Plans\MariaDbPlanReader;
 use Mk\Director\Perf\Plans\PlanReader;
 use Mk\Director\Perf\Plans\PostgresPlanReader;
+use Mk\Director\Perf\QueryRecorder;
 use Mk\Director\Perf\ScratchDatabase;
 use Mk\Director\Tests\Concerns\BootsHttpApp;
 use Mk\Director\Tests\MkLaravelTestCase;
@@ -432,9 +434,9 @@ function perfLine(string $file, string $marker): int
 /**
  * What MK Studio's runner does before `--capture`, in process: `--prepare-tests`, the "tests" on that database with the
  * capture on (the module's code, another module's code, a write and a query of the test itself), and the app pointed
- * back at its own database. Returns the capture file.
+ * back at its own database. Returns the capture file. `$tests` replaces those "tests".
  */
-function perfCapture(): string
+function perfCapture(?callable $tests = null): string
 {
     [$code, $output] = perfRun(['--prepare-tests' => true]);
     expect($code)->toBe(0, $output)
@@ -450,13 +452,15 @@ function perfCapture(): string
     $file = tempnam(sys_get_temp_dir(), 'mk-capture-');
     unlink($file);
     CaptureListener::register($file, 'PerfShop');
-    $report = new ItemReport;
-    $report->byStatus(1);
-    $report->ownerNames();
-    $report->rename(1, 'renamed');
-    $report->total();
-    (new OwnerCount)->total();
-    DB::table('perf_items')->where('name', 'item 2')->first();
+    ($tests ?? static function (): void {
+        $report = new ItemReport;
+        $report->byStatus(1);
+        $report->ownerNames();
+        $report->rename(1, 'renamed');
+        $report->total();
+        (new OwnerCount)->total();
+        DB::table('perf_items')->where('name', 'item 2')->first();
+    })();
 
     Event::forget(QueryExecuted::class);
     config(['database.connections.app.database' => PERF_APP_DB]);
@@ -493,6 +497,31 @@ test('capture_records_the_module_frame_and_marks_outside_code', function () {
         ->and(implode("\n", array_column($lines, 'sql')))->not->toContain('update');
     // One group: one test, no request in between.
     expect(array_unique(array_column($lines, 'group')))->toHaveCount(1);
+});
+
+test('capture_skips_setup_frames_catalog_queries_and_writes', function () {
+    $cte = 'with x as (select id from perf_items) update perf_items set status = 2 where id in (select id from x)';
+    $lines = perfCaptured(perfCapture(static function () use ($cte): void {
+        $migration = require __DIR__.'/../../Fixtures/Perf/Modules/PerfShop/Database/Migrations/2026_10_20_000001_backfill_items.php';
+        $migration->up();
+        $migration->viaService();
+        (new ItemFactory)->definition();
+        (new ItemReport)->columns();
+        (new ItemReport)->announce($cte);
+        (new ItemReport)->announce('select id from perf_items where id = 1 for update');
+    }));
+
+    // The migration's and the factory's own reads are setup; the service a migration calls is the module's code. The
+    // catalog lookup and the data-modifying CTE are not written; a locking read is.
+    expect(array_map(static fn (array $l): string => basename($l['file']).':'.$l['line'], $lines))->toBe([
+        'ItemReport.php:'.perfLine('PerfShop/Services/ItemReport.php', 'byStatus'),
+        'ItemReport.php:'.perfLine('PerfShop/Services/ItemReport.php', 'announce'),
+    ])
+        ->and($lines[1]['sql'])->toEndWith('for update')
+        ->and(QueryRecorder::isSelect($cte))->toBeFalse()
+        ->and(QueryRecorder::isSelect('select "update", \'delete\' from perf_items'))->toBeTrue()
+        ->and(QueryRecorder::isCatalog('select * from information_schema.columns where table_name = ?'))->toBeTrue()
+        ->and(QueryRecorder::isCatalog('select * from perf_items'))->toBeFalse();
 });
 
 test('capture_is_off_without_the_env_var', function () {

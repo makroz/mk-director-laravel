@@ -157,7 +157,7 @@ final class PerfCommand extends Command
         $foreign = 0;
         foreach (file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $json) {
             $c = json_decode($json, true);
-            if (! is_array($c) || ! is_string($c['sql'] ?? null) || ! QueryRecorder::isSelect($c['sql'])) {
+            if (! is_array($c) || ! is_string($c['sql'] ?? null) || ! QueryRecorder::isSelect($c['sql']) || QueryRecorder::isCatalog($c['sql'])) {
                 continue;
             }
             if (! preg_match(ScratchDatabase::TESTS_NAME, (string) ($c['database'] ?? ''))) {

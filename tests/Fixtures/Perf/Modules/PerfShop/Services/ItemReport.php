@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Modules\PerfShop\Services;
 
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 /** Hand-written code of the measured module: what the capture must point at, file and line. */
 class ItemReport
@@ -35,5 +37,17 @@ class ItemReport
     public function total(): int
     {
         return DB::table('perf_items')->count(); // capture: total
+    }
+
+    /** A lookup of the engine's catalog (`pg_attribute`, `information_schema.columns`): not the app's data. */
+    public function columns(): array
+    {
+        return Schema::getColumns('perf_items');
+    }
+
+    /** What the connection reports after running `$sql`: a statement not every engine runs (MariaDB has no `with … update`). */
+    public function announce(string $sql): void
+    {
+        event(new QueryExecuted($sql, [], 0.1, DB::connection())); // capture: announce
     }
 }
