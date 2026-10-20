@@ -7,6 +7,7 @@ namespace Mk\Director\Help\Http\Controllers;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Mk\Director\Auth\Models\Ability;
 use Mk\Director\Help\MkHelpCatalog;
 use Mk\Director\Help\Models\MkHelpArticle;
 
@@ -31,6 +32,9 @@ final class MkHelpController
      * `GET {prefix}/help/articles/{slug}` (el slug lleva `/`) → el artículo, o 404.
      * `related` sale como `[{slug, title}]` en el orden del árbol, sólo los
      * que el scope ve; `images` son las únicas que el front pinta.
+     * `abilityLabel` es la `description` de esa ability en la tabla de
+     * abilities, para que la nota diga qué permiso es con palabras; null si
+     * la ability no existe o no tiene descripción (el front muestra la clave).
      */
     public function show(Request $request, string $slug): JsonResponse
     {
@@ -73,6 +77,9 @@ final class MkHelpController
             'title' => $article->title,
             'audience' => $article->audience,
             'ability' => $article->ability,
+            'abilityLabel' => $article->ability === null
+                ? null
+                : (Ability::query()->where('name', $article->ability)->value('description') ?: null),
             'body' => $article->body,
             'images' => $article->images ?? [],
             'related' => $this->catalog->related($article, $audiences),

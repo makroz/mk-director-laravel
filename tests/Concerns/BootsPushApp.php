@@ -70,9 +70,13 @@ trait BootsPushApp
         // `MkAuthenticate` carga roles y abilities después de autenticar: sin
         // estas tablas el request muere en 500 y el test no mide nada.
         foreach (['roles', 'abilities'] as $name) {
-            Schema::create($name, function ($t) {
+            Schema::create($name, function ($t) use ($name) {
                 $t->uuid('id')->primary();
                 $t->string('name');
+                // La nota de permiso de los manuales la lee (`abilityLabel`).
+                if ($name === 'abilities') {
+                    $t->string('description')->nullable();
+                }
                 $t->timestamps();
             });
         }

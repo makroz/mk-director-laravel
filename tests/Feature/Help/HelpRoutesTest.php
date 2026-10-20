@@ -3,6 +3,8 @@
 declare(strict_types=1);
 
 use Illuminate\Routing\Route;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Mk\Director\Help\MkHelpSync;
 use Mk\Director\Tests\Concerns\BootsPushApp;
 use Mk\Director\Tests\MkLaravelTestCase;
@@ -141,7 +143,25 @@ test('an article with an ability is visible to a user without it and carries the
     [$status, $body] = helpGet($this, '/api/admin/help/articles/admin/primeros-pasos/aprobar', $auth);
 
     expect($status)->toBe(200)
-        ->and($body['data']['ability'])->toBe('admin.kyc.approve');
+        ->and($body['data']['ability'])->toBe('admin.kyc.approve')
+        // Not in the abilities table: the front falls back to the key.
+        ->and($body['data']['abilityLabel'])->toBeNull();
+});
+
+test('the ability note carries the ability description from the abilities table', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE);
+    DB::table('abilities')->insert([
+        'id' => (string) Str::uuid(),
+        'name' => 'admin.kyc.approve',
+        'description' => 'Aprobar la verificación de identidad de un miembro.',
+    ]);
+
+    [, $body] = helpGet($this, '/api/admin/help/articles/admin/primeros-pasos/aprobar', $auth);
+    [, $plain] = helpGet($this, '/api/admin/help/articles/admin/primeros-pasos/entrar', $auth);
+
+    expect($body['data']['abilityLabel'])->toBe('Aprobar la verificación de identidad de un miembro.')
+        ->and($plain['data']['ability'])->toBeNull()
+        ->and($plain['data']['abilityLabel'])->toBeNull();
 });
 
 test('show returns the related articles the scope sees, with their titles, in tree order', function () {
