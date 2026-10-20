@@ -20,8 +20,9 @@ use Throwable;
  *
  * 🔴 TODO O NADA: si un solo archivo falla, no se escribe nada. Un manual a
  * medio indexar se ve completo y miente. Falla con un archivo inválido, un
- * `related` que no existe, una pantalla que no está en `screens.yaml` o una
- * imagen que no se pudo subir. Con todo válido, una transacción crea o
+ * `related` o un enlace a un artículo que no existe
+ * ({@see MkHelpParser::articleLinks()}), una pantalla que no está en
+ * `screens.yaml` o una imagen que no se pudo subir. Con todo válido, una transacción crea o
  * actualiza por `slug` lo que cambió y borra los slugs que ya no están en disco.
  *
  * Las imágenes se suben ANTES de la transacción y por contenido
@@ -77,6 +78,12 @@ final class MkHelpSync
             foreach ($doc->related as $related) {
                 if (! isset($docs[$related])) {
                     $errors[] = "`{$doc->slug}`: el relacionado `{$related}` no existe";
+                }
+            }
+
+            foreach (MkHelpParser::articleLinks($doc->body) as $href => $link) {
+                if (! isset($docs[$link])) {
+                    $errors[] = "`{$doc->slug}`: el enlace `{$href}` no lleva a ningún artículo (se escribe con el slug, p. ej. `admin/retiros/pagar`)";
                 }
             }
         }

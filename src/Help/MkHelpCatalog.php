@@ -65,6 +65,30 @@ final class MkHelpCatalog
     }
 
     /**
+     * El artículo que explica la pantalla `$screen` (una clave de
+     * `screens.yaml`), o null si ninguno de estas audiencias la lista. Si la
+     * listan varios, el primero en el orden del árbol: siempre el mismo.
+     *
+     * @param  list<string>  $audiences
+     */
+    public function forScreen(string $screen, array $audiences): ?MkHelpArticle
+    {
+        $slugs = MkHelpArticle::query()
+            ->whereIn('audience', $audiences)
+            ->whereJsonContains('screens', $screen)
+            ->pluck('slug')
+            ->all();
+
+        if ($slugs === []) {
+            return null;
+        }
+
+        $first = count($slugs) === 1 ? $slugs[0] : $this->inTreeOrder($slugs, $audiences)[0]['slug'];
+
+        return $this->article($first, $audiences);
+    }
+
+    /**
      * Los `related` del artículo que el scope ve, con su título y en el orden
      * del árbol (no en el del front matter). Uno de otra audiencia no sale.
      *
@@ -73,12 +97,22 @@ final class MkHelpCatalog
      */
     public function related(MkHelpArticle $article, array $audiences): array
     {
-        $wanted = array_flip($article->related ?? []);
+        $related = $article->related ?? [];
 
-        if ($wanted === []) {
-            return [];
-        }
+        return $related === [] ? [] : $this->inTreeOrder($related, $audiences);
+    }
 
+    /**
+     * Los `$slugs` que el scope ve, con su título, en el orden del árbol
+     * (primero el padre, después sus hijos por `order`).
+     *
+     * @param  list<string>  $slugs
+     * @param  list<string>  $audiences
+     * @return list<array{slug: string, title: string}>
+     */
+    private function inTreeOrder(array $slugs, array $audiences): array
+    {
+        $wanted = array_flip($slugs);
         $out = [];
         $walk = function (array $nodes) use (&$walk, &$out, $wanted): void {
             foreach ($nodes as $node) {

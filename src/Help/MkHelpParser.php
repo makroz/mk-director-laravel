@@ -27,6 +27,12 @@ use Symfony\Component\Yaml\Yaml;
  * Markdown: `admin/kyc/aprobar.md` → `admin/kyc/img/kyc-menu.webp`. Sólo
  * png/jpg/jpeg/webp, dentro de la carpeta de los manuales. Una URL externa, un
  * archivo que falta o que no es una imagen hacen fallar la sync.
+ *
+ * Un enlace a otro artículo se escribe con su SLUG, igual que en `related`:
+ * `[Pagar un retiro](admin/retiros/pagar)`, con `#ancla` opcional. Todo enlace
+ * sin esquema (`https:`, `mailto:`, `tel:`) se lee así, y uno que no lleva a un
+ * artículo hace fallar la sync: `../pagar`, `/manual/x` o un slug mal escrito.
+ * El front lo convierte en la URL de su manual (`manualHref(slug)`).
  */
 final class MkHelpParser
 {
@@ -39,6 +45,33 @@ final class MkHelpParser
      * imágenes por referencia (`![alt][ref]`) no se reconocen.
      */
     public const IMAGE_PATTERN = '/!\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/';
+
+    /**
+     * `[texto](href)` sin el `!` de una imagen; el grupo 1 es el href. Los
+     * enlaces por referencia (`[texto][ref]`) no se reconocen.
+     */
+    private const LINK_PATTERN = '/(?<!!)\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/';
+
+    /**
+     * Los enlaces del cuerpo a otro artículo: cada href sin esquema, tal como
+     * está escrito → su slug (sin `#ancla` ni `?consulta`). Que existan lo
+     * decide la sync.
+     *
+     * @return array<string, string>
+     */
+    public static function articleLinks(string $body): array
+    {
+        preg_match_all(self::LINK_PATTERN, $body, $matches);
+
+        $slugs = [];
+        foreach ($matches[1] as $href) {
+            if (preg_match('/^[a-z][a-z0-9+.-]*:/i', $href) !== 1) {
+                $slugs[$href] = (string) preg_replace('/[#?].*$/s', '', $href);
+            }
+        }
+
+        return $slugs;
+    }
 
     /** @throws MkHelpContentException */
     public function parse(string $root, string $file): MkHelpDocument

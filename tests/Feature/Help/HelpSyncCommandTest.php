@@ -313,6 +313,25 @@ test('an unknown related fails and writes nothing', function () {
         ->and(MkHelpArticle::query()->count())->toBe(0);
 });
 
+test('a body link must name an existing article by its slug', function () {
+    // Un slug con ancla y una URL externa valen; el enlace relativo no.
+    helpAppend($this->helpRoot, 'admin/primeros-pasos/entrar.md', '[Glosario](business/glosario#token) y [la web](https://example.com/x).');
+
+    [$ok] = runHelpSync();
+
+    helpAppend($this->helpRoot, 'admin/primeros-pasos/aprobar.md', '[Entrar](../entrar) o [esto](/manual/admin).');
+    $before = helpHashes();
+
+    [$code, $out] = runHelpSync();
+
+    expect($ok)->toBe(0)
+        ->and($code)->toBe(1)
+        ->and($out)->toContain('`admin/primeros-pasos/aprobar`: el enlace `../entrar` no lleva a ningún artículo')
+        ->and($out)->toContain('el enlace `/manual/admin`')
+        ->and($out)->not->toContain('business/glosario#token')
+        ->and(helpHashes())->toBe($before);
+});
+
 test('an unknown screen fails and writes nothing', function () {
     runHelpSync();
     $before = helpHashes();

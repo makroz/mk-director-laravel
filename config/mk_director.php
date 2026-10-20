@@ -273,12 +273,17 @@ return [
     | pantalla que no está ahí (o sin ese archivo) hace fallar la sync; las que
     | ningún artículo lista salen en el reporte.
     |
+    | Un enlace a otro artículo se escribe con su slug, como en `related`:
+    | `[Pagar un retiro](admin/retiros/pagar)`. Todo enlace sin esquema se lee
+    | así, y uno que no lleva a un artículo hace fallar la sync.
+    |
     | `routes`: OPT-IN. Un grupo por scope, cada uno con su prefijo, su
     | middleware y las audiencias que ve, e.g.
     |   'admin' => ['prefix' => 'api/admin', 'middleware' => ['api', 'mk.auth:admin'],
     |               'audiences' => ['admin', 'business'], 'share' => true]
-    | monta `GET api/admin/help/tree` y `GET api/admin/help/articles/{slug}`
-    | (nombres `mk.help.admin.*`).
+    | monta `GET api/admin/help/tree`, `help/articles/{slug}`, `help/search?q=`
+    | y `help/screens/{screen}` (el artículo de una pantalla, o 404), con
+    | nombres `mk.help.admin.*`.
     */
     'help' => [
         'content_path' => resource_path('help'),

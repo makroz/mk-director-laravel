@@ -2,3 +2,4 @@
 admin.login: Entrada al panel
 admin.kyc.index: Lista de verificaciones de identidad
 admin.kyc.show: Detalle de una verificación
+member.wallet.withdraw: Pedir un retiro desde la billetera

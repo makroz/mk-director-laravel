@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Mk\Director\Help\MkHelpCatalog;
+use Mk\Director\Help\Models\MkHelpArticle;
 
 /**
  * Los manuales del usuario autenticado. Rutas opt-in:
@@ -40,7 +41,34 @@ final class MkHelpController
             return new JsonResponse(['success' => false, 'message' => 'No existe ese artículo del manual', 'data' => null], 404);
         }
 
-        return $this->ok([
+        return $this->ok($this->payload($article, $audiences), $article->title);
+    }
+
+    /**
+     * `GET {prefix}/help/screens/{screen}` → el artículo de esa pantalla (una
+     * clave de `screens.yaml`, p. ej. `admin.kyc.index`), con la misma forma
+     * que `show`, o 404 si ningún artículo del scope la lista. Es lo que pide el
+     * "?" de cada pantalla: un 404 es «esta pantalla no tiene ayuda».
+     */
+    public function screen(Request $request, string $screen): JsonResponse
+    {
+        $audiences = $this->audiences($request);
+        $article = $this->catalog->forScreen($screen, $audiences);
+
+        if ($article === null) {
+            return new JsonResponse(['success' => false, 'message' => 'Esta pantalla no tiene un artículo del manual', 'data' => null], 404);
+        }
+
+        return $this->ok($this->payload($article, $audiences), $article->title);
+    }
+
+    /**
+     * @param  list<string>  $audiences
+     * @return array<string, mixed>
+     */
+    private function payload(MkHelpArticle $article, array $audiences): array
+    {
+        return [
             'slug' => $article->slug,
             'title' => $article->title,
             'audience' => $article->audience,
@@ -49,7 +77,7 @@ final class MkHelpController
             'images' => $article->images ?? [],
             'related' => $this->catalog->related($article, $audiences),
             'updatedAt' => $article->updated_at?->toIso8601ZuluString(),
-        ], $article->title);
+        ];
     }
 
     /**

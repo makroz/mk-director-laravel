@@ -17,10 +17,10 @@ uses(MkLaravelTestCase::class, BootsPushApp::class);
 afterEach(fn () => $this->tearDownHttpApp());
 
 /** @param  array<string, array<string, mixed>>  $scopes */
-function bootHelpApp(object $test, array $scopes): string
+function bootHelpApp(object $test, array $scopes, ?string $contentPath = null): string
 {
     $test->bootPushApp([], ['help' => [
-        'content_path' => __DIR__.'/../../Fixtures/help',
+        'content_path' => $contentPath ?? __DIR__.'/../../Fixtures/help',
         'articles_table' => 'mk_help_articles',
         'routes' => ['register' => true, 'scopes' => $scopes],
     ]]);
@@ -70,7 +70,8 @@ test('routes mount per scope with its middleware', function () {
 
     $routes = helpRoutes($this->httpApp);
 
-    expect(array_keys($routes))->toEqualCanonicalizing(['mk.help.admin.tree', 'mk.help.admin.show', 'mk.help.admin.search'])
+    expect(array_keys($routes))->toEqualCanonicalizing(['mk.help.admin.tree', 'mk.help.admin.show', 'mk.help.admin.search', 'mk.help.admin.screen'])
+        ->and($routes['mk.help.admin.screen']->uri())->toBe('api/admin/help/screens/{screen}')
         ->and($routes['mk.help.admin.search']->uri())->toBe('api/admin/help/search')
         ->and($routes['mk.help.admin.tree']->uri())->toBe('api/admin/help/tree')
         ->and($routes['mk.help.admin.show']->uri())->toBe('api/admin/help/articles/{slug}')
@@ -226,4 +227,67 @@ test('the snippet is plain text, escaped, and only the hit is marked', function 
     expect($body['data'][0]['snippet'])->toBe('…del terreno. Cuidado con alert(1) y con a &lt; b &amp; &quot;c&quot;. La <mark>plusvalía</mark> es lo que gana.')
         ->and($titleOnly['data'][0]['snippet'])->toBe($text.'plusvalía es lo que gana.')
         ->and(strip_tags($body['data'][0]['snippet'], '<mark>'))->toBe($body['data'][0]['snippet']);
+});
+
+test('screen returns 404 when no article lists it', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE);
+
+    // En screens.yaml pero sin artículo, y una que ni existe.
+    [$status, $body] = helpGet($this, '/api/admin/help/screens/admin.kyc.show', $auth);
+    [$unknown] = helpGet($this, '/api/admin/help/screens/admin.no-existe', $auth);
+    [$anonymous] = helpGet($this, '/api/admin/help/screens/admin.kyc.index', null);
+
+    expect($status)->toBe(404)
+        ->and($body['success'])->toBeFalse()
+        ->and($body['data'])->toBeNull()
+        ->and($unknown)->toBe(404)
+        ->and($anonymous)->toBe(401);
+});
+
+test('screen returns the article of the scope audiences only, shaped like show', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE + ['staff' => [
+        'prefix' => 'api/staff', 'middleware' => ['api', 'mk.auth:admin'], 'audiences' => ['member'],
+    ]]);
+
+    [$status, $body] = helpGet($this, '/api/admin/help/screens/admin.kyc.index', $auth);
+    [, $show] = helpGet($this, '/api/admin/help/articles/admin/primeros-pasos/aprobar', $auth);
+    // `member/retirar` lista esta pantalla: el scope admin no la ve, el staff sí.
+    [$adminMember] = helpGet($this, '/api/admin/help/screens/member.wallet.withdraw', $auth);
+    [$staffStatus, $staff] = helpGet($this, '/api/staff/help/screens/member.wallet.withdraw', $auth);
+    [$staffAdmin] = helpGet($this, '/api/staff/help/screens/admin.kyc.index', $auth);
+
+    expect($status)->toBe(200)
+        ->and($body['data'])->toBe($show['data'])
+        ->and($body['data']['slug'])->toBe('admin/primeros-pasos/aprobar')
+        ->and($adminMember)->toBe(404)
+        ->and($staffStatus)->toBe(200)
+        ->and($staff['data']['slug'])->toBe('member/retirar')
+        ->and($staffAdmin)->toBe(404);
+});
+
+test('screen picks the first article in tree order when several list it', function () {
+    // Una copia de los fixtures con dos artículos más en la misma pantalla que
+    // `aprobar` (order 5): un hermano con order 1 y uno de primer nivel con
+    // order 50 (después de `primeros-pasos`, order 10). Por el árbol sale
+    // `zz-revisar`; por slug, por orden de alta y por el índice
+    // (audience, parent_slug, order) saldría `aa-otra`.
+    $root = sys_get_temp_dir().'/mk-help-routes-'.bin2hex(random_bytes(4));
+    $source = __DIR__.'/../../Fixtures/help';
+    foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($source, FilesystemIterator::SKIP_DOTS)) as $file) {
+        $target = $root.substr($file->getPathname(), strlen($source));
+        is_dir(dirname($target)) || mkdir(dirname($target), 0777, true);
+        copy($file->getPathname(), $target);
+    }
+    $article = fn (string $title, int $order) => "---\ntitle: {$title}\naudience: admin\norder: {$order}\nscreens: [admin.kyc.index]\n---\nTexto.\n";
+    file_put_contents($root.'/admin/primeros-pasos/zz-revisar.md', $article('Revisar la bandeja', 1));
+    file_put_contents($root.'/admin/aa-otra.md', $article('Otra sección', 50));
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE, $root);
+
+    $slugs = [];
+    foreach (range(1, 3) as $_) {
+        [, $body] = helpGet($this, '/api/admin/help/screens/admin.kyc.index', $auth);
+        $slugs[] = $body['data']['slug'];
+    }
+
+    expect($slugs)->toBe(array_fill(0, 3, 'admin/primeros-pasos/zz-revisar'));
 });
