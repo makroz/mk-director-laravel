@@ -171,6 +171,14 @@ test('a deleted file deletes its article', function () {
         ->and(helpHashes())->toHaveCount(7);
 });
 
+test('the README at the root is not an article', function () {
+    file_put_contents($this->helpRoot.'/README.md', "# Cómo escribir los manuales\n");
+
+    [$code] = runHelpSync();
+
+    expect($code)->toBe(0)->and(helpHashes())->toHaveCount(8);
+});
+
 test('an invalid file fails and writes nothing', function () {
     runHelpSync();
     $before = helpHashes();

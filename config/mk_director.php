@@ -281,9 +281,13 @@ return [
     | middleware y las audiencias que ve, e.g.
     |   'admin' => ['prefix' => 'api/admin', 'middleware' => ['api', 'mk.auth:admin'],
     |               'audiences' => ['admin', 'business'], 'share' => true]
-    | monta `GET api/admin/help/tree`, `help/articles/{slug}`, `help/search?q=`
-    | y `help/screens/{screen}` (el artículo de una pantalla, o 404), con
-    | nombres `mk.help.admin.*`.
+    | monta `GET api/admin/help/tree`, `help/articles/{slug}`, `help/search?q=`,
+    | `help/screens/{screen}` (el artículo de una pantalla, o 404) y
+    | `help/manual/{audience}` (el manual entero, para imprimir), con nombres
+    | `mk.help.admin.*`.
+    |
+    | El `README.md` de la raíz de `content_path` no se indexa: es para quien
+    | escribe los manuales.
     |
     | Enlaces públicos (`share`): un scope con `share: true` suma
     | `GET/POST help/share-links` y `DELETE help/share-links/{id}`, sólo para

@@ -302,15 +302,21 @@ final class MkHelpSync
         return $screens;
     }
 
-    /** @return list<string> los `.md` de la carpeta, en orden estable */
+    /**
+     * Los `.md` de la carpeta, en orden estable. El `README.md` de la RAÍZ no es
+     * un artículo: son las instrucciones para quien escribe los manuales.
+     *
+     * @return list<string>
+     */
     private function files(string $root): array
     {
         $files = [];
+        $readme = rtrim(str_replace('\\', '/', $root), '/').'/README.md';
         $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
 
         /** @var SplFileInfo $file */
         foreach ($iterator as $file) {
-            if ($file->isFile() && $file->getExtension() === 'md') {
+            if ($file->isFile() && $file->getExtension() === 'md' && str_replace('\\', '/', $file->getPathname()) !== $readme) {
                 $files[] = $file->getPathname();
             }
         }
