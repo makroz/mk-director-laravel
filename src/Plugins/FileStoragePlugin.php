@@ -32,7 +32,7 @@ use Mk\Director\Storage\MkStorage;
  *               // NEW (asociativo): mapeo rename
  *               'avatar' => 'avatar_path',  // request 'avatar' → column 'avatar_path'
  *           ],
- *           'disk' => 'public',
+ *           // 'disk' => 'r2_avatars',  // opcional: sin él, el disk del rol público
  *           'path' => 'uploads/files',
  *           'auto_url' => true,
  *       ],

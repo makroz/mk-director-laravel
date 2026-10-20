@@ -7,7 +7,6 @@ namespace App\Modules\{{ModuleName}}\Repositories;
 use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
 use App\Modules\{{ModuleName}}\Repositories\Contracts\{{ModuleName}}RepositoryInterface;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Storage;
 use Mk\Director\Auth\Models\Ability;
 use Mk\Director\Auth\Models\Role;
 

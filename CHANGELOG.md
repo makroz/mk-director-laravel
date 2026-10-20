@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Storage: el scaffolder deja el disk al rol público
+
+**Changed**
+- **`mk:make:auth-user` ya no pina `'disk' => 'public'`** en la config del `FileStoragePlugin` (ni en el controller del
+  CRUD ni en `updateProfile()`): el plugin toma `MkStorage::diskName('public')`, el disk que la app mapea al rol
+  público (`mk_director.storage.public_disk`).
+- El accessor `*_url` generado arma el link con `MkStorage::url()` sobre el disk del rol público, en vez de
+  `Storage::url()` (el disk DEFAULT de Laravel). Una URL absoluta guardada se devuelve tal cual.
+- El `delete()` del Repository generado borra con `MkStorage::disk('public')`, y `checkStorageLink()` mira el disk del
+  rol público. Los dos leían `mk_director.storage.disk`, una clave que nunca existió.
+
+⚠️ Un scope ya generado conserva su `'disk' => 'public'` hasta que se regenera o se borra a mano: el plugin respeta un
+`disk` explícito.
+
 ## [UNRELEASED] — Storage: el servidor no le cree al cliente
 
 **Added**

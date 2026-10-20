@@ -13,6 +13,7 @@ use Mk\Director\Auth\Enums\ScopeStatus;
 use Mk\Director\Auth\Enums\TwoFactorPolicy;
 use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Auth\Services\AuthScopeResolver;
+use Mk\Director\Storage\MkStorage;
 
 /**
  * `php artisan mk:make:auth-user {Scope}` — scaffolder de un scope de
@@ -1557,7 +1558,7 @@ PHP;
      */
     protected function checkStorageLink(): void
     {
-        $disk = config('mk_director.storage.disk', 'public');
+        $disk = app(MkStorage::class)->diskName('public');
 
         if ($disk !== 'public') {
             return; // El consumer configuró otro disk — no asummos storage:link.
@@ -1569,7 +1570,7 @@ PHP;
 
         $this->newLine();
         $this->warn('⚠️  BUG-10: storage:link no ejecutado. Si usás photo_path en --profile-fields,');
-        $this->line('   ejecutá `php artisan storage:link` o configurá `mk_director.storage.disk` con otro disk.');
+        $this->line('   ejecutá `php artisan storage:link` o configurá `mk_director.storage.public_disk` con otro disk.');
     }
 
     /**
@@ -2538,7 +2539,6 @@ PHP;
 [
             'file_storage' => [
                 'fields' => {$fieldsPhp},
-                'disk' => 'public',
                 {$pathLiteral}
                 'auto_url' => true,
             ],
@@ -2632,16 +2632,20 @@ PHP;
      * Formato: un método accessor por file field, separado por línea en blanco:
      *
      *     /**
-     *      * FEEDBACK10: accessor `avatar_url` que el {Scope}Resource expone.
-     *      * Resuelve la URL pública de `avatar` vía el disk configurado.
-     *      * Requiere `storage:link` si usás el disk `public`.
+     *      * URL pública de `avatar`: el link en el disk del rol público
+     *      * (`MkStorage`), o null si no hay archivo. Un valor que ya es una URL
+     *      * absoluta se devuelve tal cual.
      *      *\/
      *     public function getAvatarUrlAttribute(): ?string
      *     {
-     *         return $this->avatar
-     *             ? \Illuminate\Support\Facades\Storage::url($this->avatar)
-     *             : null;
+     *         $storage = app(\Mk\Director\Storage\MkStorage::class);
+     *
+     *         return $storage->url($storage->diskName('public'), $this->avatar);
      *     }
+     *
+     * Nunca `Storage::url()`: arma el link del disk DEFAULT de Laravel, que no es
+     * el que eligió la app para el rol público, y sobre un bucket privado da un
+     * link que no abre.
      *
      * El método se pine después de los accessors hardcoded del stub (`getPhotoUrlAttribute`
      * ya fue removido en el refactor). Si no hay file fields, retorna string vacío.
@@ -2663,14 +2667,15 @@ PHP;
 
 
     /**
-     * URL pública de `{$fieldName}` (`Storage::url`), o null si no hay archivo.
-     * Con el disk `public` requiere `php artisan storage:link`.
+     * URL pública de `{$fieldName}`: el link en el disk del rol público
+     * (`MkStorage`), o null si no hay archivo. Un valor que ya es una URL
+     * absoluta se devuelve tal cual.
      */
     public function get{$studly}UrlAttribute(): ?string
     {
-        return \$this->{$fieldName}
-            ? \\Illuminate\\Support\\Facades\\Storage::url(\$this->{$fieldName})
-            : null;
+        \$storage = app(\\Mk\\Director\\Storage\\MkStorage::class);
+
+        return \$storage->url(\$storage->diskName('public'), \$this->{$fieldName});
     }
 PHP;
         }
@@ -2817,7 +2822,7 @@ PHP;
      * Formato (una línea Storage::delete() por file field detectado):
      *
      *             if (! empty(${{moduleNameLower}}->avatar)) {
-     *                 Storage::disk(config('mk_director.storage.disk', 'public'))
+     *                 app(\Mk\Director\Storage\MkStorage::class)->disk('public')
      *                     ->delete(${{moduleNameLower}}->avatar);
      *             }
      *
@@ -2848,7 +2853,7 @@ PHP;
         foreach ($fileFieldNames as $fieldName) {
             $out .= <<<"PHP"
             if (! empty(\${$scopeLower}->{$fieldName})) {
-                Storage::disk(config('mk_director.storage.disk', 'public'))
+                app(\\Mk\\Director\\Storage\\MkStorage::class)->disk('public')
                     ->delete(\${$scopeLower}->{$fieldName});
             }
 
@@ -4885,7 +4890,6 @@ PHP;
             'plugins_config' => [
                 'file_storage' => [
                     'fields' => {$fieldsPhp},
-                    'disk' => 'public',
                     'path' => 'uploads/{$scopeLower}',
                 ],
             ],
