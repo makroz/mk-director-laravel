@@ -21,6 +21,7 @@ use Mk\Director\Help\MkHelpSync;
  * @property string|null $ability INFORMATIVO: nunca esconde el artículo
  * @property string $title
  * @property string $body con las imágenes ya apuntando a su URL pública
+ * @property string|null $body_text el cuerpo en texto plano, para buscar
  * @property list<array{url: string, width: int, height: int}>|null $images
  * @property list<string> $screens
  * @property list<string> $related
@@ -39,6 +40,7 @@ class MkHelpArticle extends EloquentModel
         'ability',
         'title',
         'body',
+        'body_text',
         'images',
         'screens',
         'related',

@@ -31,6 +31,7 @@ beforeEach(function () {
     $this->setUpDatabase();
     $this->runPackageMigration('2026_10_22_000001_create_mk_help_articles_table.php');
     $this->runPackageMigration('2026_10_22_000002_add_images_to_mk_help_articles_table.php');
+    $this->runPackageMigration('2026_10_22_000003_add_body_text_to_mk_help_articles_table.php');
 
     $this->helpRoot = sys_get_temp_dir().'/mk-help-sync-'.bin2hex(random_bytes(4));
     $source = __DIR__.'/../../Fixtures/help';

@@ -109,7 +109,7 @@ final class MkHelpSync
         $prefix = trim((string) config('mk_director.help.image_prefix', 'help'), '/');
         /** @var array<string, array{key: string, file: string, url: string, width: int, height: int}> $files */
         $files = [];
-        /** @var array<string, array{body: string, images: list<array{url: string, width: int, height: int}>, hash: string}> $rendered */
+        /** @var array<string, array{body: string, text: string, images: list<array{url: string, width: int, height: int}>, hash: string}> $rendered */
         $rendered = [];
 
         foreach ($docs as $slug => $doc) {
@@ -154,6 +154,7 @@ final class MkHelpSync
                         'ability' => $doc->ability,
                         'title' => $doc->title,
                         'body' => $r['body'],
+                        'body_text' => $r['text'],
                         'images' => $r['images'],
                         'screens' => $doc->screens,
                         'related' => $doc->related,
@@ -180,12 +181,13 @@ final class MkHelpSync
     }
 
     /**
-     * El cuerpo con cada imagen apuntando a su URL pública, sus medidas, y el
-     * hash de lo que se guarda: cubre el archivo Y las URLs, así que cambiar
-     * una imagen (otro sha1) o el disk público reescribe el artículo.
+     * El cuerpo con cada imagen apuntando a su URL pública, sus medidas, su
+     * texto plano y el hash de lo que se guarda: cubre el archivo, las URLs y
+     * el texto, así que cambiar una imagen (otro sha1), el disk público o
+     * {@see self::plainText()} reescribe el artículo.
      *
      * @param  array<string, array{key: string, file: string, url: string, width: int, height: int}>  $files  cache por archivo
-     * @return array{body: string, images: list<array{url: string, width: int, height: int}>, hash: string}
+     * @return array{body: string, text: string, images: list<array{url: string, width: int, height: int}>, hash: string}
      */
     private function render(MkHelpDocument $doc, string $disk, string $prefix, array &$files): array
     {
@@ -218,7 +220,45 @@ final class MkHelpSync
             $byRef,
         ));
 
-        return ['body' => $body, 'images' => $images, 'hash' => hash('sha256', $doc->hash."\n".$body)];
+        $text = self::plainText($body);
+
+        return ['body' => $body, 'text' => $text, 'images' => $images, 'hash' => hash('sha256', $doc->hash."\n".$body."\n".$text)];
+    }
+
+    /**
+     * Markdown → texto plano en una línea, para el fragmento de la búsqueda y
+     * el `LIKE`: sin marcas, sin HTML y sin URLs (de una imagen queda el alt;
+     * de un enlace, su texto). No es un parser: alcanza para que se lea.
+     *
+     * Saca también los caracteres de control: {@see MkHelpCatalog} usa dos de
+     * ellos para marcar el resultado, así que el texto no puede traerlos.
+     */
+    public static function plainText(string $markdown): string
+    {
+        $text = (string) preg_replace([
+            '/\\\\([\\\\`*_{}\[\]()#+\-.!|>])/',      // escapes: `\*` → `*`
+            '/<!--.*?-->/s',                          // comentarios HTML
+            '/^\s*(```|~~~).*$/m',                   // vallas de código (el código queda)
+            '/^\s{0,3}\[[^\]]+\]:\s+\S+.*$/m',          // definiciones de enlaces
+            '/!\[([^\]]*)\]\([^)]*\)/',                // imagen → su alt
+            '/\[([^\]]*)\](\([^)]*\)|\[[^\]]*\])/',      // enlace → su texto
+            '/<(https?:\/\/[^>\s]+)>/',                // autoenlace → la URL
+            '/<\/?[a-z][^>]*>/i',                     // etiquetas HTML
+            '/^\s{0,3}#{1,6}\s+/m',                   // títulos
+            '/^\s{0,3}>+\s?/m',                       // citas
+            '/^\s*([-*_]\s*){3,}$/m',                  // separadores
+            '/^\s*([-*+]|\d+[.)])\s+/m',              // listas
+            '/\*\*|__|~~|`|\*|(?<!\w)_|_(?!\w)/',       // énfasis y código
+            '/\|/',                                   // tablas
+        ], [
+            '$1', '', '', '', '$1', '$1', '$1', ' ', '', '', '', '', '', ' ',
+        ], $markdown);
+
+        // Los de control, después de las entidades: `&#2;` también es uno.
+        $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $text = (string) preg_replace('/[\x00-\x1F\x7F]/u', ' ', $text);
+
+        return trim((string) preg_replace('/\s+/u', ' ', $text));
     }
 
     /**

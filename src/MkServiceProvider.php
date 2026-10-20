@@ -477,6 +477,7 @@ class MkServiceProvider extends ServiceProvider
                 Route::get('help/articles/{slug}', [MkHelpController::class, 'show'])
                     ->where('slug', '.*')
                     ->name("mk.help.{$scope}.show");
+                Route::get('help/search', [MkHelpController::class, 'search'])->name("mk.help.{$scope}.search");
             });
         }
     }

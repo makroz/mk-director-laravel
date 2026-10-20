@@ -53,6 +53,32 @@ final class MkHelpController
     }
 
     /**
+     * `GET {prefix}/help/search?q=` → `[{slug, title, snippet}]`, por relevancia.
+     * `q` va recortado y con 2 a 100 caracteres; si no, 422. `snippet` es HTML
+     * con todo escapado salvo el `<mark>` del acierto.
+     */
+    public function search(Request $request): JsonResponse
+    {
+        $audiences = $this->audiences($request);
+        $query = $request->query('q');
+        $query = is_string($query) ? trim($query) : '';
+        $length = mb_strlen($query);
+
+        if ($length < 2 || $length > 100) {
+            $message = 'La búsqueda tiene que tener entre 2 y 100 caracteres';
+
+            return new JsonResponse([
+                'success' => false,
+                'message' => $message,
+                'data' => null,
+                '__extraData' => ['code' => 'ERR_VALIDATION', 'errors' => ['q' => [$message]]],
+            ], 422);
+        }
+
+        return $this->ok($this->catalog->search($query, $audiences), 'Búsqueda del manual');
+    }
+
+    /**
      * Las audiencias del scope de la ruta. Falla cerrado: sin usuario es 401
      * (un scope configurado sin `mk.auth`), y un scope sin `audiences` no ve nada.
      *

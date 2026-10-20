@@ -26,6 +26,7 @@ function bootHelpApp(object $test, array $scopes): string
     ]]);
     (require __DIR__.'/../../../src/Database/Migrations/2026_10_22_000001_create_mk_help_articles_table.php')->up();
     (require __DIR__.'/../../../src/Database/Migrations/2026_10_22_000002_add_images_to_mk_help_articles_table.php')->up();
+    (require __DIR__.'/../../../src/Database/Migrations/2026_10_22_000003_add_body_text_to_mk_help_articles_table.php')->up();
     expect(app(MkHelpSync::class)->run()->failed())->toBeFalse();
 
     return 'Bearer '.$test->pushUser('Ana')[1];
@@ -69,7 +70,8 @@ test('routes mount per scope with its middleware', function () {
 
     $routes = helpRoutes($this->httpApp);
 
-    expect(array_keys($routes))->toEqualCanonicalizing(['mk.help.admin.tree', 'mk.help.admin.show'])
+    expect(array_keys($routes))->toEqualCanonicalizing(['mk.help.admin.tree', 'mk.help.admin.show', 'mk.help.admin.search'])
+        ->and($routes['mk.help.admin.search']->uri())->toBe('api/admin/help/search')
         ->and($routes['mk.help.admin.tree']->uri())->toBe('api/admin/help/tree')
         ->and($routes['mk.help.admin.show']->uri())->toBe('api/admin/help/articles/{slug}')
         ->and($routes['mk.help.admin.tree']->middleware())->toBe(['api', 'mk.auth:admin']);
@@ -155,4 +157,73 @@ test('show returns the related articles the scope sees, with their titles, in tr
         ])
         ->and($body['data']['images'])->toBe([])
         ->and($plain['data']['related'])->toBe([]);
+});
+
+/** @return array{0: int, 1: array<string, mixed>} */
+function helpSearch(object $test, string $scope, string $q, string $auth): array
+{
+    return helpGet($test, "/api/{$scope}/help/search?q=".rawurlencode($q), $auth);
+}
+
+test('search needs two to a hundred characters, after trimming', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE);
+
+    foreach (['a', '   a   ', '', str_repeat('x', 101)] as $q) {
+        [$status, $body] = helpSearch($this, 'admin', $q, $auth);
+
+        expect($status)->toBe(422)
+            ->and($body['success'])->toBeFalse()
+            ->and($body['__extraData']['code'])->toBe('ERR_VALIDATION')
+            ->and($body['__extraData']['errors'])->toHaveKey('q');
+    }
+
+    [$missing] = helpGet($this, '/api/admin/help/search', $auth);
+    [$ok] = helpSearch($this, 'admin', ' ab ', $auth);
+
+    expect($missing)->toBe(422)->and($ok)->toBe(200);
+});
+
+test('search only finds the audiences of its scope', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE + ['staff' => [
+        'prefix' => 'api/staff', 'middleware' => ['api', 'mk.auth:admin'], 'audiences' => ['member'],
+    ]]);
+
+    // «Manual del administrador» y «Manual del miembro»; «Pedir un retiro» es de member.
+    [, $admin] = helpSearch($this, 'admin', 'manual', $auth);
+    [, $staff] = helpSearch($this, 'staff', 'manual', $auth);
+    [, $retiro] = helpSearch($this, 'admin', 'retiro', $auth);
+
+    expect(array_column($admin['data'], 'slug'))->toBe(['admin'])
+        ->and(array_column($staff['data'], 'slug'))->toBe(['member'])
+        ->and($retiro['data'])->toBe([]);
+});
+
+test('the LIKE fallback finds title and body hits, ignoring case', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE);
+
+    [$status, $title] = helpSearch($this, 'admin', 'GLOSARIO', $auth);
+    [, $body] = helpSearch($this, 'admin', 'CORREO', $auth);
+
+    expect($status)->toBe(200)
+        ->and(array_column($title['data'], 'slug'))->toBe(['business/glosario'])
+        ->and($body['data'])->toBe([[
+            'slug' => 'admin/primeros-pasos/entrar',
+            'title' => 'Entrar al panel',
+            'snippet' => 'Escribí tu <mark>correo</mark> y tu contraseña.',
+        ]]);
+});
+
+test('the snippet is plain text, escaped, and only the hit is marked', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE);
+
+    [, $body] = helpSearch($this, 'admin', 'plusvalía', $auth);
+    [, $titleOnly] = helpSearch($this, 'admin', 'glosario', $auth);
+
+    // Sin Markdown, sin la URL del enlace, sin las etiquetas del cuerpo, y lo demás escapado.
+    $text = 'Las palabras del negocio: el token es una parte del terreno. Cuidado con alert(1) y con a &lt; b &amp; &quot;c&quot;. La ';
+
+    // El acierto cae lejos del comienzo: la ventana arranca unos 60 caracteres antes, en una palabra entera.
+    expect($body['data'][0]['snippet'])->toBe('…del terreno. Cuidado con alert(1) y con a &lt; b &amp; &quot;c&quot;. La <mark>plusvalía</mark> es lo que gana.')
+        ->and($titleOnly['data'][0]['snippet'])->toBe($text.'plusvalía es lo que gana.')
+        ->and(strip_tags($body['data'][0]['snippet'], '<mark>'))->toBe($body['data'][0]['snippet']);
 });
