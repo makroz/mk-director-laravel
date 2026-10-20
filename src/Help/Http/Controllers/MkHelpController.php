@@ -26,10 +26,15 @@ final class MkHelpController
         return $this->ok($this->catalog->tree($this->audiences($request)), 'Manual');
     }
 
-    /** `GET {prefix}/help/articles/{slug}` (el slug lleva `/`) → el artículo, o 404. */
+    /**
+     * `GET {prefix}/help/articles/{slug}` (el slug lleva `/`) → el artículo, o 404.
+     * `related` sale como `[{slug, title}]` en el orden del árbol, sólo los
+     * que el scope ve; `images` son las únicas que el front pinta.
+     */
     public function show(Request $request, string $slug): JsonResponse
     {
-        $article = $this->catalog->article($slug, $this->audiences($request));
+        $audiences = $this->audiences($request);
+        $article = $this->catalog->article($slug, $audiences);
 
         if ($article === null) {
             return new JsonResponse(['success' => false, 'message' => 'No existe ese artículo del manual', 'data' => null], 404);
@@ -41,6 +46,8 @@ final class MkHelpController
             'audience' => $article->audience,
             'ability' => $article->ability,
             'body' => $article->body,
+            'images' => $article->images ?? [],
+            'related' => $this->catalog->related($article, $audiences),
             'updatedAt' => $article->updated_at?->toIso8601ZuluString(),
         ], $article->title);
     }

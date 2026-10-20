@@ -263,6 +263,16 @@ return [
     | 🔴 Los permisos NUNCA esconden un artículo: el `ability` del front matter
     | es informativo, el front muestra «Necesitás el permiso …».
     |
+    | Imágenes: `![alt](img/x.webp)` con la ruta RELATIVA A LA CARPETA DEL `.md`
+    | (`admin/kyc/aprobar.md` → `admin/kyc/img/x.webp`); sólo png/jpg/jpeg/webp.
+    | La sync las sube por contenido al rol PÚBLICO del storage
+    | (`<image_prefix>/<sha1>.<ext>`) y reescribe el cuerpo con su URL.
+    |
+    | `screens.yaml` en la raíz de `content_path`: las pantallas de los fronts,
+    | `admin.kyc.index: Lista de verificaciones`. Un artículo que lista una
+    | pantalla que no está ahí (o sin ese archivo) hace fallar la sync; las que
+    | ningún artículo lista salen en el reporte.
+    |
     | `routes`: OPT-IN. Un grupo por scope, cada uno con su prefijo, su
     | middleware y las audiencias que ve, e.g.
     |   'admin' => ['prefix' => 'api/admin', 'middleware' => ['api', 'mk.auth:admin'],

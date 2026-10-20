@@ -47,6 +47,35 @@ final class MkHelpCatalog
     }
 
     /**
+     * Los `related` del artículo que el scope ve, con su título y en el orden
+     * del árbol (no en el del front matter). Uno de otra audiencia no sale.
+     *
+     * @param  list<string>  $audiences
+     * @return list<array{slug: string, title: string}>
+     */
+    public function related(MkHelpArticle $article, array $audiences): array
+    {
+        $wanted = array_flip($article->related ?? []);
+
+        if ($wanted === []) {
+            return [];
+        }
+
+        $out = [];
+        $walk = function (array $nodes) use (&$walk, &$out, $wanted): void {
+            foreach ($nodes as $node) {
+                if (isset($wanted[$node['slug']])) {
+                    $out[] = ['slug' => $node['slug'], 'title' => $node['title']];
+                }
+                $walk($node['children']);
+            }
+        };
+        $walk($this->tree($audiences));
+
+        return $out;
+    }
+
+    /**
      * @param  array<int, MkHelpArticle>  $rows
      * @param  array<string, list<MkHelpArticle>>  $children
      * @return list<array{slug: string, title: string, children: list<array<string, mixed>>}>

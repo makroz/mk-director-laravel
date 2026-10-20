@@ -1,0 +1,4 @@
+# Las pantallas que conocen los fronts. `admin.kyc.show` no la lista ningún artículo.
+admin.login: Entrada al panel
+admin.kyc.index: Lista de verificaciones de identidad
+admin.kyc.show: Detalle de una verificación

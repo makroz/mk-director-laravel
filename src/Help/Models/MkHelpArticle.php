@@ -20,7 +20,8 @@ use Mk\Director\Help\MkHelpSync;
  * @property string $audience
  * @property string|null $ability INFORMATIVO: nunca esconde el artículo
  * @property string $title
- * @property string $body
+ * @property string $body con las imágenes ya apuntando a su URL pública
+ * @property list<array{url: string, width: int, height: int}>|null $images
  * @property list<string> $screens
  * @property list<string> $related
  * @property string|null $parent_slug
@@ -38,6 +39,7 @@ class MkHelpArticle extends EloquentModel
         'ability',
         'title',
         'body',
+        'images',
         'screens',
         'related',
         'parent_slug',
@@ -49,6 +51,7 @@ class MkHelpArticle extends EloquentModel
     protected $hidden = ['search'];
 
     protected $casts = [
+        'images' => 'array',
         'screens' => 'array',
         'related' => 'array',
         'order' => 'integer',

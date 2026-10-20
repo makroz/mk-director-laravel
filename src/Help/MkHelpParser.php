@@ -21,10 +21,24 @@ use Symfony\Component\Yaml\Yaml;
  *
  * El slug es la ruta relativa sin `.md`; un `index.md` toma el de su carpeta
  * (`admin/kyc/index.md` → `admin/kyc`). El padre es la carpeta que lo contiene.
+ *
+ * Las imágenes (`![Menú KYC](img/kyc-menu.webp)`) son archivos del manual, con
+ * la ruta RELATIVA A LA CARPETA DEL `.md`, como las resuelve cualquier editor de
+ * Markdown: `admin/kyc/aprobar.md` → `admin/kyc/img/kyc-menu.webp`. Sólo
+ * png/jpg/jpeg/webp, dentro de la carpeta de los manuales. Una URL externa, un
+ * archivo que falta o que no es una imagen hacen fallar la sync.
  */
 final class MkHelpParser
 {
     public const AUDIENCES = ['admin', 'member', 'business'];
+
+    public const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp'];
+
+    /**
+     * `![alt](ruta)` y `![alt](ruta "título")`; el grupo 1 es la ruta. Las
+     * imágenes por referencia (`![alt][ref]`) no se reconocen.
+     */
+    public const IMAGE_PATTERN = '/!\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/';
 
     /** @throws MkHelpContentException */
     public function parse(string $root, string $file): MkHelpDocument
@@ -90,9 +104,46 @@ final class MkHelpParser
             screens: $this->stringList($front, 'screens', $rel),
             related: $this->stringList($front, 'related', $rel),
             body: $body,
+            imagePaths: $this->images($root, dirname($path), $body, $rel),
             parentSlug: str_contains($slug, '/') ? dirname($slug) : null,
             hash: hash('sha256', $raw),
         );
+    }
+
+    /**
+     * Las imágenes del cuerpo: la ruta tal como está escrita → el archivo.
+     *
+     * @return array<string, string>
+     */
+    private function images(string $root, string $folder, string $body, string $rel): array
+    {
+        preg_match_all(self::IMAGE_PATTERN, $body, $matches);
+        $realRoot = realpath($root);
+        $images = [];
+
+        foreach (array_unique($matches[1]) as $ref) {
+            if (preg_match('#^([a-z][a-z0-9+.-]*:|/)#i', $ref) === 1) {
+                throw new MkHelpContentException("{$rel}: la imagen `{$ref}` tiene que ser un archivo del manual, con la ruta relativa al .md");
+            }
+
+            $file = realpath($folder.'/'.rawurldecode($ref));
+
+            if ($file === false || ! is_file($file)) {
+                throw new MkHelpContentException("{$rel}: no existe la imagen `{$ref}`");
+            }
+
+            if ($realRoot === false || ! str_starts_with($file, $realRoot.DIRECTORY_SEPARATOR)) {
+                throw new MkHelpContentException("{$rel}: la imagen `{$ref}` está fuera de la carpeta de los manuales");
+            }
+
+            if (! in_array(strtolower(pathinfo($file, PATHINFO_EXTENSION)), self::IMAGE_EXTENSIONS, true) || @getimagesize($file) === false) {
+                throw new MkHelpContentException("{$rel}: `{$ref}` no es una imagen ".implode('/', self::IMAGE_EXTENSIONS));
+            }
+
+            $images[$ref] = $file;
+        }
+
+        return $images;
     }
 
     /** @return array{0: array<string, mixed>, 1: string} el front matter y el cuerpo */

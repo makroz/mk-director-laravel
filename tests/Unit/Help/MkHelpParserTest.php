@@ -82,3 +82,43 @@ test('same content gives the same hash, other content another', function () {
     expect($parser->parse($rootA, $a)->hash)->toBe($parser->parse($rootB, $b)->hash)
         ->and($parser->parse($rootC, $c)->hash)->not->toBe($parser->parse($rootA, $a)->hash);
 });
+
+test('collects images relative to the folder of the file', function () {
+    [$root, $file] = helpTempFile('admin/kyc/aprobar.md', "---\ntitle: A\naudience: admin\n---\n![Menú](img/menu.png) ![Otra vez](img/menu.png)\n");
+    mkdir($root.'/admin/kyc/img');
+    imagepng(imagecreatetruecolor(2, 2), $root.'/admin/kyc/img/menu.png');
+
+    $doc = (new MkHelpParser)->parse($root, $file);
+
+    expect($doc->imagePaths)->toBe(['img/menu.png' => realpath($root.'/admin/kyc/img/menu.png')]);
+});
+
+test('rejects an image that does not exist', function () {
+    [$root, $file] = helpTempFile('admin/x.md', "---\ntitle: X\naudience: admin\n---\n![Falta](img/falta.png)\n");
+
+    (new MkHelpParser)->parse($root, $file);
+})->throws(MkHelpContentException::class, 'no existe la imagen `img/falta.png`');
+
+test('rejects an external image', function () {
+    [$root, $file] = helpTempFile('admin/x.md', "---\ntitle: X\naudience: admin\n---\n![Afuera](https://example.com/a.png)\n");
+
+    (new MkHelpParser)->parse($root, $file);
+})->throws(MkHelpContentException::class, 'tiene que ser un archivo del manual');
+
+test('rejects an image outside the manuals folder', function () {
+    [$root, $file] = helpTempFile('admin/x.md', "---\ntitle: X\naudience: admin\n---\n![Afuera](../../afuera.png)\n");
+    imagepng(imagecreatetruecolor(2, 2), dirname($root).'/afuera.png');
+
+    try {
+        (new MkHelpParser)->parse($root, $file);
+    } finally {
+        unlink(dirname($root).'/afuera.png');
+    }
+})->throws(MkHelpContentException::class, 'fuera de la carpeta de los manuales');
+
+test('rejects a file that is not a png, jpg or webp image', function () {
+    [$root, $file] = helpTempFile('admin/x.md', "---\ntitle: X\naudience: admin\n---\n![Texto](notas.png)\n");
+    file_put_contents($root.'/admin/notas.png', 'no soy una imagen');
+
+    (new MkHelpParser)->parse($root, $file);
+})->throws(MkHelpContentException::class, 'no es una imagen');

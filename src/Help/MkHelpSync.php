@@ -6,28 +6,45 @@ namespace Mk\Director\Help;
 
 use FilesystemIterator;
 use Mk\Director\Help\Models\MkHelpArticle;
+use Mk\Director\Storage\MkStorage;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use SplFileInfo;
+use Symfony\Component\Yaml\Exception\ParseException;
+use Symfony\Component\Yaml\Yaml;
+use Throwable;
 
 /**
- * La carpeta de los manuales (`mk_director.help.content_path`) → `mk_help_articles`.
+ * La carpeta de los manuales (`mk_director.help.content_path`) → `mk_help_articles`
+ * y sus imágenes → el rol PÚBLICO del storage.
  *
  * 🔴 TODO O NADA: si un solo archivo falla, no se escribe nada. Un manual a
- * medio indexar se ve completo y miente. Con todo válido, una transacción
- * crea o actualiza por `slug` lo que cambió de hash y borra los slugs que ya
- * no están en disco.
+ * medio indexar se ve completo y miente. Falla con un archivo inválido, un
+ * `related` que no existe, una pantalla que no está en `screens.yaml` o una
+ * imagen que no se pudo subir. Con todo válido, una transacción crea o
+ * actualiza por `slug` lo que cambió y borra los slugs que ya no están en disco.
+ *
+ * Las imágenes se suben ANTES de la transacción y por contenido
+ * (`<image_prefix>/<sha1>.<ext>`): una que ya está no se vuelve a subir, y una
+ * subida huérfana de una corrida que falló después no pisa nada.
+ *
+ * `screens.yaml` (en la raíz de `content_path`) son las pantallas que conocen
+ * los fronts, `clave: descripción`. Sin ese archivo ningún artículo puede
+ * listar `screens`.
  */
 final class MkHelpSync
 {
-    public function __construct(private readonly MkHelpParser $parser) {}
+    public function __construct(
+        private readonly MkHelpParser $parser,
+        private readonly MkStorage $storage,
+    ) {}
 
     public function run(bool $dryRun = false): MkHelpSyncReport
     {
         $root = (string) config('mk_director.help.content_path');
 
         if (! is_dir($root)) {
-            return new MkHelpSyncReport(0, 0, 0, 0, ["No existe la carpeta de los manuales: {$root}"]);
+            return new MkHelpSyncReport(errors: ["No existe la carpeta de los manuales: {$root}"]);
         }
 
         /** @var array<string, MkHelpDocument> $docs */
@@ -56,30 +73,93 @@ final class MkHelpSync
             if ($doc->parentSlug !== null && ! isset($docs[$doc->parentSlug])) {
                 $errors[] = "`{$doc->slug}`: a su carpeta le falta el `index.md` (`{$doc->parentSlug}/index.md`)";
             }
+
+            foreach ($doc->related as $related) {
+                if (! isset($docs[$related])) {
+                    $errors[] = "`{$doc->slug}`: el relacionado `{$related}` no existe";
+                }
+            }
         }
 
-        if ($errors !== []) {
-            return new MkHelpSyncReport(0, 0, 0, 0, $errors);
+        $screens = $this->screens($root, $errors);
+        $unknownScreens = [];
+
+        foreach ($docs as $doc) {
+            foreach ($doc->screens as $screen) {
+                if ($screens === null) {
+                    $errors[] = "`{$doc->slug}`: lista `screens` pero no existe `screens.yaml` en la carpeta de los manuales";
+
+                    break;
+                }
+
+                if (! array_key_exists($screen, $screens)) {
+                    $unknownScreens[] = "{$doc->slug}: {$screen}";
+                }
+            }
+        }
+
+        if ($errors !== [] || $unknownScreens !== []) {
+            return new MkHelpSyncReport(errors: $errors, unknownScreens: $unknownScreens);
+        }
+
+        $listed = array_merge([], ...array_values(array_map(fn (MkHelpDocument $d) => $d->screens, $docs)));
+        $uncovered = array_values(array_diff(array_keys($screens ?? []), $listed));
+
+        $disk = $this->storage->diskName('public');
+        $prefix = trim((string) config('mk_director.help.image_prefix', 'help'), '/');
+        /** @var array<string, array{key: string, file: string, url: string, width: int, height: int}> $files */
+        $files = [];
+        /** @var array<string, array{body: string, images: list<array{url: string, width: int, height: int}>, hash: string}> $rendered */
+        $rendered = [];
+
+        foreach ($docs as $slug => $doc) {
+            $rendered[$slug] = $this->render($doc, $disk, $prefix, $files);
         }
 
         $existing = MkHelpArticle::query()->pluck('content_hash', 'slug')->all();
-        $changed = array_filter($docs, fn (MkHelpDocument $d) => ($existing[$d->slug] ?? null) !== $d->hash);
+        $changed = array_filter($rendered, fn (array $r, string $slug) => ($existing[$slug] ?? null) !== $r['hash'], ARRAY_FILTER_USE_BOTH);
         $gone = array_values(array_diff(array_keys($existing), array_keys($docs)));
         $created = count(array_diff_key($changed, $existing));
 
+        // Sólo las imágenes de lo que cambió: lo que no cambió ya las subió.
+        $needed = [];
+        foreach (array_keys($changed) as $slug) {
+            foreach ($docs[$slug]->imagePaths as $file) {
+                $needed[$files[$file]['key']] = $files[$file]['file'];
+            }
+        }
+
+        $uploaded = 0;
+        try {
+            foreach ($needed as $key => $file) {
+                if ($this->storage->disk('public')->exists($key)) {
+                    continue;
+                }
+
+                if (! $dryRun) {
+                    $this->storage->disk('public')->put($key, (string) file_get_contents($file));
+                }
+                $uploaded++;
+            }
+        } catch (Throwable $e) {
+            return new MkHelpSyncReport(errors: ["No se pudo subir una imagen al storage `{$disk}`: {$e->getMessage()}"]);
+        }
+
         if (! $dryRun) {
-            MkHelpArticle::query()->getConnection()->transaction(function () use ($changed, $gone): void {
-                foreach ($changed as $doc) {
-                    MkHelpArticle::query()->updateOrCreate(['slug' => $doc->slug], [
+            MkHelpArticle::query()->getConnection()->transaction(function () use ($changed, $docs, $gone): void {
+                foreach ($changed as $slug => $r) {
+                    $doc = $docs[$slug];
+                    MkHelpArticle::query()->updateOrCreate(['slug' => $slug], [
                         'audience' => $doc->audience,
                         'ability' => $doc->ability,
                         'title' => $doc->title,
-                        'body' => $doc->body,
+                        'body' => $r['body'],
+                        'images' => $r['images'],
                         'screens' => $doc->screens,
                         'related' => $doc->related,
                         'parent_slug' => $doc->parentSlug,
                         'order' => $doc->order,
-                        'content_hash' => $doc->hash,
+                        'content_hash' => $r['hash'],
                     ]);
                 }
 
@@ -94,7 +174,85 @@ final class MkHelpSync
             updated: count($changed) - $created,
             deleted: count($gone),
             unchanged: count($docs) - count($changed),
+            imagesUploaded: $uploaded,
+            uncoveredScreens: $uncovered,
         );
+    }
+
+    /**
+     * El cuerpo con cada imagen apuntando a su URL pública, sus medidas, y el
+     * hash de lo que se guarda: cubre el archivo Y las URLs, así que cambiar
+     * una imagen (otro sha1) o el disk público reescribe el artículo.
+     *
+     * @param  array<string, array{key: string, file: string, url: string, width: int, height: int}>  $files  cache por archivo
+     * @return array{body: string, images: list<array{url: string, width: int, height: int}>, hash: string}
+     */
+    private function render(MkHelpDocument $doc, string $disk, string $prefix, array &$files): array
+    {
+        $byRef = [];
+        foreach ($doc->imagePaths as $ref => $file) {
+            if (! isset($files[$file])) {
+                $key = ($prefix === '' ? '' : $prefix.'/').sha1_file($file).'.'.strtolower(pathinfo($file, PATHINFO_EXTENSION));
+                [$width, $height] = getimagesize($file) ?: [0, 0];
+                $files[$file] = [
+                    'key' => $key,
+                    'file' => $file,
+                    'url' => (string) $this->storage->url($disk, $key),
+                    'width' => $width,
+                    'height' => $height,
+                ];
+            }
+            $byRef[$ref] = $files[$file];
+        }
+
+        // Por posición, no con `str_replace`: el alt puede repetir la ruta.
+        $body = $byRef === [] ? $doc->body : (string) preg_replace_callback(
+            MkHelpParser::IMAGE_PATTERN,
+            fn (array $m) => substr_replace($m[0][0], $byRef[$m[1][0]]['url'], $m[1][1] - $m[0][1], strlen($m[1][0])),
+            $doc->body,
+            flags: PREG_OFFSET_CAPTURE,
+        );
+
+        $images = array_values(array_map(
+            fn (array $f) => ['url' => $f['url'], 'width' => $f['width'], 'height' => $f['height']],
+            $byRef,
+        ));
+
+        return ['body' => $body, 'images' => $images, 'hash' => hash('sha256', $doc->hash."\n".$body)];
+    }
+
+    /**
+     * `screens.yaml`: clave → descripción, o null si no existe.
+     *
+     * @param  list<string>  $errors
+     * @return array<string, string>|null
+     */
+    private function screens(string $root, array &$errors): ?array
+    {
+        $file = rtrim($root, '/').'/screens.yaml';
+
+        if (! is_file($file)) {
+            return null;
+        }
+
+        try {
+            $screens = Yaml::parseFile($file);
+        } catch (ParseException $e) {
+            $errors[] = "screens.yaml inválido: {$e->getMessage()}";
+
+            return [];
+        }
+
+        $screens ??= [];
+
+        if (! is_array($screens) || array_is_list($screens) && $screens !== []
+            || array_filter($screens, fn ($v, $k) => ! is_string($k) || ! is_string($v), ARRAY_FILTER_USE_BOTH) !== []) {
+            $errors[] = 'screens.yaml tiene que ser una lista de `clave: descripción`';
+
+            return [];
+        }
+
+        return $screens;
     }
 
     /** @return list<string> los `.md` de la carpeta, en orden estable */

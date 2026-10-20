@@ -25,6 +25,7 @@ function bootHelpApp(object $test, array $scopes): string
         'routes' => ['register' => true, 'scopes' => $scopes],
     ]]);
     (require __DIR__.'/../../../src/Database/Migrations/2026_10_22_000001_create_mk_help_articles_table.php')->up();
+    (require __DIR__.'/../../../src/Database/Migrations/2026_10_22_000002_add_images_to_mk_help_articles_table.php')->up();
     expect(app(MkHelpSync::class)->run()->failed())->toBeFalse();
 
     return 'Bearer '.$test->pushUser('Ana')[1];
@@ -138,4 +139,20 @@ test('an article with an ability is visible to a user without it and carries the
 
     expect($status)->toBe(200)
         ->and($body['data']['ability'])->toBe('admin.kyc.approve');
+});
+
+test('show returns the related articles the scope sees, with their titles, in tree order', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE);
+
+    // El front matter dice [business/glosario, member/retirar, admin/primeros-pasos/entrar].
+    [$status, $body] = helpGet($this, '/api/admin/help/articles/admin/primeros-pasos/aprobar', $auth);
+    [, $plain] = helpGet($this, '/api/admin/help/articles/admin', $auth);
+
+    expect($status)->toBe(200)
+        ->and($body['data']['related'])->toBe([
+            ['slug' => 'admin/primeros-pasos/entrar', 'title' => 'Entrar al panel'],
+            ['slug' => 'business/glosario', 'title' => 'Glosario'],
+        ])
+        ->and($body['data']['images'])->toBe([])
+        ->and($plain['data']['related'])->toBe([]);
 });
