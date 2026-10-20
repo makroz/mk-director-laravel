@@ -116,6 +116,108 @@ elige el disk de cada uno. Guía de punta a punta: README § «Storage».
 - **Subidas directas**: un disk `s3` en el rol del perfil, los buckets con CORS que expone `ETag` y la regla de 7 días
   que aborta los multipart incompletos, las rutas por scope y `mk:uploads:prune` programado (README § «Storage»).
 
+## [UNRELEASED] — `mk-studio:perf --capture`: el código escrito a mano
+
+**Added**
+- **`Mk\Director\Perf\CaptureListener`**: mientras corren los tests de un módulo, escribe cada SELECT que corre el
+  código de la app en un JSONL (`database`, `connection`, `sql`, `bindings`, `file`, `line`, `outside`, `group`).
+  `file:line` es el marco más interno dentro del módulo medido (`app/Modules/<Módulo>/…`); sin uno, el del código de la
+  app más cercano y `outside: true`. Una consulta que no corrió ningún código de la app (el test, una migración) no se
+  escribe, ni las escrituras. `group` cambia por app (test) y por request: una forma repetida desde una línea dentro de
+  un grupo es una consulta por fila. Test: `capture_records_the_module_frame_and_marks_outside_code`.
+- **`MK_PERF_CAPTURE`** (el archivo) y **`MK_PERF_MODULE`** (el módulo): `MkServiceProvider` registra la captura sólo
+  con la primera, y 🔴 **se niega a arrancar** si la conexión por defecto no es una base `*_mk_studio_perf_tests`: los
+  tests nunca corren con la captura sobre la base de tests del proyecto ni sobre la de la app. Las pone sólo el
+  corredor de MK Studio, nunca `.env`. Tests: `capture_is_off_without_the_env_var`,
+  `capture_refuses_a_database_that_is_not_the_perf_tests_one`.
+- **`mk-studio:perf --prepare-tests`**: sólo crea `<db>_mk_studio_perf_tests` vacía (con las guardas de
+  `ScratchDatabase`, borrando una vieja) e imprime `{"database": …}`.
+- **`mk-studio:perf --capture=<archivo>`**: después de las pantallas, repite sobre el volumen cada forma SELECT
+  capturada que ninguna pantalla corrió (mediana de 5 después de un calentamiento, y su plan), con los bindings de los
+  tests. Salen como consultas `origin: {kind: 'code', file, line, outside}` con `replayed: true` («sobre datos de
+  test»: un binding puede nombrar una fila que el volumen no tiene; el plan vale, el tiempo puede quedar bajo) y
+  `duplicates`. Una forma que falla sobre el volumen va a `notes` y la corrida sigue. Sus planes cuentan para
+  `unusedIndexes`. Tests: `replay_reports_code_queries_with_plan_and_origin` (sin tocar la base de la app),
+  `a_shape_that_fails_on_the_volume_db_is_a_note_not_an_abort`, en los dos motores.
+
+**Changed**
+- `mk-studio:perf` borra al final también `<db>_mk_studio_perf_tests` (salvo `--keep`): la de los tests, quede o no
+  una captura.
+
+**Fixed** (ruido medido en RETO School: 141 consultas de código)
+- Los marcos de **preparación de los tests** no son código del módulo: migraciones, factories y seeders
+  (`Database/Migrations|Factories|Seeders/` de cualquier módulo y `database/` en la raíz) se saltean al buscar el marco.
+  Una consulta que sólo corrieron ellos no se escribe; la de un servicio que una migración llama, sí, en la línea del
+  servicio.
+- Las consultas **al motor mismo** no se capturan (`QueryRecorder::isEngineQuery()`): su catálogo
+  (`information_schema`, `performance_schema`, `mysql.`, `SHOW`, `pg_catalog` y tablas `pg_*`; `Schema::getColumns()`
+  desde un modelo era una) y las funciones de bloqueo (`pg_advisory_*`, `pg_try_advisory_*`, `GET_LOCK`,
+  `RELEASE_LOCK`, `IS_FREE_LOCK`…).
+- 🔴 **Un bool se repite como bool.** La captura y los lectores de planes pasaban los bindings por
+  `prepareBindings()`, que hace de un bool 0/1; el plan de PostgreSQL escribía `active = 1` y fallaba con
+  «operator does not exist: boolean = integer» (6 notas en RETO School). `QueryRecorder::bindable()` sólo convierte
+  fechas; `escape()` escribe el bool como lo lee cada motor. Afecta también los planes de las pantallas.
+- **`SELECT … FOR UPDATE` se repite sin el bloqueo** (`QueryRecorder::withoutLock()`: `for update|no key update|share|
+  key share`, `of …`, `nowait`, `skip locked`; MariaDB `lock in share mode`): el plan corre en una transacción de sólo
+  lectura, que lo rechaza (7 notas en RETO School). `sql` lo conserva y la consulta sale con `unlocked: true`.
+  Test: `replay_strips_the_lock_and_binds_booleans_as_booleans`, en los dos motores.
+- 🔴 `QueryRecorder::isSelect()` ya no toma por lectura un `with … update` (un CTE que modifica datos): una lectura no
+  tiene `insert`/`update`/`delete`/`merge` en ninguna parte (fuera de literales y nombres entre comillas); `for update` y
+  `for share` siguen siendo lecturas. Lo usan también los lectores de planes, que ejecutan lo que analizan.
+  Test: `capture_skips_setup_frames_catalog_queries_and_writes`.
+
+## [UNRELEASED] — `mk-studio:perf`: cada pantalla y cada plan
+
+**Added**
+- **Cada pantalla de cada registro**: además del listado, cada filtro de `allowed_filters` (con su valor más frecuente),
+  la búsqueda (las primeras letras de un valor de la primera columna `searchable`), cada filtro por el que se puede
+  ordenar, el `count(*)` del paginador (`count`) y el detalle (`show`, ruta `show` del `SmartController`, con la
+  primera fila). `origin.param` lleva la columna, el término o el id. Test:
+  `screens_cover_list_each_filter_search_sort_count_show`.
+- **N+1 por la pendiente** (`queriesAt`): cada pantalla de listado se pide con `per_page` 1, 8 y 20; si la cuenta de
+  consultas crece, hay una por fila. Test: `slope_flags_an_n_plus_one` (y su gemelo en lote, plano).
+- **El plan de cada consulta** (`Mk\Director\Perf\Plans\PlanReader`): `PostgresPlanReader`
+  (`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` en una transacción READ ONLY que se deshace) y `MariaDbPlanReader`
+  (`ANALYZE FORMAT=JSON`), normalizados a `{fullScan, index, rowsRead, sort, temp, raw}`. Sólo SELECT: los dos motores
+  ejecutan lo que analizan. Se lee una vez por SELECT distinto de la corrida. Tests:
+  `plan_reader_marks_a_full_scan`, `plan_reader_marks_an_index`, `plan_reader_refuses_a_write`, en los dos motores.
+- **`unusedIndexes`**: los índices de las tablas del módulo que ningún plan medido usó (sin la clave primaria ni los
+  únicos).
+- `QueryRecorder` guarda lo que corrió de verdad (`raw` + `bindings`) junto a la forma normalizada, y cuenta
+  `duplicates`.
+
+**Changed**
+- La consulta principal (`sql`) de una pantalla es la más lenta que lee la tabla del registro y no es su total: la
+  búsqueda del token y las abilities de cada request ya no la tapan.
+- Después de llenar el volumen, `ANALYZE` de cada tabla: un plan sobre estadísticas viejas no es el de producción.
+- En RETO (PostgreSQL 18.1, `medium`): School, 10 pantallas en 19 s; Communications, 6 en 10 s.
+
+## [UNRELEASED] — Cada relación de un módulo: introspección polimórfica y volumen sobre el grafo
+
+**Added**
+- **`mk-studio:introspect` informa las relaciones que el spec no ve.** Suma `driver` y `version` (MariaDB también
+  detrás del driver `mysql`), `morphMap` (alias => clase y tabla) y `morphs`: cada par `<nombre>_type` +
+  `<nombre>_id` de **cada tabla de la base** (ahora `tables` trae también las del paquete y los pivots) con sus
+  destinos — los alias que guardan sus filas y las de otras tablas con el mismo nombre (sólo lectura), los modelos
+  que declaran la inversa, o todo el morph map (`guessed`). Cada relación trae `table`; un `morphTo`, `morphType`,
+  `morphId` y `targets`; un `morphMany`/`morphOne`, el alias que escribe (`morphClass`). Llamar a un método de
+  relación sigue sin tocar datos. Test: `introspection_reports_morph_targets_from_the_morph_map`.
+- **`mk-studio:perf --volume=small|medium|large`** (1.000 / 20.000 / 200.000 filas en las tablas hoja del módulo;
+  default `medium`). El volumen cubre el **grafo** del módulo: sus tablas, las hijas de sus modelos y todo lo que
+  apuntan, transitivamente, en orden de FK; los pares polimórficos llevan el alias y el id de una fila real de su
+  tabla. Valores sesgados con semilla fija, inserts de a 500. Test:
+  `volume_respects_fk_order_and_fills_morph_columns_with_real_ids`.
+- **El volumen respeta los CHECK** (`Mk\Director\Perf\CheckConstraint`): formato (`~`/`REGEXP`), listas, rangos,
+  «exactamente uno de estos no nulo», booleanos y sus AND/OR/NOT, leídos de cada motor. Lo que no puede cumplir se
+  reintenta y, en el peor caso, la tabla queda en `notes`; nunca corta la corrida. Test: `volume_honors_check_constraints`.
+
+**Changed**
+- La introspección de `mk-studio:perf` corre **antes** de crear la base descartable, sobre la base de la app (sólo
+  lectura): los destinos de un par polimórfico salen de sus filas.
+- `tables` de la corrida lista todas las tablas llenadas (el grafo), no sólo las del módulo.
+- En RETO, `medium`: School pasa de 7 de 14 tablas con filas a 18 de 18 (12 s); Communications llena `posts`, sus
+  comentarios, media y reacciones y sus autores (8 de 8, 6 s).
+
 ## [UNRELEASED] — `mk-studio:perf`: un módulo medido sobre una base descartable
 
 **Added**

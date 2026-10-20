@@ -7,6 +7,8 @@ namespace Mk\Director\Spec;
 use BackedEnum;
 use Illuminate\Console\OutputStyle;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\MorphOneOrMany;
+use Illuminate\Database\Eloquent\Relations\MorphTo;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Routing\Route as LaravelRoute;
@@ -15,6 +17,7 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 use Mk\Director\Console\Commands\DiscoverAbilitiesCommand;
 use Mk\Director\Controllers\SmartController;
+use PDO;
 use ReflectionClass;
 use ReflectionEnum;
 use ReflectionMethod;
@@ -29,23 +32,42 @@ use Throwable;
  * Everything is read from the booted app, never parsed from source: `$fillable` comes from
  * `getFillable()`, casts from `getCasts()`, columns from the real database, `$mkConfig` by
  * reflection. A grep of a model file is exactly what loses `client_id` (Makromania CLAUDE.md).
- * Nothing is written and no query touches a row: relations are built on fresh instances,
- * which only builds the query object.
+ * Nothing is written. Relations are built on fresh instances, which only builds the query
+ * object; the only rows read are the ability tables' and the distinct `*_type` values of each
+ * polymorphic pair (its targets, {@see morphs()}).
  */
 final class Introspector
 {
     /** @param  list<string>  $modulePaths  folders whose children are modules (`app/Modules`) */
     public function __construct(private array $modulePaths) {}
 
-    /** @return array{models: list<array>, tables: list<array>, enums: list<array>, abilities: list<array>, routes: list<array>, crud: list<array>, storedAbilities: list<array>} */
+    /** @return array{driver: string, version: string, models: list<array>, tables: list<array>, morphMap: array<string, array>, morphs: list<array>, enums: list<array>, abilities: list<array>, routes: list<array>, crud: list<array>, storedAbilities: list<array>} */
     public function collect(): array
     {
         $models = $this->models();
         $routes = $this->routes();
+        $tables = $this->tables($models);
+        $morphMap = $this->morphMap();
+        $morphs = $this->morphs($tables, $models, $morphMap);
+        // A `morphTo`'s targets are its pair's: the same evidence the database and naming sources read.
+        foreach ($models as &$model) {
+            foreach ($model['relations'] as &$relation) {
+                if ($relation['type'] === 'MorphTo') {
+                    $pair = array_find($morphs, static fn (array $m): bool => $m['table'] === $model['table'] && $m['type'] === $relation['morphType']);
+                    $relation['targets'] = $pair['targets'] ?? array_keys($morphMap);
+                }
+            }
+        }
+        unset($model, $relation);
+        $models = array_map(static fn (array $m): array => [...$m, 'relations' => (object) $m['relations']], $models);
 
         return [
+            'driver' => $this->driver(),
+            'version' => (string) DB::connection()->getPdo()->getAttribute(PDO::ATTR_SERVER_VERSION),
             'models' => $models,
-            'tables' => $this->tables($models),
+            'tables' => $tables,
+            'morphMap' => (object) $morphMap,
+            'morphs' => $morphs,
             'enums' => $this->enums(),
             'abilities' => $this->abilities(),
             'routes' => $routes,
@@ -81,7 +103,7 @@ final class Introspector
                 'casts' => (object) $model->getCasts(),
                 'attributes' => (object) $model->getAttributes(),
                 'traits' => $traits,
-                'relations' => (object) $this->relations($model),
+                'relations' => $this->relations($model),
                 // Only a public one counts: `autoTransform()` reads `$model->apiResource`, and Eloquent
                 // answers a protected property with a (null) attribute.
                 'apiResource' => $reflection->hasProperty('apiResource') && $reflection->getProperty('apiResource')->isPublic()
@@ -95,9 +117,11 @@ final class Introspector
 
     /**
      * Public zero-argument methods whose declared return type is a `Relation`, called on a fresh
-     * instance: that only builds the relation object (no query runs).
+     * instance: that only builds the relation object (no query runs). A `morphTo` on a fresh instance has no type to
+     * read, so Eloquent builds it on the model itself: its `related` is the model, and its targets come from the pair
+     * ({@see morphs()}). The other morph relations name their pair and the alias they write (`morphClass`).
      *
-     * @return array<string, array{type: string, related: string, foreignKey?: string}>
+     * @return array<string, array{type: string, related: string, table: string, foreignKey?: string, morphType?: string, morphId?: string, morphClass?: string}>
      */
     private function relations(Model $model): array
     {
@@ -115,12 +139,19 @@ final class Introspector
                 continue;
             }
             // `declaredIn`: a relation a package base class brings (AuthUser's `abilities()`) is not the module's.
-            $entry = ['type' => class_basename($relation), 'related' => $relation->getRelated()::class, 'declaredIn' => $method->getDeclaringClass()->getName()];
+            $entry = ['type' => class_basename($relation), 'related' => $relation->getRelated()::class, 'table' => $relation->getRelated()->getTable(), 'declaredIn' => $method->getDeclaringClass()->getName()];
             if (method_exists($relation, 'getForeignKeyName')) {
                 $entry['foreignKey'] = $relation->getForeignKeyName();
             } elseif (method_exists($relation, 'getForeignPivotKeyName')) {
                 $entry['foreignKey'] = $relation->getForeignPivotKeyName();
                 $entry['pivot'] = $relation->getTable();
+            }
+            if ($relation instanceof MorphTo || $relation instanceof MorphOneOrMany) {
+                $entry['morphType'] = $relation->getMorphType();
+                $entry['morphId'] = $relation->getForeignKeyName();
+            }
+            if ($relation instanceof MorphOneOrMany) {
+                $entry['morphClass'] = $relation->getMorphClass();
             }
             $out[$method->getName()] = $entry;
         }
@@ -129,10 +160,15 @@ final class Introspector
         return $out;
     }
 
-    /** @return list<array> */
+    /**
+     * The models' tables and every other table of the database (the package's `mk_comments`, pivots): relations that
+     * point at a module from a table no module owns are found there.
+     *
+     * @return list<array>
+     */
     private function tables(array $models): array
     {
-        $names = array_values(array_unique(array_column($models, 'table')));
+        $names = array_values(array_unique([...array_column($models, 'table'), ...Schema::getTableListing(Schema::getCurrentSchemaListing(), false)]));
         sort($names);
         $out = [];
         foreach ($names as $name) {
@@ -185,6 +221,86 @@ final class Introspector
         };
 
         return $sql === null ? [] : array_map(static fn (object $r): string => $r->name, DB::select($sql, [$table]));
+    }
+
+    /** `pgsql`, `mariadb` (also behind Laravel's `mysql` driver), `mysql` or `sqlite`: what the plans and rules depend on. */
+    private function driver(): string
+    {
+        $driver = DB::connection()->getDriverName();
+        $version = (string) DB::connection()->getPdo()->getAttribute(PDO::ATTR_SERVER_VERSION);
+
+        return $driver === 'mysql' && str_contains($version, 'MariaDB') ? 'mariadb' : $driver;
+    }
+
+    /** @return array<string, array{class: string, table: ?string}> the morph map: the alias a `*_type` column stores => its model */
+    private function morphMap(): array
+    {
+        $out = [];
+        foreach (Relation::morphMap() as $alias => $class) {
+            try {
+                $table = (new $class)->getTable();
+            } catch (Throwable) {
+                $table = null;
+            }
+            $out[$alias] = ['class' => $class, 'table' => $table];
+        }
+        ksort($out);
+
+        return $out;
+    }
+
+    /**
+     * Every `<name>_type` + `<name>_id` pair of every table: one polymorphic relation, not two. Its targets are what is
+     * known of it, in this order of evidence:
+     *  - the aliases its rows store (read only: `select distinct … limit`) and those the same name stores in other
+     *    tables (`author` is the same role in `posts`, `mk_comments` and `mk_reactions`);
+     *  - the models that declare the inverse (`morphMany(MkComment::class, 'commentable')` makes `post` a target);
+     *  - else every alias of the morph map (`guessed`).
+     *
+     * ponytail: the distinct read scans the column on a table without an index on it; fine on a dev database, the
+     * place introspection runs. A name shared by two unrelated roles mixes their targets.
+     *
+     * @param  list<array>  $tables
+     * @param  list<array>  $models
+     * @param  array<string, array>  $morphMap
+     * @return list<array{table: string, name: string, type: string, id: string, targets: list<string>, guessed: bool}>
+     */
+    private function morphs(array $tables, array $models, array $morphMap): array
+    {
+        $pairs = [];
+        foreach ($tables as $table) {
+            $columns = array_column($table['columns'], 'name');
+            foreach ($columns as $column) {
+                if (str_ends_with($column, '_type') && in_array($name = substr($column, 0, -5).'_id', $columns, true)) {
+                    $pairs[] = ['table' => $table['name'], 'name' => substr($column, 0, -5), 'type' => $column, 'id' => $name];
+                }
+            }
+        }
+        $stored = [];
+        $declared = [];
+        foreach ($pairs as $p) {
+            try {
+                $values = DB::table($p['table'])->whereNotNull($p['type'])->distinct()->limit(50)->pluck($p['type'])->all();
+            } catch (Throwable) {
+                $values = [];
+            }
+            $stored[$p['name']] = [...($stored[$p['name']] ?? []), ...array_map('strval', $values)];
+        }
+        foreach ($models as $m) {
+            foreach ($m['relations'] as $r) {
+                if (isset($r['morphClass'])) {
+                    $declared[$r['table'].'.'.$r['morphType']][] = $r['morphClass'];
+                }
+            }
+        }
+        $out = [];
+        foreach ($pairs as $p) {
+            $known = array_values(array_unique([...($stored[$p['name']] ?? []), ...($declared[$p['table'].'.'.$p['type']] ?? [])]));
+            sort($known);
+            $out[] = [...$p, 'targets' => $known ?: array_keys($morphMap), 'guessed' => $known === []];
+        }
+
+        return $out;
     }
 
     /** @return list<array> */

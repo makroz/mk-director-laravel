@@ -626,12 +626,15 @@ php artisan mk-studio:introspect            # JSON en una línea, a stdout (nada
 php artisan mk-studio:introspect --pretty   # indentado
 ```
 
-Lo consumen `mk-studio spec import` (la adopción, una vez) y `mk-studio spec check` (el drift, siempre) del paquete npm `@makroz/spec`. **Sólo lee**: no escribe filas ni archivos. Recorre los módulos de `mk_director.paths.modules` (default `app_path('Modules')`) y saca:
+Lo consumen `mk-studio spec import` (la adopción, una vez), `mk-studio spec check` (el drift, siempre) y el grafo de relaciones del estudio (`relationGraph()` de `@makroz/spec`). **Sólo lee**: no escribe filas ni archivos. Recorre los módulos de `mk_director.paths.modules` (default `app_path('Modules')`) y saca:
 
 | clave | de dónde sale |
 |---|---|
-| `models` | cada modelo Eloquent concreto en `<Módulo>/Models` (los `*Base` abstractos se saltean): `getTable()`, `getKeyType()`, `usesTimestamps()`, SoftDeletes, **`getFillable()`**, `getGuarded()`, `getCasts()`, los `$attributes` de una instancia nueva, `class_uses_recursive()` y las relaciones (métodos públicos sin argumentos cuyo tipo de retorno es un `Relation`, llamados sobre una instancia nueva: no corre ninguna query; `declaredIn` dice qué clase la declara) y `apiResource` (sólo si es **público**: `autoTransform()` lee `$model->apiResource`, y Eloquent contesta uno `protected` como un atributo nulo) |
-| `tables` | `Schema::getColumns/getIndexes/getForeignKeys` de cada tabla de modelo (`type_name`, `type`, `nullable`, `default` crudos) + `partial` por índice (Postgres/sqlite) |
+| `driver`, `version` | el motor (`pgsql`, `mariadb` —también detrás del driver `mysql` de Laravel—, `mysql`, `sqlite`) y la versión del servidor |
+| `models` | cada modelo Eloquent concreto en `<Módulo>/Models` (los `*Base` abstractos se saltean): `getTable()`, `getKeyType()`, `usesTimestamps()`, SoftDeletes, **`getFillable()`**, `getGuarded()`, `getCasts()`, los `$attributes` de una instancia nueva, `class_uses_recursive()` y las relaciones (métodos públicos sin argumentos cuyo tipo de retorno es un `Relation`, llamados sobre una instancia nueva: no corre ninguna query; `declaredIn` dice qué clase la declara, `table` la tabla del modelo relacionado; un `morphTo` trae `morphType`, `morphId` y `targets`, y un `morphMany`/`morphOne` trae `morphType`, `morphId` y el alias que escribe, `morphClass`) y `apiResource` (sólo si es **público**: `autoTransform()` lee `$model->apiResource`, y Eloquent contesta uno `protected` como un atributo nulo) |
+| `tables` | `Schema::getColumns/getIndexes/getForeignKeys` de **cada tabla de la base** —las de los modelos y las demás: las del paquete (`mk_comments`), los pivots— (`type_name`, `type`, `nullable`, `default` crudos) + `partial` por índice (Postgres/sqlite) |
+| `morphMap` | el morph map: alias => `{class, table}` |
+| `morphs` | cada par `<nombre>_type` + `<nombre>_id` de cada tabla (una relación polimórfica, no dos) y sus `targets`, en este orden de evidencia: los alias que guardan sus filas y las de otras tablas con el mismo nombre (`select distinct … limit 50`, sólo lectura: `author` es el mismo rol en `posts`, `mk_comments` y `mk_reactions`), los modelos que declaran la inversa (`morphMany(MkComment::class, 'commentable')`), y si no hay nada, todo el morph map (`guessed: true`) |
 | `enums` | los backed enums de `<Módulo>/Enums`: casos, `label()` si existe, el caso de `default()` si existe, y el docblock de la clase como texto |
 | `abilities` | **el mismo** discovery de `mk:discover-abilities` (corre el comando en `--dry-run --json`): `source` `provider` o `fallback` |
 | `routes` | `Route::getRoutes()`: uri, métodos, acción y los argumentos de `mk.ability:` y `mk.auth:` |
@@ -642,25 +645,71 @@ Lo consumen `mk-studio spec import` (la adopción, una vez) y `mk-studio spec ch
 
 🔴 **Un índice parcial no es un `unique`**: `Schema::getIndexes()` informa `lands_single_active` (`… WHERE is_active`) igual que un unique entero. Sin el flag `partial`, la importación lo convertía en `unique: true` y el generador habría impedido dos terrenos inactivos. En RETO hay 9.
 
-Necesita la app booteada con su base (las columnas salen de la base real). Tests: `tests/Feature/SpecIntrospectTest.php` con el módulo de prueba `tests/Fixtures/Spec/Modules/SpecShop`.
+🔴 **Los destinos de un `morphTo` no salen del código**: Eloquent lee el alias de la fila. En RETO, `Post::author()` no nombra a nadie (R-MK-001); lo que dice `admin`/`member` son las filas de `posts`, `mk_comments` y `mk_reactions`. Dos roles distintos con el mismo nombre (`reference` en RETO) mezclan sus destinos: es el techo de la heurística.
+
+Necesita la app booteada con su base (las columnas salen de la base real). Tests: `tests/Feature/SpecIntrospectTest.php` con el módulo de prueba `tests/Fixtures/Spec/Modules/SpecShop` (`introspection_reports_morph_targets_from_the_morph_map`).
 
 ### 3.6.7. `mk-studio:perf` — un módulo medido sobre una base descartable (para MK Studio)
 
 ```bash
-php artisan mk-studio:perf --module=School             # JSON en una línea, a stdout (nada más)
-php artisan mk-studio:perf --module=School --runs=10 --keep --pretty
+php artisan mk-studio:perf --module=School                       # medium, JSON en una línea, a stdout (nada más)
+php artisan mk-studio:perf --module=School --volume=small --runs=10 --keep --pretty
 ```
 
 Lo corre la pestaña «Rendimiento» de MK Studio en el worktree del estudio, nunca en el checkout. Pasos:
 
-1. **`ScratchDatabase`**: crea `<db>_mk_studio_perf` (vacía) en el servidor de la app y la migra con `migrate --database`. Mientras dura la corrida, la conexión por defecto y el nombre de la conexión de la app apuntan ahí; al final la borra (`--keep` la deja) y devuelve la app a su base.
-2. **`VolumeSeeder`**: 1.000 filas en cada tabla de los modelos del módulo, padres primero; una tabla de afuera a la que apunta una FK recibe unas pocas filas, así cada FK lleva un id real. Llena sólo lo obligatorio (NOT NULL sin default), las FK y los timestamps; un enum toma el primer caso del cast. Lo que no puede llenar va a `notes`, nunca corta la corrida.
-3. **`PerfAdmin`**: un usuario del scope `admin` con `'*'` y un token Sanctum con `'*'` y el scope (lo que piden `mk.auth` y `mk.ability`; no hay bypass).
-4. **`ScreenRunner`** + **`QueryRecorder`**: cada ruta GET `index` de un `SmartController` del módulo, por el kernel HTTP en el mismo proceso, con el rate limit apagado y la caché en `array`. Un calentamiento y `--runs` repeticiones; las consultas se cuentan por nombre de base (`*_mk_studio_perf`).
+1. **`Introspector`**, antes de tocar nada: los modelos, las FK y los pares polimórficos con sus destinos, leídos de la base de la app (sólo lectura).
+2. **`ScratchDatabase`**: crea `<db>_mk_studio_perf` (vacía) en el servidor de la app y la migra con `migrate --database`. Mientras dura la corrida, la conexión por defecto y el nombre de la conexión de la app apuntan ahí; al final la borra (`--keep` la deja) y devuelve la app a su base.
+3. **`VolumeSeeder`**: llena el **grafo de relaciones** del módulo: sus tablas, las hijas que listan sus modelos (`comments()` → `mk_comments`) y todo lo que esas apuntan, transitivamente, por FK o como destino de un par polimórfico; padres primero, así cada FK y cada `*_type` + `*_id` nombran una fila real (el alias del morph map y el id de su tabla). Un par cuyos destinos incluyen una tabla del módulo apunta sólo ahí. Filas: `--volume=small|medium|large` = 1.000 / 20.000 / 200.000 en cada tabla hoja del módulo y en cada hija; las demás, un décimo de su hija más grande (mínimo 10). Valores **sesgados** (unos pocos padres se llevan la mayoría, uno más que todos; lo mismo los casos de un enum y los destinos de un par), con semilla fija: dos corridas llenan lo mismo. Una relación o un enum dentro de un índice único recorre sus valores en orden en vez de sesgarse (una fila de stats por alumno). Inserta de a 500.
+   - 🔴 **Respeta los CHECK** (`CheckConstraint`): los lee de `pg_constraint` (PostgreSQL) o `information_schema.CHECK_CONSTRAINTS` (MariaDB) y escribe filas que los cumplen: formato (`~`, `REGEXP`: genera un texto que la expresión acepta, distinto por fila), listas (`= ANY (ARRAY[…])`, `IN`), rangos, nulidad (`(a IS NULL) <> (b IS NULL)`: exactamente uno), booleanos, `col = <expresión de otras columnas>` y sus AND/OR/NOT. Lo que no entiende lo decide la base.
+   - Una fila rechazada se escribe sola y se reintenta una vez con otros valores (un unique). Una tabla que rechaza 20 filas seguidas sin escribir ninguna se abandona; una que ya escribió y rechaza 200 seguidas se da por llena (sus uniques se agotaron). Las dos van a `notes` con el motivo, nunca cortan la corrida.
+   - Después de llenar, `ANALYZE` de cada tabla: filas recién insertadas en lote no están en las estadísticas, y un plan leído sobre estadísticas viejas no es el que la misma data tiene en producción.
+4. **`PerfAdmin`**: un usuario del scope `admin` con `'*'` y un token Sanctum con `'*'` y el scope (lo que piden `mk.auth` y `mk.ability`; no hay bypass).
+5. **`ScreenRunner`** + **`QueryRecorder`**: **cada pantalla** de cada registro del módulo (las rutas GET `index` y `show` de sus `SmartController` y su `$mkConfig`), por el kernel HTTP en el mismo proceso, con el rate limit apagado y la caché en `array`. Un calentamiento y `--runs` repeticiones; las consultas se cuentan por nombre de base (`*_mk_studio_perf`).
+
+   | pantalla | qué pide | `param` |
+   |---|---|---|
+   | `list` | el listado por defecto | — |
+   | `filter` | cada columna de `features.allowed_filters`, con su valor **más frecuente** (el peor caso) | la columna |
+   | `search` | `?q=` con las primeras letras de un valor de la primera columna de `searchable` que tenga uno (`relacion.columna` también) | el término |
+   | `sort` | cada filtro permitido por el que el listado puede ordenar (fillable, clave, timestamps), salvo `features.sorting: false` | la columna |
+   | `count` | el `count(*)` del paginador del listado por defecto (no con paginación por cursor). No es un request propio: su tiempo es el de esa consulta | — |
+   | `show` | el detalle de la primera fila del registro (el sembrador le da a las primeras filas la mayoría de los hijos) | el id |
+
+   - **La consulta principal** (`sql`) de una pantalla es la más lenta (mediana de su propio tiempo) **que lee la tabla del registro y no es su total**: ni el `count(*)` (tiene su pantalla) ni la búsqueda del token y las abilities que hace cada request la tapan.
+   - 🔴 **N+1 por la pendiente**: cada pantalla de listado (`list`, `filter`, `search`, `sort`) se pide además con `per_page` 1, 8 y 20 (`queriesAt`, cada tamaño con su calentamiento). Si la cuenta de consultas crece con las filas, hay una consulta por fila. Un umbral fijo no lo mide: 12 consultas pueden ser 12 relaciones bien cargadas.
+   - **`duplicates`**: consultas de un mismo request que repiten una forma ya corrida en él (la forma normaliza espacios e `in (?, ?, ?)`).
+6. **`PlanReader`**: el plan de **cada SELECT distinto** que corrieron las pantallas (las principales y todas las demás), una vez, sobre el volumen. Ambos motores **ejecutan** lo que analizan, así que sólo pasa un SELECT, con los bindings escritos en el SQL:
+   - **PostgreSQL** (`PostgresPlanReader`): `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` dentro de `BEGIN` + `SET TRANSACTION READ ONLY` … `ROLLBACK`.
+   - **MariaDB** (`MariaDbPlanReader`): `ANALYZE FORMAT=JSON`. `access_type: ALL` es tabla completa; `index` (todo un índice, p. ej. un `count(*)` sin `where`) no se marca así, `rowsRead` lo muestra.
+   - Normalizado igual en los dos: `{fullScan, index, rowsRead, sort, temp, raw}`. `rowsRead` son las filas que leyeron los escaneos, también las que un filtro descartó, por sus vueltas.
+   - **`unusedIndexes`**: los índices de las tablas del módulo que **ningún plan medido** usó (así se rotula: no es «nadie en producción»). Una clave primaria o un índice único no se listan: imponen una regla aunque nadie los lea.
 
 🔴 **Las guardas**: un nombre que no termine en `_mk_studio_perf` (o `_mk_studio_perf_tests`) se rechaza antes de crear nada, `APP_ENV=production` se rechaza, y el borrado vuelve a chequear el nombre. El usuario de la base tiene que poder `CREATE DATABASE`.
 
-`plan`, `queriesAt` y `unusedIndexes` todavía no se miden: van neutros y `notes` lo dice. Tests: `tests/Feature/Perf/PerfCommandTest.php`, contra un servidor real (`MK_PERF_TEST_DRIVER=pgsql|mariadb`, `MK_PERF_TEST_HOST`, `_PORT`, `_USERNAME`, `_PASSWORD`; sin ellas se saltean): cada guarda se afirma en el servidor con un PDO propio, no por el código de salida.
+7. **El código escrito a mano** (`--capture=<archivo>`): MK Studio corre antes los tests del módulo con la captura prendida y le pasa el JSONL. Cada forma SELECT que ninguna pantalla corrió se repite sobre el volumen (mediana de 5 y su plan) y sale como consulta de código. Sin `--capture`, `notes` dice que el código no se midió.
+
+#### La captura de los tests del módulo (`--prepare-tests`, `MK_PERF_CAPTURE`)
+
+```bash
+php artisan mk-studio:perf --prepare-tests             # crea <db>_mk_studio_perf_tests vacía; imprime {"database": …}
+DB_DATABASE=<db>_mk_studio_perf_tests MK_PERF_CAPTURE=/tmp/x.jsonl MK_PERF_MODULE=School \
+    php vendor/bin/pest tests/Feature/School           # el binario directo, NO `php artisan test`
+php artisan mk-studio:perf --module=School --capture=/tmp/x.jsonl   # repite, mide y borra las dos bases
+```
+
+- **`CaptureListener`** (lo registra `MkServiceProvider` sólo si `MK_PERF_CAPTURE` tiene valor): cada SELECT que corre el código de la app, una línea JSON `{database, connection, sql, bindings, file, line, outside, group}`. `file:line` es el marco más interno en `<modules>/<MK_PERF_MODULE>/` (la línea del módulo que pidió la consulta); sin uno, el del código de la app más cercano (`app/` u otro módulo) con `outside: true`. Lo que no corrió ningún código de la app (el test mismo, el framework) no se escribe. Los marcos de preparación (`Database/Migrations|Factories|Seeders/` de cualquier módulo, `database/` en la raíz) se saltean: una consulta que sólo corrieron una migración de datos o una factory no se escribe, y la de un servicio que una migración llama sale en la línea del servicio. Tampoco se escriben las escrituras (`isSelect()`: un `with … update` es una escritura; `for update` es una lectura) ni las consultas al motor mismo (`isEngineQuery()`: el catálogo, `information_schema`, `performance_schema`, `mysql.`, `SHOW`, `pg_catalog`/`pg_*`, y las funciones de bloqueo, `pg_advisory_*`, `GET_LOCK`…). Los bindings se escriben como los recibió la conexión (`bindable()`: una fecha pasa a texto, un bool sigue siendo bool; PostgreSQL no tiene `boolean = integer`). `group` cambia por app (cada test) y por request atendido.
+- 🔴 **Se niega a arrancar** si la conexión por defecto no es una base `*_mk_studio_perf_tests`: cada test falla antes de que `RefreshDatabase` toque algo. Así la captura nunca corre sobre la base de tests del proyecto (`reto_testing`) ni sobre la de la app, aunque la variable de entorno no llegue.
+- 🔴 **Por qué el binario y no `php artisan test`**: el comando `test` de Collision **borra del entorno cada variable que nombra el `.env`** antes de lanzar PHPUnit (para que valgan las de `phpunit.xml`). `DB_DATABASE` está en el `.env`, así que se pierde y `phpunit.xml` pone la base de tests del proyecto. Con `vendor/bin/pest` (o `phpunit`) la variable del proceso gana: `<env>` sin `force="true"` no pisa una que ya existe, y Dotenv tampoco.
+- Una app que sólo permite comandos destructivos sobre su base de tests (`DB::prohibitDestructiveCommands()` salvo `DB_TEST_DATABASE`) necesita que el corredor nombre la nueva: MK Studio pasa también `DB_TEST_DATABASE=<db>_mk_studio_perf_tests`. Nunca `ALLOW_DESTRUCTIVE_DB`.
+- **La repetición** (`--capture`): una forma por SQL normalizado, con los bindings de su primera línea (una del módulo gana a una de afuera). `duplicates` es la mayor cantidad de veces que corrió desde una misma línea en un mismo grupo, menos uno (una consulta por fila). Las líneas de una base que no sea `*_mk_studio_perf_tests` no se repiten (`notes`). Sale como `origin: {kind: 'code', file, line, outside}`, `replayed: true` («sobre datos de test»: el plan vale, el tiempo puede quedar bajo si el binding nombra una fila que el volumen no tiene). Una consulta con bloqueo de filas (`for update`, `for share`, `lock in share mode`) se repite sin él (`withoutLock()`; el plan corre en una transacción de sólo lectura) y sale con `unlocked: true`; su `sql` lo conserva. Una forma que falla sobre el volumen va a `notes`; la corrida sigue.
+- `mk-studio:perf` borra al final también `<db>_mk_studio_perf_tests` (salvo `--keep`). Si la corrida se corta entre los tests y la medición, la próxima `--prepare-tests` o la próxima medición la borra.
+
+Tests: `tests/Feature/Perf/PerfCommandTest.php`, contra un servidor real (`MK_PERF_TEST_DRIVER=pgsql|mariadb`, `MK_PERF_TEST_HOST`, `_PORT`, `_USERNAME`, `_PASSWORD`; sin ellas se saltean), **en los dos motores**: cada guarda se afirma en el servidor con un PDO propio, no por el código de salida. El volumen (`volume_respects_fk_order_and_fills_morph_columns_with_real_ids`, `volume_honors_check_constraints`) se afirma en la base descartable que deja `--keep`, con el módulo de prueba `PerfGraph`. Las pantallas (`screens_cover_list_each_filter_search_sort_count_show`, módulo `PerfScreens`: dos filtros dan la lista exacta), la pendiente (`slope_flags_an_n_plus_one`, módulo `PerfSlope`: una consulta por fila en `afterList` y su gemelo en lote) y los planes (`plan_reader_marks_a_full_scan`, `…_an_index`, `…_refuses_a_write`, sobre 5.000 filas con `ANALYZE`: un plan sobre una tabla vacía no mide nada). La captura: `capture_records_the_module_frame_and_marks_outside_code`, `capture_is_off_without_the_env_var`, `capture_refuses_a_database_that_is_not_the_perf_tests_one`, `replay_reports_code_queries_with_plan_and_origin` (además, las filas de la base de la app iguales antes y después) y `a_shape_that_fails_on_the_volume_db_is_a_note_not_an_abort`: el código del módulo es `PerfShop/Services/ItemReport.php` (una tabla completa, una consulta por fila, una escritura y el mismo `count` que mide la pantalla) y el de afuera `PerfGraph/Services/OwnerCount.php`.
+
+Medido en RETO (PostgreSQL 18.1, `medium`): School llena sus 14 tablas y 4 padres (18 de 18) en 12 s, Communications `posts` + `mk_comments`/`mk_media`/`mk_reactions` + autores (8 de 8) en 6 s. Antes de los CHECK, School llenaba 7 de 14.
+
+Con cada pantalla y cada plan (`medium`): School mide 10 pantallas (sus dos `SmartController`, Category y Course) en 19 s y Communications 6 en 10 s. El listado de cursos lee la tabla entera (13.714 filas) para ordenar; los conteos de las pantallas quedan planos (sin N+1). Un polimórfico suma una consulta cuando aparece un segundo tipo entre las filas (Communications: 8, 8, 9): crece en un solo tramo, no es N+1.
 
 ## ⚙️ 3.7. Login field configurable (`--login-field=<campo>`)
 
