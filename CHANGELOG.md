@@ -12,143 +12,109 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
-## [UNRELEASED] — Storage: `mk:uploads:prune`
+## [UNRELEASED] — Storage: roles, subidas directas al bucket y su limpieza
+
+Todo archivo puede ir a Cloudflare R2, S3 o MinIO sin que el paquete nombre un proveedor: guarda por ROL y la app
+elige el disk de cada uno. Guía de punta a punta: README § «Storage».
 
 **Added**
-- **`mk:uploads:prune`** limpia las subidas directas (`mk_uploads`) que nadie va a usar, y deja cada fila Aborted:
-  - Started vencidas (`expires_at` pasado): aborta el multipart.
-  - Completing trabadas (un `complete()` cuyo proceso murió): vencidas y sin tocar hace una hora; aborta el multipart
-    y borra el objeto.
-  - Completed que nadie adjuntó en `mk_director.storage.prune_unattached_after_hours` horas (nueva clave, default
-    24; `--hours=N` la pisa, mínimo 1): borra el objeto.
-
-  Las Attached no se tocan. Cada fila se toma con un UPDATE condicional antes de tocar el storage, así que un
-  `attachUpload()` simultáneo gana y su objeto no se borra; si el storage falla, la fila vuelve a su estado y el
-  comando sale 1. `--dry-run` cuenta sin tocar nada. Programalo una vez por día:
+- **`mk_director.storage`**: `public_disk` (`MK_STORAGE_PUBLIC_DISK`, default `public`), `private_disk`
+  (`MK_STORAGE_PRIVATE_DISK`, default `local`), `signed_url_ttl` (`MK_STORAGE_SIGNED_URL_TTL`, 7200 s), `upload_ttl`
+  (6 h), `part_size` (8 MiB), `uploads_table` (`MK_UPLOADS_TABLE`, `mk_uploads`), `prune_unattached_after_hours` (24),
+  `profiles` y `routes`. Sin configurar, los roles son `public` y `local`: lo de antes.
+- **`Mk\Director\Storage\MkStorage`**: `diskName($role)`, `disk($role)`, `isPrivate($disk)`,
+  `url($disk, $path, ?$ttlSeconds)` y `profile($name)`. Es el único lugar que arma el link de un archivo guardado: disk
+  público, `url()`; disk privado (el del rol, o uno con `visibility: private`), `temporaryUrl()` firmado que vence. Un
+  path que ya es una URL absoluta pasa tal cual.
+- **Perfiles de subida** (`storage.profiles`, `MkUploadProfile`): rol, MIME => extensiones (la primera es la que se
+  guarda), `max_bytes`, `max_megapixels` (marca un perfil de imágenes) y `prefix`. El paquete trae `avatar` (2 MB),
+  `image` (10 MB, 25 MP), `video` (50 MB) y `document` (PDF, 20 MB), todos públicos. Un perfil que no existe explota.
+- **Subida directa, `Mk\Director\Storage\DirectUpload\MkDirectUpload`**: el cliente sube en partes a links firmados y
+  la API nunca ve los bytes.
+  - `start($owner, $profile, $filename, $bytes, $mime, ?$keyPrefix)` valida tipo, extensión y tamaño contra el perfil
+    ANTES de tocar el storage (422 `ERR_UPLOAD_TYPE` / `ERR_UPLOAD_TOO_LARGE`), arma la key en el servidor
+    (`{prefijo}/{Y}/{m}/{uuid}.{ext}`: del nombre del cliente no se copia nada), abre el multipart y firma un link por
+    parte.
+  - `complete($owner, $id, $etags)` une las partes y **revisa lo guardado**: bytes reales (HEAD) contra `max_bytes`,
+    la firma de los primeros 16 bytes contra los MIME del perfil y, en un perfil de imágenes, ancho × alto de la
+    cabecera (64 KB, o hasta 1 MiB si un EXIF grande empuja el marcador) contra `max_megapixels`
+    (`ERR_UPLOAD_DIMENSIONS`; una imagen sin medidas legibles es `ERR_UPLOAD_TYPE`). Lo que no pasa se borra del
+    storage y la fila queda Aborted, con 422. La fila guarda los bytes, el MIME (el de la firma) y las medidas MEDIDOS.
+    Exige tantos ETags como partes firmó el `start()`.
+  - `abort($owner, $id)`, `claim($owner, $id, $profiles)` (la subida Completed de ese dueño, bloqueada) y
+    `discard(MkUpload)`.
+  - Toda búsqueda va por id **y** dueño: una subida ajena es 404 (`ERR_UPLOAD_NOT_FOUND`), nunca 403. Dos `complete()`
+    simultáneos: la fila se toma con un UPDATE condicional (Started → Completing) antes de hablar con el storage y el
+    segundo recibe 404; si el storage rechaza la unión (un ETag mal), la fila vuelve a Started y se puede reintentar.
+  - Sólo sobre un disk `s3` (S3, Cloudflare R2, MinIO), por `S3DirectUploadDriver` detrás de la interfaz
+    `MkDirectUploadDriver`; otro driver explota nombrando el disk.
+- **Tabla `mk_uploads`** con su migración, el modelo `MkUpload` y el enum `MkUploadStatus` (Started 1, Completed 2,
+  Attached 3, Aborted 4, Completing 5). `multipart_id` es TEXT (el id de R2 mide 343 caracteres); `parts` guarda
+  cuántas partes se firmaron.
+- **Rutas opt-in** (`MK_UPLOADS_REGISTER_ROUTES` / `storage.routes.register` + `storage.routes.scopes`, un grupo por
+  scope con su prefijo y su middleware): `POST uploads` (201 `{upload_id, part_size, part_urls, expires_at}`),
+  `POST uploads/{upload}/complete` (`{upload_id, mime, bytes, width, height}`) y `DELETE uploads/{upload}` (204),
+  nombres `mk.uploads.{scope}.*`. El dueño es el usuario de la sesión; sin usuario, 401 aunque el scope no tenga
+  `mk.auth`.
+- **`HasMkMedia::attachUpload($owner, $uploadId, $collection, $position, profiles: 'image' | ['image', 'video'])`**:
+  convierte una subida Completed del dueño en una fila de `mk_media` y la marca Attached, en una transacción con la
+  subida bloqueada. Una subida ajena, todavía sin terminar, ya adjuntada o de un perfil que la colección no acepta da
+  404 y no crea nada. Sin `profiles` acepta cualquier perfil.
+- **`ValidatesMkMedia::mkUploadIdsRules()`** (opt-in): `upload_ids` array (tope `mkMediaMaxFiles()`) de uuids
+  distintos. La pertenencia la garantiza `attachUpload()`.
+- **`Mk\Director\Storage\MkFileInspector`**: `sniff($head)` da el tipo REAL por los primeros bytes —`image/jpeg`,
+  `image/png`, `image/webp`, `image/gif`, `application/pdf`, `video/mp4`, `video/quicktime` (`ftyp qt` o un QuickTime
+  viejo que arranca con `moov`/`mdat`/`wide`/`free`), `video/webm`, `audio/mpeg` (tag `ID3` o frame MPEG), `audio/aac`
+  (ADTS), `audio/wav`, `audio/ogg` y `audio/mp4` (`ftyp` con marca `M4A `/`M4B `/`M4P `)— o null;
+  `dimensions($headerBytes)` lee ancho y alto con `getimagesizefromstring`, sin el archivo entero. Un M4A con marca
+  genérica (`isom`, `mp42`) sale `video/mp4`: un perfil de audio que lo acepte lista `video/mp4` con la extensión `m4a`.
+- **`mk:uploads:prune [--hours=N] [--dry-run]`** deja Aborted, y limpia del storage, lo que nadie va a usar: Started
+  vencidas (aborta el multipart); Completing trabadas —un `complete()` cuyo proceso murió—, vencidas y sin tocar hace
+  una hora (aborta y borra el objeto); Completed que nadie adjuntó en `prune_unattached_after_hours` horas (`--hours`
+  la pisa, mínimo 1; borra el objeto). Las Attached no se tocan. Cada fila se toma con un UPDATE condicional antes de
+  tocar el storage, así que un `attachUpload()` simultáneo gana; si el storage falla, la fila vuelve a su estado y el
+  comando sale 1. Un multipart que ya no existe (lo abortó la regla de 7 días del bucket) cuenta como abortado: el
+  `abort()` del driver toma `NoSuchUpload` como éxito. Programalo:
   `Schedule::command('mk:uploads:prune')->daily()->withoutOverlapping()->onOneServer()`.
-- `MkDirectUpload::discard(MkUpload)`: lo que una subida dejó en el storage, fuera, según su estado (lo usan `abort()`
-  y la poda).
+- `league/flysystem-aws-s3-v3` en `suggest` (y en `require-dev` para los tests).
 
 **Changed**
-- `S3DirectUploadDriver::abort()` toma un `NoSuchUpload` como éxito: el multipart ya no existe (lo abortó la regla de
-  7 días del bucket o un `complete()` ya lo unió), que es lo que se pedía.
-
-## [UNRELEASED] — Storage: el inspector reconoce audio
-
-**Added**
-- **`MkFileInspector::sniff()` reconoce audio**: `audio/mpeg` (tag `ID3` o frame MPEG), `audio/aac` (frame ADTS),
-  `audio/wav` (`RIFF…WAVE`), `audio/ogg` (`OggS`) y `audio/mp4` (`ftyp` con marca `M4A `/`M4B `/`M4P `). Un perfil
-  de subida directa de audio ya puede pasar la revisión del `complete()`: antes todo audio salía null y se rechazaba.
-
-**Changed**
-- Un `ftyp` con marca `M4A ` (y `M4B `/`M4P `) ahora es `audio/mp4`, no `video/mp4`: un perfil de video deja de
-  aceptar un M4A de iTunes renombrado `.mp4`. Un M4A con marca genérica (`isom`, `mp42`) sigue saliendo `video/mp4`
-  porque los bytes no dicen más; un perfil de audio que lo acepte lista `video/mp4` con la extensión `m4a`.
-
-## [UNRELEASED] — Storage: el scaffolder deja el disk al rol público
-
-**Changed**
-- **`mk:make:auth-user` ya no pina `'disk' => 'public'`** en la config del `FileStoragePlugin` (ni en el controller del
-  CRUD ni en `updateProfile()`): el plugin toma `MkStorage::diskName('public')`, el disk que la app mapea al rol
-  público (`mk_director.storage.public_disk`).
-- El accessor `*_url` generado arma el link con `MkStorage::url()` sobre el disk del rol público, en vez de
-  `Storage::url()` (el disk DEFAULT de Laravel). Una URL absoluta guardada se devuelve tal cual.
-- El `delete()` del Repository generado borra con `MkStorage::disk('public')`, y `checkStorageLink()` mira el disk del
-  rol público. Los dos leían `mk_director.storage.disk`, una clave que nunca existió.
-
-**Added**
-- **`HasMkMedia::attachUpload(..., profiles: 'image' | ['image', 'document'])`**: los perfiles que acepta la colección.
-  Una subida de otro perfil es 404, igual que una ajena, y no crea nada: sin él, la portada de un modelo podía recibir un
-  video o un PDF que `media[]` nunca habría dejado entrar. `MkDirectUpload::claim()` acepta también una lista de
-  perfiles. Sin el argumento se comporta como antes.
-
-⚠️ Un scope ya generado conserva su `'disk' => 'public'` hasta que se regenera o se borra a mano: el plugin respeta un
-`disk` explícito.
-
-## [UNRELEASED] — Storage: el servidor no le cree al cliente
-
-**Added**
-- **`Mk\Director\Storage\MkFileInspector`**: `sniff($head)` da el tipo REAL por los primeros bytes (`image/jpeg`,
-  `image/png`, `image/webp`, `image/gif`, `application/pdf`, `video/mp4`, `video/quicktime` —`ftyp qt` o un QuickTime
-  viejo que arranca con `moov`/`mdat`/`wide`/`free`— y `video/webm`), o null; `dimensions($headerBytes)` lee ancho y
-  alto de la cabecera con `getimagesizefromstring`, sin el archivo entero.
-- Código **`ERR_UPLOAD_DIMENSIONS`** (422) en `MkUploadException`.
-- Estado **`MkUploadStatus::Completing` (5)**: la subida que un `complete()` está uniendo y revisando.
-- Columna **`mk_uploads.parts`**: las partes firmadas en el `start()`. Va en la migración de creación (la tabla todavía
-  no salió en un release).
-
-**Changed**
-- **`MkDirectUpload::complete()` revisa lo GUARDADO**, después de unir las partes: los bytes reales (HEAD) contra el
-  máximo del perfil (`ERR_UPLOAD_TOO_LARGE`); la firma de los primeros 16 bytes tiene que ser un MIME del perfil
-  (`ERR_UPLOAD_TYPE`); en un perfil de imágenes, ancho × alto de la cabecera (64 KB, y una lectura de hasta 1 MiB si un
-  EXIF grande empuja el marcador más allá) contra `max_megapixels` (`ERR_UPLOAD_DIMENSIONS`; una imagen sin medidas
-  legibles es `ERR_UPLOAD_TYPE`). Lo que no pasa se BORRA del storage y la fila queda Aborted, con 422.
-- La fila guarda los bytes, el MIME y las medidas MEDIDOS: `bytes` queda null hasta el `complete()` (lo declarado ya no
-  se guarda) y `mime` pasa a ser el de la firma. `attachUpload()` los copia a `mk_media`.
-- **Dos `complete()` simultáneos**: la fila se toma con un UPDATE condicional (Started → Completing) antes de hablar con
-  el storage; el segundo recibe 404 sin llegar al storage. Si el storage rechaza la unión (un ETag mal), la fila vuelve
-  a Started y se puede reintentar.
-- El `complete()` exige tantos ETags como `parts` guardó el `start()`: cambiar `part_size` ya no rompe las subidas en
-  vuelo.
+- **`HasMkMedia::attachUploadedFile()` sin `$disk` guarda en el disk del rol `public`**, ya no en
+  `filesystems.default`. Una app con default `local` guardaba las galerías donde nadie podía pedirlas. Mide ancho y alto
+  del TEMPORAL antes de guardar: ya no relee el archivo guardado (en un disk remoto era bajarlo entero).
+- `MkMedia::url` y `FileStoragePlugin` (default del disk y `auto_url`) pasan por `MkStorage`: en un disk privado
+  devuelven un link firmado en vez de uno que no abre.
 - **`ValidatesMkMedia` lee los perfiles `image`, `video` y `document`**: `mkAllowedMimeTypes()`, `mkImageMaxBytes()`,
-  `mkVideoMaxBytes()`, `mkDocumentMaxBytes()` y los MIME de documento salen de `mk_director.storage.profiles`, así que
-  el formulario y la subida directa aceptan lo mismo. Los métodos siguen siendo sobrescribibles.
+  `mkVideoMaxBytes()`, `mkDocumentMaxBytes()` y los MIME de documento salen de `storage.profiles`, así que el formulario
+  y la subida directa aceptan lo mismo. Los métodos siguen siendo sobrescribibles.
+- **`mk:make:auth-user` ya no pina `'disk' => 'public'`** en la config del `FileStoragePlugin` (controller del CRUD y
+  `updateProfile()`): el plugin toma el disk del rol público. El accessor `*_url` generado arma el link con
+  `MkStorage::url()` en vez de `Storage::url()` (el disk DEFAULT de Laravel), y el `delete()` del Repository generado
+  y `checkStorageLink()` usan el disk del rol público: antes leían `mk_director.storage.disk`, una clave que nunca
+  existió.
 
 ⚠️ **Cambio de comportamiento: el tope de imagen de `ValidatesMkMedia` pasa de 5 MB a 10 MB** (el `max_bytes` del perfil
 `image`). Una app que quiera seguir en 5 MB baja ese perfil o sobrescribe `mkImageMaxBytes()`.
 
-⚠️ Una app con `config/mk_director.php` publicado necesita los perfiles `image`, `video` y `document` en su bloque
-`storage`: sin ellos, `ValidatesMkMedia` explota nombrando el perfil que falta.
+### Upgrading (apps)
 
-## [UNRELEASED] — Storage: la subida directa al storage (`MkDirectUpload`)
-
-**Added**
-- **`Mk\Director\Storage\DirectUpload\MkDirectUpload`**: el navegador sube el archivo en partes a links firmados y la
-  API nunca ve los bytes. `start($owner, $profile, $filename, $bytes, $mime, ?$keyPrefix)` valida tipo y tamaño contra
-  el perfil ANTES de tocar el storage (422 `ERR_UPLOAD_TYPE` / `ERR_UPLOAD_TOO_LARGE`), arma la key en el servidor
-  (`{prefijo}/{Y}/{m}/{uuid}.{ext}`, la extensión la pone el perfil; del nombre del cliente no se copia nada), abre el
-  multipart y firma un link por parte. `complete($owner, $id, $etags)`, `abort($owner, $id)` y
-  `claim($owner, $id, ?$profile)`. Toda búsqueda va por id **y** dueño: una subida ajena es 404
-  (`ERR_UPLOAD_NOT_FOUND`), nunca 403.
-- Sólo sobre un disk `s3` (S3, Cloudflare R2, MinIO), por `S3DirectUploadDriver` detrás de la interfaz
-  `MkDirectUploadDriver`; otro driver explota nombrando el disk.
-- **Tabla `mk_uploads`** (`MK_UPLOADS_TABLE`) con su migración, el modelo `MkUpload` y el enum `MkUploadStatus`
-  (Started 1, Completed 2, Attached 3, Aborted 4). `multipart_id` es TEXT: el id de R2 mide 343 caracteres.
-- **`mk_director.storage`** suma `upload_ttl` (6 h), `part_size` (8 MiB), `uploads_table`, los perfiles `avatar`,
-  `image`, `video` y `document` (MIME => extensiones, bytes máximos, rol y prefijo) y `routes`. `MkStorage::profile()`
-  arma un `MkUploadProfile`; un perfil que no existe explota.
-- **Rutas opt-in** (`MK_UPLOADS_REGISTER_ROUTES` + `storage.routes.scopes`, un grupo por scope con su prefijo y su
-  middleware): `POST uploads` (201 `{upload_id, part_size, part_urls, expires_at}`), `POST uploads/{upload}/complete`
-  (`{upload_id, mime, bytes, width, height}`) y `DELETE uploads/{upload}` (204), nombres `mk.uploads.{scope}.*`. El
-  dueño es el usuario de la sesión; sin usuario, 401 aunque el scope no tenga `mk.auth`.
-- **`HasMkMedia::attachUpload($owner, $uploadId, $collection, $position)`**: convierte una subida Completed del dueño
-  en una fila de `mk_media` y la marca Attached, en una transacción con la subida bloqueada. Una subida ajena, todavía
-  Started o ya adjuntada da 404 y no crea nada.
-
-⚠️ Una app con `config/mk_director.php` publicado no recibe los perfiles nuevos: Laravel mezcla sólo el primer nivel,
-así que su bloque `storage` reemplaza entero al del paquete. Copiá `profiles`, `routes` y los demás keys nuevos.
-- **`ValidatesMkMedia::mkUploadIdsRules()`** (opt-in): `upload_ids` array (tope `mkMediaMaxFiles()`) de uuids distintos, para el servicio que adjunta con `attachUpload()`. La pertenencia no se valida ahí: la garantiza `attachUpload()`.
-
-## [UNRELEASED] — Storage: los roles `public` y `private`, y `MkStorage`
-
-**Added**
-- **`mk_director.storage`**: `public_disk` (`MK_STORAGE_PUBLIC_DISK`, default `public`), `private_disk`
-  (`MK_STORAGE_PRIVATE_DISK`, default `local`) y `signed_url_ttl` (`MK_STORAGE_SIGNED_URL_TTL`, 7200 s). El paquete
-  guarda por ROL; qué proveedor cumple cada rol lo decide la app con un disk de `filesystems.php` (un disk `s3` cubre
-  Cloudflare R2, S3 y MinIO).
-- **`Mk\Director\Storage\MkStorage`**: `diskName($role)`, `disk($role)`, `isPrivate($disk)` y `url($disk, $path)`, el
-  único lugar que arma el link de un archivo guardado. Disk público: `url()`; disk privado (el del rol, o uno con
-  `visibility: private`): `temporaryUrl()` firmado que vence. Un path que ya es una URL absoluta pasa tal cual.
-- `league/flysystem-aws-s3-v3` en `suggest` (y en `require-dev` para los tests de links firmados).
-
-**Changed**
-- **`HasMkMedia::attachUploadedFile()` sin `$disk` guarda en el disk del rol `public`**, ya no en
-  `filesystems.default`. Una app con default `local` guardaba las galerías donde nadie podía pedirlas; por eso RETO
-  pasaba `'public'` a mano. Quien dependía del default de la app: pasá el disk explícito o configurá el rol.
-- `HasMkMedia` mide ancho y alto del TEMPORAL antes de guardar: ya no relee el archivo guardado (en un disk remoto
-  era bajar entero lo recién subido).
-- `MkMedia::url` y `FileStoragePlugin` (default del disk y `auto_url`) pasan por `MkStorage`: en un disk privado
-  devuelven un link firmado en vez de uno que no abre.
+- **`config/mk_director.php` publicado**: Laravel mezcla la config del paquete sólo en el primer nivel, así que un
+  `storage` publicado reemplaza entero al del paquete. Copiá el bloque `storage` completo (sobre todo `profiles` con
+  `image`, `video` y `document`: sin ellos `ValidatesMkMedia` explota nombrando el que falta), o no lo publiques y
+  agregá lo tuyo con `config([...])` en un provider de la app.
+- **Scopes generados antes de este cambio** conservan su `'disk' => 'public'` explícito en la config del
+  `FileStoragePlugin` (el plugin respeta un `disk` explícito): sacalo a mano o regenerá el scope para que tome el rol
+  público.
+- **`attachUploadedFile()` sin disk**: quien dependía de `filesystems.default` pasa el disk explícito o configura el rol
+  `public`.
+- **La migración de `mk_uploads`** se carga sola (`php artisan migrate`) y ya trae `parts`. Sólo una app que corrió la
+  primera versión de esta migración (antes del commit que agregó `parts`, nunca publicada en un release) no la tiene:
+  Laravel la da por corrida y su `Schema::hasTable` no la rehace. Esa app suma la columna con una migración propia:
+  `Schema::table('mk_uploads', fn (Blueprint $t) => $t->unsignedInteger('parts')->default(1));` (o el nombre de
+  `MK_UPLOADS_TABLE`). Una subida Started de varias partes abierta antes del cambio no va a poder completarse: la limpia
+  `mk:uploads:prune` cuando vence.
+- **Subidas directas**: un disk `s3` en el rol del perfil, los buckets con CORS que expone `ETag` y la regla de 7 días
+  que aborta los multipart incompletos, las rutas por scope y `mk:uploads:prune` programado (README § «Storage»).
 
 ## [UNRELEASED] — `mk-studio:perf`: un módulo medido sobre una base descartable
 
