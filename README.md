@@ -98,6 +98,7 @@ Los comandos principales que registra el paquete (la lista entera: `php artisan 
 | `mk:reports-clean [--dry-run]` | Borra los reportes vencidos **y sus archivos**. Programalo con `Schedule::command('mk:reports-clean')->hourly()`. ⚠️ Sin él el disco crece para siempre con archivos que ya nadie puede pedir. |
 | `mk:push:prune [--days=N] [--dry-run]` | Borra los teléfonos de push que no se vieron en N días (`MK_PUSH_PRUNE_AFTER_DAYS`, default 60; 0 la apaga). Programalo con `Schedule::command('mk:push:prune')->daily()`. ⚠️ OneSignal no siempre avisa de una dirección muerta: sin él quedan para siempre. |
 | `mk:uploads:prune [--hours=N] [--dry-run]` | Limpia las subidas directas que nadie va a usar: aborta las vencidas sin terminar y borra el objeto de las terminadas que nadie adjuntó en N horas (default 24). Programalo una vez por día: ver «Storage». |
+| `mk:help:sync [--dry-run]` | Indexa los manuales en Markdown de `resources/help` en `mk_help_articles`, todo o nada, y sube sus imágenes. Corrélo en cada deploy, después de `migrate`: ver «Ayuda y manuales». |
 | `mk:lint:boundaries [--strict]` | Linter de R-MK-001 (imports cross-module). Check de CI obligatorio. |
 | `mk:security-lint` | Auditoría estática: modelos Eloquent y config de `MkMultiTenantPlugin`. |
 | `mk:generate-docs` | OpenAPI estático desde los constructores MK. |
@@ -413,6 +414,202 @@ nombrando el disk. Un proveedor nuevo necesita implementar
 elija para su driver de disk —un cambio del paquete—. Ese contrato es el de un
 multipart con links `PUT` y ETags; un proveedor que firma parámetros en vez de
 URLs (Cloudinary) además necesita su propio `putPart` en el front.
+
+## Ayuda y manuales
+
+Los manuales de una app son archivos Markdown en el repo de la API. `mk:help:sync`
+los indexa en una tabla (`mk_help_articles`) y sube sus imágenes al storage; la API
+los sirve por scope y los fronts los muestran con las piezas `MkHelp*` de
+`@makroz/web` (el centro de ayuda, el "?" de cada pantalla, la vista para imprimir,
+los enlaces compartidos) y de `@makroz/mobile`.
+
+🔴 **Los permisos NUNCA esconden un artículo.** El sistema ya frena a quien no
+tiene un permiso, y el manual sirve para aprender una tarea que te pueden dar
+mañana. Lo único que separa manuales es la **audiencia**.
+
+### 1. El contenido: `resources/help/`
+
+```
+resources/help/
+├── screens.yaml                   # las pantallas de los fronts
+├── README.md                      # opcional: para quien escribe; no se indexa
+├── admin/                         # audiencia = la carpeta de arriba
+│   ├── index.md                   # la portada del manual (slug `admin`)
+│   └── kyc/
+│       ├── index.md               # la sección: título y orden (slug `admin/kyc`)
+│       ├── aprobar.md             # slug `admin/kyc/aprobar`
+│       └── img/kyc-menu.webp
+├── member/
+└── business/                      # lo que ven las dos: cómo funciona el negocio
+```
+
+- Las audiencias son `admin`, `member` y `business`, y la carpeta de arriba
+  **es** la audiencia. El slug es la ruta sin `.md`; un `index.md` toma el de su
+  carpeta. Cada carpeta necesita su `index.md`: sin él la sync falla.
+- El front matter:
+
+```markdown
+---
+title: Aprobar una verificación de identidad
+audience: admin            # admin | member | business; IGUAL a la carpeta de arriba
+order: 20                  # entre sus hermanos; default 0 (empate: por slug)
+ability: admin.kyc.approve # opcional e INFORMATIVO: «Necesitás el permiso …»
+screens: [admin.kyc.index, admin.kyc.show]
+related: [admin/retiros/pagar, business/glosario]
+---
+El cuerpo, en Markdown. ![Menú KYC](img/kyc-menu.webp)
+```
+
+- **Imágenes**: un archivo del manual con la ruta **relativa a la carpeta del
+  `.md`**, como la resuelve cualquier editor de Markdown (`admin/kyc/aprobar.md` →
+  `admin/kyc/img/kyc-menu.webp`). Sólo png, jpg, jpeg y webp, dentro de
+  `resources/help`. Una URL externa, una ruta absoluta o un archivo que falta hacen
+  fallar la sync.
+- **Enlaces a otro artículo**: con su **slug**, igual que en `related`:
+  `[Pagar un retiro](admin/retiros/pagar)`, con `#ancla` opcional. Todo enlace sin
+  esquema se lee así y uno que no lleva a un artículo hace fallar la sync (`../pagar`,
+  `/manual/x`, un slug mal escrito). El front lo convierte en la URL de su manual.
+  Afuera sólo abren `https:`, `mailto:` y `tel:`.
+- **`screens.yaml`**: `clave: descripción`, una por pantalla de los fronts
+  (`admin.kyc.index: Lista de verificaciones`). La clave es la que el front le pasa
+  al "?" (`<MkHelpButton screen="admin.kyc.index">`). Un artículo que lista una
+  pantalla que no está ahí hace fallar la sync, y las que ningún artículo lista
+  salen en el reporte como «sin artículo».
+
+### 2. Las rutas: opt-in, un grupo por scope
+
+Cada scope dice qué audiencias ve. En el `register()` de un provider de la app,
+en código y no en `.env` (el prefijo, el middleware y las audiencias son un
+contrato con los fronts):
+
+```php
+private function configureHelp(): void
+{
+    config([
+        'mk_director.help.routes.register' => true,   // o MK_HELP_REGISTER_ROUTES=true
+        'mk_director.help.routes.scopes' => [
+            'admin' => [
+                'prefix' => 'api/admin',
+                'middleware' => ['api', 'mk.auth:admin'],
+                'audiences' => ['admin', 'business'],
+                'share' => true,                       // monta los enlaces compartidos
+            ],
+            'member' => [
+                'prefix' => 'api/member',
+                'middleware' => ['api', 'mk.auth:member'],
+                'audiences' => ['member', 'business'],
+                'share' => false,
+            ],
+        ],
+        'mk_director.help.share.ability' => 'admin.help.share',
+    ]);
+}
+```
+
+| Ruta (bajo el prefijo del scope) | Respuesta `data` |
+|---|---|
+| `GET help/tree` | `[{slug, title, children}]`, por `order` entre hermanos |
+| `GET help/articles/{slug}` (el slug lleva `/`) | el artículo, o 404 |
+| `GET help/screens/{screen}` | el artículo que lista esa pantalla (si varios, el primero en el orden del árbol), o 404: «esta pantalla no tiene ayuda» |
+| `GET help/search?q=` | `[{slug, title, snippet}]`, hasta 20; `q` recortado de 2 a 100 caracteres, si no 422 |
+| `GET help/manual/{audience}` | el manual entero en el orden del árbol, cada artículo con `depth` (la vista para imprimir); 404 si la audiencia no es del scope |
+| `GET/POST help/share-links`, `DELETE help/share-links/{id}` | sólo en un scope con `share: true` (abajo) |
+
+Nombres `mk.help.{scope}.*`; responden con el sobre `{success, message, data}`. Un
+artículo es `{slug, title, audience, ability, abilityLabel, body, images, related,
+updatedAt}`: `images` son las únicas que el front pinta (`{url, width, height}`),
+`related` sale con su título, en el orden del árbol y sólo los que el scope ve.
+`abilityLabel` es la `description` de esa ability en la tabla `abilities`, para que
+la nota diga el permiso con palabras (null si no está: el front muestra la clave).
+**Es informativo: ningún permiso filtra nada.** Sin usuario en la sesión es 401,
+aunque el grupo no tenga `mk.auth`; un scope sin `audiences` no ve nada.
+
+### 3. `mk:help:sync`, en cada deploy
+
+```bash
+php artisan migrate
+php artisan mk:help:sync            # o --dry-run: valida y cuenta sin escribir
+```
+
+🔴 **Todo o nada.** Con un front matter inválido, una carpeta sin `index.md`, dos
+archivos con el mismo slug, un `related` o un enlace que no existen, una imagen
+que falta o no se pudo subir, o una pantalla que no está en `screens.yaml`, lista
+los errores, **no escribe nada** y sale con 1: un manual a medio indexar se ve
+completo y miente. Con todo válido imprime cuántos creó, actualizó, borró y dejó
+sin cambios, cuántas imágenes subió y qué pantallas no tienen artículo.
+
+- Una transacción crea o actualiza por slug lo que cambió (por el hash del archivo
+  y de lo que se guarda) y borra los slugs que ya no están en disco.
+- Las imágenes se suben **antes** de la transacción, por contenido, al rol
+  **público** del storage (`<image_prefix>/<sha1>.<ext>`, `image_prefix` = `help`):
+  una que ya está no se vuelve a subir, y el cuerpo guardado apunta a su URL pública
+  con su ancho y alto.
+- `--dry-run` corre la validación entera y cuenta, sin escribir en la base ni subir
+  nada al storage. Sirve para revisar el contenido en un PR.
+
+### 4. Enlaces compartidos (temporales y públicos)
+
+Un scope con `share: true` suma `GET/POST help/share-links` y
+`DELETE help/share-links/{id}`, sólo para quien tiene
+`canMk(mk_director.help.share.ability)` (null = nadie: 403). Cada uno lista y
+revoca **sus** enlaces.
+
+- `POST {target, hours}`: `target` es `slug:<slug>` (un artículo) o
+  `manual:<audience>` (un manual entero) de lo que **ese scope** ve; `hours` va de
+  1 a `share.max_hours` (720). Responde 201 con la `url`: la **única** vez que sale
+  el token (`Str::random(48)`); la tabla `mk_help_share_links` guarda su sha256.
+- La `url` es `share.public_url` + `/` + token. `public_url` sale de
+  **`MK_HELP_SHARE_URL`** (la página pública del front, p. ej.
+  `https://admin.example.com/compartido`), leída por la config del paquete para que
+  sobreviva a `config:cache`. Sin ella, crear un enlace falla.
+- La página pública lee, **sin sesión**, `GET api/help/shared/{token}`
+  (`{target, tree, article}`: para `slug:` el artículo; para `manual:` el árbol y su
+  portada) y `GET api/help/shared/{token}/articles/{slug}` (sólo un artículo dentro
+  de lo compartido; si no, 404). Prefijo y throttle en `help.routes.public`
+  (`api/help`, `throttle:60,1`); se montan si algún scope comparte. Vencido,
+  revocado o inventado es **410**, sin decir cuál. Cada visita suma `uses`.
+- Lo compartido se ve entero, como en el panel.
+
+### 5. La búsqueda
+
+- **Postgres**: una columna generada `search` (`tsvector` `spanish`, título con peso
+  A y texto con peso B) con índice GIN, contra `websearch_to_tsquery('spanish', …)`,
+  ordenada por `ts_rank`. Indexa `body_text` —el cuerpo en texto plano que arma la
+  sync, sin Markdown ni URLs— y cada texto **dos veces**, tal cual y sin tildes
+  (`translate()`), así que `contrasena` encuentra `contraseña` y `retiros` encuentra
+  `retiro`. El fragmento es `ts_headline` con `<mark>` en el acierto y todo lo demás
+  escapado. Límite conocido: una búsqueda sin tilde encuentra el artículo pero no
+  marca la palabra.
+- **Los demás drivers**: `LIKE` sin distinguir mayúsculas en el título y el texto,
+  ordenado por título, sin stemming ni tildes; el fragmento es una ventana alrededor
+  del primer acierto. Existe para que el paquete se pruebe en sqlite: no está
+  afinado para producción en MySQL.
+
+### 6. La config
+
+```php
+'help' => [
+    'content_path' => resource_path('help'),
+    'articles_table' => env('MK_HELP_ARTICLES_TABLE', 'mk_help_articles'),
+    'share_links_table' => env('MK_HELP_SHARE_LINKS_TABLE', 'mk_help_share_links'),
+    'image_prefix' => 'help',
+    'routes' => [
+        'register' => env('MK_HELP_REGISTER_ROUTES', false),
+        'scopes' => [],
+        'public' => ['prefix' => 'api/help', 'middleware' => ['api', 'throttle:60,1']],
+    ],
+    'share' => [
+        'ability' => null,                         // p. ej. 'admin.help.share'
+        'max_hours' => 720,
+        'public_url' => env('MK_HELP_SHARE_URL'),
+    ],
+],
+```
+
+Las migraciones (`mk_help_articles` y `mk_help_share_links`) se cargan solas con
+`php artisan migrate`. La ability de compartir es de la app (su nombre sale de
+`share.ability`): la app la crea y la siembra en sus roles. 🔴 Una app con `config/mk_director.php` publicado lleva el bloque
+`help` entero, por lo mismo que `storage`.
 
 ## Stack
 

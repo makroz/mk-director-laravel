@@ -12,6 +12,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Ayuda y manuales
+
+Los manuales de una app como archivos Markdown en `resources/help/`, indexados por `mk:help:sync` y servidos por scope.
+Los permisos nunca esconden un artículo: sólo la audiencia separa manuales. Guía de punta a punta: README § «Ayuda y
+manuales».
+
+**Added**
+- **`mk_director.help`**: `content_path` (`resource_path('help')`), `articles_table` (`MK_HELP_ARTICLES_TABLE`,
+  `mk_help_articles`), `share_links_table` (`MK_HELP_SHARE_LINKS_TABLE`, `mk_help_share_links`), `image_prefix`
+  (`help`), `routes` (`register` = `MK_HELP_REGISTER_ROUTES`, default false; `scopes`; `public`) y `share` (`ability`,
+  default null = nadie comparte; `max_hours`, 720; `public_url` = `MK_HELP_SHARE_URL`).
+- **El contenido**: la carpeta de arriba es la audiencia (`admin`, `member`, `business`); el slug es la ruta sin `.md`
+  y un `index.md` titula y ordena su carpeta (obligatorio en cada una). Front matter `title`, `audience` (igual a la
+  carpeta), `order`, `ability` (opcional e informativo), `screens` y `related`. Imágenes png/jpg/jpeg/webp con la ruta
+  relativa a la carpeta del `.md`; enlaces entre artículos escritos con el slug. `screens.yaml` en la raíz lista las
+  pantallas de los fronts (`clave: descripción`). El `README.md` de la raíz no se indexa.
+- **`mk:help:sync {--dry-run}`** (`MkHelpSync`, `MkHelpParser`, `MkHelpSyncReport`): TODO O NADA. Un front matter
+  inválido, una carpeta sin `index.md`, un slug repetido, un `related` o un enlace que no existen, una imagen que falta
+  o no se pudo subir, o una pantalla que no está en `screens.yaml`: lista los errores, no escribe nada y sale con 1.
+  Con todo válido, una transacción crea o actualiza por slug lo que cambió y borra lo que ya no está; imprime creados,
+  actualizados, borrados, sin cambios, imágenes subidas y las pantallas sin artículo. Las imágenes van antes, por
+  contenido, al rol público del storage (`<image_prefix>/<sha1>.<ext>`), y el cuerpo guarda su URL pública.
+- **Rutas opt-in, un grupo por scope** con su `prefix`, `middleware` y `audiences`: `GET help/tree`,
+  `help/articles/{slug}`, `help/screens/{screen}` (el artículo de una pantalla, el primero en el orden del árbol, o
+  404), `help/search?q=` (2 a 100 caracteres, si no 422; hasta 20) y `help/manual/{audience}` (el manual entero en el
+  orden del árbol con `depth`, para imprimir; 404 si la audiencia no es del scope). Nombres `mk.help.{scope}.*`. Sin
+  usuario, 401. El artículo trae `abilityLabel`: la `description` de su ability en la tabla `abilities`.
+- **Enlaces compartidos** (`MkHelpShareLinks`, modelo `MkHelpShareLink`): un scope con `share: true` suma
+  `GET/POST help/share-links` y `DELETE help/share-links/{id}`, con 403 sin `canMk(share.ability)`; cada uno ve y
+  revoca sólo los suyos. `target` `slug:<slug>` o `manual:<audience>` de lo que el scope ve, `hours` 1..`max_hours`.
+  El token sale una vez, en la `url` (`public_url/<token>`); la tabla guarda su sha256. Las públicas
+  `GET {routes.public.prefix}/shared/{token}` y `…/shared/{token}/articles/{slug}` (default `api/help`,
+  `throttle:60,1`) van sin sesión; vencido, revocado o inventado es 410.
+- **Búsqueda**: en Postgres, una columna generada `search` (`tsvector` `spanish`, título A y texto plano B, cada uno
+  también sin tildes con `translate()`) con índice GIN, `websearch_to_tsquery` y `ts_headline` con `<mark>` (lo demás
+  escapado). En los demás drivers, `LIKE` sin distinguir mayúsculas, sin stemming ni tildes. Límite conocido: una
+  búsqueda sin tilde encuentra el artículo pero no marca la palabra.
+- **Tablas `mk_help_articles` y `mk_help_share_links`**: migraciones `2026_10_22_000001` a `000004`, modelos
+  `MkHelpArticle` y `MkHelpShareLink` con la tabla de la config.
+- `symfony/yaml` (`^7.0|^8.0`) pasa a `require`: lee el front matter y `screens.yaml`.
+
+### Upgrading (apps)
+
+- **`php artisan migrate`** corre las cuatro migraciones de la ayuda (`2026_10_22_000001` a `000004`): se cargan solas.
+- **`symfony/yaml` es una dependencia del paquete**: `composer update makroz/director-laravel` la trae. En casi todas
+  las apps ya estaba, transitiva.
+- **Prender la ayuda** es opt-in: `configureHelp()` en un provider de la app con `help.routes.register`, un grupo por
+  scope (`prefix`, `middleware`, `audiences`, `share`) y, para compartir, `help.share.ability` sembrada en los roles
+  que comparten y `MK_HELP_SHARE_URL` en el `.env`. Después, el contenido en `resources/help/` y `mk:help:sync` en
+  cada deploy, después de `migrate`.
+- **`config/mk_director.php` publicado**: copiá el bloque `help` entero (Laravel mezcla la config sólo en el primer
+  nivel), o no lo publiques y configurá con `config([...])`.
+
 ## [UNRELEASED] — Storage: roles, subidas directas al bucket y su limpieza
 
 Todo archivo puede ir a Cloudflare R2, S3 o MinIO sin que el paquete nombre un proveedor: guarda por ROL y la app
