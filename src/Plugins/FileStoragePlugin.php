@@ -9,6 +9,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Mk\Director\Contracts\MkPluginInterface;
 use Mk\Director\Managers\PluginManager;
+use Mk\Director\Storage\MkStorage;
 
 /**
  * FileStoragePlugin — auto file uploads.
@@ -31,7 +32,7 @@ use Mk\Director\Managers\PluginManager;
  *               // NEW (asociativo): mapeo rename
  *               'avatar' => 'avatar_path',  // request 'avatar' → column 'avatar_path'
  *           ],
- *           'disk' => 'public',
+ *           // 'disk' => 'r2_avatars',  // opcional: sin él, el disk del rol público
  *           'path' => 'uploads/files',
  *           'auto_url' => true,
  *       ],
@@ -96,7 +97,7 @@ class FileStoragePlugin implements MkPluginInterface
         $config = $this->manager->getConfigValue('plugins_config.file_storage', []);
 
         $fields = $config['fields'] ?? [];
-        $disk = $config['disk'] ?? 'public';
+        $disk = $config['disk'] ?? app(MkStorage::class)->diskName('public');
         $path = $config['path'] ?? 'uploads/files';
 
         foreach ($fields as $requestField => $columnName) {
@@ -195,7 +196,7 @@ class FileStoragePlugin implements MkPluginInterface
         }
 
         $fields = $config['fields'] ?? [];
-        $disk = $config['disk'] ?? 'public';
+        $disk = $config['disk'] ?? app(MkStorage::class)->diskName('public');
 
         // Recursive URL conversion helper
         $this->convertPathsToUrls($responseData, $fields, $disk);
@@ -209,8 +210,8 @@ class FileStoragePlugin implements MkPluginInterface
         if (is_array($data) || is_object($data)) {
             foreach ($data as $key => &$value) {
                 if (in_array($key, $fields) && is_string($value) && ! empty($value)) {
-                    // Prepend storage URL
-                    $value = Storage::disk($disk)->url($value);
+                    // Público: el link plano; privado: firmado (ver MkStorage).
+                    $value = app(MkStorage::class)->url($disk, $value);
                 } elseif (is_array($value) || is_object($value)) {
                     $this->convertPathsToUrls($value, $fields, $disk);
                 }

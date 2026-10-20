@@ -6,6 +6,7 @@ namespace Mk\Director\Http\Requests\Concerns;
 
 use Closure;
 use Illuminate\Http\UploadedFile;
+use Mk\Director\Storage\MkStorage;
 
 /**
  * Reglas de validación de `media[]` para cualquier modelo con `HasMkMedia`.
@@ -27,9 +28,15 @@ use Illuminate\Http\UploadedFile;
  * (`HasMkMedia::attachUploadedFile`, `MkMediaKind`, `MkMediaResource`); las
  * reglas de entrada son la pieza que faltaba.
  *
- * Los NÚMEROS sí son política de cada app, y por eso salen de métodos
- * sobrescribibles en vez de constantes: un consumidor que necesite otro tope
- * redefine `mkMediaMaxFiles()` y nada más.
+ * Los NÚMEROS sí son política de cada app. Los tipos y los topes salen de los
+ * perfiles `image`, `video` y `document` de `mk_director.storage.profiles`
+ * —los mismos que revisa la subida directa—, así que el formulario y la subida
+ * directa no pueden aceptar cosas distintas. Un request que necesite otro tope
+ * todavía puede redefinir el método (`mkImageMaxBytes()`, `mkMediaMaxFiles()`).
+ *
+ * ⚠️ Una app con `config/mk_director.php` publicado necesita esos tres perfiles
+ * en su bloque `storage`: sin ellos, `MkStorage::profile()` explota nombrando
+ * el que falta (caer a un tope que nadie eligió sería peor).
  *
  * ## Uso
  *
@@ -86,19 +93,13 @@ trait ValidatesMkMedia
      * `getMimeType()`. Vale la pena tenerlo claro, porque creer que la
      * protección está acá lleva a aflojar la de allá.
      *
+     * Default: los MIME de los perfiles `image` y `video`.
+     *
      * @return list<string>
      */
     protected function mkAllowedMimeTypes(): array
     {
-        return [
-            'image/jpeg',
-            'image/png',
-            'image/webp',
-            'image/gif',
-            'video/mp4',
-            'video/quicktime',
-            'video/webm',
-        ];
+        return [...$this->mkProfileMimes('image'), ...$this->mkProfileMimes('video')];
     }
 
     /**
@@ -119,25 +120,25 @@ trait ValidatesMkMedia
         return 10;
     }
 
-    /** Tamaño máximo de una imagen, en bytes. */
+    /** Tamaño máximo de una imagen, en bytes: el `max_bytes` del perfil `image`. */
     protected function mkImageMaxBytes(): int
     {
-        return 5 * 1024 * 1024;
+        return app(MkStorage::class)->profile('image')->maxBytes;
     }
 
-    /** Tamaño máximo de un video, en bytes. */
+    /** Tamaño máximo de un video, en bytes: el `max_bytes` del perfil `video`. */
     protected function mkVideoMaxBytes(): int
     {
-        return 50 * 1024 * 1024;
+        return app(MkStorage::class)->profile('video')->maxBytes;
     }
 
     /**
-     * Tamaño máximo de un documento PDF, en bytes. Sólo aplica si
-     * {@see mkAllowsDocuments()} es `true`.
+     * Tamaño máximo de un documento, en bytes: el `max_bytes` del perfil
+     * `document`. Sólo aplica si {@see mkAllowsDocuments()} es `true`.
      */
     protected function mkDocumentMaxBytes(): int
     {
-        return 20 * 1024 * 1024;
+        return app(MkStorage::class)->profile('document')->maxBytes;
     }
 
     /**
@@ -150,7 +151,7 @@ trait ValidatesMkMedia
         $mimes = $this->mkAllowedMimeTypes();
 
         if ($this->mkAllowsDocuments()) {
-            $mimes[] = 'application/pdf';
+            $mimes = [...$mimes, ...$this->mkProfileMimes('document')];
         }
 
         return [
@@ -184,6 +185,25 @@ trait ValidatesMkMedia
     }
 
     /**
+     * Regla de `upload_ids`: archivos que el front ya subió DIRECTO al storage
+     * (`POST {scope}/uploads`). OPT-IN: sumala sólo si el servicio los adjunta
+     * con `attachUpload()`; si no, el campo se validaría y se ignoraría.
+     *
+     * 🔴 LA PERTENENCIA NO SE VALIDA ACÁ, igual que en `remove_media`: la
+     * garantiza `attachUpload()`, que sólo toma una subida COMPLETA del mismo
+     * dueño (otra cosa es 404, sin confirmar que el id existe).
+     *
+     * @return array<string, mixed>
+     */
+    protected function mkUploadIdsRules(): array
+    {
+        return [
+            'upload_ids' => ['sometimes', 'array', 'max:'.$this->mkMediaMaxFiles()],
+            'upload_ids.*' => ['uuid', 'distinct'],
+        ];
+    }
+
+    /**
      * Regla de `embed_url`. OPT-IN: sumala sólo si el modelo acepta embeds.
      *
      * Una URL de un proveedor DESCONOCIDO no es un error — se guarda como link
@@ -205,9 +225,9 @@ trait ValidatesMkMedia
      * que la mide. (El default del paquete para archivos sueltos es 2048 KB, que
      * tampoco alcanza para video.)
      *
-     * Un PDF tiene SU propio tope: si cayera en la rama "no es imagen", se
-     * mediría contra el de video y un documento de 45 MB entraría sin que
-     * nadie lo haya decidido.
+     * Un documento (un MIME del perfil `document`) tiene SU propio tope: si
+     * cayera en la rama "no es imagen", se mediría contra el de video y un PDF
+     * de 45 MB entraría sin que nadie lo haya decidido.
      */
     private function mkMediaSizeRule(): Closure
     {
@@ -222,7 +242,7 @@ trait ValidatesMkMedia
 
             [$limite, $tipo] = match (true) {
                 str_starts_with($mime, 'image/') => [$this->mkImageMaxBytes(), 'imagen'],
-                $mime === 'application/pdf' => [$this->mkDocumentMaxBytes(), 'documento'],
+                $this->mkAllowsDocuments() && in_array($mime, $this->mkProfileMimes('document'), true) => [$this->mkDocumentMaxBytes(), 'documento'],
                 default => [$this->mkVideoMaxBytes(), 'video'],
             };
 
@@ -230,6 +250,12 @@ trait ValidatesMkMedia
                 $fail("Cada {$tipo} puede pesar hasta ".$this->enMegas($limite).' MB.');
             }
         };
+    }
+
+    /** @return list<string> los MIME que acepta el perfil `$profile` */
+    private function mkProfileMimes(string $profile): array
+    {
+        return array_keys(app(MkStorage::class)->profile($profile)->mimes);
     }
 
     /** El límite en MB para el mensaje, sin decimales de más. */

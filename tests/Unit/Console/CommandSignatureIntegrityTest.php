@@ -64,6 +64,8 @@ function mkExpectedCommandArguments(): array
         // criterio es `expires_at`, que ya está en cada fila.
         'mk:reports-clean' => [],
         'mk:security-lint' => [],
+        // Sin argumentos: el criterio es el estado y los vencimientos de cada fila.
+        'mk:uploads:prune' => [],
         'mk:service' => ['name'],
         'mk:skill:deploy' => ['name'],
         'mk:skill:list' => [],

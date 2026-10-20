@@ -6,9 +6,9 @@ namespace Mk\Director\Models;
 
 use Illuminate\Database\Eloquent\Model as EloquentModel;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
-use Illuminate\Support\Facades\Storage;
 use Mk\Director\Enums\MkEmbedProvider;
 use Mk\Director\Enums\MkMediaKind;
+use Mk\Director\Storage\MkStorage;
 
 /**
  * MkMedia — una pieza de media adjunta a cualquier modelo del consumer.
@@ -70,11 +70,13 @@ class MkMedia extends EloquentModel
     }
 
     /**
-     * URL pública de esta media, sea archivo propio o embed.
+     * El link de esta media, sea archivo propio o embed.
      *
-     * Para Image/Video/Document resuelve contra el disk de LA FILA — no contra un disk
-     * global. Ésa es una de las limitaciones concretas de `FileStoragePlugin`,
-     * que lee `$config['disk']` una sola vez para todos los archivos.
+     * Para Image/Video/Document resuelve contra el disk de LA FILA —no contra
+     * un disk global—, por {@see MkStorage}: link plano si el disk es público,
+     * firmado y con vencimiento si es privado. Leer el disk de la fila es lo
+     * que `FileStoragePlugin` no puede: lee `$config['disk']` una sola vez
+     * para todos los archivos.
      *
      * Para Embed no hay archivo nuestro: devuelve la `source_url` original.
      */
@@ -92,6 +94,8 @@ class MkMedia extends EloquentModel
             return null;
         }
 
-        return Storage::disk($this->disk ?: config('filesystems.default'))->url($this->path);
+        $storage = app(MkStorage::class);
+
+        return $storage->url($this->disk ?: $storage->diskName('public'), $this->path);
     }
 }

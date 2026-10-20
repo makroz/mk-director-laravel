@@ -2,12 +2,40 @@
 
 declare(strict_types=1);
 
+use Illuminate\Container\Container;
+use Illuminate\Foundation\Application;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Translation\ArrayLoader;
 use Illuminate\Translation\Translator;
 use Illuminate\Validation\Factory as ValidationFactory;
 use Illuminate\Validation\Validator;
 use Mk\Director\Http\Requests\Concerns\ValidatesMkMedia;
+use Mk\Director\Tests\TestCase;
+
+uses(TestCase::class);
+
+/**
+ * Los perfiles `storage.profiles` TAL CUAL los trae `config/mk_director.php`:
+ * los topes y los tipos que se miden acá son los que recibe un consumer.
+ *
+ * El archivo usa `app_path()`, que el contenedor mínimo del TestCase no tiene:
+ * se lee una vez con una Application de paso y se restaura el contenedor.
+ */
+function packageUploadProfiles(): array
+{
+    static $profiles = null;
+
+    if ($profiles === null) {
+        $previous = Container::getInstance();
+        Container::setInstance(new Application(sys_get_temp_dir()));
+        $profiles = (require __DIR__.'/../../config/mk_director.php')['storage']['profiles'];
+        Container::setInstance($previous);
+    }
+
+    return $profiles;
+}
+
+beforeEach(fn () => config()->set('mk_director.storage.profiles', packageUploadProfiles()));
 
 /**
  * 🔴 SIN `uses(MkLaravelTestCase)` Y SIN LA FACADE `Validator`, A PROPÓSITO.
@@ -111,13 +139,32 @@ it('rechaza pasarse del tope de archivos', function (): void {
         ->and($v->errors()->has('media'))->toBeTrue();
 });
 
-it('rechaza una imagen que se pasa de 5 MB', function (): void {
-    $archivo = UploadedFile::fake()->image('enorme.jpg')->size(6 * 1024);
+it('rechaza una imagen que se pasa de 10 MB', function (): void {
+    $archivo = UploadedFile::fake()->image('enorme.jpg')->size(11 * 1024);
 
     $v = validarMedia(['media' => [$archivo]]);
 
     expect($v->passes())->toBeFalse()
-        ->and($v->errors()->first('media.0'))->toContain('5 MB');
+        ->and($v->errors()->first('media.0'))->toContain('10 MB');
+});
+
+/**
+ * 🔴 LOS TOPES Y LOS TIPOS SON LOS DE LOS PERFILES, los mismos que revisa la
+ * subida directa: si una app cambia un perfil, el formulario cambia con él y
+ * los dos caminos no pueden aceptar cosas distintas.
+ */
+it('toma los topes y los tipos de los perfiles de storage', function (): void {
+    config()->set('mk_director.storage.profiles.image.max_bytes', 1024 * 1024);
+    config()->set('mk_director.storage.profiles.image.mimes', ['image/jpeg' => ['jpg']]);
+    config()->set('mk_director.storage.profiles.video.max_bytes', 2 * 1024 * 1024);
+
+    $imagen = validarMedia(['media' => [UploadedFile::fake()->image('foto.jpg')->size(2 * 1024)]]);
+    $png = validarMedia(['media' => [UploadedFile::fake()->image('foto.png')->size(10)]]);
+    $video = validarMedia(['media' => [UploadedFile::fake()->create('clip.mp4', 3 * 1024, 'video/mp4')]]);
+
+    expect($imagen->errors()->first('media.0'))->toBe('Cada imagen puede pesar hasta 1 MB.')
+        ->and($png->errors()->has('media.0'))->toBeTrue()
+        ->and($video->errors()->first('media.0'))->toBe('Cada video puede pesar hasta 2 MB.');
 });
 
 /**
@@ -157,7 +204,7 @@ it('rechaza un archivo cuyo mime real no está en la lista', function (): void {
  * 🔴 ACÁ ESTÁ LA PROTECCIÓN REAL contra "un video se cuela con el límite de una
  * imagen": la regla de TAMAÑO, que elige el tope mirando `getMimeType()` y no
  * la extensión. Un mp4 de 20 MB llamado `foto.jpg` tiene que entrar (es un
- * video válido, dentro del límite de video), no ser medido contra los 5 MB de
+ * video válido, dentro del límite de video), no ser medido contra los 10 MB de
  * imagen ni rechazado por llamarse como se llama.
  */
 it('mide por el mime real, no por la extensión del nombre', function (): void {
@@ -176,7 +223,7 @@ it('rechaza algo que no es un archivo', function (): void {
 
 /**
  * 🔴 SI EL LÍMITE FUERA UNO SOLO, ESTE TEST Y EL DE LA IMAGEN NO PODRÍAN PASAR
- * LOS DOS. Un video de 20 MB tiene que entrar y una imagen de 6 MB tiene que
+ * LOS DOS. Un video de 20 MB tiene que entrar y una imagen de 11 MB tiene que
  * ser rechazada: con un `max:` único hay que elegir cuál de los dos romper.
  */
 it('acepta un video de 20 MB, que como imagen sería rechazado', function (): void {

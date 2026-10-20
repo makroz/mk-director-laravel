@@ -193,7 +193,10 @@ test('BUG-10 fix: handle() invoca checkStorageLink() al final', function () {
 test('BUG-10 fix: checkStorageLink warn si disk=public y storage no linkeado', function () {
     $command = commandSource014();
 
-    expect($command)->toMatch("/\\\$disk\s*=\s*config\(\s*'mk_director\.storage\.disk',\s*'public'\s*\)/");
+    // El disk es el del rol público (`mk_director.storage.public_disk`); la
+    // clave `mk_director.storage.disk` que leía antes nunca existió.
+    expect($command)->toContain("\$disk = app(MkStorage::class)->diskName('public');");
+    expect($command)->not->toContain("'mk_director.storage.disk'");
     expect($command)->toContain('php artisan storage:link');
 });
 

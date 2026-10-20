@@ -3704,7 +3704,7 @@ positivo que distraía al dev (FEEDBACK8 F8-B04).
             // NEW (asociativo): rename request field → column
             'photo' => 'photo_path',  // request 'photo' → column 'photo_path'
         ],
-        'disk'     => 'public',             // Disco de Laravel
+        // 'disk' => 'r2_public',          // Opcional: sin él, el disk del rol `public` (MkStorage)
         'path'     => 'surveys/images',     // Carpeta destino
         'auto_url' => true,                 // Convertir path a URL en afterResponse
     ]
@@ -3717,7 +3717,6 @@ positivo que distraía al dev (FEEDBACK8 F8-B04).
 'plugins_config' => [
     'file_storage' => [
         'fields' => [],
-        'disk'   => 'public',
         'path'   => 'uploads/files',
         'auto_url' => true,
     ],
@@ -3728,7 +3727,8 @@ positivo que distraía al dev (FEEDBACK8 F8-B04).
 - Hook = `beforeSave` (corre ANTES del `Model::create`/`update`). El path
   se escribe en `$data[$column]` para que Eloquent lo persista al insertar.
 - `afterResponse` (si `auto_url=true`) convierte el path almacenado a URL
-  completa vía `Storage::disk($disk)->url($path)`.
+  completa vía `MkStorage::url($disk, $path)`: link plano en un disk público,
+  firmado y con vencimiento en uno privado. Roles y disks: README § Storage.
 - **YAGNI hasta que un consumer lo pida**: organizar archivos por ID del modelo
   (`uploads/{id}/file.jpg`) NO está soportado por este plugin (FEEDBACK8 F8-B02
   backlog deferred). Implementación requeriría hook `afterCreate` con modelo ya

@@ -37,6 +37,7 @@ El motor de backend de MK-Director. Ofrece una capa de abstracción potente para
 - **S8 Fase 7 scaffolder hardening (v2.0.1-rc0 — RETO fase 6 clean rebuild feedback, HALLAZGO-NEW-FASE18-A/B/C — BC break documentado en C)**: 3 hallazgos pineados como fixes (A, B) + 1 BC break (C). (A) **`forgot()` llaves extras en `AuthController.stub`** — 5 líneas huérfanas + llave extra eliminadas; `php artisan route:list` ya NO crashea con `ParseError: syntax error, unexpected variable "$token"` en línea ~370. (B) **`me/permissions` route regression guard** — 7 tests source-parsing pineados para asegurar que el scaffolder pineá la route DENTRO del bloque `mk.auth:{scope}` (canónico desde R-PKG-043 FASE19-02). (C) **`mk.ability` per-route en CRUD** (BC break, R-G-033 autoriza) — las 21 rutas CRUD scaffoldeadas pinean `mk.ability:{scope}.{resource}.{action}` PER-ROUTE (no group-level). Defense-in-depth contra privilege escalation: editor con abilities reducidas ya NO puede ejecutar acciones sin ability check. Ver `DEVELOPER_GUIDE.md §3.15.1-3.15.3` + `CHANGELOG.md` § v2.0.1-rc0.
 - **Refresh + reset + forgot implementación completa** (v1.6.0-rc4): `RefreshTokenParser` (Sanctum v4 `id|plaintext`), `TokenIssuer::rotateRefreshToken()` con defense-in-depth contra escalación de scope, persistencia en `{scope}_password_reset_tokens`.
 - **Motor de reportes (PDF · XLSX · CSV)**: un módulo declara sus columnas en un `ExportConfig` y su listado se exporta en los tres formatos. `GET /api/{modulo}?_export=xlsx` responde **202** con un `uuid`; el archivo lo arma un job y el front hace polling. Incluye historial de descargas, barra de progreso real, reportes CUSTOM (consulta propia, devuelve bytes) y el limpiador `mk:reports-clean`. 🔴 **Siempre async, sin modo sync**: un export síncrono se muere por `max_execution_time` o por memoria, y las dos formas son invisibles hasta que el listado crece — medido con 198.004 filas (~422 MB de JSON), el request ni llegaba a responder. 🔴 **El margen inferior del PDF lo mide mPDF**, no una constante: se recalcula en cada página con el alto real del pie, así que un pie personalizado por proyecto no queda pisado por el contenido. Un `ExportConfig` mínimo son **tres** métodos (`use ExportConfigDefaults`). Guía: [`docs/guides/EXPORT.md`](../../docs/guides/EXPORT.md) del monorepo.
+- **Storage por roles y subidas directas (R2, S3, MinIO)**: el paquete guarda en el rol `public` o `private` y la app elige el disk de cada uno; `MkStorage` arma todos los links (firmados en el privado). El cliente sube al bucket en partes firmadas y el servidor revisa lo guardado (bytes, firma, megapíxeles) antes de que `attachUpload()` lo adjunte. Ver § Storage más abajo.
 - **Notificaciones push (FCM u OneSignal)**: `MkPush::to($user)->send(new PushMessage(...))` a una persona, a un grupo o a un tema (`MkPush::subscribe/unsubscribe/topic`). El servicio se elige con `MK_PUSH_DRIVER` (`fcm`, `onesignal`, `log` o `null`, el default) y el resto del proyecto no se entera. Rutas de registro opt-in (`mk_director.push.register_routes`), envío encolado `afterCommit`, poda de los teléfonos que el servicio rechaza y de los que no se ven (`mk:push:prune`). La app lo monta con `MkPushProvider` de `@makroz/mobile`. Guía: [`docs/guides/push.md`](docs/guides/push.md) — push en 30 minutos, con las trampas medidas.
 - **Escrituras atómicas en `CRUDSmart`**: `store()`, `update()` y `destroy()` envuelven la escritura y sus hooks `after*` en una transacción. Antes no lo hacían —mientras `storeMany()` sí—, así que el bulk era atómico y el single no: un `afterCreate` que tirara dejaba la fila escrita y devolvía 500.
 - **List & Search Managers**: Parsing de strings complejos para búsquedas relacionales y joins dinámicos.
@@ -76,13 +77,13 @@ php artisan migrate
 ```
 
 ⚠️ **Las migraciones del paquete NO se publican**: se cargan solas
-(`loadMigrationsFrom`). En un Laravel limpio, `php artisan migrate` corre las
-16 sin ningún `vendor:publish` previo. Publicarlas te deja copias que después
+(`loadMigrationsFrom`). En un Laravel limpio, `php artisan migrate` las corre
+todas sin ningún `vendor:publish` previo. Publicarlas te deja copias que después
 divergen del paquete.
 
 ## Comandos Artisan
 
-Los 18 comandos que registra el paquete (`php artisan list mk`).
+Los comandos principales que registra el paquete (la lista entera: `php artisan list mk`).
 
 | Comando | Qué hace |
 |---|---|
@@ -96,6 +97,7 @@ Los 18 comandos que registra el paquete (`php artisan list mk`).
 | `mk:status` | Diagnóstico de los controllers MK y su configuración. |
 | `mk:reports-clean [--dry-run]` | Borra los reportes vencidos **y sus archivos**. Programalo con `Schedule::command('mk:reports-clean')->hourly()`. ⚠️ Sin él el disco crece para siempre con archivos que ya nadie puede pedir. |
 | `mk:push:prune [--days=N] [--dry-run]` | Borra los teléfonos de push que no se vieron en N días (`MK_PUSH_PRUNE_AFTER_DAYS`, default 60; 0 la apaga). Programalo con `Schedule::command('mk:push:prune')->daily()`. ⚠️ OneSignal no siempre avisa de una dirección muerta: sin él quedan para siempre. |
+| `mk:uploads:prune [--hours=N] [--dry-run]` | Limpia las subidas directas que nadie va a usar: aborta las vencidas sin terminar y borra el objeto de las terminadas que nadie adjuntó en N horas (default 24). Programalo una vez por día: ver «Storage». |
 | `mk:lint:boundaries [--strict]` | Linter de R-MK-001 (imports cross-module). Check de CI obligatorio. |
 | `mk:security-lint` | Auditoría estática: modelos Eloquent y config de `MkMultiTenantPlugin`. |
 | `mk:generate-docs` | OpenAPI estático desde los constructores MK. |
@@ -153,6 +155,264 @@ Habilita features en `config/mk_director.php`:
     'mme_enforcement' => true,
 ],
 ```
+
+## Storage: archivos en R2, S3 o MinIO
+
+El paquete no nombra proveedores. Guarda por **rol** —`public` (avatares,
+galerías, todo lo que se sirve con un link fijo) y `private` (lo que sólo se ve
+con permiso)— y la app decide qué disk de `config/filesystems.php` cumple cada
+uno. Un disk `s3` cubre Cloudflare R2, Amazon S3 y MinIO sólo con variables de
+entorno.
+
+Sin configurar nada, los roles son `public` y `local`: lo de siempre, en el
+disco del servidor.
+
+### 1. Los buckets (uno público y uno privado por entorno)
+
+En R2 el acceso público es del **bucket entero** (un subdominio `r2.dev` o un
+dominio propio), no de cada objeto. Por eso cada entorno lleva dos:
+
+| Bucket | Acceso | Para |
+|---|---|---|
+| `<app>-public-<entorno>` | dirección pública: `r2.dev` en desarrollo (tiene límite de tráfico), un dominio propio en producción | el rol `public` |
+| `<app>-private-<entorno>` | ninguna: todo link sale firmado y vence | el rol `private` |
+
+A **los dos** se les configura:
+
+- **CORS** para los orígenes de los fronts web (una app nativa no lo necesita):
+  métodos `PUT`, `GET` y `HEAD`, y `ExposeHeaders: ["ETag"]`. Sin `ETag`
+  expuesto el navegador sube las partes pero no puede leer su ETag, y el
+  `complete` falla.
+
+  ```json
+  [{
+    "AllowedOrigins": ["https://admin.example.com"],
+    "AllowedMethods": ["PUT", "GET", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }]
+  ```
+- **Una regla de ciclo de vida que aborta los multipart incompletos a los 7
+  días.** Es la red de seguridad de lo que `mk:uploads:prune` no alcanzó: una
+  parte subida y nunca unida ocupa espacio y no se ve en el listado del bucket.
+
+### 2. Los disks y los roles
+
+`league/flysystem-aws-s3-v3` (`^3.25`) hace falta para cualquier disk `s3`:
+`composer require league/flysystem-aws-s3-v3`.
+
+```php
+// config/filesystems.php — los nombres de las variables son de la app
+'r2_public' => [
+    'driver' => 's3',
+    'key' => env('R2_ACCESS_KEY_ID'),
+    'secret' => env('R2_SECRET_ACCESS_KEY'),
+    'region' => env('R2_REGION', 'auto'),       // R2: `auto`
+    'bucket' => env('R2_PUBLIC_BUCKET'),
+    'endpoint' => env('R2_ENDPOINT'),           // https://<account>.r2.cloudflarestorage.com
+    'url' => env('R2_PUBLIC_URL'),              // la dirección pública del bucket: arma los links
+    'use_path_style_endpoint' => true,          // MinIO lo necesita, R2 lo acepta
+    'throw' => true,
+],
+'r2_private' => [
+    'driver' => 's3',
+    'key' => env('R2_ACCESS_KEY_ID'),
+    'secret' => env('R2_SECRET_ACCESS_KEY'),
+    'region' => env('R2_REGION', 'auto'),
+    'bucket' => env('R2_PRIVATE_BUCKET'),
+    'endpoint' => env('R2_ENDPOINT'),
+    'use_path_style_endpoint' => true,
+    'visibility' => 'private',
+    'throw' => true,
+],
+```
+
+```dotenv
+MK_STORAGE_PUBLIC_DISK=r2_public    # mk_director.storage.public_disk  (default `public`)
+MK_STORAGE_PRIVATE_DISK=r2_private  # mk_director.storage.private_disk (default `local`)
+MK_STORAGE_SIGNED_URL_TTL=7200      # segundos que vale un link a un archivo privado
+```
+
+### 3. `MkStorage`: el único que arma un link
+
+`Mk\Director\Storage\MkStorage` (por el contenedor:
+`app(MkStorage::class)`):
+
+| Método | Qué hace |
+|---|---|
+| `diskName('public' \| 'private')` | El nombre del disk que cumple el rol. |
+| `disk('public' \| 'private')` | Ese disk (`Filesystem`), para `put`, `get`, `delete`. |
+| `url($disk, $path, ?$ttlSeconds)` | El link de un archivo guardado: en un disk público, `url()`; en uno privado (el del rol, o cualquiera con `visibility: private`), un `temporaryUrl()` firmado que vence a los `signed_url_ttl` segundos. Un path null da null; uno que ya es una URL absoluta se devuelve tal cual. |
+| `isPrivate($disk)` | Si ese disk cuenta como privado. |
+| `profile($name)` | El perfil de subida (abajo). Un nombre que no existe explota. |
+
+🔴 **Nunca `Storage::disk(...)->url()` suelto.** Sobre un bucket privado
+devuelve un link que no abre, y el error recién se ve como una imagen rota.
+`MkMedia::url`, `FileStoragePlugin` (`auto_url`) y los accessors `*_url` que
+genera `mk:make:auth-user` ya pasan por `MkStorage`.
+
+Lo que llega por la API (`FileStoragePlugin`, `HasMkMedia::attachUploadedFile()`)
+se guarda en el disk del rol `public` salvo que se pase otro.
+
+### 4. Perfiles de subida
+
+Un perfil dice qué entra en una clase de archivo, en
+`mk_director.storage.profiles`:
+
+```php
+'image' => [
+    'role' => 'public',                                   // o 'private'
+    'mimes' => ['image/jpeg' => ['jpg', 'jpeg'], 'image/png' => ['png'],
+                'image/webp' => ['webp'], 'image/gif' => ['gif']],  // MIME => extensiones; la 1ª es la que se guarda
+    'max_bytes' => 10 * 1024 * 1024,
+    'max_megapixels' => 25,                               // sólo en perfiles de imágenes
+    'prefix' => 'media/images',                           // carpeta de la key
+],
+```
+
+El paquete trae `avatar` (2 MB), `image` (10 MB, 25 MP), `video` (mp4, mov,
+webm; 50 MB) y `document` (PDF, 20 MB), todos en el rol `public`.
+`ValidatesMkMedia` lee sus topes y tipos de `image`, `video` y `document`, así
+que un formulario `media[]` y una subida directa aceptan lo mismo.
+
+**Un perfil propio de la app** se agrega con `config()` en el `boot()` de un
+provider de la app, después de que el paquete mezcló su config. Así se hace en
+un módulo con archivos grandes y privados:
+
+```php
+public function boot(): void
+{
+    config([
+        'mk_director.storage.profiles.course_video' => [
+            'role' => 'private',
+            'mimes' => ['video/mp4' => ['mp4', 'm4v'], 'video/quicktime' => ['mov'], 'video/webm' => ['webm']],
+            'max_bytes' => 4 * 1024 * 1024 * 1024,
+            'prefix' => 'courses',
+        ],
+    ]);
+}
+```
+
+⚠️ Cada MIME que un perfil tenga que aceptar en una subida directa tiene que ser
+uno que el servidor reconozca por sus bytes (`MkFileInspector::sniff()`):
+`image/jpeg`, `image/png`, `image/webp`, `image/gif`, `application/pdf`,
+`video/mp4`, `video/quicktime`, `video/webm`, `audio/mpeg`, `audio/aac`,
+`audio/wav`, `audio/ogg` y `audio/mp4`. Un alias (`audio/x-wav`) puede estar
+para el arranque, pero el `complete` compara contra el MIME que dan los bytes:
+el perfil tiene que listar también ese.
+
+🔴 **Una app con `config/mk_director.php` publicado tiene que llevar el bloque
+`storage` entero.** Laravel mezcla la config del paquete sólo en el primer
+nivel: el `storage` publicado reemplaza al del paquete, y sin `profiles`
+(`image`, `video`, `document`) `ValidatesMkMedia` explota nombrando el perfil
+que falta. Copiá el bloque de `config/mk_director.php` del paquete, o no
+publiques y configurá con `config()` como arriba.
+
+### 5. Subidas directas: el archivo va del cliente al bucket
+
+El navegador o el teléfono sube el archivo en partes a links firmados; la API
+sólo abre, cierra y registra, y nunca ve los bytes. Sólo con un disk `s3` en el
+rol del perfil.
+
+**Las rutas son opt-in, un grupo por scope.** En el `register()` de un provider
+de la app (el paquete las monta en su `boot()`):
+
+```php
+config([
+    'mk_director.storage.routes.register' => true,   // o MK_UPLOADS_REGISTER_ROUTES=true
+    'mk_director.storage.routes.scopes' => [
+        'admin' => ['prefix' => 'api/admin', 'middleware' => ['api', 'mk.auth:admin']],
+    ],
+]);
+```
+
+| Ruta | Body → respuesta |
+|---|---|
+| `POST api/admin/uploads` | `{profile, filename, bytes, mime}` → 201 `{upload_id, part_size, part_urls, expires_at}` |
+| `POST api/admin/uploads/{upload}/complete` | `{etags: [...]}` (en el orden de las partes) → `{upload_id, mime, bytes, width, height}` |
+| `DELETE api/admin/uploads/{upload}` | cancela → 204 |
+
+Nombres `mk.uploads.{scope}.start|complete|abort`. El dueño de la subida es el
+usuario de la sesión; sin usuario, 401 aunque el grupo no tenga `mk.auth`.
+
+**El recorrido:**
+
+1. **start** valida tipo, extensión y tamaño declarados contra el perfil
+   **antes** de tocar el storage (422 `ERR_UPLOAD_TYPE` / `ERR_UPLOAD_TOO_LARGE`),
+   arma la key en el servidor (`{prefix}/{Y}/{m}/{uuid}.{ext}`: del nombre del
+   cliente no se copia nada), abre el multipart y firma un link por parte
+   (`part_size`, 8 MiB). Los links valen `upload_ttl` (6 h).
+2. El cliente hace `PUT` de cada parte a su link y junta los ETags. En el front
+   esto lo hace `mkDirectUpload` de `@makroz/core`, o directamente
+   `<MkFileUpload direct={{ profile: 'image' }}>` de `@makroz/web` /
+   `@makroz/mobile`, que además puede achicar la foto antes (`optimize`).
+3. **complete** une las partes y **revisa lo guardado**, porque lo declarado no
+   vale nada: los bytes reales (HEAD) contra `max_bytes`
+   (`ERR_UPLOAD_TOO_LARGE`), la firma de los primeros bytes contra los MIME del
+   perfil (`ERR_UPLOAD_TYPE`) y, en un perfil de imágenes, ancho × alto de la
+   cabecera contra `max_megapixels` (`ERR_UPLOAD_DIMENSIONS`). Lo que no pasa se
+   **borra** del bucket y responde 422 con `__extraData.code`. La fila guarda lo
+   medido.
+4. El formulario manda los `upload_ids[]` junto con el resto de los campos, y
+   el servicio los adjunta:
+
+```php
+// FormRequest con ValidatesMkMedia
+public function rules(): array
+{
+    return [/* ... */] + $this->mkMediaRules() + $this->mkUploadIdsRules();
+}
+
+// Service — el modelo usa HasMkMedia
+foreach ($request->validated('upload_ids', []) as $uploadId) {
+    $post->attachUpload($request->user(), (string) $uploadId, 'gallery', profiles: ['image', 'video']);
+}
+```
+
+`mkUploadIdsRules()` valida `upload_ids` (array de uuids distintos, tope
+`mkMediaMaxFiles()`). La pertenencia la garantiza `attachUpload()`: busca la
+subida por id **y** dueño (`$owner` sale de la sesión, nunca del body), sólo
+Completed y sólo de los `profiles` que acepta esa colección; crea la fila de
+`mk_media` y la marca Attached en una transacción con la subida bloqueada. Una
+subida ajena, sin terminar, ya usada o de otro perfil da **404** y no crea nada:
+cada subida se usa una sola vez.
+
+Para un flujo propio (una ruta de arranque que diga para qué es el archivo,
+p. ej. la lección de un curso), el servicio
+`Mk\Director\Storage\DirectUpload\MkDirectUpload` expone
+`start($owner, $profile, $filename, $bytes, $mime, ?$keyPrefix)`,
+`complete($owner, $id, $etags)`, `abort($owner, $id)` y
+`claim($owner, $id, $profiles)`.
+
+### 6. `mk:uploads:prune`, una vez por día
+
+```php
+// routes/console.php
+Schedule::command('mk:uploads:prune')->daily()->withoutOverlapping()->onOneServer();
+```
+
+Deja Aborted, y limpia del bucket, lo que nadie va a usar: las subidas Started
+vencidas (aborta el multipart), las que un `complete()` dejó a medias
+(Completing, vencidas y sin tocar hace una hora) y las Completed que nadie
+adjuntó en `mk_director.storage.prune_unattached_after_hours` horas (24;
+`--hours=N` la pisa). Las Attached no se tocan. `--dry-run` cuenta sin tocar
+nada. `onOneServer()` necesita un cache compartido (`redis`, `database`).
+
+### 7. Otro proveedor (Cloudinary, …)
+
+Leer y servir archivos de otro proveedor es **un disk más** de Laravel (un
+adaptador de Flysystem) asignado a un rol: `MkStorage` y todo lo que pasa por la
+API funcionan sin cambios.
+
+La **subida directa** es otra cosa: hoy sólo existe `S3DirectUploadDriver`, y
+`MkDirectUpload` lo elige por el `driver` del disk (`s3`); otro driver explota
+nombrando el disk. Un proveedor nuevo necesita implementar
+`Mk\Director\Storage\DirectUpload\MkDirectUploadDriver` (`start`,
+`presignParts`, `complete`, `abort`, `size`, `head`) y que `MkDirectUpload` lo
+elija para su driver de disk —un cambio del paquete—. Ese contrato es el de un
+multipart con links `PUT` y ETags; un proveedor que firma parámetros en vez de
+URLs (Cloudinary) además necesita su propio `putPart` en el front.
 
 ## Stack
 

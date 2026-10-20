@@ -233,7 +233,7 @@ test('ADR-5/ADR-6: end-to-end wiring — correctly-detected file field feeds bui
 
     expect($fileFieldNames)->toBe(['avatar']);
     expect($accessors)->toContain('public function getAvatarUrlAttribute(): ?string');
-    expect($accessors)->toContain('Storage::url($this->avatar)');
+    expect($accessors)->toContain("\$storage->url(\$storage->diskName('public'), \$this->avatar)");
 });
 
 test('RETO 2026-07-17: end-to-end wiring — detected file field feeds buildFileFieldsAppends() and emits $appends so /me + /login serialize avatar_url', function () {
@@ -257,9 +257,9 @@ test('RETO 2026-07-17: the model stub declares the {{fileFieldsAppends}} placeho
 test('Phase 2 regression guard: OTP password/code routes + password/change remain pinned in the routes stub after Phase 3 changes', function () {
     $stub = (string) file_get_contents(widePackageRoot().'/src/Stubs/auth-user.routes.stub');
 
-    expect($stub)->toContain("password/code/request");
-    expect($stub)->toContain("password/code/confirm");
-    expect($stub)->toContain("password/change");
+    expect($stub)->toContain('password/code/request');
+    expect($stub)->toContain('password/code/confirm');
+    expect($stub)->toContain('password/change');
 });
 
 test('Phase 2 regression guard: updateProfileRoute placeholder (PATCH me) is still pinned unconditionally in the routes stub', function () {

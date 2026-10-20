@@ -945,12 +945,12 @@ test('FEEDBACK10: buildFileFieldsAccessors() emite get{Name}UrlAttribute dinámi
 
     // accessor para `avatar` → `getAvatarUrlAttribute`.
     expect($out)->toMatch('/function\s+getAvatarUrlAttribute\s*\(\s*\)\s*:\s*\?string/');
-    expect($out)->toContain('Storage::url($this->avatar)');
+    expect($out)->toContain("\$storage->url(\$storage->diskName('public'), \$this->avatar)");
     expect($out)->toContain('URL pública de `avatar`');   // docblock del accessor
 
     // accessor para `cover_photo` → `getCoverPhotoUrlAttribute`.
     expect($out)->toMatch('/function\s+getCoverPhotoUrlAttribute\s*\(\s*\)\s*:\s*\?string/');
-    expect($out)->toContain('Storage::url($this->cover_photo)');
+    expect($out)->toContain("\$storage->url(\$storage->diskName('public'), \$this->cover_photo)");
     expect($out)->toContain('URL pública de `cover_photo`');
 
     // NO `getPhotoUrlAttribute` hardcoded.
@@ -1145,7 +1145,9 @@ test('R-PKG-051: model stub post-generateStub NO contiene placeholders fileField
 
     public function getAvatarUrlAttribute(): ?string
     {
-        return $this->avatar ? \Illuminate\Support\Facades\Storage::url($this->avatar) : null;
+        $storage = app(\Mk\Director\Storage\MkStorage::class);
+
+        return $storage->url($storage->diskName('public'), $this->avatar);
     }
 
 PHP, $stub);

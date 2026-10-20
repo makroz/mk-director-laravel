@@ -179,6 +179,81 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Storage: los dos roles de disk
+    |--------------------------------------------------------------------------
+    | El paquete no nombra proveedores: guarda en el disk del rol `public`
+    | (avatares, galerías) o del rol `private` (documentos que sólo ve quien
+    | tiene permiso). Cada rol es un disk de `config/filesystems.php`: un disk
+    | `s3` cubre Cloudflare R2, S3 y MinIO sólo con variables de entorno.
+    |
+    | Sin configurar quedan `public` y `local`, lo que el paquete usaba antes.
+    | `Mk\Director\Storage\MkStorage` es el único que arma el link de un
+    | archivo: público con `url()`, privado firmado por `signed_url_ttl` segundos.
+    |
+    | SUBIDA DIRECTA (`Mk\Director\Storage\DirectUpload\MkDirectUpload`): el
+    | navegador sube en partes de `part_size` bytes a links firmados que valen
+    | `upload_ttl` segundos; la API nunca ve los bytes. Sólo con un disk `s3`.
+    | Cada subida es una fila de `uploads_table`.
+    |
+    | `mk:uploads:prune` (programalo una vez por día) aborta las subidas que
+    | vencieron sin terminar y borra el objeto de las Completed que nadie
+    | adjuntó en `prune_unattached_after_hours` horas.
+    |
+    | `profiles`: qué entra en cada clase de archivo. `mimes` es MIME =>
+    | extensiones aceptadas (la primera es la que guarda el servidor);
+    | `max_megapixels` marca un perfil de imágenes; `prefix`, la carpeta de la
+    | key. Una app agrega los suyos (o pisa estos) en su config publicada.
+    |
+    | `routes`: las 3 rutas de subida, OPT-IN. Un grupo por scope, cada uno con
+    | su prefijo y su middleware, e.g.
+    |   'admin' => ['prefix' => 'api/admin', 'middleware' => ['api', 'mk.auth:admin']]
+    | monta `POST api/admin/uploads`, `POST api/admin/uploads/{upload}/complete`
+    | y `DELETE api/admin/uploads/{upload}` (nombres `mk.uploads.admin.*`).
+    */
+    'storage' => [
+        'public_disk' => env('MK_STORAGE_PUBLIC_DISK', 'public'),
+        'private_disk' => env('MK_STORAGE_PRIVATE_DISK', 'local'),
+        'signed_url_ttl' => (int) env('MK_STORAGE_SIGNED_URL_TTL', 7200),
+        'upload_ttl' => 21600,          // 6 h para terminar de subir
+        'part_size' => 8 * 1024 * 1024, // 8 MiB por parte
+        'uploads_table' => env('MK_UPLOADS_TABLE', 'mk_uploads'),
+        'prune_unattached_after_hours' => 24,
+        'profiles' => [
+            'avatar' => [
+                'role' => 'public',
+                'mimes' => ['image/jpeg' => ['jpg', 'jpeg'], 'image/png' => ['png'], 'image/webp' => ['webp']],
+                'max_bytes' => 2 * 1024 * 1024,
+                'max_megapixels' => 25,
+                'prefix' => 'avatars',
+            ],
+            'image' => [
+                'role' => 'public',
+                'mimes' => ['image/jpeg' => ['jpg', 'jpeg'], 'image/png' => ['png'], 'image/webp' => ['webp'], 'image/gif' => ['gif']],
+                'max_bytes' => 10 * 1024 * 1024,
+                'max_megapixels' => 25,
+                'prefix' => 'media/images',
+            ],
+            'video' => [
+                'role' => 'public',
+                'mimes' => ['video/mp4' => ['mp4'], 'video/quicktime' => ['mov'], 'video/webm' => ['webm']],
+                'max_bytes' => 50 * 1024 * 1024,
+                'prefix' => 'media/videos',
+            ],
+            'document' => [
+                'role' => 'public',
+                'mimes' => ['application/pdf' => ['pdf']],
+                'max_bytes' => 20 * 1024 * 1024,
+                'prefix' => 'media/documents',
+            ],
+        ],
+        'routes' => [
+            'register' => env('MK_UPLOADS_REGISTER_ROUTES', false),
+            'scopes' => [],
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Reacciones (tabla polimórfica `mk_reactions`)
     |--------------------------------------------------------------------------
     | Usada por el trait `HasMkReactions`. Contenido y autor son ambos

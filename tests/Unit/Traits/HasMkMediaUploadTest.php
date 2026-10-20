@@ -48,6 +48,10 @@ beforeEach(function () {
     Schema::create('upload_owners', function (Blueprint $table): void {
         $table->id();
     });
+
+    // Sin disk explícito se guarda en el del rol `public` (MkStorage): acá, el
+    // disk local REAL del test case.
+    config()->set('mk_director.storage.public_disk', 'local');
 });
 
 afterEach(function () {
@@ -84,10 +88,29 @@ test('guarda el archivo y deduce kind Image del MIME', function () {
         ->and(Storage::disk($media->disk)->exists($media->path))->toBeTrue();
 });
 
+test('sin disk explícito guarda en el disk del rol público, no en el default de la app', function () {
+    // 🔴 El default de la app en RETO es `local` (privado, sin URL): una foto
+    // de galería guardada ahí tenía link a `/storage/…` y el archivo en otro
+    // lado. Por eso cada servicio de RETO pasaba `'public'` a mano.
+    config()->set('filesystems.disks.media_public', [
+        'driver' => 'local',
+        'root' => sys_get_temp_dir().'/mk-director-tests-public-'.getmypid(),
+    ]);
+    config()->set('mk_director.storage.public_disk', 'media_public');
+    $owner = UploadOwner::create([]);
+
+    $media = $owner->attachUploadedFile(UploadedFile::fake()->image('foto.jpg'), 'gallery');
+
+    expect($media->disk)->toBe('media_public')
+        ->and(Storage::disk('media_public')->exists($media->path))->toBeTrue()
+        ->and(Storage::disk('local')->exists($media->path))->toBeFalse();
+
+    Storage::disk('media_public')->deleteDirectory('gallery');
+});
+
 test('mide ancho y alto de la imagen', function () {
-    // Las dimensiones se leen del archivo YA GUARDADO. Si se leyeran del
-    // temporal —que `store()` ya movió—, `getimagesize()` devolvería false y
-    // las dos columnas quedarían en null SIN error.
+    // Las dimensiones se leen del TEMPORAL antes de guardar: releer lo guardado
+    // de un disk remoto (R2, S3) sería bajar entero el archivo recién subido.
     $owner = UploadOwner::create([]);
 
     $media = $owner->attachUploadedFile(UploadedFile::fake()->image('foto.jpg', 320, 240));

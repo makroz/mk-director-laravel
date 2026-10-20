@@ -34,6 +34,7 @@ use Mk\Director\Console\Commands\MkUpdateCommand;
 use Mk\Director\Console\Commands\PerfCommand;
 use Mk\Director\Console\Commands\PruneAbilitiesCommand;
 use Mk\Director\Console\Commands\PrunePushDevicesCommand;
+use Mk\Director\Console\Commands\PruneUploadsCommand;
 use Mk\Director\Console\Commands\SecurityLintCommand;
 use Mk\Director\Console\Commands\SpecIntrospectCommand;
 use Mk\Director\Controllers\OpenApiController;
@@ -42,6 +43,7 @@ use Mk\Director\Export\Contracts\ReportHeaderProvider;
 use Mk\Director\Export\Controllers\MkReportController;
 use Mk\Director\Export\FilasDelExport;
 use Mk\Director\Export\Support\DefaultReportHeaderProvider;
+use Mk\Director\Http\Controllers\MkUploadController;
 use Mk\Director\Http\Middleware\MkApiEnvelope;
 use Mk\Director\Http\Middleware\MkEnvelope;
 use Mk\Director\Managers\CacheManager;
@@ -341,6 +343,9 @@ class MkServiceProvider extends ServiceProvider
                 // Borra los teléfonos de push que no se vieron en N días.
                 // Programalo con `Schedule::command('mk:push:prune')->daily()`.
                 PrunePushDevicesCommand::class,
+                // Aborta las subidas directas vencidas y borra las que nadie adjuntó.
+                // Programalo con `Schedule::command('mk:uploads:prune')->daily()->onOneServer()`.
+                PruneUploadsCommand::class,
             ]);
         }
 
@@ -348,6 +353,7 @@ class MkServiceProvider extends ServiceProvider
         $this->registerOpenApiRoutes();
         $this->registerExportRoutes();
         $this->registerPushRoutes();
+        $this->registerUploadRoutes();
         // 🔴 En `booted`, no acá. El `Artisan::call()` del auto-discover
         // arranca el kernel de consola y marca sus comandos como cargados; si
         // eso pasa durante el boot de los providers, `routes/console.php` —que
@@ -412,6 +418,33 @@ class MkServiceProvider extends ServiceProvider
             Route::post('devices', [MkPushDeviceController::class, 'store'])->name('mk.push.devices.store');
             Route::delete('devices/{address}', [MkPushDeviceController::class, 'destroy'])->name('mk.push.devices.destroy');
         });
+    }
+
+    /**
+     * Las 3 rutas de la subida directa. OPT-IN: sólo con
+     * `mk_director.storage.routes.register = true`, y un grupo por cada scope
+     * de `storage.routes.scopes` (`['admin' => ['prefix' => 'api/admin',
+     * 'middleware' => ['api', 'mk.auth:admin']]]`). Sin scopes no monta nada.
+     *
+     * El middleware es el del scope: el controller además falla cerrado (401)
+     * si no hay usuario, por si un scope quedó sin `mk.auth`.
+     */
+    protected function registerUploadRoutes(): void
+    {
+        if (! config('mk_director.storage.routes.register', false)) {
+            return;
+        }
+
+        foreach ((array) config('mk_director.storage.routes.scopes', []) as $scope => $group) {
+            Route::group([
+                'prefix' => (string) ($group['prefix'] ?? ''),
+                'middleware' => (array) ($group['middleware'] ?? ['api']),
+            ], function () use ($scope): void {
+                Route::post('uploads', [MkUploadController::class, 'start'])->name("mk.uploads.{$scope}.start");
+                Route::post('uploads/{upload}/complete', [MkUploadController::class, 'complete'])->name("mk.uploads.{$scope}.complete");
+                Route::delete('uploads/{upload}', [MkUploadController::class, 'abort'])->name("mk.uploads.{$scope}.abort");
+            });
+        }
     }
 
     /**
