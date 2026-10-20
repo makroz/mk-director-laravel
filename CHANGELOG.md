@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Storage: el inspector reconoce audio
+
+**Added**
+- **`MkFileInspector::sniff()` reconoce audio**: `audio/mpeg` (tag `ID3` o frame MPEG), `audio/aac` (frame ADTS),
+  `audio/wav` (`RIFF…WAVE`), `audio/ogg` (`OggS`) y `audio/mp4` (`ftyp` con marca `M4A `/`M4B `/`M4P `). Un perfil
+  de subida directa de audio ya puede pasar la revisión del `complete()`: antes todo audio salía null y se rechazaba.
+
+**Changed**
+- Un `ftyp` con marca `M4A ` (y `M4B `/`M4P `) ahora es `audio/mp4`, no `video/mp4`: un perfil de video deja de
+  aceptar un M4A de iTunes renombrado `.mp4`. Un M4A con marca genérica (`isom`, `mp42`) sigue saliendo `video/mp4`
+  porque los bytes no dicen más; un perfil de audio que lo acepte lista `video/mp4` con la extensión `m4a`.
+
 ## [UNRELEASED] — Storage: el scaffolder deja el disk al rol público
 
 **Changed**

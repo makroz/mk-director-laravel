@@ -25,10 +25,18 @@ final class MkFileInspector
      * Video: una caja `ftyp` en el byte 4 es MP4, salvo la marca `qt  ` que es
      * QuickTime; un QuickTime viejo arranca con `moov`/`mdat`/`wide`/`free` en
      * vez de `ftyp`. WebM es la firma EBML `1A 45 DF A3`.
+     *
+     * Audio: un tag `ID3` o un frame MPEG (11 bits de sincronía) es MP3, salvo
+     * la capa `00`, que es un frame ADTS (AAC suelto); `RIFF…WAVE` es WAV,
+     * `OggS` es Ogg, y un `ftyp` con marca `M4A `/`M4B `/`M4P ` es M4A.
+     * ⚠️ Muchos teléfonos graban el M4A con una marca genérica (`isom`,
+     * `mp42`): esos salen `video/mp4`, porque los bytes no dicen más. Un perfil
+     * de audio que los acepte lista `video/mp4` con la extensión `m4a`.
      */
     public function sniff(string $head): ?string
     {
         $box = substr($head, 4, 4);
+        $sync = strlen($head) >= 2 && ord($head[0]) === 0xFF && (ord($head[1]) & 0xE0) === 0xE0;
 
         return match (true) {
             str_starts_with($head, "\xFF\xD8\xFF") => 'image/jpeg',
@@ -36,10 +44,16 @@ final class MkFileInspector
             str_starts_with($head, 'RIFF') && substr($head, 8, 4) === 'WEBP' => 'image/webp',
             str_starts_with($head, 'GIF87a'), str_starts_with($head, 'GIF89a') => 'image/gif',
             str_starts_with($head, '%PDF-') => 'application/pdf',
+            $box === 'ftyp' && in_array(substr($head, 8, 4), ['M4A ', 'M4B ', 'M4P '], true) => 'audio/mp4',
             $box === 'ftyp' && substr($head, 8, 4) === 'qt  ' => 'video/quicktime',
             $box === 'ftyp' => 'video/mp4',
             in_array($box, ['moov', 'mdat', 'wide', 'free'], true) => 'video/quicktime',
             str_starts_with($head, "\x1A\x45\xDF\xA3") => 'video/webm',
+            str_starts_with($head, 'ID3') => 'audio/mpeg',
+            $sync && (ord($head[1]) & 0x06) === 0 => 'audio/aac',
+            $sync => 'audio/mpeg',
+            str_starts_with($head, 'RIFF') && substr($head, 8, 4) === 'WAVE' => 'audio/wav',
+            str_starts_with($head, 'OggS') => 'audio/ogg',
             default => null,
         };
     }

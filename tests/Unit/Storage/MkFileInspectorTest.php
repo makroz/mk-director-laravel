@@ -24,6 +24,12 @@ test('sniffs each type the package stores from its first bytes', function (strin
     'quicktime (ftyp qt)' => ["\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00", 'video/quicktime'],
     'quicktime viejo (moov primero)' => ["\x00\x00\x00\x6Cmoov\x00\x00\x00\x00", 'video/quicktime'],
     'webm' => ["\x1A\x45\xDF\xA3\x9F\x42\x86\x81", 'video/webm'],
+    'mp3 (tag ID3)' => ["ID3\x04\x00\x00\x00\x00\x00\x22TSSE", 'audio/mpeg'],
+    'mp3 (frame sin tag)' => ["\xFF\xFB\x90\x64\x00\x00\x00\x00", 'audio/mpeg'],
+    'aac (frame ADTS)' => ["\xFF\xF1\x50\x80\x02\x1F\xFC\x21", 'audio/aac'],
+    'm4a (marca M4A)' => ["\x00\x00\x00\x20ftypM4A \x00\x00\x00\x00", 'audio/mp4'],
+    'wav' => ["RIFF\x24\x00\x00\x00WAVEfmt ", 'audio/wav'],
+    'ogg' => ["OggS\x00\x02\x00\x00\x00\x00\x00\x00", 'audio/ogg'],
 ]);
 
 test('a renamed executable or unknown bytes are not any type', function (string $head) {
@@ -32,7 +38,7 @@ test('a renamed executable or unknown bytes are not any type', function (string 
     'exe' => [FileBytes::exe()],
     'zip' => ["PK\x03\x04\x14\x00\x00\x00"],
     'html' => ['<!doctype html><script>'],
-    'RIFF que no es WebP (wav)' => ["RIFF\x24\x00\x00\x00WAVEfmt "],
+    'RIFF que no es WebP ni WAV (avi)' => ["RIFF\x24\x00\x00\x00AVI LIST"],
     'vacío' => [''],
 ]);
 
