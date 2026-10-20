@@ -254,6 +254,41 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Ayuda y manuales (MkHelp)
+    |--------------------------------------------------------------------------
+    | Los manuales son archivos Markdown con front matter en `content_path`
+    | (`admin/`, `member/`, `business/`: la carpeta de arriba ES la audiencia).
+    | `mk:help:sync` los indexa en `articles_table`; corrélo en cada deploy.
+    |
+    | 🔴 Los permisos NUNCA esconden un artículo: el `ability` del front matter
+    | es informativo, el front muestra «Necesitás el permiso …».
+    |
+    | `routes`: OPT-IN. Un grupo por scope, cada uno con su prefijo, su
+    | middleware y las audiencias que ve, e.g.
+    |   'admin' => ['prefix' => 'api/admin', 'middleware' => ['api', 'mk.auth:admin'],
+    |               'audiences' => ['admin', 'business'], 'share' => true]
+    | monta `GET api/admin/help/tree` y `GET api/admin/help/articles/{slug}`
+    | (nombres `mk.help.admin.*`).
+    */
+    'help' => [
+        'content_path' => resource_path('help'),
+        'articles_table' => env('MK_HELP_ARTICLES_TABLE', 'mk_help_articles'),
+        'share_links_table' => env('MK_HELP_SHARE_LINKS_TABLE', 'mk_help_share_links'),
+        'image_prefix' => 'help',                 // carpeta en el rol público del storage
+        'routes' => [
+            'register' => env('MK_HELP_REGISTER_ROUTES', false),
+            'scopes' => [],
+            'public' => ['prefix' => 'api/help', 'middleware' => ['api', 'throttle:60,1']],
+        ],
+        'share' => [
+            'ability' => null,                    // e.g. 'admin.help.share'; null = nadie comparte
+            'max_hours' => 720,
+            'public_url' => env('MK_HELP_SHARE_URL'), // base de la página pública; se le agrega el token
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Reacciones (tabla polimórfica `mk_reactions`)
     |--------------------------------------------------------------------------
     | Usada por el trait `HasMkReactions`. Contenido y autor son ambos
