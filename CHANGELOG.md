@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - El `delete()` del Repository generado borra con `MkStorage::disk('public')`, y `checkStorageLink()` mira el disk del
   rol público. Los dos leían `mk_director.storage.disk`, una clave que nunca existió.
 
+**Added**
+- **`HasMkMedia::attachUpload(..., profiles: 'image' | ['image', 'document'])`**: los perfiles que acepta la colección.
+  Una subida de otro perfil es 404, igual que una ajena, y no crea nada: sin él, la portada de un modelo podía recibir un
+  video o un PDF que `media[]` nunca habría dejado entrar. `MkDirectUpload::claim()` acepta también una lista de
+  perfiles. Sin el argumento se comporta como antes.
+
 ⚠️ Un scope ya generado conserva su `'disk' => 'public'` hasta que se regenera o se borra a mano: el plugin respeta un
 `disk` explícito.
 

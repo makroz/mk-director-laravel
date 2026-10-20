@@ -201,15 +201,28 @@ trait HasMkMedia
      * dueño: un id ajeno, uno todavía Started o uno ya adjuntado dan 404 y no
      * crean nada.
      *
+     * `$profiles` dice qué perfiles acepta ESTA colección (`'image'`, o
+     * `['image', 'document']`). Sin él entra una subida de cualquier perfil: la
+     * portada de un terreno recibiría un video o un PDF que el formulario nunca
+     * habría dejado subir por `media[]`. Una subida de otro perfil es 404, igual
+     * que una ajena.
+     *
      * Todo en una transacción con la subida bloqueada: dos requests con el
      * mismo id no pueden crear dos filas de media sobre el mismo objeto.
      *
+     * @param  string|list<string>|null  $profiles
+     *
      * @throws MkUploadException 404
      */
-    public function attachUpload(Model $owner, string $uploadId, string $collection = 'default', ?int $position = null): MkMedia
-    {
-        return $this->getConnection()->transaction(function () use ($owner, $uploadId, $collection, $position): MkMedia {
-            $upload = app(MkDirectUpload::class)->claim($owner, $uploadId);
+    public function attachUpload(
+        Model $owner,
+        string $uploadId,
+        string $collection = 'default',
+        ?int $position = null,
+        string|array|null $profiles = null,
+    ): MkMedia {
+        return $this->getConnection()->transaction(function () use ($owner, $uploadId, $collection, $position, $profiles): MkMedia {
+            $upload = app(MkDirectUpload::class)->claim($owner, $uploadId, $profiles);
             $mime = (string) $upload->mime;
 
             $attributes = [

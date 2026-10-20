@@ -428,6 +428,17 @@ test('attachUpload refuses another owner\'s upload', function () {
         ->and(MkUpload::query()->find($upload->id)->status)->toBe(MkUploadStatus::Completed);
 });
 
+test('attachUpload refuses an upload of a profile the collection does not take', function () {
+    $upload = completedUpload($this, $this->ana);
+    $post = DirectUploadPost::create([]);
+
+    expect(uploadError(fn () => $post->attachUpload($this->ana, $upload->id, 'cover', profiles: ['video', 'document']))->status)->toBe(404)
+        ->and(MkMedia::query()->count())->toBe(0)
+        ->and(MkUpload::query()->find($upload->id)->status)->toBe(MkUploadStatus::Completed);
+
+    expect($post->attachUpload($this->ana, $upload->id, 'cover', profiles: 'image')->path)->toBe($upload->key);
+});
+
 test('attachUpload refuses a started upload', function () {
     $id = $this->uploads->start($this->ana, 'image', 'foto.jpg', 10, 'image/jpeg')['upload']->id;
     $post = DirectUploadPost::create([]);

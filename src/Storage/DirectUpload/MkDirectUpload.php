@@ -207,18 +207,21 @@ final class MkDirectUpload
     }
 
     /**
-     * La subida Completed de ESTE dueño (y de ese perfil, si se pide), con
-     * `lockForUpdate`. Llamala dentro de una transacción: es lo que impide que
-     * dos requests simultáneos adjunten la misma subida dos veces.
+     * La subida Completed de ESTE dueño (y de ese perfil, o de uno de esos
+     * perfiles, si se pide), con `lockForUpdate`. Llamala dentro de una
+     * transacción: es lo que impide que dos requests simultáneos adjunten la
+     * misma subida dos veces.
+     *
+     * @param  string|list<string>|null  $profile
      *
      * @throws MkUploadException 404 si no existe, es de otro, no está Completed o es de otro perfil
      */
-    public function claim(Model $owner, string $uploadId, ?string $profile = null): MkUpload
+    public function claim(Model $owner, string $uploadId, string|array|null $profile = null): MkUpload
     {
         $query = $this->find($owner, $uploadId, [MkUploadStatus::Completed]);
 
         if ($profile !== null) {
-            $query->where('profile', $profile);
+            $query->whereIn('profile', (array) $profile);
         }
 
         return $query->lockForUpdate()->first() ?? throw MkUploadException::notFound();
