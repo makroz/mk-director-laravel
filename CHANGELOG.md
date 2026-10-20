@@ -12,6 +12,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `mk-studio:perf --capture`: el código escrito a mano
+
+**Added**
+- **`Mk\Director\Perf\CaptureListener`**: mientras corren los tests de un módulo, escribe cada SELECT que corre el
+  código de la app en un JSONL (`database`, `connection`, `sql`, `bindings`, `file`, `line`, `outside`, `group`).
+  `file:line` es el marco más interno dentro del módulo medido (`app/Modules/<Módulo>/…`); sin uno, el del código de la
+  app más cercano y `outside: true`. Una consulta que no corrió ningún código de la app (el test, una migración) no se
+  escribe, ni las escrituras. `group` cambia por app (test) y por request: una forma repetida desde una línea dentro de
+  un grupo es una consulta por fila. Test: `capture_records_the_module_frame_and_marks_outside_code`.
+- **`MK_PERF_CAPTURE`** (el archivo) y **`MK_PERF_MODULE`** (el módulo): `MkServiceProvider` registra la captura sólo
+  con la primera, y 🔴 **se niega a arrancar** si la conexión por defecto no es una base `*_mk_studio_perf_tests`: los
+  tests nunca corren con la captura sobre la base de tests del proyecto ni sobre la de la app. Las pone sólo el
+  corredor de MK Studio, nunca `.env`. Tests: `capture_is_off_without_the_env_var`,
+  `capture_refuses_a_database_that_is_not_the_perf_tests_one`.
+- **`mk-studio:perf --prepare-tests`**: sólo crea `<db>_mk_studio_perf_tests` vacía (con las guardas de
+  `ScratchDatabase`, borrando una vieja) e imprime `{"database": …}`.
+- **`mk-studio:perf --capture=<archivo>`**: después de las pantallas, repite sobre el volumen cada forma SELECT
+  capturada que ninguna pantalla corrió (mediana de 5 después de un calentamiento, y su plan), con los bindings de los
+  tests. Salen como consultas `origin: {kind: 'code', file, line, outside}` con `replayed: true` («sobre datos de
+  test»: un binding puede nombrar una fila que el volumen no tiene; el plan vale, el tiempo puede quedar bajo) y
+  `duplicates`. Una forma que falla sobre el volumen va a `notes` y la corrida sigue. Sus planes cuentan para
+  `unusedIndexes`. Tests: `replay_reports_code_queries_with_plan_and_origin` (sin tocar la base de la app),
+  `a_shape_that_fails_on_the_volume_db_is_a_note_not_an_abort`, en los dos motores.
+
+**Changed**
+- `mk-studio:perf` borra al final también `<db>_mk_studio_perf_tests` (salvo `--keep`): la de los tests, quede o no
+  una captura.
+
+**Fixed** (ruido medido en RETO School: 141 consultas de código)
+- Los marcos de **preparación de los tests** no son código del módulo: migraciones, factories y seeders
+  (`Database/Migrations|Factories|Seeders/` de cualquier módulo y `database/` en la raíz) se saltean al buscar el marco.
+  Una consulta que sólo corrieron ellos no se escribe; la de un servicio que una migración llama, sí, en la línea del
+  servicio.
+- Las consultas **al motor mismo** no se capturan (`QueryRecorder::isEngineQuery()`): su catálogo
+  (`information_schema`, `performance_schema`, `mysql.`, `SHOW`, `pg_catalog` y tablas `pg_*`; `Schema::getColumns()`
+  desde un modelo era una) y las funciones de bloqueo (`pg_advisory_*`, `pg_try_advisory_*`, `GET_LOCK`,
+  `RELEASE_LOCK`, `IS_FREE_LOCK`…).
+- 🔴 **Un bool se repite como bool.** La captura y los lectores de planes pasaban los bindings por
+  `prepareBindings()`, que hace de un bool 0/1; el plan de PostgreSQL escribía `active = 1` y fallaba con
+  «operator does not exist: boolean = integer» (6 notas en RETO School). `QueryRecorder::bindable()` sólo convierte
+  fechas; `escape()` escribe el bool como lo lee cada motor. Afecta también los planes de las pantallas.
+- **`SELECT … FOR UPDATE` se repite sin el bloqueo** (`QueryRecorder::withoutLock()`: `for update|no key update|share|
+  key share`, `of …`, `nowait`, `skip locked`; MariaDB `lock in share mode`): el plan corre en una transacción de sólo
+  lectura, que lo rechaza (7 notas en RETO School). `sql` lo conserva y la consulta sale con `unlocked: true`.
+  Test: `replay_strips_the_lock_and_binds_booleans_as_booleans`, en los dos motores.
+- 🔴 `QueryRecorder::isSelect()` ya no toma por lectura un `with … update` (un CTE que modifica datos): una lectura no
+  tiene `insert`/`update`/`delete`/`merge` en ninguna parte (fuera de literales y nombres entre comillas); `for update` y
+  `for share` siguen siendo lecturas. Lo usan también los lectores de planes, que ejecutan lo que analizan.
+  Test: `capture_skips_setup_frames_catalog_queries_and_writes`.
+
 ## [UNRELEASED] — `mk-studio:perf`: cada pantalla y cada plan
 
 **Added**

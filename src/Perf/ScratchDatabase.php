@@ -29,6 +29,11 @@ final class ScratchDatabase
     /** What a scratch database is called. Anything else is refused, on create and on drop. */
     public const NAME = '/^[A-Za-z0-9_]+_mk_studio_perf(_tests)?$/';
 
+    /** Where the module's tests run while their queries are captured (`mk-studio:perf --prepare-tests`). */
+    public const TESTS_SUFFIX = 'mk_studio_perf_tests';
+
+    public const TESTS_NAME = '/^[A-Za-z0-9_]+_mk_studio_perf_tests$/';
+
     private const MAINTENANCE = 'mk_studio_perf_maintenance';
 
     /** @var array{name: string, config: array<string, mixed>}|null the app's default connection, while in use */
@@ -93,6 +98,21 @@ final class ScratchDatabase
         $database = $this->assertScratch($connection);
         $config = $this->app['config'] ?? (array) config("database.connections.{$connection}");
         $this->release($connection);
+        $driver = (string) $config['driver'];
+        $this->maintenance($config, fn (Connection $db) => $db->statement($this->dropSql($driver, $database)));
+    }
+
+    /**
+     * Drops `<db>_<suffix>` if it is there, without ever pointing the app at it: the tests' database once their capture
+     * is written. The same name guard as `create()`.
+     */
+    public function discard(string $suffix): void
+    {
+        $config = (array) config('database.connections.'.config('database.default'));
+        $database = ($config['database'] ?? '').'_'.$suffix;
+        if (! preg_match(self::NAME, $database)) {
+            throw new RuntimeException("refused: {$database} is not a scratch database.");
+        }
         $driver = (string) $config['driver'];
         $this->maintenance($config, fn (Connection $db) => $db->statement($this->dropSql($driver, $database)));
     }

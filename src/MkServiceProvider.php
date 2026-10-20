@@ -48,6 +48,7 @@ use Mk\Director\Managers\CacheManager;
 use Mk\Director\Managers\PluginManager;
 use Mk\Director\Models\MkReport;
 use Mk\Director\ModuleLoader\ModuleLoaderServiceProvider;
+use Mk\Director\Perf\CaptureListener;
 use Mk\Director\Plugins\FileStoragePlugin;
 use Mk\Director\Push\Contracts\PushProvider;
 use Mk\Director\Push\Http\Controllers\MkPushDeviceController;
@@ -258,6 +259,13 @@ class MkServiceProvider extends ServiceProvider
         // Dir separado a propósito — Auth/Database/Migrations es el store de
         // RBAC y meter tablas de dominio ahí borra esa frontera.
         $this->loadMigrationsFrom(__DIR__.'/Database/Migrations');
+
+        // MK Studio's capture of hand-written code: only while its runner runs a module's tests (it sets the variable,
+        // never `.env`). It refuses any database but a `*_mk_studio_perf_tests` one.
+        $capture = env(CaptureListener::FILE_ENV);
+        if (is_string($capture) && $capture !== '') {
+            CaptureListener::register($capture, (string) env(CaptureListener::MODULE_ENV));
+        }
 
         // R-PKG-046 F9-B07 — Lazy plugin boot.
         //

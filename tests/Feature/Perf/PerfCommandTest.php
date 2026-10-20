@@ -2,24 +2,32 @@
 
 declare(strict_types=1);
 
+use App\Modules\PerfGraph\Services\OwnerCount;
 use App\Modules\PerfScreens\Http\Controllers\ProductController;
+use App\Modules\PerfShop\Database\Factories\ItemFactory;
 use App\Modules\PerfShop\Http\Controllers\ItemController;
 use App\Modules\PerfShop\Models\Item;
+use App\Modules\PerfShop\Services\ItemReport;
 use App\Modules\PerfSlope\Http\Controllers\BatchedController;
 use App\Modules\PerfSlope\Http\Controllers\PerRowController;
 use Illuminate\Console\Application;
 use Illuminate\Contracts\Console\Kernel as ConsoleKernelContract;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\Relation;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
 use Illuminate\Foundation\Providers\ConsoleSupportServiceProvider;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
 use Mk\Director\Auth\Models\AuthUser;
+use Mk\Director\MkServiceProvider;
+use Mk\Director\Perf\CaptureListener;
 use Mk\Director\Perf\Plans\MariaDbPlanReader;
 use Mk\Director\Perf\Plans\PlanReader;
 use Mk\Director\Perf\Plans\PostgresPlanReader;
+use Mk\Director\Perf\QueryRecorder;
 use Mk\Director\Perf\ScratchDatabase;
 use Mk\Director\Tests\Concerns\BootsHttpApp;
 use Mk\Director\Tests\MkLaravelTestCase;
@@ -139,7 +147,7 @@ beforeEach(function () {
     if (perfServer() === null) {
         $this->markTestSkipped('needs a server: MK_PERF_TEST_DRIVER=pgsql|mariadb, MK_PERF_TEST_HOST, _PORT, _USERNAME, _PASSWORD.');
     }
-    foreach (['', '_mk_studio_perf', '_perf'] as $suffix) {
+    foreach (['', '_mk_studio_perf', '_mk_studio_perf_tests', '_perf'] as $suffix) {
         perfDropTestDatabase(PERF_APP_DB.$suffix);
     }
     perfPdo()->exec('create database '.PERF_APP_DB);
@@ -182,7 +190,7 @@ afterEach(function () {
     Relation::morphMap([], false);
     $this->tearDownHttpApp();
     Application::forgetBootstrappers();
-    foreach (['', '_mk_studio_perf', '_perf'] as $suffix) {
+    foreach (['', '_mk_studio_perf', '_mk_studio_perf_tests', '_perf'] as $suffix) {
         perfDropTestDatabase(PERF_APP_DB.$suffix);
     }
 });
@@ -407,4 +415,227 @@ test('plan_reader_refuses_a_write', function () {
 
     expect(fn () => $reader->read('app', 'delete from perf_items', []))->toThrow(InvalidArgumentException::class)
         ->and(DB::table('perf_items')->count())->toBe(5003);
+});
+
+const PERF_TESTS_DB = PERF_APP_DB.'_mk_studio_perf_tests';
+
+/** The line of a fixture file that carries `// capture: <marker>`. */
+function perfLine(string $file, string $marker): int
+{
+    $lines = file(__DIR__.'/../../Fixtures/Perf/Modules/'.$file);
+    foreach ($lines as $i => $line) {
+        if (str_contains($line, "// capture: {$marker}")) {
+            return $i + 1;
+        }
+    }
+    throw new LogicException("no marker {$marker} in {$file}");
+}
+
+/**
+ * What MK Studio's runner does before `--capture`, in process: `--prepare-tests`, the "tests" on that database with the
+ * capture on (the module's code, another module's code, a write and a query of the test itself), and the app pointed
+ * back at its own database. Returns the capture file. `$tests` replaces those "tests".
+ */
+function perfCapture(?callable $tests = null): string
+{
+    [$code, $output] = perfRun(['--prepare-tests' => true]);
+    expect($code)->toBe(0, $output)
+        ->and(json_decode($output, true))->toBe(['database' => PERF_TESTS_DB]);
+    config(['database.connections.app.database' => PERF_TESTS_DB]);
+    DB::purge('app');
+    Artisan::call('migrate', ['--database' => 'app', '--force' => true]);
+    foreach (range(1, 3) as $i) {
+        $owner = DB::table('perf_owners')->insertGetId(['name' => "owner {$i}"]);
+        DB::table('perf_items')->insert(['owner_id' => $owner, 'name' => "item {$i}", 'status' => 1]);
+    }
+
+    $file = tempnam(sys_get_temp_dir(), 'mk-capture-');
+    unlink($file);
+    CaptureListener::register($file, 'PerfShop');
+    ($tests ?? static function (): void {
+        $report = new ItemReport;
+        $report->byStatus(1);
+        $report->ownerNames();
+        $report->rename(1, 'renamed');
+        $report->total();
+        (new OwnerCount)->total();
+        DB::table('perf_items')->where('name', 'item 2')->first();
+    })();
+
+    Event::forget(QueryExecuted::class);
+    config(['database.connections.app.database' => PERF_APP_DB]);
+    DB::purge('app');
+
+    return $file;
+}
+
+/** @return list<array<string, mixed>> */
+function perfCaptured(string $file): array
+{
+    return array_map(static fn (string $l): array => json_decode($l, true, flags: JSON_THROW_ON_ERROR), file($file, FILE_IGNORE_NEW_LINES));
+}
+
+test('capture_records_the_module_frame_and_marks_outside_code', function () {
+    $lines = perfCaptured(perfCapture());
+    $at = static fn (array $l): string => basename($l['file']).':'.$l['line'];
+    $report = 'ItemReport.php:';
+
+    // Every SELECT some app code ran, at the line that ran it; not the write, not the test's own query.
+    expect(array_map($at, $lines))->toBe([
+        $report.perfLine('PerfShop/Services/ItemReport.php', 'byStatus'),
+        $report.(perfLine('PerfShop/Services/ItemReport.php', 'perOwner') - 1),
+        ...array_fill(0, 3, $report.perfLine('PerfShop/Services/ItemReport.php', 'perOwner')),
+        $report.perfLine('PerfShop/Services/ItemReport.php', 'total'),
+        'OwnerCount.php:'.perfLine('PerfGraph/Services/OwnerCount.php', 'outside'),
+    ]);
+    expect($lines[0]['file'])->toEndWith('Fixtures/Perf/Modules/PerfShop/Services/ItemReport.php')
+        ->and($lines[0]['bindings'])->toBe([1])
+        ->and($lines[0]['sql'])->toContain('perf_items')
+        ->and(array_unique(array_column($lines, 'database')))->toBe([PERF_TESTS_DB])
+        ->and(array_unique(array_column($lines, 'connection')))->toBe(['app'])
+        ->and(array_column($lines, 'outside'))->toBe([false, false, false, false, false, false, true])
+        ->and(implode("\n", array_column($lines, 'sql')))->not->toContain('update');
+    // One group: one test, no request in between.
+    expect(array_unique(array_column($lines, 'group')))->toHaveCount(1);
+});
+
+test('capture_skips_setup_frames_catalog_queries_and_writes', function () {
+    $cte = 'with x as (select id from perf_items) update perf_items set status = 2 where id in (select id from x)';
+    $lines = perfCaptured(perfCapture(static function () use ($cte): void {
+        $migration = require __DIR__.'/../../Fixtures/Perf/Modules/PerfShop/Database/Migrations/2026_10_20_000001_backfill_items.php';
+        $migration->up();
+        $migration->viaService();
+        (new ItemFactory)->definition();
+        (new ItemReport)->columns();
+        (new ItemReport)->announce($cte);
+        (new ItemReport)->announce('select id from perf_items where id = 1 for update');
+        (new ItemReport)->announce('select pg_advisory_xact_lock(hashtext(?))');
+        (new ItemReport)->announce('select GET_LOCK(?, 5)');
+    }));
+
+    // The migration's and the factory's own reads are setup; the service a migration calls is the module's code. The
+    // catalog lookup and the data-modifying CTE are not written; a locking read is.
+    expect(array_map(static fn (array $l): string => basename($l['file']).':'.$l['line'], $lines))->toBe([
+        'ItemReport.php:'.perfLine('PerfShop/Services/ItemReport.php', 'byStatus'),
+        'ItemReport.php:'.perfLine('PerfShop/Services/ItemReport.php', 'announce'),
+    ])
+        ->and($lines[1]['sql'])->toEndWith('for update')
+        ->and(QueryRecorder::isSelect($cte))->toBeFalse()
+        ->and(QueryRecorder::isSelect('select "update", \'delete\' from perf_items'))->toBeTrue()
+        ->and(QueryRecorder::isEngineQuery('select * from information_schema.columns where table_name = ?'))->toBeTrue()
+        ->and(QueryRecorder::isEngineQuery('select pg_try_advisory_lock(?)'))->toBeTrue()
+        ->and(QueryRecorder::isEngineQuery('select release_lock(?)'))->toBeTrue()
+        ->and(QueryRecorder::isEngineQuery('select * from perf_items'))->toBeFalse()
+        ->and(QueryRecorder::withoutLock('select * from "t" where "id" = ? for no key update of "t" skip locked'))->toBe('select * from "t" where "id" = ?')
+        ->and(QueryRecorder::withoutLock('select * from `t` lock in share mode'))->toBe('select * from `t`')
+        ->and(QueryRecorder::withoutLock('select * from t'))->toBe('select * from t');
+});
+
+test('replay_strips_the_lock_and_binds_booleans_as_booleans', function () {
+    $file = perfCapture(static function (): void {
+        (new ItemReport)->active();
+        (new ItemReport)->lockOne();
+    });
+    $lines = perfCaptured($file);
+    expect($lines[0]['bindings'])->toBe([true]);
+
+    [$code, $output] = perfRun(['--capture' => $file]);
+
+    expect($code)->toBe(0, $output);
+    $run = json_decode($output, true, flags: JSON_THROW_ON_ERROR);
+    $byLine = [];
+    foreach ($run['queries'] as $q) {
+        if ($q['origin']['kind'] === 'code') {
+            $byLine[$q['origin']['line']] = $q;
+        }
+    }
+    $active = $byLine[perfLine('PerfShop/Services/ItemReport.php', 'active')];
+    $lock = $byLine[perfLine('PerfShop/Services/ItemReport.php', 'lock')];
+
+    // Both replayed and planned on the volume: the bool bound as one, the lock left out and said so.
+    expect(implode("\n", $run['notes']))->not->toContain('no se pudo repetir')
+        ->and($active['plan']['raw'])->not->toBeNull()
+        ->and($active)->not->toHaveKey('unlocked')
+        ->and($lock['sql'])->toEndWith('for update')
+        ->and($lock['unlocked'])->toBeTrue()
+        ->and($lock['plan']['raw'])->not->toBeNull();
+});
+
+test('capture_is_off_without_the_env_var', function () {
+    // beforeEach booted the app without MK_PERF_CAPTURE: nothing listens to the queries.
+    expect($this->httpApp['events']->hasListeners(QueryExecuted::class))->toBeFalse();
+
+    // With it, the provider starts the capture, whose guard refuses this database.
+    putenv(CaptureListener::FILE_ENV.'='.sys_get_temp_dir().'/mk-capture-on');
+    putenv(CaptureListener::MODULE_ENV.'=PerfShop');
+    try {
+        expect(fn () => (new MkServiceProvider($this->httpApp))->boot())->toThrow(RuntimeException::class, 'capture refused');
+    } finally {
+        putenv(CaptureListener::FILE_ENV);
+        putenv(CaptureListener::MODULE_ENV);
+    }
+});
+
+test('capture_refuses_a_database_that_is_not_the_perf_tests_one', function () {
+    $file = sys_get_temp_dir().'/mk-capture-refused-'.uniqid();
+
+    // The app's own database: the tests must never run there with the capture on.
+    expect(fn () => CaptureListener::register($file, 'PerfShop'))->toThrow(RuntimeException::class, PERF_APP_DB.', not on a *_mk_studio_perf_tests');
+    (new ItemReport)->byStatus(1);
+    expect(file_exists($file))->toBeFalse()
+        ->and($this->httpApp['events']->hasListeners(QueryExecuted::class))->toBeFalse();
+});
+
+test('replay_reports_code_queries_with_plan_and_origin', function () {
+    $file = perfCapture();
+    $before = perfRowCounts();
+
+    [$code, $output] = perfRun(['--capture' => $file]);
+
+    expect(perfRowCounts())->toBe($before);
+    expect($code)->toBe(0, $output);
+    $run = json_decode($output, true, flags: JSON_THROW_ON_ERROR);
+    $code = array_column(array_filter($run['queries'], static fn (array $q): bool => $q['origin']['kind'] === 'code'), null, 'sql');
+    $count = array_values(array_filter($run['queries'], static fn (array $q): bool => $q['origin']['kind'] === 'screen' && $q['origin']['screen'] === 'count'))[0];
+    $byStatus = array_values(array_filter($code, static fn (array $q): bool => $q['origin']['line'] === perfLine('PerfShop/Services/ItemReport.php', 'byStatus')))[0];
+    $perOwner = array_values(array_filter($code, static fn (array $q): bool => $q['origin']['line'] === perfLine('PerfShop/Services/ItemReport.php', 'perOwner')))[0];
+    $outside = array_values(array_filter($code, static fn (array $q): bool => $q['origin']['outside']));
+
+    // The module's full scan, timed and planned on the 1,000 items of the volume, with the tests' bindings.
+    expect($byStatus['origin']['file'])->toEndWith('PerfShop/Services/ItemReport.php')
+        ->and($byStatus['origin']['outside'])->toBeFalse()
+        ->and($byStatus['replayed'])->toBeTrue()
+        ->and($byStatus['plan']['fullScan'])->toBeTrue()
+        ->and($byStatus['plan']['rowsRead'])->toBeGreaterThanOrEqual(1000)
+        ->and($byStatus['plan']['raw'])->not->toBeNull()
+        ->and($byStatus['medianMs'])->toBeGreaterThan(0)
+        ->and($byStatus['queriesAt'])->toBeNull();
+    // A query per row: three times from one line in one test.
+    expect($perOwner['duplicates'])->toBe(2)
+        ->and($byStatus['duplicates'])->toBe(0);
+    // Another module's code: there, marked outside.
+    expect($outside)->toHaveCount(1)
+        ->and($outside[0]['origin']['file'])->toEndWith('PerfGraph/Services/OwnerCount.php');
+    // The count the screen already measured is not measured again as code.
+    expect($code)->toHaveCount(4)
+        ->and(array_keys($code))->not->toContain($count['sql'])
+        ->and(implode("\n", $run['notes']))->toContain('sobre datos de test')
+        ->and(perfDatabaseExists(PERF_TESTS_DB))->toBeFalse();
+});
+
+test('a_shape_that_fails_on_the_volume_db_is_a_note_not_an_abort', function () {
+    $file = tempnam(sys_get_temp_dir(), 'mk-capture-');
+    $line = static fn (string $sql, int $at): string => json_encode([
+        'database' => PERF_TESTS_DB, 'connection' => 'app', 'sql' => $sql, 'bindings' => [2],
+        'file' => 'app/Modules/PerfShop/Services/Legacy.php', 'line' => $at, 'outside' => false, 'group' => 'g1',
+    ])."\n";
+    file_put_contents($file, $line('select id from perf_items where legacy_code = ?', 7).$line('select id from perf_items where status = ?', 9));
+
+    [$code, $output] = perfRun(['--capture' => $file]);
+
+    expect($code)->toBe(0, $output);
+    $run = json_decode($output, true, flags: JSON_THROW_ON_ERROR);
+    $code = array_values(array_filter($run['queries'], static fn (array $q): bool => $q['origin']['kind'] === 'code'));
+    expect(array_column(array_column($code, 'origin'), 'line'))->toBe([9])
+        ->and(implode("\n", $run['notes']))->toContain('app/Modules/PerfShop/Services/Legacy.php:7 no se pudo repetir sobre el volumen');
 });
