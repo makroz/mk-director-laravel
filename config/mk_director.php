@@ -254,6 +254,71 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Ayuda y manuales (MkHelp)
+    |--------------------------------------------------------------------------
+    | Los manuales son archivos Markdown con front matter en `content_path`
+    | (`admin/`, `member/`, `business/`: la carpeta de arriba ES la audiencia).
+    | `mk:help:sync` los indexa en `articles_table`; corrélo en cada deploy.
+    |
+    | 🔴 Los permisos NUNCA esconden un artículo: el `ability` del front matter
+    | es informativo, el front muestra «Necesitás el permiso …».
+    |
+    | Imágenes: `![alt](img/x.webp)` con la ruta RELATIVA A LA CARPETA DEL `.md`
+    | (`admin/kyc/aprobar.md` → `admin/kyc/img/x.webp`); sólo png/jpg/jpeg/webp.
+    | La sync las sube por contenido al rol PÚBLICO del storage
+    | (`<image_prefix>/<sha1>.<ext>`) y reescribe el cuerpo con su URL.
+    |
+    | `screens.yaml` en la raíz de `content_path`: las pantallas de los fronts,
+    | `admin.kyc.index: Lista de verificaciones`. Un artículo que lista una
+    | pantalla que no está ahí (o sin ese archivo) hace fallar la sync; las que
+    | ningún artículo lista salen en el reporte.
+    |
+    | Un enlace a otro artículo se escribe con su slug, como en `related`:
+    | `[Pagar un retiro](admin/retiros/pagar)`. Todo enlace sin esquema se lee
+    | así, y uno que no lleva a un artículo hace fallar la sync.
+    |
+    | `routes`: OPT-IN. Un grupo por scope, cada uno con su prefijo, su
+    | middleware y las audiencias que ve, e.g.
+    |   'admin' => ['prefix' => 'api/admin', 'middleware' => ['api', 'mk.auth:admin'],
+    |               'audiences' => ['admin', 'business'], 'share' => true]
+    | monta `GET api/admin/help/tree`, `help/articles/{slug}`, `help/search?q=`,
+    | `help/screens/{screen}` (el artículo de una pantalla, o 404) y
+    | `help/manual/{audience}` (el manual entero, para imprimir), con nombres
+    | `mk.help.admin.*`.
+    |
+    | El `README.md` de la raíz de `content_path` no se indexa: es para quien
+    | escribe los manuales.
+    |
+    | Enlaces públicos (`share`): un scope con `share: true` suma
+    | `GET/POST help/share-links` y `DELETE help/share-links/{id}`, sólo para
+    | quien tiene `canMk(share.ability)` (null = nadie) y cada uno con SUS
+    | enlaces. `target` es `slug:<slug>` o `manual:<audience>` de lo que ese
+    | scope ve; dura `hours` (1..`max_hours`). La URL es `public_url` + '/' +
+    | token, y el token sale UNA vez: la tabla guarda su sha256. La página
+    | pública lee `GET {routes.public.prefix}/shared/{token}` y
+    | `…/shared/{token}/articles/{slug}`, sin sesión y con el throttle de
+    | `routes.public.middleware`; vencido o revocado es 410. Lo compartido se
+    | ve entero: los permisos no esconden nada.
+    */
+    'help' => [
+        'content_path' => resource_path('help'),
+        'articles_table' => env('MK_HELP_ARTICLES_TABLE', 'mk_help_articles'),
+        'share_links_table' => env('MK_HELP_SHARE_LINKS_TABLE', 'mk_help_share_links'),
+        'image_prefix' => 'help',                 // carpeta en el rol público del storage
+        'routes' => [
+            'register' => env('MK_HELP_REGISTER_ROUTES', false),
+            'scopes' => [],
+            'public' => ['prefix' => 'api/help', 'middleware' => ['api', 'throttle:60,1']],
+        ],
+        'share' => [
+            'ability' => null,                    // e.g. 'admin.help.share'; null = nadie comparte
+            'max_hours' => 720,
+            'public_url' => env('MK_HELP_SHARE_URL'), // base de la página pública; se le agrega el token
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Reacciones (tabla polimórfica `mk_reactions`)
     |--------------------------------------------------------------------------
     | Usada por el trait `HasMkReactions`. Contenido y autor son ambos

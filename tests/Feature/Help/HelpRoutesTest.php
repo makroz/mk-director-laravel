@@ -1,0 +1,375 @@
+<?php
+
+declare(strict_types=1);
+
+use Illuminate\Routing\Route;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+use Mk\Director\Help\MkHelpSync;
+use Mk\Director\Tests\Concerns\BootsPushApp;
+use Mk\Director\Tests\MkLaravelTestCase;
+
+/**
+ * Las rutas de los manuales con la cadena de middleware REAL
+ * (`['api', 'mk.auth:admin']`). Cada scope ve SÓLO sus audiencias; los
+ * permisos no esconden nada (el usuario de prueba no tiene ninguno).
+ */
+uses(MkLaravelTestCase::class, BootsPushApp::class);
+
+afterEach(fn () => $this->tearDownHttpApp());
+
+/** @param  array<string, array<string, mixed>>  $scopes */
+function bootHelpApp(object $test, array $scopes, ?string $contentPath = null): string
+{
+    $test->bootPushApp([], ['help' => [
+        'content_path' => $contentPath ?? __DIR__.'/../../Fixtures/help',
+        'articles_table' => 'mk_help_articles',
+        'routes' => ['register' => true, 'scopes' => $scopes],
+    ]]);
+    (require __DIR__.'/../../../src/Database/Migrations/2026_10_22_000001_create_mk_help_articles_table.php')->up();
+    (require __DIR__.'/../../../src/Database/Migrations/2026_10_22_000002_add_images_to_mk_help_articles_table.php')->up();
+    (require __DIR__.'/../../../src/Database/Migrations/2026_10_22_000003_add_body_text_to_mk_help_articles_table.php')->up();
+    expect(app(MkHelpSync::class)->run()->failed())->toBeFalse();
+
+    return 'Bearer '.$test->pushUser('Ana')[1];
+}
+
+/** @return array<string, Route> las rutas `mk.help.*`, por nombre */
+function helpRoutes($app): array
+{
+    $routes = $app['router']->getRoutes();
+    $routes->refreshNameLookups();
+
+    return collect($routes->getRoutes())
+        ->filter(fn (Route $r) => str_starts_with((string) $r->getName(), 'mk.help.'))
+        ->keyBy(fn (Route $r) => $r->getName())
+        ->all();
+}
+
+/** @return array{0: int, 1: array<string, mixed>} */
+function helpGet(object $test, string $uri, ?string $auth): array
+{
+    $response = $test->httpGet($uri, $auth === null ? [] : ['HTTP_AUTHORIZATION' => $auth]);
+
+    return [$response->getStatusCode(), json_decode((string) $response->getContent(), true) ?? []];
+}
+
+const HELP_ADMIN_SCOPE = ['admin' => [
+    'prefix' => 'api/admin', 'middleware' => ['api', 'mk.auth:admin'], 'audiences' => ['admin', 'business'],
+]];
+
+test('routes are absent unless register is on', function () {
+    expect(helpRoutes($this->bootHttpApp(stdClass::class)))->toBe([]);
+    $this->tearDownHttpApp();
+
+    $app = $this->bootHttpApp(stdClass::class, ['help' => ['routes' => ['register' => false, 'scopes' => HELP_ADMIN_SCOPE]]]);
+
+    expect(helpRoutes($app))->toBe([]);
+});
+
+test('routes mount per scope with its middleware', function () {
+    bootHelpApp($this, HELP_ADMIN_SCOPE);
+
+    $routes = helpRoutes($this->httpApp);
+
+    expect(array_keys($routes))->toEqualCanonicalizing(['mk.help.admin.tree', 'mk.help.admin.show', 'mk.help.admin.search', 'mk.help.admin.screen', 'mk.help.admin.manual'])
+        ->and($routes['mk.help.admin.manual']->uri())->toBe('api/admin/help/manual/{audience}')
+        ->and($routes['mk.help.admin.screen']->uri())->toBe('api/admin/help/screens/{screen}')
+        ->and($routes['mk.help.admin.search']->uri())->toBe('api/admin/help/search')
+        ->and($routes['mk.help.admin.tree']->uri())->toBe('api/admin/help/tree')
+        ->and($routes['mk.help.admin.show']->uri())->toBe('api/admin/help/articles/{slug}')
+        ->and($routes['mk.help.admin.tree']->middleware())->toBe(['api', 'mk.auth:admin']);
+});
+
+test('without a session the manual answers 401', function () {
+    bootHelpApp($this, HELP_ADMIN_SCOPE);
+
+    [$status] = helpGet($this, '/api/admin/help/tree', null);
+
+    expect($status)->toBe(401);
+});
+
+test('the tree only carries the audiences of its scope, nested and in order', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE);
+
+    [$status, $body] = helpGet($this, '/api/admin/help/tree', $auth);
+
+    expect($status)->toBe(200)
+        ->and($body['success'])->toBeTrue()
+        ->and($body['data'])->toBe([
+            ['slug' => 'admin', 'title' => 'Manual del administrador', 'children' => [
+                ['slug' => 'admin/primeros-pasos', 'title' => 'Primeros pasos', 'children' => [
+                    ['slug' => 'admin/primeros-pasos/aprobar', 'title' => 'Aprobar una verificación', 'children' => []],
+                    ['slug' => 'admin/primeros-pasos/entrar', 'title' => 'Entrar al panel', 'children' => []],
+                ]],
+            ]],
+            ['slug' => 'business', 'title' => 'Cómo funciona', 'children' => [
+                ['slug' => 'business/glosario', 'title' => 'Glosario', 'children' => []],
+            ]],
+        ]);
+});
+
+test('another scope sees only its own audiences', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE + ['staff' => [
+        'prefix' => 'api/staff', 'middleware' => ['api', 'mk.auth:admin'], 'audiences' => ['member'],
+    ]]);
+
+    [, $tree] = helpGet($this, '/api/staff/help/tree', $auth);
+    [$adminStatus] = helpGet($this, '/api/staff/help/articles/admin/primeros-pasos/entrar', $auth);
+
+    expect(array_column($tree['data'], 'slug'))->toBe(['member'])
+        ->and($adminStatus)->toBe(404);
+});
+
+test('show serves a nested slug and 404s an article of another audience', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE);
+
+    [$status, $body] = helpGet($this, '/api/admin/help/articles/admin/primeros-pasos/entrar', $auth);
+    [$memberStatus, $memberBody] = helpGet($this, '/api/admin/help/articles/member/retirar', $auth);
+
+    expect($status)->toBe(200)
+        ->and($body['data']['slug'])->toBe('admin/primeros-pasos/entrar')
+        ->and($body['data']['title'])->toBe('Entrar al panel')
+        ->and($body['data']['audience'])->toBe('admin')
+        ->and($body['data']['body'])->toBe("Escribí tu correo y tu contraseña.\n")
+        ->and($body['data']['updatedAt'])->toBeString()
+        ->and($memberStatus)->toBe(404)
+        ->and($memberBody['success'])->toBeFalse()
+        ->and($memberBody['data'])->toBeNull();
+});
+
+test('an article with an ability is visible to a user without it and carries the ability', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE);
+
+    [$status, $body] = helpGet($this, '/api/admin/help/articles/admin/primeros-pasos/aprobar', $auth);
+
+    expect($status)->toBe(200)
+        ->and($body['data']['ability'])->toBe('admin.kyc.approve')
+        // Not in the abilities table: the front falls back to the key.
+        ->and($body['data']['abilityLabel'])->toBeNull();
+});
+
+test('the ability note carries the ability description from the abilities table', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE);
+    DB::table('abilities')->insert([
+        'id' => (string) Str::uuid(),
+        'name' => 'admin.kyc.approve',
+        'description' => 'Aprobar la verificación de identidad de un miembro.',
+    ]);
+
+    [, $body] = helpGet($this, '/api/admin/help/articles/admin/primeros-pasos/aprobar', $auth);
+    [, $plain] = helpGet($this, '/api/admin/help/articles/admin/primeros-pasos/entrar', $auth);
+
+    expect($body['data']['abilityLabel'])->toBe('Aprobar la verificación de identidad de un miembro.')
+        ->and($plain['data']['ability'])->toBeNull()
+        ->and($plain['data']['abilityLabel'])->toBeNull();
+});
+
+test('show returns the related articles the scope sees, with their titles, in tree order', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE);
+
+    // El front matter dice [business/glosario, member/retirar, admin/primeros-pasos/entrar].
+    [$status, $body] = helpGet($this, '/api/admin/help/articles/admin/primeros-pasos/aprobar', $auth);
+    [, $plain] = helpGet($this, '/api/admin/help/articles/admin', $auth);
+
+    expect($status)->toBe(200)
+        ->and($body['data']['related'])->toBe([
+            ['slug' => 'admin/primeros-pasos/entrar', 'title' => 'Entrar al panel'],
+            ['slug' => 'business/glosario', 'title' => 'Glosario'],
+        ])
+        ->and($body['data']['images'])->toBe([])
+        ->and($plain['data']['related'])->toBe([]);
+});
+
+/** @return array{0: int, 1: array<string, mixed>} */
+function helpSearch(object $test, string $scope, string $q, string $auth): array
+{
+    return helpGet($test, "/api/{$scope}/help/search?q=".rawurlencode($q), $auth);
+}
+
+test('search needs two to a hundred characters, after trimming', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE);
+
+    foreach (['a', '   a   ', '', str_repeat('x', 101)] as $q) {
+        [$status, $body] = helpSearch($this, 'admin', $q, $auth);
+
+        expect($status)->toBe(422)
+            ->and($body['success'])->toBeFalse()
+            ->and($body['__extraData']['code'])->toBe('ERR_VALIDATION')
+            ->and($body['__extraData']['errors'])->toHaveKey('q');
+    }
+
+    [$missing] = helpGet($this, '/api/admin/help/search', $auth);
+    [$ok] = helpSearch($this, 'admin', ' ab ', $auth);
+
+    expect($missing)->toBe(422)->and($ok)->toBe(200);
+});
+
+test('search only finds the audiences of its scope', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE + ['staff' => [
+        'prefix' => 'api/staff', 'middleware' => ['api', 'mk.auth:admin'], 'audiences' => ['member'],
+    ]]);
+
+    // «Manual del administrador» y «Manual del miembro»; «Pedir un retiro» es de member.
+    [, $admin] = helpSearch($this, 'admin', 'manual', $auth);
+    [, $staff] = helpSearch($this, 'staff', 'manual', $auth);
+    [, $retiro] = helpSearch($this, 'admin', 'retiro', $auth);
+
+    expect(array_column($admin['data'], 'slug'))->toBe(['admin'])
+        ->and(array_column($staff['data'], 'slug'))->toBe(['member'])
+        ->and($retiro['data'])->toBe([]);
+});
+
+test('the LIKE fallback finds title and body hits, ignoring case', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE);
+
+    [$status, $title] = helpSearch($this, 'admin', 'GLOSARIO', $auth);
+    [, $body] = helpSearch($this, 'admin', 'CORREO', $auth);
+
+    expect($status)->toBe(200)
+        ->and(array_column($title['data'], 'slug'))->toBe(['business/glosario'])
+        ->and($body['data'])->toBe([[
+            'slug' => 'admin/primeros-pasos/entrar',
+            'title' => 'Entrar al panel',
+            'snippet' => 'Escribí tu <mark>correo</mark> y tu contraseña.',
+        ]]);
+});
+
+test('the snippet is plain text, escaped, and only the hit is marked', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE);
+
+    [, $body] = helpSearch($this, 'admin', 'plusvalía', $auth);
+    [, $titleOnly] = helpSearch($this, 'admin', 'glosario', $auth);
+
+    // Sin Markdown, sin la URL del enlace, sin las etiquetas del cuerpo, y lo demás escapado.
+    $text = 'Las palabras del negocio: el token es una parte del terreno. Cuidado con alert(1) y con a &lt; b &amp; &quot;c&quot;. La ';
+
+    // El acierto cae lejos del comienzo: la ventana arranca unos 60 caracteres antes, en una palabra entera.
+    expect($body['data'][0]['snippet'])->toBe('…del terreno. Cuidado con alert(1) y con a &lt; b &amp; &quot;c&quot;. La <mark>plusvalía</mark> es lo que gana.')
+        ->and($titleOnly['data'][0]['snippet'])->toBe($text.'plusvalía es lo que gana.')
+        ->and(strip_tags($body['data'][0]['snippet'], '<mark>'))->toBe($body['data'][0]['snippet']);
+});
+
+test('screen returns 404 when no article lists it', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE);
+
+    // En screens.yaml pero sin artículo, y una que ni existe.
+    [$status, $body] = helpGet($this, '/api/admin/help/screens/admin.kyc.show', $auth);
+    [$unknown] = helpGet($this, '/api/admin/help/screens/admin.no-existe', $auth);
+    [$anonymous] = helpGet($this, '/api/admin/help/screens/admin.kyc.index', null);
+
+    expect($status)->toBe(404)
+        ->and($body['success'])->toBeFalse()
+        ->and($body['data'])->toBeNull()
+        ->and($unknown)->toBe(404)
+        ->and($anonymous)->toBe(401);
+});
+
+test('screen returns the article of the scope audiences only, shaped like show', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE + ['staff' => [
+        'prefix' => 'api/staff', 'middleware' => ['api', 'mk.auth:admin'], 'audiences' => ['member'],
+    ]]);
+
+    [$status, $body] = helpGet($this, '/api/admin/help/screens/admin.kyc.index', $auth);
+    [, $show] = helpGet($this, '/api/admin/help/articles/admin/primeros-pasos/aprobar', $auth);
+    // `member/retirar` lista esta pantalla: el scope admin no la ve, el staff sí.
+    [$adminMember] = helpGet($this, '/api/admin/help/screens/member.wallet.withdraw', $auth);
+    [$staffStatus, $staff] = helpGet($this, '/api/staff/help/screens/member.wallet.withdraw', $auth);
+    [$staffAdmin] = helpGet($this, '/api/staff/help/screens/admin.kyc.index', $auth);
+
+    expect($status)->toBe(200)
+        ->and($body['data'])->toBe($show['data'])
+        ->and($body['data']['slug'])->toBe('admin/primeros-pasos/aprobar')
+        ->and($adminMember)->toBe(404)
+        ->and($staffStatus)->toBe(200)
+        ->and($staff['data']['slug'])->toBe('member/retirar')
+        ->and($staffAdmin)->toBe(404);
+});
+
+test('screen picks the first article in tree order when several list it', function () {
+    // Una copia de los fixtures con dos artículos más en la misma pantalla que
+    // `aprobar` (order 5): un hermano con order 1 y uno de primer nivel con
+    // order 50 (después de `primeros-pasos`, order 10). Por el árbol sale
+    // `zz-revisar`; por slug, por orden de alta y por el índice
+    // (audience, parent_slug, order) saldría `aa-otra`.
+    $root = sys_get_temp_dir().'/mk-help-routes-'.bin2hex(random_bytes(4));
+    $source = __DIR__.'/../../Fixtures/help';
+    foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($source, FilesystemIterator::SKIP_DOTS)) as $file) {
+        $target = $root.substr($file->getPathname(), strlen($source));
+        is_dir(dirname($target)) || mkdir(dirname($target), 0777, true);
+        copy($file->getPathname(), $target);
+    }
+    $article = fn (string $title, int $order) => "---\ntitle: {$title}\naudience: admin\norder: {$order}\nscreens: [admin.kyc.index]\n---\nTexto.\n";
+    file_put_contents($root.'/admin/primeros-pasos/zz-revisar.md', $article('Revisar la bandeja', 1));
+    file_put_contents($root.'/admin/aa-otra.md', $article('Otra sección', 50));
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE, $root);
+
+    $slugs = [];
+    foreach (range(1, 3) as $_) {
+        [, $body] = helpGet($this, '/api/admin/help/screens/admin.kyc.index', $auth);
+        $slugs[] = $body['data']['slug'];
+    }
+
+    expect($slugs)->toBe(array_fill(0, 3, 'admin/primeros-pasos/zz-revisar'));
+});
+
+test('the manual is every article of the audience in tree order, with its depth', function () {
+    // Una copia de los fixtures con dos artículos más: `zz-revisar` (order 1)
+    // va ANTES que `aprobar` (5) y `entrar` (10), y `aa-otra` (order 50) DESPUÉS
+    // de `primeros-pasos` (10). Por slug o por orden de alta saldrían al revés.
+    $root = sys_get_temp_dir().'/mk-help-manual-'.bin2hex(random_bytes(4));
+    $source = __DIR__.'/../../Fixtures/help';
+    foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($source, FilesystemIterator::SKIP_DOTS)) as $file) {
+        $target = $root.substr($file->getPathname(), strlen($source));
+        is_dir(dirname($target)) || mkdir(dirname($target), 0777, true);
+        copy($file->getPathname(), $target);
+    }
+    $article = fn (string $title, int $order) => "---\ntitle: {$title}\naudience: admin\norder: {$order}\n---\nTexto.\n";
+    file_put_contents($root.'/admin/primeros-pasos/zz-revisar.md', $article('Revisar la bandeja', 1));
+    file_put_contents($root.'/admin/aa-otra.md', $article('Otra sección', 50));
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE, $root);
+
+    [$status, $body] = helpGet($this, '/api/admin/help/manual/admin', $auth);
+    [, $show] = helpGet($this, '/api/admin/help/articles/admin/primeros-pasos/aprobar', $auth);
+
+    expect($status)->toBe(200)
+        ->and(array_map(fn (array $a) => [$a['slug'], $a['depth']], $body['data']))->toBe([
+            ['admin', 0],
+            ['admin/primeros-pasos', 1],
+            ['admin/primeros-pasos/zz-revisar', 2],
+            ['admin/primeros-pasos/aprobar', 2],
+            ['admin/primeros-pasos/entrar', 2],
+            ['admin/aa-otra', 1],
+        ])
+        // Cada artículo, con la forma de `show` (su `related` incluido) más `depth`.
+        ->and($body['data'][3])->toBe($show['data'] + ['depth' => 2]);
+});
+
+test('the manual rejects an audience outside its scope', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE);
+
+    [$business] = helpGet($this, '/api/admin/help/manual/business', $auth);
+    [$member, $body] = helpGet($this, '/api/admin/help/manual/member', $auth);
+    [$unknown] = helpGet($this, '/api/admin/help/manual/no-existe', $auth);
+    [$anonymous] = helpGet($this, '/api/admin/help/manual/admin', null);
+
+    expect($business)->toBe(200)
+        ->and($member)->toBe(404)
+        ->and($body['success'])->toBeFalse()
+        ->and($body['data'])->toBeNull()
+        ->and($unknown)->toBe(404)
+        ->and($anonymous)->toBe(401);
+});
+
+test('the member scope cannot print the admin manual', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE + ['staff' => [
+        'prefix' => 'api/staff', 'middleware' => ['api', 'mk.auth:admin'], 'audiences' => ['member'],
+    ]]);
+
+    [$admin] = helpGet($this, '/api/staff/help/manual/admin', $auth);
+    [$memberStatus, $member] = helpGet($this, '/api/staff/help/manual/member', $auth);
+
+    expect($admin)->toBe(404)
+        ->and($memberStatus)->toBe(200)
+        ->and(array_column($member['data'], 'slug'))->toBe(['member', 'member/retirar']);
+});

@@ -20,6 +20,7 @@ use Mk\Director\Console\Commands\CleanReportsCommand;
 use Mk\Director\Console\Commands\DiscoverAbilitiesCommand;
 use Mk\Director\Console\Commands\FixSanctumUuidsCommand;
 use Mk\Director\Console\Commands\GenerateDocsCommand;
+use Mk\Director\Console\Commands\HelpSyncCommand;
 use Mk\Director\Console\Commands\LintBoundariesCommand;
 use Mk\Director\Console\Commands\MakeAuthUserCommand;
 use Mk\Director\Console\Commands\MakeDTOCommand;
@@ -43,6 +44,8 @@ use Mk\Director\Export\Contracts\ReportHeaderProvider;
 use Mk\Director\Export\Controllers\MkReportController;
 use Mk\Director\Export\FilasDelExport;
 use Mk\Director\Export\Support\DefaultReportHeaderProvider;
+use Mk\Director\Help\Http\Controllers\MkHelpController;
+use Mk\Director\Help\Http\Controllers\MkHelpShareLinkController;
 use Mk\Director\Http\Controllers\MkUploadController;
 use Mk\Director\Http\Middleware\MkApiEnvelope;
 use Mk\Director\Http\Middleware\MkEnvelope;
@@ -346,6 +349,8 @@ class MkServiceProvider extends ServiceProvider
                 // Aborta las subidas directas vencidas y borra las que nadie adjuntó.
                 // Programalo con `Schedule::command('mk:uploads:prune')->daily()->onOneServer()`.
                 PruneUploadsCommand::class,
+                // Indexa los manuales en Markdown. Corrélo en cada deploy, después de `migrate`.
+                HelpSyncCommand::class,
             ]);
         }
 
@@ -354,6 +359,7 @@ class MkServiceProvider extends ServiceProvider
         $this->registerExportRoutes();
         $this->registerPushRoutes();
         $this->registerUploadRoutes();
+        $this->registerHelpRoutes();
         // 🔴 En `booted`, no acá. El `Artisan::call()` del auto-discover
         // arranca el kernel de consola y marca sus comandos como cargados; si
         // eso pasa durante el boot de los providers, `routes/console.php` —que
@@ -443,6 +449,63 @@ class MkServiceProvider extends ServiceProvider
                 Route::post('uploads', [MkUploadController::class, 'start'])->name("mk.uploads.{$scope}.start");
                 Route::post('uploads/{upload}/complete', [MkUploadController::class, 'complete'])->name("mk.uploads.{$scope}.complete");
                 Route::delete('uploads/{upload}', [MkUploadController::class, 'abort'])->name("mk.uploads.{$scope}.abort");
+            });
+        }
+    }
+
+    /**
+     * Las rutas de los manuales. OPT-IN: sólo con
+     * `mk_director.help.routes.register = true`, y un grupo por cada scope de
+     * `help.routes.scopes` (`['admin' => ['prefix' => 'api/admin', 'middleware'
+     * => ['api', 'mk.auth:admin'], 'audiences' => ['admin', 'business']]]`).
+     *
+     * El scope viaja en la acción de la ruta (`mk_help_scope`): el controller
+     * lee de ahí qué audiencias sirve.
+     *
+     * Un scope con `share: true` suma `help/share-links` (listar, crear,
+     * revocar). Si alguno comparte, se montan UNA vez las públicas de
+     * `help.routes.public` (`{prefix}/shared/{token}` y
+     * `…/shared/{token}/articles/{slug}`), sin sesión y con su throttle.
+     */
+    protected function registerHelpRoutes(): void
+    {
+        if (! config('mk_director.help.routes.register', false)) {
+            return;
+        }
+
+        foreach ((array) config('mk_director.help.routes.scopes', []) as $scope => $group) {
+            Route::group([
+                'prefix' => (string) ($group['prefix'] ?? ''),
+                'middleware' => (array) ($group['middleware'] ?? ['api']),
+                'mk_help_scope' => (string) $scope,
+            ], function () use ($scope, $group): void {
+                Route::get('help/tree', [MkHelpController::class, 'tree'])->name("mk.help.{$scope}.tree");
+                Route::get('help/articles/{slug}', [MkHelpController::class, 'show'])
+                    ->where('slug', '.*')
+                    ->name("mk.help.{$scope}.show");
+                Route::get('help/search', [MkHelpController::class, 'search'])->name("mk.help.{$scope}.search");
+                Route::get('help/screens/{screen}', [MkHelpController::class, 'screen'])->name("mk.help.{$scope}.screen");
+                Route::get('help/manual/{audience}', [MkHelpController::class, 'manual'])->name("mk.help.{$scope}.manual");
+
+                if (($group['share'] ?? false) === true) {
+                    Route::get('help/share-links', [MkHelpShareLinkController::class, 'index'])->name("mk.help.{$scope}.share-links.index");
+                    Route::post('help/share-links', [MkHelpShareLinkController::class, 'store'])->name("mk.help.{$scope}.share-links.store");
+                    Route::delete('help/share-links/{id}', [MkHelpShareLinkController::class, 'destroy'])->name("mk.help.{$scope}.share-links.destroy");
+                }
+            });
+        }
+
+        if (collect((array) config('mk_director.help.routes.scopes', []))->contains(fn ($group) => ($group['share'] ?? false) === true)) {
+            $public = (array) config('mk_director.help.routes.public', []);
+
+            Route::group([
+                'prefix' => (string) ($public['prefix'] ?? 'api/help'),
+                'middleware' => (array) ($public['middleware'] ?? ['api', 'throttle:60,1']),
+            ], function (): void {
+                Route::get('shared/{token}', [MkHelpShareLinkController::class, 'shared'])->name('mk.help.shared');
+                Route::get('shared/{token}/articles/{slug}', [MkHelpShareLinkController::class, 'sharedArticle'])
+                    ->where('slug', '.*')
+                    ->name('mk.help.shared.article');
             });
         }
     }
