@@ -28,7 +28,7 @@ final class PostgresPlanReader implements PlanReader
         if ($db->getDriverName() !== 'pgsql') {
             throw new InvalidArgumentException("the connection {$connection} is not PostgreSQL.");
         }
-        $raw = $db->getQueryGrammar()->substituteBindingsIntoRawSql($sql, $db->prepareBindings($bindings));
+        $raw = $db->getQueryGrammar()->substituteBindingsIntoRawSql($sql, QueryRecorder::bindable($db, $bindings));
         $db->beginTransaction();
         try {
             $db->statement('set transaction read only');

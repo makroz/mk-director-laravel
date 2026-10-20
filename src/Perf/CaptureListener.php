@@ -27,7 +27,7 @@ use RuntimeException;
  *  - `database`: where it ran. The runner refuses a capture with any database but its `*_mk_studio_perf_tests`.
  *
  * Only reads are written ({@see QueryRecorder::isSelect()}: a `with … update` is a write), never a lookup of the
- * engine's catalog ({@see QueryRecorder::isCatalog()}), and only their bindings: the tests' own data.
+ * engine's catalog ({@see QueryRecorder::isEngineQuery()}: a lock function is not a read of the data either), and only their bindings: the tests' own data.
  *
  * Registered by `MkServiceProvider` only when `MK_PERF_CAPTURE` names the file (set by MK Studio's runner, never in
  * `.env`), and it refuses to start unless the default connection is a `*_mk_studio_perf_tests` database: the
@@ -61,7 +61,7 @@ final class CaptureListener
         });
 
         DB::listen(static function (QueryExecuted $q) use ($file, $own, $modules, $app, $base, $state): void {
-            if (! QueryRecorder::isSelect($q->sql) || QueryRecorder::isCatalog($q->sql)) {
+            if (! QueryRecorder::isSelect($q->sql) || QueryRecorder::isEngineQuery($q->sql)) {
                 return;
             }
             $module = $outside = null;
@@ -87,7 +87,7 @@ final class CaptureListener
                     'database' => $q->connection->getDatabaseName(),
                     'connection' => $q->connectionName,
                     'sql' => $q->sql,
-                    'bindings' => $q->connection->prepareBindings($q->bindings),
+                    'bindings' => QueryRecorder::bindable($q->connection, $q->bindings),
                     'file' => str_starts_with($frame['file'], $base) ? substr($frame['file'], strlen($base)) : $frame['file'],
                     'line' => $frame['line'] ?? 0,
                     'outside' => $module === null,

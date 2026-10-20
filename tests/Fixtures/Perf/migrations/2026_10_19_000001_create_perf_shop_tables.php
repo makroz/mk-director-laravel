@@ -24,6 +24,7 @@ return new class extends Migration
             $t->foreignId('owner_id')->constrained('perf_owners');
             $t->string('name', 80)->index();
             $t->unsignedTinyInteger('status');
+            $t->boolean('active')->default(true);
             $t->timestamps();
             // No screen filters, sorts or counts by it, and it is wider than the others: no plan uses it on either engine.
             $t->index(['created_at', 'updated_at', 'name']);

@@ -26,7 +26,7 @@ final class MariaDbPlanReader implements PlanReader
         if (! in_array($db->getDriverName(), ['mysql', 'mariadb'], true)) {
             throw new InvalidArgumentException("the connection {$connection} is not MariaDB.");
         }
-        $raw = $db->getQueryGrammar()->substituteBindingsIntoRawSql($sql, $db->prepareBindings($bindings));
+        $raw = $db->getQueryGrammar()->substituteBindingsIntoRawSql($sql, QueryRecorder::bindable($db, $bindings));
         $row = (array) $db->selectOne('analyze format=json '.$raw);
         $json = json_decode((string) reset($row), true, flags: JSON_THROW_ON_ERROR);
         $out = ['fullScan' => false, 'index' => null, 'indexes' => [], 'rowsRead' => 0, 'sort' => false, 'temp' => false];

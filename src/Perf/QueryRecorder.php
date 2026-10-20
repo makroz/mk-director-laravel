@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Mk\Director\Perf;
 
+use DateTimeInterface;
+use Illuminate\Database\Connection;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\DB;
 
@@ -78,11 +80,38 @@ final class QueryRecorder
     }
 
     /**
-     * A lookup of the engine's catalog, not of the app's data: `information_schema`, `performance_schema`, `mysql.`,
-     * `SHOW …`, PostgreSQL's `pg_catalog` and `pg_*` tables (Laravel's `Schema::getColumns()` reads `pg_attribute`).
+     * A query of the engine itself, not of the app's data: its catalog (`information_schema`, `performance_schema`,
+     * `mysql.`, `SHOW …`, PostgreSQL's `pg_catalog` and `pg_*` tables: Laravel's `Schema::getColumns()` reads
+     * `pg_attribute`) or a lock function (`pg_advisory_*`, `pg_try_advisory_*`, MariaDB's `GET_LOCK` and friends).
      */
-    public static function isCatalog(string $sql): bool
+    public static function isEngineQuery(string $sql): bool
     {
-        return preg_match('/^\s*show\b|\b(?:information_schema|performance_schema|pg_catalog|mysql)\s*\.|\b(?:from|join)\s+"?pg_\w+/i', $sql) === 1;
+        return preg_match(
+            '/^\s*show\b|\b(?:information_schema|performance_schema|pg_catalog|mysql)\s*\.|\b(?:from|join)\s+"?pg_\w+'
+            .'|\bpg_(?:try_)?advisory_\w*\s*\(|\b(?:get_lock|release_lock|release_all_locks|is_free_lock|is_used_lock)\s*\(/i',
+            $sql,
+        ) === 1;
+    }
+
+    /** `$sql` without its trailing row lock (`for update`, `for share`, … `of t`, `nowait`, `skip locked`; MariaDB `lock in share mode`). */
+    public static function withoutLock(string $sql): string
+    {
+        return (string) preg_replace(
+            '/\s+(?:for\s+(?:no\s+key\s+update|update|key\s+share|share)(?:\s+of\s+[^\s,]+(?:\s*,\s*[^\s,]+)*)?(?:\s+(?:nowait|skip\s+locked))?|lock\s+in\s+share\s+mode)\s*$/i',
+            '',
+            $sql,
+        );
+    }
+
+    /**
+     * Bindings as the connection receives them, minus what it would change: a date becomes its string, and a bool stays
+     * a bool (`prepareBindings()` makes it 0/1, and PostgreSQL has no `boolean = integer`). For the capture's JSON and
+     * for the bindings a plan reader writes into the SQL (`escape()` writes a bool as each engine reads one).
+     */
+    public static function bindable(Connection $db, array $bindings): array
+    {
+        $format = $db->getQueryGrammar()->getDateFormat();
+
+        return array_map(static fn (mixed $v): mixed => $v instanceof DateTimeInterface ? $v->format($format) : $v, $bindings);
     }
 }

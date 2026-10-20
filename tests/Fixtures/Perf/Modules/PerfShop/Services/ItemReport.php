@@ -39,6 +39,18 @@ class ItemReport
         return DB::table('perf_items')->count(); // capture: total
     }
 
+    /** A boolean binding: PostgreSQL has no `boolean = integer`, so it must come back a bool. */
+    public function active(): array
+    {
+        return DB::table('perf_items')->where('active', true)->get()->all(); // capture: active
+    }
+
+    /** A row lock: replayed without it (the plan runs in a read-only transaction). */
+    public function lockOne(): ?object
+    {
+        return DB::table('perf_items')->where('id', 1)->lockForUpdate()->first(); // capture: lock
+    }
+
     /** A lookup of the engine's catalog (`pg_attribute`, `information_schema.columns`): not the app's data. */
     public function columns(): array
     {

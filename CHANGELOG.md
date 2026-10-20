@@ -45,8 +45,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`Database/Migrations|Factories|Seeders/` de cualquier módulo y `database/` en la raíz) se saltean al buscar el marco.
   Una consulta que sólo corrieron ellos no se escribe; la de un servicio que una migración llama, sí, en la línea del
   servicio.
-- Las consultas al **catálogo del motor** no se capturan (`QueryRecorder::isCatalog()`: `information_schema`,
-  `performance_schema`, `mysql.`, `SHOW`, `pg_catalog` y tablas `pg_*`; `Schema::getColumns()` desde un modelo era una).
+- Las consultas **al motor mismo** no se capturan (`QueryRecorder::isEngineQuery()`): su catálogo
+  (`information_schema`, `performance_schema`, `mysql.`, `SHOW`, `pg_catalog` y tablas `pg_*`; `Schema::getColumns()`
+  desde un modelo era una) y las funciones de bloqueo (`pg_advisory_*`, `pg_try_advisory_*`, `GET_LOCK`,
+  `RELEASE_LOCK`, `IS_FREE_LOCK`…).
+- 🔴 **Un bool se repite como bool.** La captura y los lectores de planes pasaban los bindings por
+  `prepareBindings()`, que hace de un bool 0/1; el plan de PostgreSQL escribía `active = 1` y fallaba con
+  «operator does not exist: boolean = integer» (6 notas en RETO School). `QueryRecorder::bindable()` sólo convierte
+  fechas; `escape()` escribe el bool como lo lee cada motor. Afecta también los planes de las pantallas.
+- **`SELECT … FOR UPDATE` se repite sin el bloqueo** (`QueryRecorder::withoutLock()`: `for update|no key update|share|
+  key share`, `of …`, `nowait`, `skip locked`; MariaDB `lock in share mode`): el plan corre en una transacción de sólo
+  lectura, que lo rechaza (7 notas en RETO School). `sql` lo conserva y la consulta sale con `unlocked: true`.
+  Test: `replay_strips_the_lock_and_binds_booleans_as_booleans`, en los dos motores.
 - 🔴 `QueryRecorder::isSelect()` ya no toma por lectura un `with … update` (un CTE que modifica datos): una lectura no
   tiene `insert`/`update`/`delete`/`merge` en ninguna parte (fuera de literales y nombres entre comillas); `for update` y
   `for share` siguen siendo lecturas. Lo usan también los lectores de planes, que ejecutan lo que analizan.

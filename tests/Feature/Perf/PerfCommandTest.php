@@ -509,6 +509,8 @@ test('capture_skips_setup_frames_catalog_queries_and_writes', function () {
         (new ItemReport)->columns();
         (new ItemReport)->announce($cte);
         (new ItemReport)->announce('select id from perf_items where id = 1 for update');
+        (new ItemReport)->announce('select pg_advisory_xact_lock(hashtext(?))');
+        (new ItemReport)->announce('select GET_LOCK(?, 5)');
     }));
 
     // The migration's and the factory's own reads are setup; the service a migration calls is the module's code. The
@@ -520,8 +522,43 @@ test('capture_skips_setup_frames_catalog_queries_and_writes', function () {
         ->and($lines[1]['sql'])->toEndWith('for update')
         ->and(QueryRecorder::isSelect($cte))->toBeFalse()
         ->and(QueryRecorder::isSelect('select "update", \'delete\' from perf_items'))->toBeTrue()
-        ->and(QueryRecorder::isCatalog('select * from information_schema.columns where table_name = ?'))->toBeTrue()
-        ->and(QueryRecorder::isCatalog('select * from perf_items'))->toBeFalse();
+        ->and(QueryRecorder::isEngineQuery('select * from information_schema.columns where table_name = ?'))->toBeTrue()
+        ->and(QueryRecorder::isEngineQuery('select pg_try_advisory_lock(?)'))->toBeTrue()
+        ->and(QueryRecorder::isEngineQuery('select release_lock(?)'))->toBeTrue()
+        ->and(QueryRecorder::isEngineQuery('select * from perf_items'))->toBeFalse()
+        ->and(QueryRecorder::withoutLock('select * from "t" where "id" = ? for no key update of "t" skip locked'))->toBe('select * from "t" where "id" = ?')
+        ->and(QueryRecorder::withoutLock('select * from `t` lock in share mode'))->toBe('select * from `t`')
+        ->and(QueryRecorder::withoutLock('select * from t'))->toBe('select * from t');
+});
+
+test('replay_strips_the_lock_and_binds_booleans_as_booleans', function () {
+    $file = perfCapture(static function (): void {
+        (new ItemReport)->active();
+        (new ItemReport)->lockOne();
+    });
+    $lines = perfCaptured($file);
+    expect($lines[0]['bindings'])->toBe([true]);
+
+    [$code, $output] = perfRun(['--capture' => $file]);
+
+    expect($code)->toBe(0, $output);
+    $run = json_decode($output, true, flags: JSON_THROW_ON_ERROR);
+    $byLine = [];
+    foreach ($run['queries'] as $q) {
+        if ($q['origin']['kind'] === 'code') {
+            $byLine[$q['origin']['line']] = $q;
+        }
+    }
+    $active = $byLine[perfLine('PerfShop/Services/ItemReport.php', 'active')];
+    $lock = $byLine[perfLine('PerfShop/Services/ItemReport.php', 'lock')];
+
+    // Both replayed and planned on the volume: the bool bound as one, the lock left out and said so.
+    expect(implode("\n", $run['notes']))->not->toContain('no se pudo repetir')
+        ->and($active['plan']['raw'])->not->toBeNull()
+        ->and($active)->not->toHaveKey('unlocked')
+        ->and($lock['sql'])->toEndWith('for update')
+        ->and($lock['unlocked'])->toBeTrue()
+        ->and($lock['plan']['raw'])->not->toBeNull();
 });
 
 test('capture_is_off_without_the_env_var', function () {

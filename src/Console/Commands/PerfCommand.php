@@ -157,7 +157,7 @@ final class PerfCommand extends Command
         $foreign = 0;
         foreach (file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $json) {
             $c = json_decode($json, true);
-            if (! is_array($c) || ! is_string($c['sql'] ?? null) || ! QueryRecorder::isSelect($c['sql']) || QueryRecorder::isCatalog($c['sql'])) {
+            if (! is_array($c) || ! is_string($c['sql'] ?? null) || ! QueryRecorder::isSelect($c['sql']) || QueryRecorder::isEngineQuery($c['sql'])) {
                 continue;
             }
             if (! preg_match(ScratchDatabase::TESTS_NAME, (string) ($c['database'] ?? ''))) {
@@ -261,16 +261,18 @@ final class PerfCommand extends Command
             if (isset($shapes[$sql])) {
                 continue;
             }
+            // A row lock cannot run in the plan's read-only transaction, and takes nothing from the plan or the time.
+            $replay = QueryRecorder::withoutLock($c['sql']);
             try {
                 $ms = [];
                 foreach (range(0, self::REPLAYS) as $i) {
                     $t = hrtime(true);
-                    DB::connection($connection)->select($c['sql'], $c['bindings']);
+                    DB::connection($connection)->select($replay, $c['bindings']);
                     if ($i > 0) {
                         $ms[] = (hrtime(true) - $t) / 1e6;
                     }
                 }
-                $plans[$sql] = $reader->read($connection, $c['sql'], $c['bindings']);
+                $plans[$sql] = $reader->read($connection, $replay, $c['bindings']);
             } catch (Throwable $e) {
                 $notes[] = "{$c['file']}:{$c['line']} no se pudo repetir sobre el volumen (".Str::limit($sql, 120).'): '.Str::limit(strtok($e->getMessage(), "\n") ?: $e::class, 200);
 
@@ -286,6 +288,7 @@ final class PerfCommand extends Command
                 'queriesAt' => null,
                 'duplicates' => $c['duplicates'],
                 'replayed' => true,
+                ...($replay === $c['sql'] ? [] : ['unlocked' => true]),
                 'plan' => null,
             ];
         }
