@@ -87,6 +87,24 @@ final class MkHelpController
     }
 
     /**
+     * `GET {prefix}/help/manual/{audience}` → el manual entero de esa audiencia,
+     * en el orden del árbol y con `depth` en cada artículo (la vista para
+     * imprimir). 404 si la audiencia no es del scope: el scope de los miembros
+     * nunca imprime el del administrador. La forma, en
+     * {@see MkHelpCatalog::manual()}.
+     */
+    public function manual(Request $request, string $audience): JsonResponse
+    {
+        $audiences = $this->audiences($request);
+
+        if (! in_array($audience, $audiences, true)) {
+            return new JsonResponse(['success' => false, 'message' => 'No existe ese manual', 'data' => null], 404);
+        }
+
+        return $this->ok($this->catalog->manual($audience, $audiences), 'Manual');
+    }
+
+    /**
      * Las audiencias del scope de la ruta. Falla cerrado: sin usuario es 401
      * (un scope configurado sin `mk.auth`), y un scope sin `audiences` no ve nada.
      *

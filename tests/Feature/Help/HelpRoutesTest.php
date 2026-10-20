@@ -72,7 +72,8 @@ test('routes mount per scope with its middleware', function () {
 
     $routes = helpRoutes($this->httpApp);
 
-    expect(array_keys($routes))->toEqualCanonicalizing(['mk.help.admin.tree', 'mk.help.admin.show', 'mk.help.admin.search', 'mk.help.admin.screen'])
+    expect(array_keys($routes))->toEqualCanonicalizing(['mk.help.admin.tree', 'mk.help.admin.show', 'mk.help.admin.search', 'mk.help.admin.screen', 'mk.help.admin.manual'])
+        ->and($routes['mk.help.admin.manual']->uri())->toBe('api/admin/help/manual/{audience}')
         ->and($routes['mk.help.admin.screen']->uri())->toBe('api/admin/help/screens/{screen}')
         ->and($routes['mk.help.admin.search']->uri())->toBe('api/admin/help/search')
         ->and($routes['mk.help.admin.tree']->uri())->toBe('api/admin/help/tree')
@@ -310,4 +311,65 @@ test('screen picks the first article in tree order when several list it', functi
     }
 
     expect($slugs)->toBe(array_fill(0, 3, 'admin/primeros-pasos/zz-revisar'));
+});
+
+test('the manual is every article of the audience in tree order, with its depth', function () {
+    // Una copia de los fixtures con dos artículos más: `zz-revisar` (order 1)
+    // va ANTES que `aprobar` (5) y `entrar` (10), y `aa-otra` (order 50) DESPUÉS
+    // de `primeros-pasos` (10). Por slug o por orden de alta saldrían al revés.
+    $root = sys_get_temp_dir().'/mk-help-manual-'.bin2hex(random_bytes(4));
+    $source = __DIR__.'/../../Fixtures/help';
+    foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($source, FilesystemIterator::SKIP_DOTS)) as $file) {
+        $target = $root.substr($file->getPathname(), strlen($source));
+        is_dir(dirname($target)) || mkdir(dirname($target), 0777, true);
+        copy($file->getPathname(), $target);
+    }
+    $article = fn (string $title, int $order) => "---\ntitle: {$title}\naudience: admin\norder: {$order}\n---\nTexto.\n";
+    file_put_contents($root.'/admin/primeros-pasos/zz-revisar.md', $article('Revisar la bandeja', 1));
+    file_put_contents($root.'/admin/aa-otra.md', $article('Otra sección', 50));
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE, $root);
+
+    [$status, $body] = helpGet($this, '/api/admin/help/manual/admin', $auth);
+    [, $show] = helpGet($this, '/api/admin/help/articles/admin/primeros-pasos/aprobar', $auth);
+
+    expect($status)->toBe(200)
+        ->and(array_map(fn (array $a) => [$a['slug'], $a['depth']], $body['data']))->toBe([
+            ['admin', 0],
+            ['admin/primeros-pasos', 1],
+            ['admin/primeros-pasos/zz-revisar', 2],
+            ['admin/primeros-pasos/aprobar', 2],
+            ['admin/primeros-pasos/entrar', 2],
+            ['admin/aa-otra', 1],
+        ])
+        // Cada artículo, con la forma de `show` (su `related` incluido) más `depth`.
+        ->and($body['data'][3])->toBe($show['data'] + ['depth' => 2]);
+});
+
+test('the manual rejects an audience outside its scope', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE);
+
+    [$business] = helpGet($this, '/api/admin/help/manual/business', $auth);
+    [$member, $body] = helpGet($this, '/api/admin/help/manual/member', $auth);
+    [$unknown] = helpGet($this, '/api/admin/help/manual/no-existe', $auth);
+    [$anonymous] = helpGet($this, '/api/admin/help/manual/admin', null);
+
+    expect($business)->toBe(200)
+        ->and($member)->toBe(404)
+        ->and($body['success'])->toBeFalse()
+        ->and($body['data'])->toBeNull()
+        ->and($unknown)->toBe(404)
+        ->and($anonymous)->toBe(401);
+});
+
+test('the member scope cannot print the admin manual', function () {
+    $auth = bootHelpApp($this, HELP_ADMIN_SCOPE + ['staff' => [
+        'prefix' => 'api/staff', 'middleware' => ['api', 'mk.auth:admin'], 'audiences' => ['member'],
+    ]]);
+
+    [$admin] = helpGet($this, '/api/staff/help/manual/admin', $auth);
+    [$memberStatus, $member] = helpGet($this, '/api/staff/help/manual/member', $auth);
+
+    expect($admin)->toBe(404)
+        ->and($memberStatus)->toBe(200)
+        ->and(array_column($member['data'], 'slug'))->toBe(['member', 'member/retirar']);
 });

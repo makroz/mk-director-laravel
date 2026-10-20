@@ -90,6 +90,40 @@ final class MkHelpCatalog
     }
 
     /**
+     * El manual entero de `$audience` para imprimirlo: cada artículo con la
+     * forma de {@see payload()} más `depth` (0 = la raíz), en el orden del
+     * árbol — en profundidad, cada sección antes que sus hijos, y los hermanos
+     * por `order` y después por slug, como el árbol del panel.
+     *
+     * ponytail: `payload()` arma el árbol de `related` y busca la ability por
+     * artículo (unas 2 consultas por artículo); si un manual llega a cientos de
+     * artículos, precargar los dos una vez.
+     *
+     * @param  list<string>  $audiences  las del scope: recortan `related`
+     * @return list<array<string, mixed>>
+     */
+    public function manual(string $audience, array $audiences): array
+    {
+        $order = [];
+        $walk = function (array $nodes, int $depth) use (&$walk, &$order): void {
+            foreach ($nodes as $node) {
+                $order[$node['slug']] = $depth;
+                $walk($node['children'], $depth + 1);
+            }
+        };
+        $walk($this->tree([$audience]), 0);
+
+        $articles = MkHelpArticle::query()->where('audience', $audience)->get()->keyBy('slug');
+
+        $out = [];
+        foreach ($order as $slug => $depth) {
+            $out[] = $this->payload($articles[$slug], $audiences) + ['depth' => $depth];
+        }
+
+        return $out;
+    }
+
+    /**
      * Un artículo como lo sirve la API (el panel, la app y los enlaces públicos).
      * `related` sale como `[{slug, title}]` en el orden del árbol, sólo los de
      * `$audiences`; `images` son las únicas que el front pinta. `abilityLabel`

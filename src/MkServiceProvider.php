@@ -485,6 +485,7 @@ class MkServiceProvider extends ServiceProvider
                     ->name("mk.help.{$scope}.show");
                 Route::get('help/search', [MkHelpController::class, 'search'])->name("mk.help.{$scope}.search");
                 Route::get('help/screens/{screen}', [MkHelpController::class, 'screen'])->name("mk.help.{$scope}.screen");
+                Route::get('help/manual/{audience}', [MkHelpController::class, 'manual'])->name("mk.help.{$scope}.manual");
 
                 if (($group['share'] ?? false) === true) {
                     Route::get('help/share-links', [MkHelpShareLinkController::class, 'index'])->name("mk.help.{$scope}.share-links.index");
