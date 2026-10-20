@@ -133,8 +133,8 @@ final class MkDirectUpload
      * revisión, o el storage al medir, el objeto ya unido no se confía: se borra.
      *
      * ⚠️ Un proceso que muere a mitad de camino deja la fila en Completing. La
-     * poda de subidas vencidas tiene que tratarla como una Started (abortar el
-     * multipart y borrar el objeto, ignorando el que no exista).
+     * limpia `mk:uploads:prune` cuando venció y nadie la tocó hace una hora
+     * ({@see discard()}: aborta el multipart y borra el objeto).
      *
      * @param  list<string>  $etags
      *
@@ -197,13 +197,27 @@ final class MkDirectUpload
         $upload = $this->find($owner, $uploadId, [MkUploadStatus::Started, MkUploadStatus::Completed])->first()
             ?? throw MkUploadException::notFound();
 
-        if ($upload->status === MkUploadStatus::Started) {
-            $this->driver($upload->disk)->abort($upload->disk, $upload->key, $upload->multipart_id);
-        } else {
-            Storage::disk($upload->disk)->delete($upload->key);
-        }
+        $this->discard($upload);
 
         $upload->update(['status' => MkUploadStatus::Aborted]);
+    }
+
+    /**
+     * Lo que una subida dejó en el storage, fuera: el multipart de una Started,
+     * el objeto de una Completed, y las DOS cosas de una Completing (el proceso
+     * que la tomó pudo morir antes o después de unir las partes). No cambia la
+     * fila ni mira el dueño: eso es de quien llama ({@see abort()} y
+     * `mk:uploads:prune`). Lo que ya no existe no es un error.
+     */
+    public function discard(MkUpload $upload): void
+    {
+        if ($upload->status !== MkUploadStatus::Completed) {
+            $this->driver($upload->disk)->abort($upload->disk, $upload->key, $upload->multipart_id);
+        }
+
+        if ($upload->status !== MkUploadStatus::Started) {
+            Storage::disk($upload->disk)->delete($upload->key);
+        }
     }
 
     /**

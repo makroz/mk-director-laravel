@@ -12,6 +12,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Storage: `mk:uploads:prune`
+
+**Added**
+- **`mk:uploads:prune`** limpia las subidas directas (`mk_uploads`) que nadie va a usar, y deja cada fila Aborted:
+  - Started vencidas (`expires_at` pasado): aborta el multipart.
+  - Completing trabadas (un `complete()` cuyo proceso murió): vencidas y sin tocar hace una hora; aborta el multipart
+    y borra el objeto.
+  - Completed que nadie adjuntó en `mk_director.storage.prune_unattached_after_hours` horas (nueva clave, default
+    24; `--hours=N` la pisa, mínimo 1): borra el objeto.
+
+  Las Attached no se tocan. Cada fila se toma con un UPDATE condicional antes de tocar el storage, así que un
+  `attachUpload()` simultáneo gana y su objeto no se borra; si el storage falla, la fila vuelve a su estado y el
+  comando sale 1. `--dry-run` cuenta sin tocar nada. Programalo una vez por día:
+  `Schedule::command('mk:uploads:prune')->daily()->withoutOverlapping()->onOneServer()`.
+- `MkDirectUpload::discard(MkUpload)`: lo que una subida dejó en el storage, fuera, según su estado (lo usan `abort()`
+  y la poda).
+
+**Changed**
+- `S3DirectUploadDriver::abort()` toma un `NoSuchUpload` como éxito: el multipart ya no existe (lo abortó la regla de
+  7 días del bucket o un `complete()` ya lo unió), que es lo que se pedía.
+
 ## [UNRELEASED] — Storage: el inspector reconoce audio
 
 **Added**

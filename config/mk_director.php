@@ -195,6 +195,10 @@ return [
     | `upload_ttl` segundos; la API nunca ve los bytes. Sólo con un disk `s3`.
     | Cada subida es una fila de `uploads_table`.
     |
+    | `mk:uploads:prune` (programalo una vez por día) aborta las subidas que
+    | vencieron sin terminar y borra el objeto de las Completed que nadie
+    | adjuntó en `prune_unattached_after_hours` horas.
+    |
     | `profiles`: qué entra en cada clase de archivo. `mimes` es MIME =>
     | extensiones aceptadas (la primera es la que guarda el servidor);
     | `max_megapixels` marca un perfil de imágenes; `prefix`, la carpeta de la
@@ -213,6 +217,7 @@ return [
         'upload_ttl' => 21600,          // 6 h para terminar de subir
         'part_size' => 8 * 1024 * 1024, // 8 MiB por parte
         'uploads_table' => env('MK_UPLOADS_TABLE', 'mk_uploads'),
+        'prune_unattached_after_hours' => 24,
         'profiles' => [
             'avatar' => [
                 'role' => 'public',

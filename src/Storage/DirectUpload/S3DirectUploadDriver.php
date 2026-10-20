@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Mk\Director\Storage\DirectUpload;
 
+use Aws\S3\Exception\S3Exception;
 use Aws\S3\S3Client;
 use Illuminate\Filesystem\AwsS3V3Adapter;
 use Illuminate\Support\Facades\Storage;
@@ -59,9 +60,20 @@ final class S3DirectUploadDriver implements MkDirectUploadDriver
         ]);
     }
 
+    /**
+     * Un multipart que ya no existe (`NoSuchUpload`: lo abortó la regla de 7
+     * días del bucket, o un `complete()` ya lo unió) cuenta como abortado: es
+     * el estado que se pedía. Sin esto la poda se trabaría para siempre en esa fila.
+     */
     public function abort(string $disk, string $key, string $multipartId): void
     {
-        $this->client($disk)->abortMultipartUpload($this->object($disk, $key) + ['UploadId' => $multipartId]);
+        try {
+            $this->client($disk)->abortMultipartUpload($this->object($disk, $key) + ['UploadId' => $multipartId]);
+        } catch (S3Exception $e) {
+            if ($e->getAwsErrorCode() !== 'NoSuchUpload') {
+                throw $e;
+            }
+        }
     }
 
     public function size(string $disk, string $key): int

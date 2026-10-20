@@ -34,6 +34,7 @@ use Mk\Director\Console\Commands\MkUpdateCommand;
 use Mk\Director\Console\Commands\PerfCommand;
 use Mk\Director\Console\Commands\PruneAbilitiesCommand;
 use Mk\Director\Console\Commands\PrunePushDevicesCommand;
+use Mk\Director\Console\Commands\PruneUploadsCommand;
 use Mk\Director\Console\Commands\SecurityLintCommand;
 use Mk\Director\Console\Commands\SpecIntrospectCommand;
 use Mk\Director\Controllers\OpenApiController;
@@ -334,6 +335,9 @@ class MkServiceProvider extends ServiceProvider
                 // Borra los teléfonos de push que no se vieron en N días.
                 // Programalo con `Schedule::command('mk:push:prune')->daily()`.
                 PrunePushDevicesCommand::class,
+                // Aborta las subidas directas vencidas y borra las que nadie adjuntó.
+                // Programalo con `Schedule::command('mk:uploads:prune')->daily()->onOneServer()`.
+                PruneUploadsCommand::class,
             ]);
         }
 
