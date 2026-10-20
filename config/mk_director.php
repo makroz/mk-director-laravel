@@ -284,6 +284,17 @@ return [
     | monta `GET api/admin/help/tree`, `help/articles/{slug}`, `help/search?q=`
     | y `help/screens/{screen}` (el artículo de una pantalla, o 404), con
     | nombres `mk.help.admin.*`.
+    |
+    | Enlaces públicos (`share`): un scope con `share: true` suma
+    | `GET/POST help/share-links` y `DELETE help/share-links/{id}`, sólo para
+    | quien tiene `canMk(share.ability)` (null = nadie) y cada uno con SUS
+    | enlaces. `target` es `slug:<slug>` o `manual:<audience>` de lo que ese
+    | scope ve; dura `hours` (1..`max_hours`). La URL es `public_url` + '/' +
+    | token, y el token sale UNA vez: la tabla guarda su sha256. La página
+    | pública lee `GET {routes.public.prefix}/shared/{token}` y
+    | `…/shared/{token}/articles/{slug}`, sin sesión y con el throttle de
+    | `routes.public.middleware`; vencido o revocado es 410. Lo compartido se
+    | ve entero: los permisos no esconden nada.
     */
     'help' => [
         'content_path' => resource_path('help'),

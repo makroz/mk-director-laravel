@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Mk\Director\Help;
 
 use Illuminate\Database\Eloquent\Builder;
+use Mk\Director\Auth\Models\Ability;
 use Mk\Director\Help\Models\MkHelpArticle;
 
 /**
@@ -86,6 +87,34 @@ final class MkHelpCatalog
         $first = count($slugs) === 1 ? $slugs[0] : $this->inTreeOrder($slugs, $audiences)[0]['slug'];
 
         return $this->article($first, $audiences);
+    }
+
+    /**
+     * Un artículo como lo sirve la API (el panel, la app y los enlaces públicos).
+     * `related` sale como `[{slug, title}]` en el orden del árbol, sólo los de
+     * `$audiences`; `images` son las únicas que el front pinta. `abilityLabel`
+     * es la `description` de esa ability en la tabla de abilities, para que la
+     * nota diga qué permiso es con palabras; null si la ability no existe o no
+     * tiene descripción (el front muestra la clave).
+     *
+     * @param  list<string>  $audiences
+     * @return array<string, mixed>
+     */
+    public function payload(MkHelpArticle $article, array $audiences): array
+    {
+        return [
+            'slug' => $article->slug,
+            'title' => $article->title,
+            'audience' => $article->audience,
+            'ability' => $article->ability,
+            'abilityLabel' => $article->ability === null
+                ? null
+                : (Ability::query()->where('name', $article->ability)->value('description') ?: null),
+            'body' => $article->body,
+            'images' => $article->images ?? [],
+            'related' => $this->related($article, $audiences),
+            'updatedAt' => $article->updated_at?->toIso8601ZuluString(),
+        ];
     }
 
     /**
