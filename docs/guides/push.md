@@ -452,7 +452,10 @@ Lo que hace falta además de Android:
   RN Firebase 26 resuelve el SDK de Apple por SPM por defecto, que exige frameworks dinámicos;
   `forceStaticLinking` lo pide con el React Native precompilado de Expo 54+.
 - La **imagen** necesita una Notification Service Extension (un target nativo extra) que baje
-  `fcm_options.image`; el servidor ya manda `mutable-content: 1` cuando hay imagen.
+  `fcm_options.image`; el servidor ya manda `mutable-content: 1` cuando hay imagen. La trae
+  `@makroz/mobile` como config plugin: sumá `"@makroz/mobile/plugins/push-image"` a los `plugins` (pide
+  `ios.bundleIdentifier`; el target queda `<bundle id>.ImageNotification`, embebido en la app). No enlaza
+  Firebase, así que el Podfile no cambia.
 
 🔴 **Límite conocido**: la configuración de iOS compila y corre en el simulador, pero **todavía no se probó
 en un iPhone real** (registro del token, llegada, imagen y toque). Y Firebase deja de publicar versiones en
