@@ -32,11 +32,17 @@ use Throwable;
  *   4. create an admin with `'*'` and its token ({@see PerfAdmin});
  *   5. request every screen of each record (list, each filter, search, each sort, count, show) through the HTTP
  *      kernel, a warm-up and `--runs` times, and the list-like ones at per_page 1/8/20 ({@see ScreenRunner});
- *   6. read the plan of each distinct SELECT the screens ran, once ({@see PlanReader}), and list the module's
- *      indexes no plan used;
- *   7. drop the scratch database (kept with `--keep`) and print the run.
+ *   6. read the plan of each distinct SELECT the screens ran, once ({@see PlanReader});
+ *   7. with `--capture`, replay each SELECT shape the module's tests ran that no screen ran ({@see CaptureListener}):
+ *      its median and plan on the volume, with the tests' own bindings (`replayed`: a binding may name a row the
+ *      volume does not have, so the plan holds and the time may read low). A shape that fails there is a note;
+ *   8. list the module's indexes no plan used;
+ *   9. drop the scratch database and the tests' one (both kept with `--keep`) and print the run.
  *
- * The app's database is never written. Hand-written code outside the screens is not measured yet (`notes`).
+ * `--prepare-tests` only creates `<db>_mk_studio_perf_tests` (empty, dropping a stale one) and prints its name: MK
+ * Studio runs the module's tests there with the capture on, then this command with `--capture`, which drops it.
+ *
+ * The app's database is never written.
  *
  * @see \Mk\Director\Perf\Plans\PlanReader
  */
@@ -46,13 +52,21 @@ final class PerfCommand extends Command
         {--module= : The module to measure (as its folder: School)}
         {--volume=medium : small, medium or large (rows of the module\'s leaf tables: 1,000, 20,000 or 200,000)}
         {--runs=50 : Measured requests per screen, after one warm-up}
-        {--keep : Keep the scratch database after the run}
+        {--capture= : The JSONL the module\'s tests wrote with MK_PERF_CAPTURE: its SELECTs are replayed on the volume}
+        {--prepare-tests : Only create the empty <db>_mk_studio_perf_tests database for the tests and print its name}
+        {--keep : Keep the scratch databases after the run}
         {--pretty : Indented JSON}';
 
     protected $description = 'Measures a module\'s screens on a scratch copy of the schema and prints the run as JSON for MK Studio.';
 
+    /** Replays of a captured shape, after one warm-up: a median needs a few; the screens' `--runs` would be slow. */
+    private const REPLAYS = 5;
+
     public function handle(ScratchDatabase $db, VolumeSeeder $seed, ScreenRunner $screens, QueryRecorder $rec): int
     {
+        if ($this->option('prepare-tests')) {
+            return $this->prepareTests($db);
+        }
         $module = (string) $this->option('module');
         $volume = (string) $this->option('volume');
         $runs = (int) $this->option('runs');
@@ -66,17 +80,31 @@ final class PerfCommand extends Command
             return $this->refuse('--runs must be between 1 and 1000.');
         }
 
+        $capture = $this->option('capture');
+        if ($capture !== null && ! is_readable((string) $capture)) {
+            return $this->refuse("--capture={$capture}: no such file.");
+        }
+
         $started = hrtime(true);
         $startedAt = gmdate('Y-m-d\TH:i:s\Z');
         try {
-            // Before the scratch database: the pairs' targets are read from the app's rows.
-            $intro = (new Introspector([config('mk_director.paths.modules', app_path('Modules'))]))->collect();
-            $connection = $db->create();
             try {
-                $db->migrate($connection);
-                $run = $this->measure($connection, $module, $volume, $runs, $intro, $seed, $screens, $rec);
+                $notes = [];
+                $captured = $capture === null ? null : $this->captured((string) $capture, $notes);
+                // Before the scratch database: the pairs' targets are read from the app's rows.
+                $intro = (new Introspector([config('mk_director.paths.modules', app_path('Modules'))]))->collect();
+                $connection = $db->create();
+                try {
+                    $db->migrate($connection);
+                    $run = $this->measure($connection, $module, $volume, $runs, $intro, $seed, $screens, $rec, $captured, $notes);
+                } finally {
+                    $this->option('keep') ? $db->release($connection) : $db->drop($connection);
+                }
             } finally {
-                $this->option('keep') ? $db->release($connection) : $db->drop($connection);
+                // The tests' database (`--prepare-tests`), whether they left a capture or not.
+                if (! $this->option('keep') && ! app()->environment('production')) {
+                    $db->discard(ScratchDatabase::TESTS_SUFFIX);
+                }
             }
         } catch (Throwable $e) {
             return $this->refuse($e->getMessage());
@@ -99,8 +127,69 @@ final class PerfCommand extends Command
         return self::SUCCESS;
     }
 
-    /** @return array<string, mixed> the run's measured part */
-    private function measure(string $connection, string $module, string $volume, int $runs, array $intro, VolumeSeeder $seed, ScreenRunner $screens, QueryRecorder $rec): array
+    /** `--prepare-tests`: the tests' empty database, with the same guards as the scratch one; prints `{"database"}`. */
+    private function prepareTests(ScratchDatabase $db): int
+    {
+        try {
+            $connection = $db->create(ScratchDatabase::TESTS_SUFFIX);
+            $database = (string) config("database.connections.{$connection}.database");
+            $db->release($connection);
+        } catch (Throwable $e) {
+            return $this->refuse($e->getMessage());
+        }
+        $this->output->writeln(json_encode(['database' => $database], JSON_THROW_ON_ERROR), OutputInterface::OUTPUT_RAW);
+
+        return self::SUCCESS;
+    }
+
+    /**
+     * The capture's SELECT shapes, one per normalized SQL: the first line seen (a line in the module wins over one
+     * outside it), and `duplicates`, the most times the shape ran from one line in one test or request, minus one.
+     * A line from any database but a `*_mk_studio_perf_tests` one is not replayed.
+     *
+     * @param  list<string>  $notes
+     * @return array<string, array{sql: string, bindings: array, file: string, line: int, outside: bool, duplicates: int}>
+     */
+    private function captured(string $file, array &$notes): array
+    {
+        $out = [];
+        $runs = [];
+        $foreign = 0;
+        foreach (file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $json) {
+            $c = json_decode($json, true);
+            if (! is_array($c) || ! is_string($c['sql'] ?? null) || ! QueryRecorder::isSelect($c['sql'])) {
+                continue;
+            }
+            if (! preg_match(ScratchDatabase::TESTS_NAME, (string) ($c['database'] ?? ''))) {
+                $foreign++;
+
+                continue;
+            }
+            $sql = QueryRecorder::normalize($c['sql']);
+            $at = ($c['group'] ?? '')."|{$sql}|{$c['file']}:{$c['line']}";
+            $runs[$at] = ($runs[$at] ?? 0) + 1;
+            $had = $out[$sql] ?? null;
+            if ($had === null || ($had['outside'] && ! $c['outside'])) {
+                $out[$sql] = [
+                    'sql' => $c['sql'], 'bindings' => (array) ($c['bindings'] ?? []), 'file' => (string) $c['file'],
+                    'line' => (int) $c['line'], 'outside' => (bool) $c['outside'], 'duplicates' => $had['duplicates'] ?? 0,
+                ];
+            }
+            $out[$sql]['duplicates'] = max($out[$sql]['duplicates'], $runs[$at] - 1);
+        }
+        if ($foreign > 0) {
+            $notes[] = "{$foreign} consultas capturadas no corrieron en una base *_mk_studio_perf_tests: no se repitieron.";
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  array<string, array<string, mixed>>|null  $captured  null: the module's tests did not run
+     * @param  list<string>  $notes
+     * @return array<string, mixed> the run's measured part
+     */
+    private function measure(string $connection, string $module, string $volume, int $runs, array $intro, VolumeSeeder $seed, ScreenRunner $screens, QueryRecorder $rec, ?array $captured, array $notes): array
     {
         [$engine, $version] = $this->engine($connection);
         $tables = [];
@@ -160,13 +249,45 @@ final class PerfCommand extends Command
         // Each distinct SELECT of the run, once, on the volume: the screens' main queries and everything else they ran.
         $reader = $engine === 'pgsql' ? new PostgresPlanReader : new MariaDbPlanReader;
         $plans = [];
-        $notes = [];
         foreach ($shapes as $sql => $s) {
             try {
                 $plans[$sql] = $reader->read($connection, $s['raw'], $s['bindings']);
             } catch (Throwable $e) {
                 $notes[] = 'Sin plan para '.Str::limit($sql, 120).': '.Str::limit(strtok($e->getMessage(), "\n") ?: $e::class, 200);
             }
+        }
+        // Hand-written code: the shapes the module's tests ran that no screen ran, with the tests' bindings.
+        foreach ($captured ?? [] as $sql => $c) {
+            if (isset($shapes[$sql])) {
+                continue;
+            }
+            try {
+                $ms = [];
+                foreach (range(0, self::REPLAYS) as $i) {
+                    $t = hrtime(true);
+                    DB::connection($connection)->select($c['sql'], $c['bindings']);
+                    if ($i > 0) {
+                        $ms[] = (hrtime(true) - $t) / 1e6;
+                    }
+                }
+                $plans[$sql] = $reader->read($connection, $c['sql'], $c['bindings']);
+            } catch (Throwable $e) {
+                $notes[] = "{$c['file']}:{$c['line']} no se pudo repetir sobre el volumen (".Str::limit($sql, 120).'): '.Str::limit(strtok($e->getMessage(), "\n") ?: $e::class, 200);
+
+                continue;
+            }
+            [$median, $p95] = ScreenRunner::stats($ms);
+            $queries[] = [
+                'id' => substr(sha1("code:{$c['file']}:{$c['line']}:{$sql}"), 0, 12),
+                'origin' => ['kind' => 'code', 'file' => $c['file'], 'line' => $c['line'], 'outside' => $c['outside']],
+                'sql' => $sql,
+                'medianMs' => $median,
+                'p95Ms' => $p95,
+                'queriesAt' => null,
+                'duplicates' => $c['duplicates'],
+                'replayed' => true,
+                'plan' => null,
+            ];
         }
         foreach ($queries as &$q) {
             $plan = $plans[$q['sql']] ?? null;
@@ -177,7 +298,9 @@ final class PerfCommand extends Command
         $tableInfo = array_map(fn (string $t): array => $this->tableInfo($connection, $t), array_keys($filled));
 
         // Shown as is in the studio's «Rendimiento» tab: in Spanish, like the rest of its copy.
-        $notes[] = 'El código escrito a mano fuera de las pantallas (servicios, jobs) todavía no se mide.';
+        $notes[] = $captured === null
+            ? 'El código escrito a mano fuera de las pantallas (servicios, jobs) no se midió: no corrieron los tests del módulo.'
+            : 'Las consultas del código se repitieron sobre el volumen con los valores de sus tests: sus tiempos son «sobre datos de test».';
         foreach ($seed->skipped() as $table => $why) {
             $notes[] = "La tabla {$table} no se pudo llenar: {$why}";
         }
@@ -188,6 +311,9 @@ final class PerfCommand extends Command
             $notes[] = "Pantalla sin medir: {$why}";
         }
         foreach ($queries as $q) {
+            if ($q['origin']['kind'] !== 'screen') {
+                continue;
+            }
             if ($q['status'] >= 300) {
                 $notes[] = "{$q['origin']['record']}: GET /{$q['uri']} respondió {$q['status']}: su tiempo no es el de la pantalla.";
             }

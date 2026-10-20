@@ -187,7 +187,7 @@ final class ScreenRunner
     }
 
     /** @return array{0: float, 1: float} median and p95 of `$ms` */
-    private static function stats(array $ms): array
+    public static function stats(array $ms): array
     {
         sort($ms);
         $n = count($ms);
