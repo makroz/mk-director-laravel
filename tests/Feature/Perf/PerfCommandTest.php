@@ -21,6 +21,8 @@ use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
 use Illuminate\Foundation\Providers\ConsoleSupportServiceProvider;
 use Illuminate\Pipeline\Pipeline;
+use Illuminate\Routing\Events\RouteMatched;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
@@ -397,8 +399,15 @@ test('slope_flags_an_n_plus_one', function () {
         Route::get('api/admin/perf-slope/per-row', [PerRowController::class, 'index']);
         Route::get('api/admin/perf-slope/batched', [BatchedController::class, 'index']);
     });
+    // The token's `last_used_at` is written only when the clock ticked to a new second since the last request: make it tick at 8 rows alone.
+    Event::listen(RouteMatched::class, static function (RouteMatched $e): void {
+        if ($e->request->query('per_page') === '8') {
+            Carbon::setTestNow(Carbon::now()->addSecond());
+        }
+    });
 
     [$code, $output] = perfRun(['--module' => 'PerfSlope']);
+    Carbon::setTestNow();
     expect($code)->toBe(0, $output);
     $lists = array_column(array_filter(
         json_decode($output, true, flags: JSON_THROW_ON_ERROR)['queries'],
