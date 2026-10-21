@@ -59,6 +59,28 @@ final class Frames
     }
 
     /**
+     * Every frame of the app's own code on the stack, innermost first, as `file:line` joined by `<`: the call site of a
+     * query. The same loop body asking again has the same path; two lines asking for the same shape do not, even when
+     * both reach it through one helper (a settings service read for two keys).
+     *
+     * @param  list<array<string, mixed>>  $trace
+     */
+    public static function appPath(array $trace): string
+    {
+        $modules = self::dir((string) config('mk_director.paths.modules', app_path('Modules')));
+        $app = self::dir(app_path());
+        $path = [];
+        foreach ($trace as $f) {
+            $file = (string) ($f['file'] ?? '');
+            if ($file !== '' && (str_starts_with($file, $modules) || str_starts_with($file, $app)) && preg_match(self::SETUP, $file) !== 1 && ! self::passesThrough($f)) {
+                $path[] = self::frame($f, null)['file'].':'.($f['line'] ?? 0);
+            }
+        }
+
+        return implode('<', $path);
+    }
+
+    /**
      * The innermost frame of this package outside its measuring harness (`Perf/`, the console commands), as
      * `vendor/makroz/director-laravel/…`: never the folder it is installed or linked from on this machine.
      *
@@ -77,6 +99,29 @@ final class Frames
             // `vendor/`: the package's own dependencies, when it runs from its checkout (its tests).
             if (! preg_match('#^(src/Perf/|src/Console/|vendor/)#', $file)) {
                 return ['file' => self::PACKAGE_PATH.$file, 'line' => (int) ($f['line'] ?? 0), 'module' => null];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The test's own line that called into the app, as `<file>:<line>`: the outermost frame in a `tests/` folder that is
+     * neither the app's code nor a package's (`vendor/`), so a helper of the tests called from two lines is two calls.
+     * Null when no test file is on the stack.
+     *
+     * @param  list<array<string, mixed>>  $trace
+     */
+    public static function testFrame(array $trace): ?string
+    {
+        $modules = self::dir((string) config('mk_director.paths.modules', app_path('Modules')));
+        $app = self::dir(app_path());
+        foreach ($trace as $f) {
+            $path = (string) ($f['file'] ?? '');
+            if (str_contains($path, '/tests/') && ! str_contains($path, '/vendor/') && ! str_starts_with($path, $modules) && ! str_starts_with($path, $app)) {
+                $frame = self::frame($f, null);
+
+                return "{$frame['file']}:{$frame['line']}";
             }
         }
 

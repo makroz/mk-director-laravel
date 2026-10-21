@@ -11,7 +11,8 @@ use Illuminate\Support\Facades\Schema;
  * The relation graph the volume tests fill: the module PerfGraph owns `perf_notes` and `perf_tags`.
  *
  *  - `perf_notes.team_id` → `perf_teams.region_id` → `perf_regions`: parents outside the module, two levels deep;
- *  - `perf_notes.author_type` + `author_id`: polymorphic, to an owner or an item (the morph map);
+ *  - `perf_notes.author_type` + `author_id`: polymorphic, to an owner or an item (the morph map); its state columns
+ *    (an enum with a default, a counter, a nullable step and a nullable one-to-one link) are spread by the volume;
  *  - `perf_tags`: a format CHECK on a unique code, and exactly one of `item_id` / `owner_id`.
  */
 return new class extends Migration
@@ -32,6 +33,12 @@ return new class extends Migration
             $t->foreignId('team_id')->constrained('perf_teams');
             $t->morphs('author');
             $t->text('body');
+            // State: a default, a counter, a step not reached by every row, a one-to-one link not every row has.
+            $t->unsignedTinyInteger('status')->default(1);
+            $t->unsignedInteger('views')->default(0);
+            $t->timestamp('read_at')->nullable();
+            $t->foreignId('pinned_item_id')->nullable()->unique()->constrained('perf_items');
+            $t->softDeletes();
             $t->timestamps();
         });
         Schema::create('perf_tags', function (Blueprint $t): void {

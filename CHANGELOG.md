@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `mk-studio:perf`: sin falsas alarmas en el código a mano
+
+**Fixed**
+- **El N+1 del código a mano sale en la línea que repitió**: una consulta por forma **y** línea; antes la forma se
+  quedaba con la primera línea que la corrió y el conteo era el máximo de todas.
+- **Una repetición se cuenta por llamada**: la captura escribe `test` (la línea del test que llamó) y `path` (el sitio
+  de la llamada), y cambia de `group` también en cada comando de artisan y job. Varias llamadas del test, un bucle del
+  test o un helper leído desde varias líneas ya no son un N+1; un bucle dentro de la app sí, aunque lea el mismo valor.
+- **El volumen se parece a las filas reales**: los enums usan todos sus casos; las columnas con default y las nullable
+  (tres de cada cuatro) se escriben; una relación nullable única se vacía cuando se agotan sus padres.
+
+**Added**
+- **`notes` explica `screens: 0`**: un módulo sin controladores CRUD del paquete (o sin rutas GET `index`/`show`).
+
 ## [UNRELEASED] — `QueryBudget`: el test de la pendiente
 
 **Added**

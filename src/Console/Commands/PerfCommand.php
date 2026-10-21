@@ -147,17 +147,28 @@ final class PerfCommand extends Command
     }
 
     /**
-     * The capture's SELECT shapes, one per normalized SQL: the first line seen (a line in the module wins over one
-     * outside it), and `duplicates`, the most times the shape ran from one line in one test or request, minus one.
-     * A line from any database but a `*_mk_studio_perf_tests` one is not replayed.
+     * The capture's SELECT shapes, one per normalized SQL and line of code that ran it: every line of the module, and,
+     * for a shape no line of the module ran, the first line outside it. A line from any database but a
+     * `*_mk_studio_perf_tests` one is not replayed.
+     *
+     * `duplicates` is how many more times the line ran the shape than its unit ran at all, at worst. A unit is one call of
+     * the test into the app (`group`: a request, a command or a job; `test`: the test's line that called), and the times it
+     * ran are the fewest any of its shapes ran: a test looping over a service three times runs every shape of it three
+     * times, so none of them repeats, while a loop inside the app runs its body's shapes once per row. The runs of one
+     * shape are counted per call site (`path`, the app frames on the stack): one helper read for two settings from two
+     * lines is not a repeat. A capture without `test` or `path` (an older package) counts per `group` and line.
+     *
+     * ponytail: bindings are not compared. A per-row read of one same value (a setting asked inside the loop) is the N+1
+     * this rule exists for; a loop inside the app whose every shape runs once per row has no shape that tells the unit
+     * entered once, and reads as no repeat.
      *
      * @param  list<string>  $notes
-     * @return array<string, array{sql: string, bindings: array, file: string, line: int, outside: bool, duplicates: int}>
+     * @return array<string, array{shape: string, sql: string, bindings: array, file: string, line: int, outside: bool, duplicates: int}>
      */
     private function captured(string $file, array &$notes): array
     {
         $out = [];
-        $runs = [];
+        $units = [];
         $foreign = 0;
         foreach (file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $json) {
             $c = json_decode($json, true);
@@ -170,22 +181,39 @@ final class PerfCommand extends Command
                 continue;
             }
             $sql = QueryRecorder::normalize($c['sql']);
-            $at = ($c['group'] ?? '')."|{$sql}|{$c['file']}:{$c['line']}";
-            $runs[$at] = ($runs[$at] ?? 0) + 1;
-            $had = $out[$sql] ?? null;
-            if ($had === null || ($had['outside'] && ! $c['outside'])) {
-                $out[$sql] = [
-                    'sql' => $c['sql'], 'bindings' => (array) ($c['bindings'] ?? []), 'file' => (string) $c['file'],
-                    'line' => (int) $c['line'], 'outside' => (bool) $c['outside'], 'duplicates' => $had['duplicates'] ?? 0,
-                ];
+            $at = "{$sql}\0{$c['file']}:{$c['line']}";
+            $out[$at] ??= [
+                'shape' => $sql, 'sql' => $c['sql'], 'bindings' => (array) ($c['bindings'] ?? []), 'file' => (string) $c['file'],
+                'line' => (int) $c['line'], 'outside' => (bool) $c['outside'], 'duplicates' => 0,
+            ];
+            $run = $at."\0".($c['path'] ?? '');
+            $unit = &$units[($c['group'] ?? '').'|'.($c['test'] ?? '')];
+            $unit[$run] = ($unit[$run] ?? 0) + 1;
+            unset($unit);
+        }
+        foreach ($units as $runs) {
+            $entered = min($runs);
+            foreach ($runs as $run => $n) {
+                $at = substr($run, 0, strrpos($run, "\0"));
+                $out[$at]['duplicates'] = max($out[$at]['duplicates'], intdiv($n, $entered) - 1);
             }
-            $out[$sql]['duplicates'] = max($out[$sql]['duplicates'], $runs[$at] - 1);
         }
         if ($foreign > 0) {
             $notes[] = "{$foreign} consultas capturadas no corrieron en una base *_mk_studio_perf_tests: no se repitieron.";
         }
+        $inside = array_column(array_filter($out, static fn (array $c): bool => ! $c['outside']), 'shape', 'shape');
+        $kept = [];
 
-        return $out;
+        return array_filter($out, static function (array $c) use ($inside, &$kept): bool {
+            if (! $c['outside']) {
+                return true;
+            }
+            if (isset($inside[$c['shape']]) || isset($kept[$c['shape']])) {
+                return false;
+            }
+
+            return $kept[$c['shape']] = true;
+        });
     }
 
     /**
@@ -231,7 +259,8 @@ final class PerfCommand extends Command
         $token = (new PerfAdmin)->make($seed, $connection);
         $queries = [];
         $shapes = [];
-        foreach ($screens->screens($module, $token, $intro) as $screen) {
+        $list = $screens->screens($module, $token, $intro);
+        foreach ($list as $screen) {
             $m = $screens->measure($screen, $runs, $rec);
             $shapes += $m['shapes'];
             $origin = ['kind' => 'screen', 'record' => $screen['record'], 'screen' => $screen['screen'], ...($screen['param'] === null ? [] : ['param' => $screen['param']])];
@@ -261,29 +290,37 @@ final class PerfCommand extends Command
                 $notes[] = 'Sin plan para '.Str::limit($sql, 120).': '.Str::limit(strtok($e->getMessage(), "\n") ?: $e::class, 200);
             }
         }
-        // Hand-written code: the shapes the module's tests ran that no screen ran, with the tests' bindings.
-        foreach ($captured ?? [] as $sql => $c) {
+        // Hand-written code: the shapes the module's tests ran that no screen ran, with the tests' bindings, each shape
+        // replayed once for every line that ran it.
+        $timed = [];
+        foreach ($captured ?? [] as $c) {
+            $sql = $c['shape'];
             if (isset($shapes[$sql])) {
                 continue;
             }
             // A row lock cannot run in the plan's read-only transaction, and takes nothing from the plan or the time.
             $replay = QueryRecorder::withoutLock($c['sql']);
-            try {
-                $ms = [];
-                foreach (range(0, self::REPLAYS) as $i) {
-                    $t = hrtime(true);
-                    DB::connection($connection)->select($replay, $c['bindings']);
-                    if ($i > 0) {
-                        $ms[] = (hrtime(true) - $t) / 1e6;
+            if (! isset($timed[$sql])) {
+                try {
+                    $ms = [];
+                    foreach (range(0, self::REPLAYS) as $i) {
+                        $t = hrtime(true);
+                        DB::connection($connection)->select($replay, $c['bindings']);
+                        if ($i > 0) {
+                            $ms[] = (hrtime(true) - $t) / 1e6;
+                        }
                     }
+                    $plans[$sql] = $reader->read($connection, $replay, $c['bindings']);
+                    $timed[$sql] = ScreenRunner::stats($ms);
+                } catch (Throwable $e) {
+                    $timed[$sql] = false;
+                    $notes[] = "{$c['file']}:{$c['line']} no se pudo repetir sobre el volumen (".Str::limit($sql, 120).'): '.Str::limit(strtok($e->getMessage(), "\n") ?: $e::class, 200);
                 }
-                $plans[$sql] = $reader->read($connection, $replay, $c['bindings']);
-            } catch (Throwable $e) {
-                $notes[] = "{$c['file']}:{$c['line']} no se pudo repetir sobre el volumen (".Str::limit($sql, 120).'): '.Str::limit(strtok($e->getMessage(), "\n") ?: $e::class, 200);
-
+            }
+            if ($timed[$sql] === false) {
                 continue;
             }
-            [$median, $p95] = ScreenRunner::stats($ms);
+            [$median, $p95] = $timed[$sql];
             $queries[] = [
                 'id' => substr(sha1("code:{$c['file']}:{$c['line']}:{$sql}"), 0, 12),
                 'origin' => ['kind' => 'code', 'file' => $c['file'], 'line' => $c['line'], 'outside' => $c['outside']],
@@ -317,6 +354,11 @@ final class PerfCommand extends Command
         }
         foreach ($screens->skipped() as $why) {
             $notes[] = "Pantalla sin medir: {$why}";
+        }
+        if ($list === [] && $screens->skipped() === []) {
+            $notes[] = array_filter($intro['crud'], static fn (array $c): bool => $c['module'] === $module) === []
+                ? "No se midió ninguna pantalla: ningún registro de {$module} tiene un controlador CRUD del paquete (listado o detalle). Sus consultas son las del código escrito a mano, que miden los tests del módulo."
+                : "No se midió ninguna pantalla: los controladores CRUD de {$module} no tienen una ruta GET de listado (index) ni de detalle (show).";
         }
         foreach ($queries as $q) {
             if ($q['origin']['kind'] !== 'screen') {
