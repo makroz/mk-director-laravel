@@ -15,11 +15,13 @@ use Composer\InstalledVersions;
 use Illuminate\Console\Application;
 use Illuminate\Console\Events\CommandFinished;
 use Illuminate\Contracts\Console\Kernel as ConsoleKernelContract;
+use Illuminate\Contracts\Http\Kernel as HttpKernel;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
 use Illuminate\Foundation\Providers\ConsoleSupportServiceProvider;
+use Illuminate\Http\Request;
 use Illuminate\Pipeline\Pipeline;
 use Illuminate\Routing\Events\RouteMatched;
 use Illuminate\Support\Carbon;
@@ -794,6 +796,30 @@ test('a_repeat_is_counted_once_per_call_at_the_line_that_ran_it', function () {
         ->and($dup[$at('warmOwner')])->toBe(0)
         // One group for the test, and a new one at each of the three commands.
         ->and(array_unique(array_column($lines, 'group')))->toHaveCount(4);
+});
+
+test('a_loop_over_rows_passed_in_repeats_inside_a_request_and_not_from_a_test', function () {
+    Route::get('perf-names', static fn () => (new ItemReport)->namesOf([1, 2, 3]));
+    $file = perfCapture(static function (): void {
+        expect(app(HttpKernel::class)->handle(Request::create('perf-names'))->getStatusCode())->toBe(200);
+    });
+    $lines = perfCaptured($file);
+    expect(array_unique(array_column($lines, 'once')))->toBe([true]);
+    [$code, $output] = perfRun(['--capture' => $file]);
+    expect($code)->toBe(0, $output);
+    $dup = static fn (string $out): array => array_column(array_filter(
+        json_decode($out, true, flags: JSON_THROW_ON_ERROR)['queries'],
+        static fn (array $q): bool => $q['origin']['kind'] === 'code',
+    ), 'duplicates');
+    // Every query of the request is inside the loop: the request was still entered once.
+    expect($dup($output))->toBe([2]);
+
+    // The same call straight from the test: a loop of the test would look the same, so no repeat.
+    $file = perfCapture(static fn () => (new ItemReport)->namesOf([1, 2, 3]));
+    expect(array_unique(array_column(perfCaptured($file), 'once')))->toBe([false]);
+    [$code, $output] = perfRun(['--capture' => $file]);
+    expect($code)->toBe(0, $output)
+        ->and($dup($output))->toBe([0]);
 });
 
 test('a_shape_that_fails_on_the_volume_db_is_a_note_not_an_abort', function () {

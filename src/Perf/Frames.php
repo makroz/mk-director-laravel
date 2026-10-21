@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace Mk\Director\Perf;
 
+use Illuminate\Console\Command;
+use Illuminate\Contracts\Http\Kernel as HttpKernel;
 use Illuminate\Pipeline\Pipeline;
+use Illuminate\Queue\CallQueuedHandler;
 
 /**
  * Which line of code ran a query, from its stack (`debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS)`, innermost first):
@@ -126,6 +129,24 @@ final class Frames
         }
 
         return null;
+    }
+
+    /**
+     * Whether the query ran inside one request, command or job: a call into the app the stack shows was entered once,
+     * however many times its body then asked. False for code a test calls directly.
+     *
+     * @param  list<array<string, mixed>>  $trace
+     */
+    public static function enteredOnce(array $trace): bool
+    {
+        foreach ($trace as $f) {
+            $class = (string) ($f['class'] ?? '');
+            if ($class !== '' && (is_a($class, HttpKernel::class, true) || is_a($class, Command::class, true) || is_a($class, CallQueuedHandler::class, true))) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** A middleware's `$next($request)`: the frame called into the pipeline, it did not ask for the query. */

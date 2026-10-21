@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   test o un helper leído desde varias líneas ya no son un N+1; un bucle dentro de la app sí, aunque lea el mismo valor.
 - **El volumen se parece a las filas reales**: los enums usan todos sus casos; las columnas con default y las nullable
   (tres de cada cuatro) se escriben; una relación nullable única se vacía cuando se agotan sus padres.
+- **Un bucle sobre filas recibidas es un N+1 dentro de un request, comando o job**: la captura escribe `once` (la
+  llamada entró una sola vez, se ve en el stack) y la repetición deja de depender de que otra consulta de la llamada
+  corriera una vez. Llamado directo desde un test sigue sin contar: se ve igual que un bucle del test.
 - **La pendiente cuenta sólo lecturas** (`queriesAt` y `QueryBudget`): el `last_used_at` del token se escribe cuando
   el reloj pasó a otro segundo desde el request anterior, así que caía en un tamaño y no en el otro y torcía la
   pendiente en uno: un falso N+1, o uno real que quedaba en 7 en vez de 8.

@@ -30,6 +30,17 @@ class ItemReport
         return $names;
     }
 
+    /** One query per owner passed in: no query of the call reads the rows the loop walks. */
+    public function namesOf(array $ownerIds): array
+    {
+        $names = [];
+        foreach ($ownerIds as $id) {
+            $names[] = DB::table('perf_owners')->where('id', $id)->value('name'); // capture: perPassed
+        }
+
+        return $names;
+    }
+
     /** The same shape as `perOwner`'s, from another line, once: the repeat is not this line's. */
     public function firstOwner(): ?string
     {
