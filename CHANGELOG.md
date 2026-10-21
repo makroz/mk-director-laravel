@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `mk-studio:perf`: la línea de cada N+1 y las versiones
+
+**Added**
+- **`frames`** en cada listado medido: las consultas que corren una vez por fila, con la línea que las corrió
+  (`{sql, file, line, module}`; la del paquete como `vendor/makroz/director-laravel/…`). MK Studio decide con eso si un
+  N+1 lo arregla el spec, el código a mano del proyecto o el paquete.
+- **`versions`** en la corrida: `{php, laravel, director}`.
+- **`Mk\Director\Perf\Frames`**: la regla única de «qué línea pidió esta consulta», compartida por la captura y las
+  pantallas.
+
+**Changed**
+- La captura (`MK_PERF_CAPTURE`) ya no atribuye una consulta a un middleware que sólo pasa el request
+  (`$next($request)`): está en el stack de cada consulta y no la pidió.
+
 ## [UNRELEASED] — Ayuda y manuales
 
 Los manuales de una app como archivos Markdown en `resources/help/`, indexados por `mk:help:sync` y servidos por scope.
