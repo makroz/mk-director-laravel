@@ -11,6 +11,8 @@ use Illuminate\Support\Facades\Schema;
 /** Hand-written code of the measured module: what the capture must point at, file and line. */
 class ItemReport
 {
+    private bool $warm = false;
+
     /** No index leads with `status`: a full scan on the volume. */
     public function byStatus(int $status): array
     {
@@ -26,6 +28,51 @@ class ItemReport
         }
 
         return $names;
+    }
+
+    /** The same shape as `perOwner`'s, from another line, once: the repeat is not this line's. */
+    public function firstOwner(): ?string
+    {
+        return DB::table('perf_owners')->where('id', 1)->value('name'); // capture: firstOwner
+    }
+
+    /** One read of the same value per item: a per-row read even with the same bindings each time. */
+    public function sameOwnerPerItem(): array
+    {
+        $ids = [];
+        foreach (DB::table('perf_items')->orderBy('id')->limit(3)->get() as $item) {
+            $ids[] = DB::table('perf_owners')->where('name', 'owner 1')->value('id'); // capture: samePerRow
+        }
+
+        return $ids;
+    }
+
+    /** Three settings-like reads from three lines through one helper, after one read of the items: no loop. */
+    public function threeOwners(): array
+    {
+        DB::table('perf_items')->orderBy('id')->value('id');
+
+        return [
+            $this->ownerNamed('owner 1'),
+            $this->ownerNamed('owner 2'),
+            $this->ownerNamed('owner 3'),
+        ];
+    }
+
+    private function ownerNamed(string $name): ?int
+    {
+        return DB::table('perf_owners')->where('name', $name)->value('id'); // capture: ownerNamed
+    }
+
+    /** A command's body: its first run warms what the next runs reuse. */
+    public function warmOwner(): ?string
+    {
+        if (! $this->warm) {
+            $this->warm = true;
+            DB::table('perf_items')->orderBy('id')->value('name');
+        }
+
+        return DB::table('perf_owners')->where('id', 2)->value('name'); // capture: warmOwner
     }
 
     public function rename(int $id, string $name): void

@@ -13,6 +13,7 @@ use App\Modules\PerfSlope\Http\Controllers\EntryController;
 use App\Modules\PerfSlope\Http\Controllers\PerRowController;
 use Composer\InstalledVersions;
 use Illuminate\Console\Application;
+use Illuminate\Console\Events\CommandFinished;
 use Illuminate\Contracts\Console\Kernel as ConsoleKernelContract;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\Relation;
@@ -35,7 +36,9 @@ use Mk\Director\Perf\QueryRecorder;
 use Mk\Director\Perf\ScratchDatabase;
 use Mk\Director\Tests\Concerns\BootsHttpApp;
 use Mk\Director\Tests\MkLaravelTestCase;
+use Symfony\Component\Console\Input\ArrayInput;
 use Symfony\Component\Console\Output\BufferedOutput;
+use Symfony\Component\Console\Output\NullOutput;
 
 /**
  * `mk-studio:perf` on a REAL server (PostgreSQL or MariaDB): what it creates and drops is a database on that
@@ -284,7 +287,7 @@ test('volume_respects_fk_order_and_fills_morph_columns_with_real_ids', function 
 
     // The module's tables, their parents two levels up, and both targets of the pair; parents written first.
     expect($rows)->toBe([
-        'perf_regions' => 10, 'perf_teams' => 100, 'perf_owners' => 100, 'perf_items' => 100, 'perf_notes' => 1000, 'perf_tags' => 1000,
+        'perf_owners' => 100, 'perf_items' => 100, 'perf_regions' => 10, 'perf_teams' => 100, 'perf_notes' => 1000, 'perf_tags' => 1000,
     ])
         ->and($at['perf_regions'])->toBeLessThan($at['perf_teams'])
         ->and($at['perf_teams'])->toBeLessThan($at['perf_notes'])
@@ -318,6 +321,39 @@ test('volume_honors_check_constraints', function () {
         ->and(array_filter($tags, static fn (array $t): bool => $t['item_id'] !== null))->not->toBe([])
         ->and(array_filter($tags, static fn (array $t): bool => $t['owner_id'] !== null))->not->toBe([])
         ->and(implode("\n", json_decode($output, true)['notes']))->not->toContain('perf_tags');
+});
+
+test('volume_spreads_state_columns_like_real_rows', function () {
+    Relation::morphMap(['owner' => PerfOwner::class, 'item' => Item::class]);
+
+    [$code, $output] = perfRun(['--module' => 'PerfGraph', '--keep' => true]);
+    expect($code)->toBe(0, $output);
+
+    // An enum with a default: every case in use, none standing for every row.
+    $status = array_column(perfScratch('select status, count(*) as n from perf_notes group by status order by status'), 'n', 'status');
+    expect(array_keys($status))->toBe([1, 2, 3, 4])
+        ->and(max($status) / array_sum($status))->toBeLessThan(0.7);
+    $notes = perfScratch('select count(*) as total, count(distinct views) as views, count(read_at) as reached, count(pinned_item_id) as pinned,
+        count(deleted_at) as deleted from perf_notes')[0];
+    // A counter with a default varies; a nullable step is reached by most rows, not all; the rows are live.
+    expect((int) $notes['total'])->toBe(1000)
+        ->and((int) $notes['views'])->toBeGreaterThan(100)
+        ->and((int) $notes['reached'] / 1000)->toBeGreaterThan(0.6)->toBeLessThan(0.9)
+        ->and((int) $notes['deleted'])->toBe(0);
+    // A nullable one-to-one link: as many as the 100 items allow, the rest empty, and no row refused for it.
+    expect((int) $notes['pinned'])->toBeGreaterThan(50)->toBeLessThanOrEqual(100)
+        ->and(implode("\n", json_decode($output, true)['notes']))->not->toContain('perf_notes');
+});
+
+test('a_module_without_crud_screens_says_why_none_was_measured', function () {
+    Relation::morphMap(['owner' => PerfOwner::class, 'item' => Item::class]);
+
+    [$code, $output] = perfRun(['--module' => 'PerfGraph']);
+
+    expect($code)->toBe(0, $output);
+    $run = json_decode($output, true, flags: JSON_THROW_ON_ERROR);
+    expect(array_filter($run['queries'], static fn (array $q): bool => $q['origin']['kind'] === 'screen'))->toBe([])
+        ->and(implode("\n", $run['notes']))->toContain('No se midió ninguna pantalla: ningún registro de PerfGraph tiene un controlador CRUD');
 });
 
 test('screens_cover_list_each_filter_search_sort_count_show', function () {
@@ -696,6 +732,57 @@ test('replay_reports_code_queries_with_plan_and_origin', function () {
         ->and(array_keys($code))->not->toContain($count['sql'])
         ->and(implode("\n", $run['notes']))->toContain('sobre datos de test')
         ->and(perfDatabaseExists(PERF_TESTS_DB))->toBeFalse();
+});
+
+test('a_repeat_is_counted_once_per_call_at_the_line_that_ran_it', function () {
+    $file = perfCapture(static function (): void {
+        $report = new ItemReport;
+        $report->firstOwner();
+        $report->ownerNames();
+        $report->sameOwnerPerItem();
+        $report->threeOwners();
+        // Several calls from the test, and a loop of the test: each call is its own unit, none of them a repeat.
+        $report->byStatus(1);
+        $report->byStatus(2);
+        foreach (range(1, 3) as $status) {
+            $report->active();
+        }
+        // A command run three times from one line, its first run warming what the next ones reuse: three calls.
+        foreach (range(1, 3) as $run) {
+            event(new CommandFinished('perf:warm', new ArrayInput([]), new NullOutput, 0));
+            $report->warmOwner();
+        }
+    });
+    $lines = perfCaptured($file);
+    // The unit: the test's line that called, and the call site, app frames only.
+    expect(array_filter($lines, static fn (array $l): bool => preg_match('#tests/Feature/Perf/PerfCommandTest\.php:\d+$#', (string) $l['test']) !== 1))->toBe([])
+        ->and($lines[0]['path'])->toStartWith($lines[0]['file'].':'.$lines[0]['line'])->not->toContain('PerfCommandTest');
+
+    [$code, $output] = perfRun(['--capture' => $file]);
+
+    expect($code)->toBe(0, $output);
+    $run = json_decode($output, true, flags: JSON_THROW_ON_ERROR);
+    $dup = [];
+    foreach ($run['queries'] as $q) {
+        if ($q['origin']['kind'] === 'code') {
+            $dup[$q['origin']['line']] = $q['duplicates'];
+        }
+    }
+    $at = static fn (string $marker): int => perfLine('PerfShop/Services/ItemReport.php', $marker);
+
+    // The loop's shape, first run from another line: reported at both lines, the repeat at the loop's.
+    expect($dup[$at('perOwner')])->toBe(2)
+        ->and($dup[$at('firstOwner')])->toBe(0)
+        // The same value read once per row is a per-row read.
+        ->and($dup[$at('samePerRow')])->toBe(2)
+        // One helper line reached from three lines: three call sites, no loop.
+        ->and($dup[$at('ownerNamed')])->toBe(0)
+        // Two calls from two lines of the test, three from a loop of the test: no repeat.
+        ->and($dup[$at('byStatus')])->toBe(0)
+        ->and($dup[$at('active')])->toBe(0)
+        ->and($dup[$at('warmOwner')])->toBe(0)
+        // One group for the test, and a new one at each of the three commands.
+        ->and(array_unique(array_column($lines, 'group')))->toHaveCount(4);
 });
 
 test('a_shape_that_fails_on_the_volume_db_is_a_note_not_an_abort', function () {

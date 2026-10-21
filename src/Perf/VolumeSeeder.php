@@ -21,13 +21,17 @@ use Throwable;
  *  - in FK order: parents first, so every foreign key and every `*_type` + `*_id` pair holds a real row.
  *
  * Row counts: the module's leaf tables and the children get the volume's rows; every other table a tenth of its
- * largest child's, at least PARENT_ROWS. Values are skewed: a child picks its parent, an enum its case and a pair its
- * target unevenly (a few parents get most rows, one of them most of all), because uniform data hides bad plans.
- * Inserts are chunked. The volume is the same every run (a fixed seed), so a second run compares like with like.
+ * largest child's, at least PARENT_ROWS. Values are skewed: a child picks its parent and a pair its target unevenly (a
+ * few parents get most rows, one of them most of all), because uniform data hides bad plans; an enum takes every case,
+ * the first ones more often. Inserts are chunked. The volume is the same every run (a fixed seed), so a second run
+ * compares like with like.
  *
- * Only what has to be written is: NOT NULL columns without a default, every relation column (nullable too), the
- * timestamps, and what a CHECK needs ({@see CheckConstraint}). A row the database still refuses is written alone and
- * retried once with new values (a unique collision); a table that keeps refusing is reported, never fatal.
+ * Every column is written, as a real table's rows would have it: one with a default too (a status left at its default
+ * would be one value in every row), and a nullable one in three rows of four (a step not every row reached:
+ * `released_at`, a link not every row has). `deleted_at` stays empty: the rows are live. A nullable link inside a unique
+ * index stays empty once its parents are spent. What a CHECK needs is honored ({@see CheckConstraint}). A row the
+ * database still refuses is written alone and retried once with new values (a unique collision); a table that keeps
+ * refusing is reported, never fatal. {@see row()} writes only what has to be: the perf admin keeps its defaults.
  */
 final class VolumeSeeder
 {
@@ -139,7 +143,7 @@ final class VolumeSeeder
         $this->connection = $connection;
         $this->casts[$table] ??= $casts;
 
-        return $this->rowOf($table, $i);
+        return $this->rowOf($table, $i, spread: false);
     }
 
     /**
@@ -275,8 +279,13 @@ final class VolumeSeeder
         return $written;
     }
 
-    /** @return array<string, mixed> */
-    private function rowOf(string $table, int $i, bool $retry = false): array
+    /**
+     * `$spread`: every column as a real row has it (the volume); false: only what has to be written (NOT NULL columns
+     * without a default, the relations, the timestamps).
+     *
+     * @return array<string, mixed>
+     */
+    private function rowOf(string $table, int $i, bool $retry = false, bool $spread = true): array
     {
         // A retry needs other values: a unique column already holds this row's.
         $seed = $retry ? $i + mt_rand(1, 1_000_000) * 1_000_003 : $i;
@@ -289,9 +298,13 @@ final class VolumeSeeder
         $q = $n - 1;
         foreach ($meta['foreignKeys'] as $p => $fk) {
             array_push($references, ...$fk['columns']);
+            $nullable = $spread && array_filter($fk['columns'], static fn (string $c): bool => ! $meta['columns'][$c]['nullable']) === [];
+            if ($nullable && $n % 4 === 0) {
+                continue;
+            }
             if (in_array($p, $meta['spread'], true)) {
                 $pool = $this->pool($table, $fk['foreign_table'], $fk['foreign_columns']);
-                $parent = $pool === [] ? null : $pool[$q % count($pool)];
+                $parent = $pool === [] || ($nullable && $q >= count($pool)) ? null : $pool[$q % count($pool)];
                 $q = intdiv($q, max(1, count($pool)));
             } else {
                 $parent = $this->parentRow($table, $fk['foreign_table'], $fk['foreign_columns']);
@@ -335,8 +348,8 @@ final class VolumeSeeder
             $timestamp = in_array($c['name'], ['created_at', 'updated_at'], true);
             // A reference with no parent row stays empty: a made-up id would only fail as a foreign key violation.
             if (array_key_exists($c['name'], $row) || in_array($c['name'], $references, true)
-                || $c['auto_increment'] || ($c['generation'] ?? null) !== null
-                || (! $timestamp && ($c['nullable'] || $c['default'] !== null))) {
+                || $c['auto_increment'] || ($c['generation'] ?? null) !== null || $c['name'] === 'deleted_at'
+                || (! $timestamp && ($spread ? $c['nullable'] && $n % 4 === 0 : $c['nullable'] || $c['default'] !== null))) {
                 continue;
             }
             $cast = $casts[$c['name']] ?? null;
@@ -440,7 +453,7 @@ final class VolumeSeeder
         if ($cast !== null && enum_exists($cast) && is_subclass_of($cast, BackedEnum::class)) {
             $cases = $cast::cases();
 
-            return $cases === [] ? null : $cases[CheckConstraint::skew(count($cases))]->value;
+            return $cases === [] ? null : $cases[self::spread(count($cases))]->value;
         }
         $type = strtolower((string) $c['type_name']);
         $full = strtolower((string) $c['type']);
@@ -463,6 +476,15 @@ final class VolumeSeeder
             in_array($type, $text, true) => $this->text($c['name'], $i, $length),
             default => null,
         };
+    }
+
+    /**
+     * A case of `$n`, every one of them in use, the first ones more often (of four: about 50, 21, 16 and 13 %).
+     * {@see CheckConstraint::skew()} leaves the last cases of a long enum almost empty.
+     */
+    private static function spread(int $n): int
+    {
+        return min($n - 1, (int) floor($n * (mt_rand() / mt_getrandmax()) ** 2));
     }
 
     /** Unique per row (unique columns hold); a short column gets the row number in base 36, unique up to 36^length. */
