@@ -333,15 +333,17 @@ test('volume_spreads_state_columns_like_real_rows', function () {
     $status = array_column(perfScratch('select status, count(*) as n from perf_notes group by status order by status'), 'n', 'status');
     expect(array_keys($status))->toBe([1, 2, 3, 4])
         ->and(max($status) / array_sum($status))->toBeLessThan(0.7);
-    $notes = perfScratch('select count(*) as total, count(distinct views) as views, count(read_at) as reached, count(pinned_item_id) as pinned,
+    $notes = perfScratch('select count(*) as total, count(distinct views) as views, count(read_at) as reached, count(pinned_item_id) as pinned, count(pinned_at) as pinned_at,
         count(deleted_at) as deleted from perf_notes')[0];
     // A counter with a default varies; a nullable step is reached by most rows, not all; the rows are live.
     expect((int) $notes['total'])->toBe(1000)
         ->and((int) $notes['views'])->toBeGreaterThan(100)
         ->and((int) $notes['reached'] / 1000)->toBeGreaterThan(0.6)->toBeLessThan(0.9)
         ->and((int) $notes['deleted'])->toBe(0);
-    // A nullable one-to-one link: as many as the 100 items allow, the rest empty, and no row refused for it.
+    // A nullable one-to-one link: as many as the 100 items allow, the rest empty, and no row refused for it, not even
+    // when a CHECK ties it to `pinned_at` (a row past the spent items empties both instead of reusing an item).
     expect((int) $notes['pinned'])->toBeGreaterThan(50)->toBeLessThanOrEqual(100)
+        ->and((int) $notes['pinned_at'])->toBe((int) $notes['pinned'])
         ->and(implode("\n", json_decode($output, true)['notes']))->not->toContain('perf_notes');
 });
 

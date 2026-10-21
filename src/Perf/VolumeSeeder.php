@@ -29,9 +29,9 @@ use Throwable;
  * Every column is written, as a real table's rows would have it: one with a default too (a status left at its default
  * would be one value in every row), and a nullable one in three rows of four (a step not every row reached:
  * `released_at`, a link not every row has). `deleted_at` stays empty: the rows are live. A nullable link inside a unique
- * index stays empty once its parents are spent. What a CHECK needs is honored ({@see CheckConstraint}). A row the
- * database still refuses is written alone and retried once with new values (a unique collision); a table that keeps
- * refusing is reported, never fatal. {@see row()} writes only what has to be: the perf admin keeps its defaults.
+ * index stays empty once its parents are spent, and so does a column a CHECK ties to it. What a CHECK needs is honored
+ * ({@see CheckConstraint}). A row the database still refuses is written alone and retried once with new values (a
+ * unique collision); a table that keeps refusing is reported, never fatal. {@see row()} writes only what has to be: the perf admin keeps its defaults.
  */
 final class VolumeSeeder
 {
@@ -368,10 +368,16 @@ final class VolumeSeeder
         if ($meta['checks'] === []) {
             return $row;
         }
-        // A column a CHECK needs set: a foreign key takes a real parent, anything else a generic value.
+        // A column a CHECK needs set: a foreign key takes a real parent, anything else a generic value. A link inside a
+        // unique index already walked its parents: a skewed one would repeat a parent, so it stays empty and the CHECK
+        // takes its other way (`(link IS NULL) = (step IS NULL)` empties the step too).
         $fill = function (string $column) use ($table, $meta, $n, $casts): mixed {
-            foreach ($meta['foreignKeys'] as $fk) {
+            foreach ($meta['foreignKeys'] as $p => $fk) {
                 if (($k = array_search($column, $fk['columns'], true)) !== false) {
+                    if (in_array($p, $meta['spread'], true)) {
+                        return null;
+                    }
+
                     return $this->parentRow($table, $fk['foreign_table'], $fk['foreign_columns'])[$fk['foreign_columns'][$k]] ?? null;
                 }
             }
