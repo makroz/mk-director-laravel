@@ -82,6 +82,7 @@ final class CaptureListener
                     'group' => $state->group,
                     'test' => Frames::testFrame($trace),
                     'path' => Frames::appPath($trace),
+                    'once' => Frames::enteredOnce($trace),
                 ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
             } catch (JsonException) {
                 return; // a binary binding: not a shape the replay could send back

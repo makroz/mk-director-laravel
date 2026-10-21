@@ -154,13 +154,15 @@ final class PerfCommand extends Command
      * `duplicates` is how many more times the line ran the shape than its unit ran at all, at worst. A unit is one call of
      * the test into the app (`group`: a request, a command or a job; `test`: the test's line that called), and the times it
      * ran are the fewest any of its shapes ran: a test looping over a service three times runs every shape of it three
-     * times, so none of them repeats, while a loop inside the app runs its body's shapes once per row. The runs of one
+     * times, so none of them repeats, while a loop inside the app runs its body's shapes once per row. Inside a request,
+     * a command or a job (`once`) the unit was entered once by construction, so every run past the first is a repeat,
+     * even when every shape of it is inside the loop (rows passed in, not read by a query of the unit). The runs of one
      * shape are counted per call site (`path`, the app frames on the stack): one helper read for two settings from two
      * lines is not a repeat. A capture without `test` or `path` (an older package) counts per `group` and line.
      *
      * ponytail: bindings are not compared. A per-row read of one same value (a setting asked inside the loop) is the N+1
-     * this rule exists for; a loop inside the app whose every shape runs once per row has no shape that tells the unit
-     * entered once, and reads as no repeat.
+     * this rule exists for; code a test calls directly, whose every shape runs once per row, has no shape that tells the
+     * unit entered once (a loop of the test looks the same), and reads as no repeat.
      *
      * @param  list<string>  $notes
      * @return array<string, array{shape: string, sql: string, bindings: array, file: string, line: int, outside: bool, duplicates: int}>
@@ -187,12 +189,12 @@ final class PerfCommand extends Command
                 'line' => (int) $c['line'], 'outside' => (bool) $c['outside'], 'duplicates' => 0,
             ];
             $run = $at."\0".($c['path'] ?? '');
-            $unit = &$units[($c['group'] ?? '').'|'.($c['test'] ?? '')];
+            $unit = &$units[($c['group'] ?? '').'|'.($c['test'] ?? '').'|'.(($c['once'] ?? false) ? 'once' : '')];
             $unit[$run] = ($unit[$run] ?? 0) + 1;
             unset($unit);
         }
-        foreach ($units as $runs) {
-            $entered = min($runs);
+        foreach ($units as $key => $runs) {
+            $entered = str_ends_with((string) $key, '|once') ? 1 : min($runs);
             foreach ($runs as $run => $n) {
                 $at = substr($run, 0, strrpos($run, "\0"));
                 $out[$at]['duplicates'] = max($out[$at]['duplicates'], intdiv($n, $entered) - 1);
