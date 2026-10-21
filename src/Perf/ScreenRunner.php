@@ -31,7 +31,8 @@ use Throwable;
  *  - `show`: the detail of the record's first row (the seeder hands its children to the first rows most).
  *
  * Every list-like screen is also requested at `per_page` 1, 8 and 20 (`queriesAt`): a query count that grows with
- * the rows is a query per row (N+1).
+ * the rows is a query per row (N+1), and `frames` names the line that runs each of those queries ({@see perRowFrames()}),
+ * so MK Studio can tell whose it is: the spec's, the project's hand code or the package.
  *
  * What is switched off for the measure, and why: rate limiting (50 requests in a second would be 429s, not
  * timings), the cache store (`array`, so a cached answer from a previous run never stands in for the query) and
@@ -109,7 +110,8 @@ final class ScreenRunner
      *
      * @param  array{record: string, table: ?string, screen: string, param: ?string, uri: string, query: array, token: string}  $screen
      * @return array{status: int, medianMs: float, p95Ms: float, queryCount: int, duplicates: int, sql: string,
-     *     queriesAt: ?array{perPage1: int, perPage8: int, perPage20: int}, shapes: array<string, array{raw: string, bindings: array}>}
+     *     queriesAt: ?array{perPage1: int, perPage8: int, perPage20: int},
+     *     frames: ?list<array{sql: string, file: ?string, line: ?int, module: ?string}>, shapes: array<string, array{raw: string, bindings: array}>}
      */
     public function measure(array $screen, int $runs, QueryRecorder $rec): array
     {
@@ -161,14 +163,18 @@ final class ScreenRunner
         }
         [$median, $p95] = $screen['screen'] === 'count' && $main !== null ? self::stats($shapes[$main]['ms']) : self::stats($times);
 
-        $queriesAt = null;
+        $queriesAt = $frames = null;
         if (in_array($screen['screen'], ['list', 'filter', 'search', 'sort'], true)) {
             $at = [];
+            $logs = [];
             foreach (self::SLOPE as $perPage) {
                 $send(['per_page' => $perPage]); // its own warm-up: a first request at a size may load what the next reuse
-                $at["perPage{$perPage}"] = count($rec->record(static fn () => $send(['per_page' => $perPage])));
+                // Untimed: the stack of each query is kept, for the lines that run once per row.
+                $logs[$perPage] = $rec->record(static fn () => $send(['per_page' => $perPage]), frames: true);
+                $at["perPage{$perPage}"] = count($logs[$perPage]);
             }
             $queriesAt = $at;
+            $frames = self::perRowFrames($logs[self::SLOPE[0]], $logs[self::SLOPE[2]]);
         }
 
         return [
@@ -179,11 +185,39 @@ final class ScreenRunner
             'duplicates' => QueryRecorder::duplicates($log),
             'sql' => $main ?? '',
             'queriesAt' => $queriesAt,
+            'frames' => $frames,
             'shapes' => array_map(static fn (array $s): array => ['raw' => $s['raw'], 'bindings' => $s['bindings']], array_filter(
                 $shapes,
                 static fn (array $s): bool => QueryRecorder::isSelect($s['raw']),
             )),
         ];
+    }
+
+    /**
+     * The queries that run once per row: each shape the request ran more than once, and more times at the most rows than at the fewest, with
+     * the line that ran it ({@see Frames}: the app's, else the package's; null when neither), one per shape and line.
+     *
+     * @param  list<array{sql: string, frame?: ?array}>  $fewest
+     * @param  list<array{sql: string, frame?: ?array}>  $most
+     * @return list<array{sql: string, file: ?string, line: ?int, module: ?string}>
+     */
+    public static function perRowFrames(array $fewest, array $most): array
+    {
+        $before = array_count_values(array_column($fewest, 'sql'));
+        $after = array_count_values(array_column($most, 'sql'));
+        $out = [];
+        foreach ($most as $q) {
+            // A shape the request ran once is no loop, even if it is new: `limit 20` is not the `limit 1` of the fewest rows.
+            if ($after[$q['sql']] < 2 || $after[$q['sql']] <= ($before[$q['sql']] ?? 0)) {
+                continue;
+            }
+            $f = $q['frame'] ?? null;
+            $out[$q['sql'].'|'.($f['file'] ?? '').':'.($f['line'] ?? '')] ??= [
+                'sql' => $q['sql'], 'file' => $f['file'] ?? null, 'line' => $f['line'] ?? null, 'module' => $f['module'] ?? null,
+            ];
+        }
+
+        return array_values($out);
     }
 
     /** @return array{0: float, 1: float} median and p95 of `$ms` */

@@ -20,7 +20,7 @@ class PerRowController extends SmartController
     public function afterList(Request $request, array $items, ?int $total): array
     {
         foreach ($items as $item) {
-            $item->setAttribute('owner_name', DB::table('perf_owners')->where('id', $item->owner_id)->value('name'));
+            $item->setAttribute('owner_name', DB::table('perf_owners')->where('id', $item->owner_id)->value('name')); // capture: perRow
         }
 
         return $items;

@@ -15,7 +15,8 @@ use Illuminate\Support\Facades\DB;
  *
  * Each query is kept twice: `sql`, its normalized shape (what is compared, counted and shown), and `raw` plus
  * `bindings`, what really ran (what a plan reader re-runs: the shape folds `in (?, ?, ?)` and no longer matches
- * its bindings).
+ * its bindings). With `$frames`, each query also keeps `frame`: the line of the app's code that ran it, else the
+ * package's ({@see Frames}), null when neither is on its stack. A stack per query costs time: never on a timed run.
  */
 final class QueryRecorder
 {
@@ -23,26 +24,34 @@ final class QueryRecorder
 
     private bool $on = false;
 
-    /** @var list<array{sql: string, raw: string, bindings: array, ms: float}> */
+    private bool $frames = false;
+
+    /** @var list<array{sql: string, raw: string, bindings: array, ms: float, frame?: ?array{file: string, line: int, module: ?string}}> */
     private array $log = [];
 
-    /** @return list<array{sql: string, raw: string, bindings: array, ms: float}> the queries `$run` ran, in order */
-    public function record(callable $run): array
+    /** @return list<array{sql: string, raw: string, bindings: array, ms: float, frame?: ?array{file: string, line: int, module: ?string}}> the queries `$run` ran, in order */
+    public function record(callable $run, bool $frames = false): array
     {
         if (! $this->listening) {
             $this->listening = true;
             DB::listen(function (QueryExecuted $q): void {
                 if ($this->on && preg_match(ScratchDatabase::NAME, (string) $q->connection->getDatabaseName())) {
-                    $this->log[] = ['sql' => self::normalize($q->sql), 'raw' => $q->sql, 'bindings' => $q->bindings, 'ms' => (float) $q->time];
+                    $entry = ['sql' => self::normalize($q->sql), 'raw' => $q->sql, 'bindings' => $q->bindings, 'ms' => (float) $q->time];
+                    if ($this->frames) {
+                        $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS);
+                        $entry['frame'] = Frames::firstAppFrame($trace) ?? Frames::packageFrame($trace);
+                    }
+                    $this->log[] = $entry;
                 }
             });
         }
         $this->log = [];
         $this->on = true;
+        $this->frames = $frames;
         try {
             $run();
         } finally {
-            $this->on = false;
+            $this->on = $this->frames = false;
         }
 
         return $this->log;

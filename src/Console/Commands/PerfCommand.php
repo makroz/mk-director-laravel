@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Mk\Director\Console\Commands;
 
+use Composer\InstalledVersions;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -16,6 +17,7 @@ use Mk\Director\Perf\ScratchDatabase;
 use Mk\Director\Perf\ScreenRunner;
 use Mk\Director\Perf\VolumeSeeder;
 use Mk\Director\Spec\Introspector;
+use OutOfBoundsException;
 use RuntimeException;
 use Symfony\Component\Console\Output\ConsoleOutputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
@@ -37,7 +39,8 @@ use Throwable;
  *      its median and plan on the volume, with the tests' own bindings (`replayed`: a binding may name a row the
  *      volume does not have, so the plan holds and the time may read low). A shape that fails there is a note;
  *   8. list the module's indexes no plan used;
- *   9. drop the scratch database and the tests' one (both kept with `--keep`) and print the run.
+ *   9. drop the scratch database and the tests' one (both kept with `--keep`) and print the run, with the versions
+ *      that ran it (PHP, Laravel, this package).
  *
  * `--prepare-tests` only creates `<db>_mk_studio_perf_tests` (empty, dropping a stale one) and prints its name: MK
  * Studio runs the module's tests there with the capture on, then this command with `--capture`, which drops it.
@@ -120,6 +123,7 @@ final class PerfCommand extends Command
             'commit' => $this->git('rev-parse HEAD'),
             'startedAt' => $startedAt,
             'durationMs' => (int) round((hrtime(true) - $started) / 1e6),
+            'versions' => self::versions(),
         ];
         $flags = JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION;
         $this->output->writeln(json_encode($run, $flags | ($this->option('pretty') ? JSON_PRETTY_PRINT : 0)), OutputInterface::OUTPUT_RAW);
@@ -241,6 +245,7 @@ final class PerfCommand extends Command
                 'p95Ms' => $m['p95Ms'],
                 'queryCount' => $m['queryCount'],
                 'queriesAt' => $m['queriesAt'],
+                ...($m['frames'] === null ? [] : ['frames' => $m['frames']]),
                 'duplicates' => $m['duplicates'],
                 'plan' => null,
             ];
@@ -415,6 +420,23 @@ final class PerfCommand extends Command
                 ...(isset($partial[$i['name']]) ? ['partial' => $partial[$i['name']]] : []),
             ], Schema::connection($connection)->getIndexes($table)),
         ];
+    }
+
+    /**
+     * What ran the measure, for the reports MK Studio sends to MK: `director` is this package's version as Composer
+     * installed it (`dev-<branch>` from a path repository), `dev` when Composer does not know it.
+     *
+     * @return array{php: string, laravel: string, director: string}
+     */
+    public static function versions(): array
+    {
+        try {
+            $director = InstalledVersions::getPrettyVersion('makroz/director-laravel');
+        } catch (OutOfBoundsException) {
+            $director = null;
+        }
+
+        return ['php' => PHP_VERSION, 'laravel' => app()->version(), 'director' => $director ?? 'dev'];
     }
 
     private function git(string $args): string

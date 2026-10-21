@@ -9,7 +9,9 @@ use App\Modules\PerfShop\Http\Controllers\ItemController;
 use App\Modules\PerfShop\Models\Item;
 use App\Modules\PerfShop\Services\ItemReport;
 use App\Modules\PerfSlope\Http\Controllers\BatchedController;
+use App\Modules\PerfSlope\Http\Controllers\EntryController;
 use App\Modules\PerfSlope\Http\Controllers\PerRowController;
+use Composer\InstalledVersions;
 use Illuminate\Console\Application;
 use Illuminate\Contracts\Console\Kernel as ConsoleKernelContract;
 use Illuminate\Database\Eloquent\Model;
@@ -17,6 +19,7 @@ use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
 use Illuminate\Foundation\Providers\ConsoleSupportServiceProvider;
+use Illuminate\Pipeline\Pipeline;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
@@ -24,6 +27,7 @@ use Illuminate\Support\Facades\Route;
 use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\MkServiceProvider;
 use Mk\Director\Perf\CaptureListener;
+use Mk\Director\Perf\Frames;
 use Mk\Director\Perf\Plans\MariaDbPlanReader;
 use Mk\Director\Perf\Plans\PlanReader;
 use Mk\Director\Perf\Plans\PostgresPlanReader;
@@ -372,6 +376,77 @@ test('slope_flags_an_n_plus_one', function () {
         ->and($batched['queriesAt']['perPage1'])->toBe($batched['queriesAt']['perPage8'])
         ->and($batched['queriesAt']['perPage8'])->toBe($batched['queriesAt']['perPage20'])
         ->and($batched['duplicates'])->toBe(0);
+});
+
+test('screen_queries_carry_their_first_app_frame', function () {
+    Route::middleware(['api', 'mk.auth:admin'])->group(function (): void {
+        Route::get('api/admin/perf-slope/per-row', [PerRowController::class, 'index']);
+        Route::get('api/admin/perf-slope/batched', [BatchedController::class, 'index']);
+        Route::get('api/admin/perf-slope/entries', [EntryController::class, 'index']);
+    });
+
+    // A project that lets a Resource load a relation lazily (this suite forbids it everywhere else).
+    Model::preventLazyLoading(false);
+    try {
+        [$code, $output] = perfRun(['--module' => 'PerfSlope']);
+    } finally {
+        Model::preventLazyLoading();
+    }
+    expect($code)->toBe(0, $output);
+    $queries = json_decode($output, true, flags: JSON_THROW_ON_ERROR)['queries'];
+    $lists = array_column(array_filter($queries, static fn (array $q): bool => $q['origin']['screen'] === 'list'), null, 'uri');
+    $at = static fn (array $f): string => basename((string) $f['file']).':'.$f['line'];
+    $entries = $lists['api/admin/perf-slope/entries'];
+
+    // The per-row query of each list, at the line of the module that runs it: the hand Resource's lazy load, the
+    // controller's hook. The batched twin runs none; a screen with no slope has no frames.
+    expect(array_map($at, $entries['frames']))->toBe(['EntryResource.php:'.perfLine('PerfSlope/Http/Resources/EntryResource.php', 'owner')])
+        ->and($entries['frames'][0]['module'])->toBe('PerfSlope')
+        ->and($entries['frames'][0]['sql'])->toMatch('/from .?perf_owners.? where/')
+        ->and(array_map($at, $lists['api/admin/perf-slope/per-row']['frames']))->toBe(['PerRowController.php:'.perfLine('PerfSlope/Http/Controllers/PerRowController.php', 'perRow')])
+        ->and($lists['api/admin/perf-slope/batched']['frames'])->toBe([])
+        ->and(array_filter($queries, static fn (array $q): bool => $q['origin']['screen'] === 'count' && array_key_exists('frames', $q)))->toBe([]);
+});
+
+test('frames_skip_vendor_and_setup', function () {
+    $modules = realpath((string) config('mk_director.paths.modules'));
+    $vendor = base_path('vendor/laravel/framework/src/Illuminate/Database/Query/Builder.php');
+    $package = realpath(__DIR__.'/../../..');
+    $trace = [
+        ['file' => $vendor, 'line' => 10],
+        ['file' => "{$modules}/PerfShop/Database/Factories/ItemFactory.php", 'line' => 11],
+        ['file' => "{$modules}/PerfGraph/Http/Middleware/Pass.php", 'line' => 12, 'class' => Pipeline::class, 'function' => '{closure}'],
+        ['file' => "{$modules}/PerfGraph/Services/OwnerCount.php", 'line' => 13],
+        ['file' => "{$modules}/PerfShop/Services/ItemReport.php", 'line' => 14],
+    ];
+
+    // Vendor, test setup and a middleware handing the request on are skipped; the first app line is the caller,
+    // unless a line of the module asked for wins.
+    expect(Frames::firstAppFrame($trace))->toMatchArray(['line' => 13, 'module' => 'PerfGraph'])
+        ->and(Frames::firstAppFrame($trace, 'PerfShop'))->toMatchArray(['line' => 14, 'module' => 'PerfShop'])
+        ->and(Frames::firstAppFrame(array_slice($trace, 0, 3)))->toBeNull()
+        // The package's own line, as any project's vendor folder names it; its measuring harness is not one.
+        ->and(Frames::packageFrame([
+            ['file' => "{$package}/src/Perf/ScreenRunner.php", 'line' => 20],
+            ['file' => "{$package}/src/Controllers/SmartController.php", 'line' => 21],
+        ]))->toBe(['file' => 'vendor/makroz/director-laravel/src/Controllers/SmartController.php', 'line' => 21, 'module' => null])
+        // Nor are its own dependencies, when it runs from its checkout.
+        ->and(Frames::packageFrame([
+            ['file' => "{$package}/vendor/laravel/framework/src/Illuminate/Events/Dispatcher.php", 'line' => 22],
+            ['file' => "{$package}/src/Console/Commands/PerfCommand.php", 'line' => 23],
+            ['file' => $vendor, 'line' => 24],
+        ]))->toBeNull();
+});
+
+test('perf_run_reports_versions', function () {
+    [$code, $output] = perfRun();
+    expect($code)->toBe(0, $output);
+
+    expect(json_decode($output, true, flags: JSON_THROW_ON_ERROR)['versions'])->toBe([
+        'php' => PHP_VERSION,
+        'laravel' => app()->version(),
+        'director' => InstalledVersions::getPrettyVersion('makroz/director-laravel'),
+    ]);
 });
 
 /** 5,000 items on the app database, with fresh statistics: a plan on an empty table measures nothing. */
