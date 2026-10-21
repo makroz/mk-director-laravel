@@ -713,6 +713,37 @@ Medido en RETO (PostgreSQL 18.1, `medium`): School llena sus 14 tablas y 4 padre
 
 Con cada pantalla y cada plan (`medium`): School mide 10 pantallas (sus dos `SmartController`, Category y Course) en 19 s y Communications 6 en 10 s. El listado de cursos lee la tabla entera (13.714 filas) para ordenar; los conteos de las pantallas quedan planos (sin N+1). Un polimórfico suma una consulta cuando aparece un segundo tipo entre las filas (Communications: 8, 8, 9): crece en un solo tramo, no es N+1.
 
+### 3.6.8. `QueryBudget` — el test de la pendiente (N+1) para los tests de la app
+
+```php
+use Mk\Director\Testing\QueryBudget;
+
+QueryBudget::assertFlat(
+    screen: fn () => $this->getJson('/api/posts')->assertOk()->json('data'),   // devuelve las filas listadas
+    seedRows: fn (int $n) => Post::factory()->count($n)->create(),           // agrega $n filas que la pantalla lista
+    rows: [8, 20],                                                           // los tamaños que se comparan con 1
+);
+```
+
+Siembra 1 fila, llama a `screen` una vez para calentar (la primera llamada llena cachés de sesión, permisos y config que
+las siguientes no repiten) y cuenta sus consultas; después siembra hasta cada tamaño de `rows` y vuelve a contar. Falla
+si un tamaño corre más consultas que con 1 fila: eso es una consulta por fila. Cuenta la conexión por defecto con su
+query log, y lo deja como estaba.
+
+- 🔴 **La pendiente, no un techo.** Con las pocas filas de un test, un N+1 cabe debajo de cualquier número (3 filas son
+  ~9 consultas de más: un «menos de 25» queda verde con el bug puesto), y un techo envejece: cada relación legítima lo
+  sube un poco. `ceiling:` queda para la regresión que sube todo parejo.
+- **`growth:`** declara cuántas consultas de más se aceptan con más filas: un polimórfico suma una cuando aparece un
+  segundo tipo entre las filas (8, 8, 9).
+- 🔴 **El control del fixture.** Si `screen` devuelve un entero o algo contable (las filas), además falla cuando el
+  tamaño mayor no listó más filas que con 1: un fixture que no llega a la pantalla (filas de otro usuario, un estado que
+  la pantalla filtra) cuesta lo mismo en todos los tamaños y quedaría verde para siempre.
+- Devuelve las cuentas por tamaño (`[1 => 7, 8 => 7, 20 => 7]`). Un tamaño ≤ 1 en `rows` es un error.
+
+Tests: `tests/Unit/Testing/QueryBudgetTest.php` (sqlite en memoria). Cada guarda tiene el suyo que se pone rojo sin
+ella: la comparación, el calentamiento (diez consultas de la primera llamada tapaban el N+1: 12 contra 9), el control
+del fixture, el `growth` y el `ceiling`.
+
 ## ⚙️ 3.7. Login field configurable (`--login-field=<campo>`)
 
 `mk:make:auth-user` ahora soporta campos de login no-email. Útil para:

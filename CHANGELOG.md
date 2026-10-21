@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `QueryBudget`: el test de la pendiente
+
+**Added**
+- **`Mk\Director\Testing\QueryBudget::assertFlat($screen, $seedRows, $rows = 8, $ceiling = null, $growth = 0)`**: para
+  los tests de una app (Pest o PHPUnit). Siembra 1 fila, calienta, cuenta las consultas de la pantalla y vuelve a
+  contar en cada tamaño de `$rows`; falla si crecen más que `$growth` (un N+1), si pasan `$ceiling`, o —cuando la
+  pantalla devuelve sus filas— si el fixture no llega a la pantalla. Devuelve las cuentas por tamaño. Ver
+  DEVELOPER_GUIDE § 3.6.8.
+
 ## [UNRELEASED] — `mk-studio:perf`: la línea de cada N+1 y las versiones
 
 **Added**

@@ -611,6 +611,13 @@ Las migraciones (`mk_help_articles` y `mk_help_share_links`) se cargan solas con
 `share.ability`): la app la crea y la siembra en sus roles. 🔴 Una app con `config/mk_director.php` publicado lleva el bloque
 `help` entero, por lo mismo que `storage`.
 
+## Tests: `QueryBudget`, el N+1 por la pendiente
+
+`Mk\Director\Testing\QueryBudget::assertFlat($screen, $seedRows, rows: [8, 20])` corre una pantalla con 1 fila y con
+cada tamaño de `rows` y falla si la cantidad de consultas crece con las filas (una consulta por fila). Calienta antes de
+contar, acepta un `growth:` declarado y un `ceiling:` absoluto, y si `$screen` devuelve las filas, falla también cuando
+el fixture no llega a la pantalla. Detalle: `DEVELOPER_GUIDE.md` § 3.6.8.
+
 ## Stack
 
 - PHP 8.4+ (PHP 8.5-clean: `MkBelongsToMany::from()` y accessors de `HasTenantScope` no emiten deprecation warnings)
