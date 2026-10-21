@@ -117,6 +117,21 @@ test('a_cache_filled_on_the_first_call_does_not_hide_an_n_plus_one', function ()
     expect(fn () => QueryBudget::assertFlat($screen, 'qbSeed', 8))->toThrow(AssertionFailedError::class, 'grows');
 });
 
+test('a_write_on_one_size_alone_is_not_counted', function () use ($flat) {
+    // A token's `last_used_at` is written only when the clock ticked to a new second since the last request: one size
+    // writes it, the next does not. Only reads are counted.
+    $screen = function () use ($flat) {
+        $posts = $flat();
+        if ($posts->count() === 8) {
+            QbPost::query()->whereKey($posts->first()->id)->update(['title' => 'touched']);
+        }
+
+        return $posts;
+    };
+
+    expect(QueryBudget::assertFlat($screen, 'qbSeed', 8))->toBe([1 => 1, 8 => 1]);
+});
+
 test('a_fixture_that_never_reaches_the_screen_fails', function () {
     // The screen lists another status than the one seeded: it costs the same at every size, with or without an N+1.
     $screen = fn () => QbPost::where('title', 'nobody')->get()->each(fn (QbPost $p) => $p->comments()->count());

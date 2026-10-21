@@ -30,9 +30,9 @@ use Throwable;
  *    its own: its time is that query's own time, not the request's;
  *  - `show`: the detail of the record's first row (the seeder hands its children to the first rows most).
  *
- * Every list-like screen is also requested at `per_page` 1, 8 and 20 (`queriesAt`): a query count that grows with
- * the rows is a query per row (N+1), and `frames` names the line that runs each of those queries ({@see perRowFrames()}),
- * so MK Studio can tell whose it is: the spec's, the project's hand code or the package.
+ * Every list-like screen is also requested at `per_page` 1, 8 and 20 (`queriesAt`, its reads): a read count that grows
+ * with the rows is a query per row (N+1), and `frames` names the line that runs each of those queries
+ * ({@see perRowFrames()}), so MK Studio can tell whose it is: the spec's, the project's hand code or the package.
  *
  * What is switched off for the measure, and why: rate limiting (50 requests in a second would be 429s, not
  * timings), the cache store (`array`, so a cached answer from a previous run never stands in for the query) and
@@ -171,7 +171,9 @@ final class ScreenRunner
                 $send(['per_page' => $perPage]); // its own warm-up: a first request at a size may load what the next reuse
                 // Untimed: the stack of each query is kept, for the lines that run once per row.
                 $logs[$perPage] = $rec->record(static fn () => $send(['per_page' => $perPage]), frames: true);
-                $at["perPage{$perPage}"] = count($logs[$perPage]);
+                // Reads only: the token's `last_used_at` is written whenever the clock ticked to a new second since the last
+                // request, so a write lands on one size and not the next and bends the slope by one.
+                $at["perPage{$perPage}"] = count(array_filter($logs[$perPage], static fn (array $q): bool => QueryRecorder::isSelect($q['raw'])));
             }
             $queriesAt = $at;
             $frames = self::perRowFrames($logs[self::SLOPE[0]], $logs[self::SLOPE[2]]);

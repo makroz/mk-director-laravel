@@ -24,7 +24,8 @@ use PHPUnit\Framework\Assert;
  *         rows: [8, 20],
  *     );
  *
- * Counts the default connection's queries (its query log; the log is restored as it was).
+ * Counts the default connection's reads (its query log; the log is restored as it was): a write, like a token's
+ * `last_used_at`, can land on one size and not the next.
  */
 final class QueryBudget
 {
@@ -107,6 +108,10 @@ final class QueryBudget
                 $connection->disableQueryLog();
             }
         }
+
+        // Reads only: a token's `last_used_at` is written whenever the clock ticked to a new second since the last
+        // request, so a write lands on one size and not the next.
+        $log = array_values(array_filter($log, static fn (array $q): bool => QueryRecorder::isSelect($q['query'])));
 
         $listed = match (true) {
             is_int($result) => $result,
