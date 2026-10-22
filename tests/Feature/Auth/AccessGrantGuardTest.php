@@ -321,6 +321,25 @@ test('another scope: syncing or deleting a role of that scope checks the shared 
     expect(guardDenial(fn () => $guard->assertCanChangeRole($admin, $kitchen, null)))->toBeNull();
 });
 
+test('another scope: only the target scope is left to the route, a THIRD known scope is checked', function () {
+    bootGuardWorld($this);
+    // A third real scope: `crew.*` names are neither the actor's nor the target's.
+    config([
+        'auth.guards.crew' => ['driver' => 'sanctum', 'provider' => 'crews'],
+        'auth.providers.crews' => ['driver' => 'eloquent', 'model' => GuardMesero::class],
+    ]);
+    $role = guardRole('mesero-base', 'mesero', ['mesero.orders.create']);
+    $admin = guardUser(GuardAdmin::class, 'admin', ['admin.meseros.update', 'admin.roles.update']);
+    $mesero = guardUser(GuardMesero::class, 'mesero', ['mesero.orders.create']);
+    $guard = app(AccessGrantGuard::class);
+
+    expect(guardDenial(fn () => $guard->assertCanChangeAccess($admin, $mesero, null, ['mesero.orders.create', 'crew.shifts.close'])))->toBe(AccessGrantGuard::ERR_ACCESS_NOT_HELD);
+    expect(guardDenial(fn () => $guard->assertCanChangeRole($admin, $role, ['mesero.orders.create', 'crew.shifts.close'])))->toBe(AccessGrantGuard::ERR_ACCESS_NOT_HELD);
+
+    $crewManager = guardUser(GuardAdmin::class, 'admin-crew', ['admin.meseros.update', 'crew.shifts.close']);
+    expect(guardDenial(fn () => $guard->assertCanChangeAccess($crewManager, $mesero, null, ['mesero.orders.create', 'crew.shifts.close', 'mesero.tables.view'])))->toBeNull();
+});
+
 test('holds() uses the resolver rule: a multi-segment wildcard covers only itself', function () {
     bootGuardWorld($this);
     $guard = app(AccessGrantGuard::class);
