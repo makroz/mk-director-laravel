@@ -1196,10 +1196,11 @@ el actor tiene por roles y grants directos, **no** las abilities de su token.
 
 **Actor de otro scope** (un admin administrando meseros): rigen la primera y la
 tercera regla; la de «más acceso» no. La tercera deja afuera **sólo** los nombres
-del otro scope conocido (`mesero.*` que da un admin): ése es el espacio de
-nombres del destino y lo decide `mk.ability:{manager}.{recurso}.*` en la ruta.
-Un nombre **sin** scope conocido (`kitchen.send`, `cash.charge`) y `*` no son de
-otro espacio: se exigen igual que en el mismo scope. 🔴 Medido en un consumidor:
+del scope del DESTINO (`mesero.*` que un admin le da a un mesero): ése es su
+espacio de nombres y lo decide `mk.ability:{manager}.{recurso}.*` en la ruta.
+Un nombre **sin** scope conocido (`kitchen.send`, `cash.charge`), `*` y un
+nombre de un TERCER scope conocido (`crew.*` a un mesero) no son de ese espacio:
+se exigen igual que en el mismo scope. 🔴 Medido en un consumidor:
 antes, con sólo `admin.meseros.update`, un admin le daba a un mesero
 compartidas que no tenía, y hasta `*`.
 
@@ -1237,8 +1238,9 @@ app(AccessGrantGuard::class)->assertCanChangeRole($request->user(), $role, $abil
 
 Fuera: quien tiene `*` (salvo el rol fijo). Un rol de **otro** scope que el del
 actor (un admin armando los roles de los meseros) sólo pasa por la última regla,
-y sólo para los nombres que no son de ese otro scope: agregarle o sacarle una
-compartida (`kitchen.send`) o `*` pide tenerla; borrarlo (sync a `[]`) también.
+y sólo para los nombres que no son del scope del rol: agregarle o sacarle una
+compartida (`kitchen.send`), `*` o un nombre de un tercer scope pide tenerlo;
+borrarlo (sync a `[]`) también.
 
 **El CRUD de abilities es la tercera puerta**: roles y grants apuntan a la
 ability por id, así que renombrarla es cambiarles el permiso a todos los que la

@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `AccessGrantGuard`: entre scopes sólo queda afuera el scope del destino
+
+**Security**
+- **Un nombre de un TERCER scope conocido ya no pasa sin control entre scopes.** `assertCanChangeAccess()` y
+  `assertCanChangeRole()` dejaban afuera todo nombre de un scope conocido distinto del actor, así que un admin con
+  `admin.meseros.update` le daba a un mesero `crew.*` sin tenerlo. Ahora sólo queda afuera el scope del destino
+  (`mesero.*`, que gatea `mk.ability` en la ruta); lo demás pide `holds()` (`ERR_ACCESS_NOT_HELD`). Sin cambio para
+  una app con dos scopes.
+
 ## [UNRELEASED] — Borrados que no rompen y export completo
 
 **Security**

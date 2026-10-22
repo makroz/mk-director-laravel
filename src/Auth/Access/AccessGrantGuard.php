@@ -45,11 +45,12 @@ use Mk\Director\Auth\Services\AbilityResolver;
  *
  * Actor of ANOTHER scope (the managed resource: an admin managing waiters).
  * Rules 1 and 3 still apply; rule 2 (outrank) does not. What rule 3 skips is
- * only the names of the OTHER known scope (`mesero.*` given by an admin): that
- * is the target's own namespace, and what the manager may do there is decided
- * by `mk.ability:{manager}.{resource}.*` on the route. A name without a known
- * scope prefix (`kitchen.send`, `cash.charge`) and `*` are NOT another
- * namespace: they are checked exactly as in the same scope.
+ * only the names of the TARGET's scope (`mesero.*` given by an admin to a
+ * waiter): that is the target's own namespace, and what the manager may do
+ * there is decided by `mk.ability:{manager}.{resource}.*` on the route. A name
+ * without a known scope prefix (`kitchen.send`, `cash.charge`), `*` and a name
+ * of a THIRD known scope (`crew.*` given to a waiter) are NOT that namespace:
+ * they are checked exactly as in the same scope.
  *
  * 🔴 Measured in a consumer: before this, with only `admin.meseros.update`
  * (or `admin.roles.update` for a waiter role) an admin handed a waiter shared
@@ -113,7 +114,7 @@ class AccessGrantGuard
         }
 
         // Another scope: its own names are gated by the route; the rest is checked.
-        $checked = fn (array $names): array => $sameScope ? $names : $this->outsideOtherScopes($actor, $names);
+        $checked = fn (array $names): array => $sameScope ? $names : $this->outsideScope($names, $target->getAuthScope());
 
         if ($roleNames !== null) {
             $current = $target->roles->pluck('name')->all();
@@ -233,7 +234,7 @@ class AccessGrantGuard
 
         if ($actor->getAuthScope() !== $role->guard) {
             if ($nextAbilities !== null) {
-                $this->assertHoldsAll($actor, $this->outsideOtherScopes($actor, $this->symmetricDifference($role->abilities()->pluck('name')->all(), $nextAbilities)));
+                $this->assertHoldsAll($actor, $this->outsideScope($this->symmetricDifference($role->abilities()->pluck('name')->all(), $nextAbilities), $role->guard));
             }
 
             return;
@@ -413,13 +414,43 @@ class AccessGrantGuard
         $scopes = AuthUser::configuredScopes();
 
         return array_values(array_filter($names, function (string $name) use ($actor, $scopes): bool {
-            // El scope es el primer segmento, en singular o plural (`crew.` o `crews.`).
-            $prefix = explode('.', $name, 2)[0];
-            $singular = str_ends_with($prefix, 's') ? substr($prefix, 0, -1) : $prefix;
-            $scope = in_array($prefix, $scopes, true) ? $prefix : (in_array($singular, $scopes, true) ? $singular : null);
+            $scope = $this->scopeOf($name, $scopes);
 
             return $scope === null || $scope === $actor->getAuthScope();
         }));
+    }
+
+    /**
+     * Across scopes: every name EXCEPT the target scope's own, which the route
+     * gates. A name of a THIRD known scope is not the target's namespace, so it
+     * stays in, like a shared name and `*`.
+     *
+     * @param  array<int, string>  $names
+     * @return array<int, string>
+     */
+    private function outsideScope(array $names, ?string $scope): array
+    {
+        if ($scope === null) {
+            return $names;
+        }
+
+        $scopes = AuthUser::configuredScopes();
+
+        return array_values(array_filter($names, fn (string $name): bool => $this->scopeOf($name, $scopes) !== $scope));
+    }
+
+    /**
+     * El scope es el primer segmento, en singular o plural (`crew.` o `crews.`);
+     * null si no es un scope configurado.
+     *
+     * @param  array<int, string>  $scopes
+     */
+    private function scopeOf(string $name, array $scopes): ?string
+    {
+        $prefix = explode('.', $name, 2)[0];
+        $singular = str_ends_with($prefix, 's') ? substr($prefix, 0, -1) : $prefix;
+
+        return in_array($prefix, $scopes, true) ? $prefix : (in_array($singular, $scopes, true) ? $singular : null);
     }
 
     private function isSameAccount(AuthUser $actor, AuthUser $target): bool
