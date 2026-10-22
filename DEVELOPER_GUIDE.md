@@ -141,6 +141,7 @@ El paquete usa **HTTP 200 con envelope canónico** para TODOS los endpoints de m
 |---|---|---|---|
 | `DELETE /api/{scope}/{resource}/{id}` | **200** | `{success: true, message: "...", data: true, debugMsg: []}` (envelope canónico) | Consistencia con envelope — 200 con body confirma éxito + audit message. El campo `data: true` es el "ack" semántico. |
 | (REST-canonical alternativo) | 204 | (sin body) | Más REST-strict pero rompe la consistencia del envelope canónico |
+| `DELETE` de una fila que otra tabla todavía referencia | **409** | `{success: false, message: "No se puede eliminar: tiene registros vinculados. Desactivalo en lugar de borrarlo.", __extraData: {code: "ERR_CONFLICT"}}` | Antes la violación de FK salía como **500**. Sólo las FK: PostgreSQL `23503`, MySQL/MariaDB `23000` + `1451`/`1217`, SQLite `FOREIGN KEY constraint failed`. Cualquier otro error de la consulta sigue de largo sin cambios. El borrado corre en una transacción: la fila y lo que tocaron sus hooks quedan como estaban. `HasMkMedia` borra los archivos en `deleted` (no en `deleting`), así que una FK que frena el borrado no se lleva los archivos. |
 
 **¿Por qué 200+body en vez de 204?**
 

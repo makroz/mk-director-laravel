@@ -7,6 +7,7 @@ namespace Mk\Director\Tests\Unit\Traits;
 use Illuminate\Container\Container;
 use Illuminate\Database\Eloquent\Model as EloquentModel;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Database\QueryException;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
@@ -291,6 +292,24 @@ test('un embed no intenta borrar ningún archivo', function () {
     $owner->delete();
 
     expect(MkMedia::count())->toBe(0);
+    expect(iterator_to_array($this->deletedFiles))->toBe([]);
+});
+
+test('🔴 an owner whose delete an FK blocks keeps its media AND its files', function () {
+    // Files live outside the DB transaction: on `deleting` they were gone
+    // before the FK refused the delete, and nothing could bring them back.
+    Schema::create('owner_children', function (Blueprint $table): void {
+        $table->id();
+        $table->foreignId('owner_id')->constrained('owners_bigint');
+    });
+    $owner = MediaOwnerBigint::create([]);
+    $owner->attachMedia(['kind' => MkMediaKind::Image, 'disk' => 's3', 'path' => 'keep.jpg']);
+    $owner->getConnection()->table('owner_children')->insert(['owner_id' => $owner->id]);
+
+    expect(fn () => $owner->delete())->toThrow(QueryException::class);
+
+    expect(MediaOwnerBigint::count())->toBe(1);
+    expect(MkMedia::count())->toBe(1);
     expect(iterator_to_array($this->deletedFiles))->toBe([]);
 });
 
