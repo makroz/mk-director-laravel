@@ -319,10 +319,19 @@ import { PUSH_CHANNELS, PUSH_DEVICES_ENDPOINT, pushClient } from '@/config/push'
 ```tsx
 import { useMkPush } from '@makroz/mobile';
 
-const { status, enable, disable } = useMkPush();
-// status: 'unsupported' | 'denied' | 'off' | 'on' | 'pending'
+const { status, permission, enable, disable } = useMkPush();
+// status: 'unsupported' | 'denied' | 'off' | 'failed' | 'on' | 'pending'
+// permission: 'granted' | 'denied' | 'undetermined' | null (todavía no se sabe)
 if (status === 'unsupported') return null;   // Expo Go: sin interruptor
 ```
+
+- `'off'` es «no registrado a propósito»: sin sesión, apagado con `disable()`, o `askOnLogin={false}` sin
+  `enable()` todavía. `'failed'` es otra cosa: el registro no consiguió dirección o el `POST` falló (sin red).
+  No pone la bandera `mk.push.off` y se reintenta con `enable()`. Una app que exige los avisos puede
+  reintentar con `'failed'` sin trabar el trabajo sin señal.
+- `permission` es el permiso del sistema, leído **sin preguntar**: al arrancar, al volver la app al primer
+  plano (por ejemplo, desde Ajustes) y después de cada pedido de permiso. `'undetermined'` = el sistema
+  todavía mostraría su diálogo. Con eso se distingue «no hay permiso» de «no se pudo registrar».
 
 - `disable()` hace el `DELETE` **primero** y recién después guarda la bandera local `mk.push.off`
   (AsyncStorage: es del teléfono y sobrevive al logout). Si el `DELETE` falla, tira y no cambia nada.
