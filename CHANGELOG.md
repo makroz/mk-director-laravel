@@ -21,6 +21,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`mesero.*`, que gatea `mk.ability` en la ruta); lo demás pide `holds()` (`ERR_ACCESS_NOT_HELD`). Sin cambio para
   una app con dos scopes.
 
+## [UNRELEASED] — `mk-studio:data-check`: lo que «Revisar contra la app» cuenta en los datos
+
+**Added**
+- **`mk-studio:data-check '<json>'`.** MK Studio pregunta a los datos de la app cuántos valores borra una columna que
+  el spec saca, cuántas filas usan un caso de enum que el spec quita, si las filas de una relación apuntan a filas que
+  existen y qué migraciones corrieron. Sólo lee. Cada nombre se busca en el esquema antes de llegar al SQL, cada
+  consulta corre con el timeout de sentencia del motor (`timedOut: true` al alcanzarlo), dos claves de tipos distintos
+  no se cruzan (`sameType: false`) y un error nunca lleva host, puerto ni base. DEVELOPER_GUIDE § 3.6.9. Test:
+  `SpecDataCheckTest`.
+
 ## [UNRELEASED] — Borrados que no rompen y export completo
 
 **Security**

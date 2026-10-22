@@ -37,6 +37,7 @@ use Mk\Director\Console\Commands\PruneAbilitiesCommand;
 use Mk\Director\Console\Commands\PrunePushDevicesCommand;
 use Mk\Director\Console\Commands\PruneUploadsCommand;
 use Mk\Director\Console\Commands\SecurityLintCommand;
+use Mk\Director\Console\Commands\SpecDataCheckCommand;
 use Mk\Director\Console\Commands\SpecIntrospectCommand;
 use Mk\Director\Controllers\OpenApiController;
 use Mk\Director\Embeds\MkEmbedService;
@@ -332,6 +333,8 @@ class MkServiceProvider extends ServiceProvider
                 PruneAbilitiesCommand::class,
                 // The running app as JSON for `mk-studio spec import|check` (@makroz/spec).
                 SpecIntrospectCommand::class,
+                // What MK Studio's «Revisar contra la app» counts in the data (read-only), as JSON.
+                SpecDataCheckCommand::class,
                 // One module measured on a scratch copy of the schema, as JSON for MK Studio's «Rendimiento».
                 PerfCommand::class,
                 // R-PKG-015 BUG-NEW-09: helper command para parche de Sanctum UUIDs.
