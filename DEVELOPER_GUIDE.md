@@ -1183,7 +1183,7 @@ son del **mismo** scope de auth:
 
 | Regla | Código |
 |---|---|
-| Nadie cambia su **propio** acceso: roles, abilities directas ni `status` (mandar el propio `status` sin cambiarlo sí vale: un formulario manda el objeto entero) | `ERR_SELF_ACCESS_CHANGE` |
+| Nadie cambia su **propio** acceso: roles, abilities directas ni `status` (mandar el propio `status` sin cambiarlo sí vale: un formulario manda el objeto entero). Tampoco **borra su propia cuenta**, ni con `*` (`No podés borrar tu propia cuenta.`) | `ERR_SELF_ACCESS_CHANGE` |
 | Nadie edita, bloquea, borra ni cambia el acceso de un usuario con **más** acceso que él | `ERR_TARGET_OUTRANKS_ACTOR` |
 | Sólo se concede **y quita** lo que el actor tiene, ability por ability, y por cada rol que entra o sale. Quitar también cuenta: si no, un encargado desarma al dueño. `*` cubre todo | `ERR_ACCESS_NOT_HELD` |
 

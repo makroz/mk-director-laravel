@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Borrados que no rompen y export completo
+
+**Security**
+- **Nadie borra su propia cuenta por el CRUD.** `AccessGrantGuard::assertCanDelete()` hacía `return` cuando actor y
+  destino eran la misma cuenta, así que un admin se borraba a sí mismo por el `DELETE` genérico (200) y quedaba afuera.
+  Ahora responde 403 `ERR_SELF_ACCESS_CHANGE` («No podés borrar tu propia cuenta.»), también para quien tiene `*`.
+
 ## [UNRELEASED] — `AccessGrantGuard` entre scopes y una sola regla de comodines
 
 **Security**
