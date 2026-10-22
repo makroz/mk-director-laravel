@@ -136,6 +136,14 @@ test('el export respeta el filtro del listado', function () {
         ->toHaveCount(collect(range(1, 130))->filter(fn ($i) => str_contains("w{$i}", 'w12'))->count());
 });
 
+test('the export keeps the list sort, across the whole set', function () {
+    $names = fn (array $params) => collect(filasQueRecibeElJob($params))->pluck('name')->all();
+    $sorted = collect(range(1, 130))->map(fn ($i) => "w{$i}")->sort()->values()->all();
+
+    expect($names(['sort' => 'name', 'dir' => 'asc', 'per_page' => 10]))->toBe($sorted)
+        ->and($names(['sort' => 'name', 'dir' => 'desc', 'page' => 3]))->toBe(array_reverse($sorted));
+});
+
 test('el listado normal sigue paginando', function () {
     $request = Request::create('/x', 'GET', ['per_page' => 100]);
     app()->instance('request', $request);
