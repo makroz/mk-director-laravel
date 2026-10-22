@@ -258,29 +258,12 @@ trait HasAbilities
     }
 
     /**
-     * Legacy inline implementation kept as a no-container fallback
-     * for unit tests that did not boot a Laravel app.
+     * No-container fallback (unit tests that did not boot a Laravel app). Same
+     * wildcard rule as the resolver: {@see AbilityResolver::matches()}.
      */
     private function canMkLegacy(string $ability): bool
     {
-        $names = $this->collectAllAbilityNames();
-
-        if ($names->contains('*')) {
-            return true;
-        }
-
-        if ($names->contains($ability)) {
-            return true;
-        }
-
-        $segments = explode('.', $ability, 2);
-        $resource = $segments[0] ?? null;
-
-        if ($resource !== null && $resource !== '' && $names->contains($resource.'.*')) {
-            return true;
-        }
-
-        return false;
+        return AbilityResolver::matches($this->collectAllAbilityNames()->all(), $ability);
     }
 
     /**

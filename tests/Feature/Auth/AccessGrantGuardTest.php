@@ -101,6 +101,13 @@ final class GuardMesero extends AuthUser
 function bootGuardWorld(object $test): void
 {
     $test->bootHttpApp(GuardAdmin::class);
+    // `mesero` is a real scope (a guard whose model extends `AuthUser`), as in
+    // any app with a managed resource: that is what makes `mesero.*` names
+    // "another known scope" for the guard.
+    config([
+        'auth.guards.mesero' => ['driver' => 'sanctum', 'provider' => 'meseros'],
+        'auth.providers.meseros' => ['driver' => 'eloquent', 'model' => GuardMesero::class],
+    ]);
     foreach (glob(dirname(__DIR__, 3).'/src/Auth/Database/Migrations/*.php') ?: [] as $migration) {
         (require $migration)->up();
     }
@@ -249,6 +256,65 @@ test('otro scope (recurso managed): lo gatea la ability del manager, el guard no
 
     expect(guardDenial(fn () => $guard->assertCanChangeAccess($admin, $mesero, null, ['mesero.orders.create', 'mesero.tables.view'])))->toBeNull();
     expect(guardDenial(fn () => $guard->assertCanUpdate($admin, $mesero, ['status' => 3])))->toBeNull();
+});
+
+test('another scope: a shared name (no known scope prefix) or `*` is checked like in the same scope', function () {
+    bootGuardWorld($this);
+    $admin = guardUser(GuardAdmin::class, 'admin', ['admin.meseros.update', 'printing.print']);
+    $mesero = guardUser(GuardMesero::class, 'mesero', ['mesero.orders.create']);
+    $guard = app(AccessGrantGuard::class);
+
+    // The measured case: only `admin.meseros.update`, and it hands out what it lacks.
+    expect(guardDenial(fn () => $guard->assertCanChangeAccess($admin, $mesero, null, ['mesero.orders.create', 'kitchen.send'])))->toBe(AccessGrantGuard::ERR_ACCESS_NOT_HELD);
+    expect(guardDenial(fn () => $guard->assertCanChangeAccess($admin, $mesero, null, ['mesero.orders.create', '*'])))->toBe(AccessGrantGuard::ERR_ACCESS_NOT_HELD);
+    // A shared name the actor holds passes; so do the other scope's own names.
+    expect(guardDenial(fn () => $guard->assertCanChangeAccess($admin, $mesero, null, ['mesero.orders.create', 'printing.print', 'mesero.tables.view'])))->toBeNull();
+});
+
+test('another scope: taking away a shared name the actor lacks is denied too', function () {
+    bootGuardWorld($this);
+    $admin = guardUser(GuardAdmin::class, 'admin', ['admin.meseros.update']);
+    $mesero = guardUser(GuardMesero::class, 'mesero', ['mesero.orders.create', 'cash.charge']);
+
+    expect(guardDenial(fn () => app(AccessGrantGuard::class)->assertCanChangeAccess($admin, $mesero, null, ['mesero.orders.create'])))->toBe(AccessGrantGuard::ERR_ACCESS_NOT_HELD);
+});
+
+test('another scope: assigning a role checks its shared names, not its own-scope ones', function () {
+    bootGuardWorld($this);
+    guardRole('cocina', 'mesero', ['mesero.orders.create', 'kitchen.send']);
+    guardRole('salon', 'mesero', ['mesero.orders.create', 'mesero.tables.view']);
+    $admin = guardUser(GuardAdmin::class, 'admin', ['admin.meseros.update']);
+    $mesero = guardUser(GuardMesero::class, 'mesero');
+    $guard = app(AccessGrantGuard::class);
+
+    expect(guardDenial(fn () => $guard->assertCanChangeAccess($admin, $mesero, ['cocina'], null)))->toBe(AccessGrantGuard::ERR_ACCESS_NOT_HELD);
+    expect(guardDenial(fn () => $guard->assertCanChangeAccess($admin, $mesero, ['salon'], null)))->toBeNull();
+});
+
+test('another scope: syncing or deleting a role of that scope checks the shared names that change', function () {
+    bootGuardWorld($this);
+    $role = guardRole('mesero-base', 'mesero', ['mesero.orders.create']);
+    $kitchen = guardRole('mesero-cocina', 'mesero', ['mesero.orders.create', 'orders.lines.cancelPrinted']);
+    $admin = guardUser(GuardAdmin::class, 'admin', ['admin.roles.update', 'printing.print']);
+    $guard = app(AccessGrantGuard::class);
+
+    expect(guardDenial(fn () => $guard->assertCanChangeRole($admin, $role, ['mesero.orders.create', 'kitchen.send'])))->toBe(AccessGrantGuard::ERR_ACCESS_NOT_HELD);
+    expect(guardDenial(fn () => $guard->assertCanChangeRole($admin, $role, ['mesero.orders.create', '*'])))->toBe(AccessGrantGuard::ERR_ACCESS_NOT_HELD);
+    expect(guardDenial(fn () => $guard->assertCanChangeRole($admin, $role, ['mesero.orders.create', 'mesero.tables.view', 'printing.print'])))->toBeNull();
+    // Deleting is `[]`: it takes away a shared name the actor lacks.
+    expect(guardDenial(fn () => $guard->assertCanChangeRole($admin, $kitchen, [])))->toBe(AccessGrantGuard::ERR_ACCESS_NOT_HELD);
+    // Editing the role without touching its abilities stays out of the rule.
+    expect(guardDenial(fn () => $guard->assertCanChangeRole($admin, $kitchen, null)))->toBeNull();
+});
+
+test('holds() uses the resolver rule: a multi-segment wildcard covers only itself', function () {
+    bootGuardWorld($this);
+    $guard = app(AccessGrantGuard::class);
+    $actor = guardUser(GuardAdmin::class, 'encargado', ['admin.discounts.*', 'orders.*']);
+
+    expect($guard->holds($actor, 'admin.discounts.view'))->toBeFalse();
+    expect($guard->holds($actor, 'admin.discounts.*'))->toBeTrue();
+    expect($guard->holds($actor, 'orders.lines.cancelPrinted'))->toBeTrue();
 });
 
 test('sin actor (consola, seeders) no hay escalada que frenar', function () {

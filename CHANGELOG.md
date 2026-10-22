@@ -12,6 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `AccessGrantGuard` entre scopes y una sola regla de comodines
+
+**Security**
+- **`AccessGrantGuard` controla también cuando actor y destino son de scopes distintos.** `assertCanChangeAccess()` y
+  `assertCanChangeRole()` hacían `return` apenas los scopes diferían, así que con sólo `admin.meseros.update` (o
+  `admin.roles.update` sobre un rol de mesero) un admin le daba a un mesero compartidas que no tenía (`kitchen.send`,
+  `cash.charge`…) y hasta `*`. Ahora, entre scopes, los nombres sin scope conocido y `*` se exigen igual que en el mismo
+  scope (`ERR_ACCESS_NOT_HELD`), al dar y al quitar, por grant directo, por rol que entra o sale y al sincronizar o
+  borrar un rol del otro scope. Los nombres del OTRO scope conocido (`mesero.*` que da un admin) siguen afuera: los
+  gatea `mk.ability` en la ruta. La regla de «más acceso» sigue sin aplicar entre scopes.
+
+**Changed**
+- **Una sola regla de comodines: `AbilityResolver::matches()`.** `*`, el nombre exacto, o el comodín del PRIMER
+  segmento (`admin.*`). `admin.discounts.*` es un nombre más y no cubre `admin.discounts.view` (era así en el back; los
+  fronts aceptaban cualquier prefijo y ahora siguen esta regla, por `matchesAbility()` de `@makroz/core`). La usan el
+  resolver, el fallback sin container de `canMk()` y `AccessGrantGuard::holds()`, que tenían tres copias. Un único
+  cambio de conducta: `*.*` ya no vale por `*` en `canMk()` (el guard ya lo negaba).
+
 ## [UNRELEASED] — `mk-studio:perf`: sin falsas alarmas en el código a mano
 
 **Fixed**
