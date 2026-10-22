@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Mk\Director\Console\Commands\SpecDataCheckCommand;
@@ -73,6 +74,45 @@ test('reports_a_missing_target_table_and_different_key_types', function () {
     // Without the target every value points at nothing.
     expect($missing)->toMatchArray(['targetExists' => false, 'targetKeyType' => null, 'sameType' => false, 'rows' => 30, 'nulls' => 2, 'orphans' => 28])
         ->and($types)->toMatchArray(['targetExists' => true, 'columnType' => 'varchar', 'targetKeyType' => 'integer', 'sameType' => false]);
+});
+
+test('keys_of_different_types_are_never_joined_only_their_rows_counted', function () {
+    // PostgreSQL refuses `uuid = character varying` with an error: the join must not run at all.
+    $sql = [];
+    DB::listen(function ($q) use (&$sql) {
+        $sql[] = $q->sql;
+    });
+    [$check] = (new DataCheck)->run(['relations' => [
+        ['table' => 'lots', 'column' => 'code', 'target' => 'zones', 'targetKey' => 'id'],
+    ]])['relations'];
+
+    expect($check)->toMatchArray(['sameType' => false, 'rows' => 30, 'nulls' => 30, 'orphans' => 0, 'sample' => []])
+        ->and($check)->not->toHaveKey('error')
+        ->and(implode("\n", $sql))->not->toContain('join');
+});
+
+test('a_failed_query_answers_its_sqlstate_and_one_line_never_the_connection_or_the_sql', function () {
+    try {
+        DB::select('select * from no_such_table where secret = 1');
+    } catch (QueryException $e) {
+    }
+    expect($e->getMessage())->toContain('(Connection: ')->toContain('SQL: select') // what used to reach the screen
+        ->and(DataCheck::reason($e))->toBe('SQLSTATE[HY000] General error: 1 no such table: no_such_table');
+
+    // PostgreSQL's, as the studio got it on RETO: the hint and the SQL come on the lines after the first.
+    $pg = new QueryException('pgsql', 'select count(*) from "school_uploads" as "s" left join "mk_uploads"', [], new PDOException(
+        "SQLSTATE[42883]: Undefined function: 7 ERROR:  operator does not exist: uuid = character varying\nLINE 1: select count(*) from \"school_uploads\"\nHINT:  No operator matches."
+    ));
+    $pg->errorInfo = ['42883', 7, 'ERROR'];
+
+    // And through the command's own queries: a virtual column that sqlite computes on read fails on bad JSON.
+    // (added after the row: sqlite computes it on write too)
+    DB::statement('create table docs (body text)');
+    DB::table('docs')->insert(['body' => 'not json']);
+    DB::statement("alter table docs add column kind text generated always as (json_extract(body, '$.kind')) virtual");
+    [$failed] = (new DataCheck)->run(['columns' => [['table' => 'docs', 'column' => 'kind']]])['columns'];
+    expect($failed['error'])->toStartWith('SQLSTATE[HY000] ')->not->toContain('Connection')->not->toContain('select');
+    expect(DataCheck::reason($pg))->toBe('SQLSTATE[42883] Undefined function: 7 ERROR:  operator does not exist: uuid = character varying');
 });
 
 test('counts_non_null_values_of_a_column_and_rows_with_a_value', function () {

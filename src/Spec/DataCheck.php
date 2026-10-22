@@ -69,16 +69,25 @@ final class DataCheck
             return $base + ['error' => $error];
         }
 
-        return [...$base, ...$this->guarded(function () use ($table, $column, $target, $targetKey, $targetExists): array {
+        // Keys of different types are not joined: PostgreSQL refuses `uuid = character varying` outright, and where a
+        // driver casts, the match would be the cast's. The answer is the two types; the orphans are not counted.
+        $join = $targetExists && $base['sameType'];
+
+        return [...$base, ...$this->guarded(function () use ($table, $column, $target, $targetKey, $targetExists, $join): array {
+            $counts = [
+                'rows' => DB::table($table)->count(),
+                'nulls' => DB::table($table)->whereNull($column)->count(),
+            ];
+            if ($targetExists && ! $join) {
+                return $counts;
+            }
             // Aliased, so a relation of a table to itself (a parent_id) joins two copies of it.
             $orphans = DB::table("{$table} as s")->whereNotNull("s.{$column}");
-            if ($targetExists) {
+            if ($join) {
                 $orphans->leftJoin("{$target} as t", "t.{$targetKey}", '=', "s.{$column}")->whereNull("t.{$targetKey}");
             }
 
-            return [
-                'rows' => DB::table($table)->count(),
-                'nulls' => DB::table($table)->whereNull($column)->count(),
+            return $counts + [
                 'orphans' => (clone $orphans)->count(),
                 'sample' => (clone $orphans)->distinct()->orderBy("s.{$column}")->limit(self::SAMPLE)->pluck("s.{$column}")->all(),
             ];
@@ -175,8 +184,20 @@ final class DataCheck
         try {
             return $query();
         } catch (QueryException $e) {
-            return $this->isTimeout($e) ? ['timedOut' => true] : ['error' => $e->getMessage()];
+            return $this->isTimeout($e) ? ['timedOut' => true] : ['error' => self::reason($e)];
         }
+    }
+
+    /**
+     * What a failed query says to the screen: its SQLSTATE and the database's first line. Never Laravel's whole message,
+     * which carries the connection (host, port, database) and the SQL.
+     */
+    public static function reason(QueryException $e): string
+    {
+        $line = (string) strtok((string) ($e->getPrevious()?->getMessage() ?? ''), "\n");
+        $line = (string) preg_replace(['/^SQLSTATE\[[^\]]*\]:?\s*/', '/\s*\(Connection:.*$/s'], '', trim($line));
+
+        return trim('SQLSTATE['.($e->errorInfo[0] ?? $e->getCode()).'] '.mb_substr($line, 0, 160));
     }
 
     private function isTimeout(QueryException $e): bool
