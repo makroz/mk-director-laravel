@@ -8,6 +8,7 @@ use Illuminate\Contracts\Pagination\CursorPaginator;
 use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -1154,15 +1155,30 @@ trait CRUDSmart
         // archivo, avisar a otro sistema, ajustar un saldo— no ocurrió. No hay
         // forma de deshacerlo a mano porque el registro que decía qué borrar
         // es justamente el que se fue.
-        DB::transaction(function () use ($model, $service, $request, $id) {
-            $model->delete();
+        //
+        // 🔴 A row another table still references: the DB raises an FK
+        // violation and the client used to get a 500. Now it is a 409 that
+        // says what to do instead. The transaction already rolled back
+        // everything that ran inside it (the model's `deleting` listeners
+        // included), so nothing is left half-done. Any other error is
+        // re-thrown unchanged.
+        try {
+            DB::transaction(function () use ($model, $service, $request, $id) {
+                $model->delete();
 
-            if ($service && method_exists($service, 'afterDelete')) {
-                $service->afterDelete($request, $model, $id);
+                if ($service && method_exists($service, 'afterDelete')) {
+                    $service->afterDelete($request, $model, $id);
+                }
+
+                $this->getPluginManager()->fireAfterDelete($model, $request);
+            });
+        } catch (QueryException $e) {
+            if (! $this->isForeignKeyViolation($e)) {
+                throw $e;
             }
 
-            $this->getPluginManager()->fireAfterDelete($model, $request);
-        });
+            return $this->sendError('No se puede eliminar: tiene registros vinculados. Desactivalo en lugar de borrarlo.', [], 409);
+        }
 
         // Auto-invalidate cache if enabled
         if ($this->isCacheEnabled()) {
@@ -1170,6 +1186,28 @@ trait CRUDSmart
         }
 
         return $this->sendResponse(true, 'Eliminado con éxito');
+    }
+
+    /**
+     * Did the query fail because another table still references the row?
+     *
+     * Only FK violations, never anything else sharing the SQLSTATE: on MySQL
+     * `23000` is also a duplicate key (1062) and a NOT NULL (1048).
+     *
+     *  - PostgreSQL: SQLSTATE `23503`.
+     *  - MySQL / MariaDB: `23000` with driver code `1451` (or `1217`, the
+     *    variant that does not name the child table).
+     *  - SQLite: `23000` with the message `FOREIGN KEY constraint failed` (the
+     *    driver code is 19, shared by every constraint).
+     */
+    protected function isForeignKeyViolation(QueryException $e): bool
+    {
+        $sqlState = (string) ($e->errorInfo[0] ?? $e->getCode());
+        $driverCode = (int) ($e->errorInfo[1] ?? 0);
+
+        return $sqlState === '23503'
+            || ($sqlState === '23000' && in_array($driverCode, [1451, 1217], true))
+            || ($sqlState === '23000' && str_contains($e->getMessage(), 'FOREIGN KEY constraint failed'));
     }
 
     /**

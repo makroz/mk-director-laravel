@@ -368,13 +368,19 @@ trait HasMkMedia
      * legacy, agravado porque ahí el delete además es físico.
      *
      * Si el modelo dueño usa SoftDeletes, un soft delete NO dispara esto
-     * (Eloquent no emite `deleting` como borrado real en ese caso salvo
+     * (Eloquent no emite `deleted` como borrado real en ese caso salvo
      * `forceDelete`), que es el comportamiento correcto: restaurar un post
      * tiene que devolverte sus fotos.
+     *
+     * 🔴 It runs on `deleted`, not `deleting`: the files live outside the DB
+     * transaction. On `deleting`, an owner still referenced by another table
+     * lost its files and then the FK blocked the delete — the row (and, inside
+     * CRUDSmart's transaction, its media rows) came back, the files did not.
+     * Same reason as `AuthUser::forgetAccessOnDelete()`.
      */
     protected static function bootHasMkMedia(): void
     {
-        static::deleting(function ($model): void {
+        static::deleted(function ($model): void {
             $usesSoftDeletes = method_exists($model, 'isForceDeleting');
 
             if ($usesSoftDeletes && ! $model->isForceDeleting()) {

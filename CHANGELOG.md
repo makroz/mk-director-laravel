@@ -12,6 +12,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Borrados que no rompen y export completo
+
+**Security**
+- **Nadie borra su propia cuenta por el CRUD.** `AccessGrantGuard::assertCanDelete()` hacía `return` cuando actor y
+  destino eran la misma cuenta, así que un admin se borraba a sí mismo por el `DELETE` genérico (200) y quedaba afuera.
+  Ahora responde 403 `ERR_SELF_ACCESS_CHANGE` («No podés borrar tu propia cuenta.»), también para quien tiene `*`.
+- **Lo mismo en los módulos de `mk:module --with-rbac`.** `ModuleRbacGrantGuard::assertCanChangeUser()` servía para
+  editar y borrar y dejaba pasar la cuenta propia. Nuevo `assertCanDeleteUser()`: 403 `ERR_SELF_ACCESS_CHANGE`, también
+  para un super-admin; editarse a sí mismo sigue permitido. El `destroy()` de `module-rbac/controller-user.stub` lo
+  llama. ⚠️ Un controller ya generado sigue llamando `assertCanChangeUser()` en su `destroy()`: hay que cambiarlo a mano.
+
+**Fixed**
+- **Borrar una fila que otra tabla todavía referencia responde 409, no 500.** `CRUDSmart::destroy()` dejaba subir la
+  violación de FK. Ahora responde 409 `ERR_CONFLICT` («No se puede eliminar: tiene registros vinculados. Desactivalo en
+  lugar de borrarlo.»). Sólo las FK (PostgreSQL `23503`; MySQL/MariaDB `23000` con `1451` o `1217`; SQLite
+  `FOREIGN KEY constraint failed`); cualquier otro error sigue de largo sin cambios. No hay borrado masivo en el CRUD.
+- **`HasMkMedia` ya no pierde los archivos cuando una FK frena el borrado del dueño.** Los borraba en `deleting`, antes
+  de que la base rechazara el `DELETE`: la fila (y sus filas de media, dentro de la transacción) volvían, los archivos
+  no. Ahora corre en `deleted`.
+
 ## [UNRELEASED] — `AccessGrantGuard` entre scopes y una sola regla de comodines
 
 **Security**

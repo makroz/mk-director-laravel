@@ -125,6 +125,15 @@ test('con delete no se borra a alguien con más acceso', function () {
         ->and(DB::table('squad_users')->where('id', $this->u['owner'])->exists())->toBeTrue();
 });
 
+test('nobody deletes their own account, not even a super-admin', function (string $actor) {
+    [$status, $body] = $this->rbacSend('DELETE', "/api/squads/{$this->u[$actor]}", [], $this->u[$actor]);
+
+    expect($status)->toBe(403)
+        ->and($body['__extraData']['code'])->toBe('ERR_SELF_ACCESS_CHANGE')
+        ->and($body['message'])->toBe('No podés borrar tu propia cuenta.')
+        ->and(DB::table('squad_users')->where('id', $this->u[$actor])->exists())->toBeTrue();
+})->with(['editor', 'owner']);
+
 test('con update y delete se edita y se borra a alguien con menos acceso, y uno se edita a sí mismo', function () {
     [$status] = $this->rbacSend('PUT', "/api/squads/{$this->u['worker']}", ['name' => 'worker-editado'], $this->u['editor']);
     expect($status)->toBe(200)

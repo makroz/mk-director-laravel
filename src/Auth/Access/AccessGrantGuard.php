@@ -27,8 +27,9 @@ use Mk\Director\Auth\Services\AbilityResolver;
  * Aplican cuando actor y usuario objetivo son del MISMO scope de auth:
  *
  *  1. Nadie cambia SU PROPIO acceso (roles, abilities directas ni `status`)
- *     por el CRUD → `ERR_SELF_ACCESS_CHANGE`. Tampoco quien tiene `*`: un
- *     super-admin que se quita el rol por error queda afuera.
+ *     ni borra su propia cuenta por el CRUD → `ERR_SELF_ACCESS_CHANGE`.
+ *     Tampoco quien tiene `*`: un super-admin que se quita el rol (o se
+ *     borra) por error queda afuera.
  *  2. Nadie actúa (editar, bloquear, borrar, cambiar acceso) sobre un usuario
  *     con MÁS acceso que él: si las abilities efectivas del objetivo no están
  *     todas cubiertas por las del actor → `ERR_TARGET_OUTRANKS_ACTOR`. Si no, un
@@ -166,11 +167,25 @@ class AccessGrantGuard
     /**
      * Antes de borrar `$target` por el CRUD.
      *
+     * 🔴 Nobody deletes their OWN account → `ERR_SELF_ACCESS_CHANGE`, not even
+     * with `*`: deleting yourself is the extreme form of changing your own
+     * access. Before, the own account left through the early `return`, and an
+     * admin deleted themselves through the generic CRUD `DELETE` (200), locked
+     * out for good.
+     *
      * @throws AccessGrantDeniedException
      */
     public function assertCanDelete(?Authenticatable $actor, AuthUser $target): void
     {
-        if (! $actor instanceof AuthUser || $this->isSameAccount($actor, $target) || ! $this->isSameScope($actor, $target)) {
+        if (! $actor instanceof AuthUser) {
+            return;
+        }
+
+        if ($this->isSameAccount($actor, $target)) {
+            throw new AccessGrantDeniedException('No podés borrar tu propia cuenta.', self::ERR_SELF_ACCESS_CHANGE);
+        }
+
+        if (! $this->isSameScope($actor, $target)) {
             return;
         }
 

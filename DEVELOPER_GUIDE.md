@@ -141,6 +141,7 @@ El paquete usa **HTTP 200 con envelope canónico** para TODOS los endpoints de m
 |---|---|---|---|
 | `DELETE /api/{scope}/{resource}/{id}` | **200** | `{success: true, message: "...", data: true, debugMsg: []}` (envelope canónico) | Consistencia con envelope — 200 con body confirma éxito + audit message. El campo `data: true` es el "ack" semántico. |
 | (REST-canonical alternativo) | 204 | (sin body) | Más REST-strict pero rompe la consistencia del envelope canónico |
+| `DELETE` de una fila que otra tabla todavía referencia | **409** | `{success: false, message: "No se puede eliminar: tiene registros vinculados. Desactivalo en lugar de borrarlo.", __extraData: {code: "ERR_CONFLICT"}}` | Antes la violación de FK salía como **500**. Sólo las FK: PostgreSQL `23503`, MySQL/MariaDB `23000` + `1451`/`1217`, SQLite `FOREIGN KEY constraint failed`. Cualquier otro error de la consulta sigue de largo sin cambios. El borrado corre en una transacción: la fila y lo que tocaron sus hooks quedan como estaban. `HasMkMedia` borra los archivos en `deleted` (no en `deleting`), así que una FK que frena el borrado no se lleva los archivos. |
 
 **¿Por qué 200+body en vez de 204?**
 
@@ -342,7 +343,9 @@ Genera **20 archivos** en `app/Modules/Admin/`:
   `Mk\Director\Auth\Access\ModuleRbacGrantGuard` (403, mismos códigos que
   `AccessGrantGuard`): `super-admin` es fijo (no se sincroniza, renombra ni
   borra, y ningún rol se renombra a él — `ERR_FIXED_ROLE`); nadie cambia sus
-  roles ni las abilities de un rol que tiene (`ERR_SELF_ACCESS_CHANGE`); nadie
+  roles ni las abilities de un rol que tiene, ni borra su propia cuenta
+  (`ERR_SELF_ACCESS_CHANGE`, «No podés borrar tu propia cuenta.»; el
+  `destroy` generado llama `assertCanDeleteUser()`); nadie
   toca a un usuario —ni su contraseña— o un rol de alguien con más acceso
   (`ERR_TARGET_OUTRANKS_ACTOR`); sólo se asigna, quita o sincroniza lo que el
   actor tiene (`ERR_ACCESS_NOT_HELD`). Un super-admin queda afuera del rango y
@@ -1183,7 +1186,7 @@ son del **mismo** scope de auth:
 
 | Regla | Código |
 |---|---|
-| Nadie cambia su **propio** acceso: roles, abilities directas ni `status` (mandar el propio `status` sin cambiarlo sí vale: un formulario manda el objeto entero) | `ERR_SELF_ACCESS_CHANGE` |
+| Nadie cambia su **propio** acceso: roles, abilities directas ni `status` (mandar el propio `status` sin cambiarlo sí vale: un formulario manda el objeto entero). Tampoco **borra su propia cuenta**, ni con `*` (`No podés borrar tu propia cuenta.`) | `ERR_SELF_ACCESS_CHANGE` |
 | Nadie edita, bloquea, borra ni cambia el acceso de un usuario con **más** acceso que él | `ERR_TARGET_OUTRANKS_ACTOR` |
 | Sólo se concede **y quita** lo que el actor tiene, ability por ability, y por cada rol que entra o sale. Quitar también cuenta: si no, un encargado desarma al dueño. `*` cubre todo | `ERR_ACCESS_NOT_HELD` |
 

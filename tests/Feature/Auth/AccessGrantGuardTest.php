@@ -236,6 +236,20 @@ test('editar o borrar a quien tiene MÁS acceso: prohibido; a un par, permitido'
     expect(guardDenial(fn () => $guard->assertCanUpdate($owner, $manager, ['status' => 3])))->toBeNull();
 });
 
+test('nadie borra su propia cuenta, ni con `*`', function () {
+    bootGuardWorld($this);
+    guardRole('super-admin', 'admin', ['*']);
+    $owner = guardUser(GuardAdmin::class, 'dueño', [], ['super-admin']);
+    $manager = guardUser(GuardAdmin::class, 'encargado', ['admin.admins.delete']);
+    $guard = app(AccessGrantGuard::class);
+
+    expect(guardDenial(fn () => $guard->assertCanDelete($owner, $owner)))->toBe(AccessGrantGuard::ERR_SELF_ACCESS_CHANGE);
+    expect(guardDenial(fn () => $guard->assertCanDelete($manager, $manager)))->toBe(AccessGrantGuard::ERR_SELF_ACCESS_CHANGE);
+    // Borrar a OTRO sigue igual; y sin actor (consola) no hay regla.
+    expect(guardDenial(fn () => $guard->assertCanDelete($owner, $manager)))->toBeNull();
+    expect(guardDenial(fn () => $guard->assertCanDelete(null, $owner)))->toBeNull();
+});
+
 test('su propio status: cambiarlo no; mandar el mismo valor o editar el nombre sí', function () {
     bootGuardWorld($this);
     $manager = guardUser(GuardAdmin::class, 'encargado', ['admin.admins.update']);
