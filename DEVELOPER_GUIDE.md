@@ -750,6 +750,40 @@ Tests: `tests/Unit/Testing/QueryBudgetTest.php` (sqlite en memoria). Cada guarda
 ella: la comparación, el calentamiento (diez consultas de la primera llamada tapaban el N+1: 12 contra 9), el control
 del fixture, el `growth` y el `ceiling`.
 
+### 3.6.9. `mk-studio:data-check` — lo que «Revisar contra la app» cuenta en los datos (para MK Studio)
+
+```bash
+php artisan mk-studio:data-check '{"relations":[{"table":"school_uploads","column":"mk_upload_id","target":"mk_uploads","targetKey":"id"}],"migrations":true}'
+```
+
+Lo corre la pantalla «Revisar contra la app» del estudio, en su worktree de la api preparado como para `mk-studio:perf`
+(su propio `vendor`, el `.env` del checkout). **Sólo lee**: `SELECT`s por el query builder y nada más. El pedido va como
+argumento, no por stdin: el runner de artisan del estudio no tiene stdin, y lo que pide es lo que muestra la pantalla
+(pocos KB). La respuesta es JSON en una línea, a stdout.
+
+| pedido | qué contesta |
+|---|---|
+| `relations: [{table, column, target, targetKey}]` | `rows`, `nulls`, `orphans` (filas cuyo valor no es un `targetKey` de `target`) y hasta 20 de esos valores en `sample`; `targetExists`, `columnType`, `targetKeyType` y `sameType` |
+| `columns: [{table, column}]` | `nonNull`: los valores que borraría un `dropColumn` |
+| `values: [{table, column, value}]` | `rows`: las filas que usan un caso de enum que el spec saca |
+| `migrations: true` | `migrations`: los nombres que la tabla de migraciones dice que corrieron (ninguno sin esa tabla) |
+
+🔴 **Ningún nombre del pedido llega al SQL sin estar en el esquema**: cada tabla y columna se busca primero en el listado
+de la base. Un nombre que el esquema no tiene contesta `error` en ese ítem y nunca se vuelve consulta.
+
+🔴 **Dos claves de tipos distintos no se cruzan**: PostgreSQL rechaza `uuid = character varying` y, donde el motor
+convierte, la coincidencia sería la de la conversión. La respuesta trae los dos tipos con `sameType: false` y no cuenta
+huérfanos. Pasó en RETO: `school_uploads.mk_upload_id` es `uuid` y `mk_uploads.id` es `varchar(36)`.
+
+🔴 **Un error no lleva la conexión**: un ítem que falla contesta el SQLSTATE y la primera línea de la base, nunca el
+mensaje entero de Laravel, que trae host, puerto, base y el SQL.
+
+Cada consulta corre con el timeout de sentencia del motor (MariaDB `max_statement_time`, MySQL `max_execution_time`,
+PostgreSQL `statement_timeout`; sqlite no tiene), 5 s por defecto; un ítem que lo alcanza contesta `timedOut: true` en
+lugar de un número. Es un ajuste de la sesión y se restaura al terminar: la base no cambia.
+
+Tests: `tests/Feature/SpecDataCheckTest.php`.
+
 ## ⚙️ 3.7. Login field configurable (`--login-field=<campo>`)
 
 `mk:make:auth-user` ahora soporta campos de login no-email. Útil para:
