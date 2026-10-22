@@ -89,7 +89,7 @@ class AbilityResolver
         $cached = $this->cache->get($key);
 
         if (is_array($cached)) {
-            return $this->matchAbility($cached, $ability);
+            return self::matches($cached, $ability);
         }
 
         // 3) Loader (DB query).
@@ -104,7 +104,7 @@ class AbilityResolver
             // ignore
         }
 
-        return $this->matchAbility($names, $ability);
+        return self::matches($names, $ability);
     }
 
     /**
@@ -136,28 +136,34 @@ class AbilityResolver
     }
 
     /**
-     * @param  array<int, string>  $names
+     * THE wildcard rule of the package. Every place that asks "does this set of
+     * held names cover `$ability`?" goes through here: this resolver, the
+     * no-container fallback of `canMk()` and `AccessGrantGuard::holds()`. The
+     * fronts (`hasAbility()` in `@makroz/web` and `@makroz/mobile`, through
+     * `matchesAbility()` of `@makroz/core`) mirror it name for name.
+     *
+     * A held name covers `$ability` when it is:
+     *  - `*` (everything);
+     *  - exactly `$ability`;
+     *  - `{first}.*`, where `{first}` is the FIRST dot segment of `$ability`
+     *    (`admin.*` covers `admin.discounts.view` and `admin` itself).
+     *
+     * Nothing else is a wildcard. `admin.discounts.*` is an ordinary name that
+     * only matches a check for `admin.discounts.*`; it does NOT cover
+     * `admin.discounts.view`. And `*` is never a first segment: `*.*` does not
+     * stand for `*`.
+     *
+     * @param  array<int, string>  $names  The held ability names.
      */
-    private function matchAbility(array $names, string $ability): bool
+    public static function matches(array $names, string $ability): bool
     {
-        $collection = collect($names);
-
-        if ($collection->contains('*')) {
+        if (in_array('*', $names, true) || in_array($ability, $names, true)) {
             return true;
         }
 
-        if ($collection->contains($ability)) {
-            return true;
-        }
+        $resource = explode('.', $ability, 2)[0];
 
-        $segments = explode('.', $ability, 2);
-        $resource = $segments[0] ?? null;
-
-        if ($resource !== null && $resource !== '' && $collection->contains($resource.'.*')) {
-            return true;
-        }
-
-        return false;
+        return $resource !== '' && $resource !== '*' && in_array($resource.'.*', $names, true);
     }
 
     /**

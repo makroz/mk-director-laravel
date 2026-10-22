@@ -283,6 +283,27 @@ test('AbilityResolver: matches "<resource>.*" wildcard for scoped checks', funct
     expect($resolver->can($user, 'orders.list'))->toBeFalse();
 });
 
+test('AbilityResolver::matches() is the one wildcard rule: `*`, the exact name, or the FIRST-segment wildcard', function () {
+    expect(AbilityResolver::matches(['*'], 'anything.at.all'))->toBeTrue();
+    expect(AbilityResolver::matches(['admin.*'], 'admin.discounts.view'))->toBeTrue();
+    expect(AbilityResolver::matches(['admin.*'], 'admin'))->toBeTrue();
+    expect(AbilityResolver::matches(['admin.discounts.view'], 'admin.discounts.view'))->toBeTrue();
+    // A multi-segment wildcard is an ordinary NAME: it only matches itself.
+    expect(AbilityResolver::matches(['admin.discounts.*'], 'admin.discounts.view'))->toBeFalse();
+    expect(AbilityResolver::matches(['admin.discounts.*'], 'admin.discounts.*'))->toBeTrue();
+    // `*` as the first segment is not a resource: `*.*` never stands for `*`.
+    expect(AbilityResolver::matches(['*.*'], '*'))->toBeFalse();
+    expect(AbilityResolver::matches(['*.*'], '*.x'))->toBeFalse();
+    expect(AbilityResolver::matches([], 'admin.x'))->toBeFalse();
+});
+
+test('AbilityResolver: a held `*.*` does not grant `*`', function () {
+    $user = new FakeAuthUser(['id' => 'user-star-star']);
+    $user->directAbilityNames = ['*.*'];
+
+    expect(makeResolver()->can($user, '*'))->toBeFalse();
+});
+
 test('AbilityResolver: returns false for unknown ability', function () {
     $user = new FakeAuthUser(['id' => 'user-6']);
     $user->directAbilityNames = ['users.list'];

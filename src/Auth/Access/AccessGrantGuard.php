@@ -10,6 +10,7 @@ use Mk\Director\Auth\Enums\FixedStatus;
 use Mk\Director\Auth\Models\Ability;
 use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Auth\Models\Role;
+use Mk\Director\Auth\Services\AbilityResolver;
 
 /**
  * Frena la escalada de privilegios por el CRUD de usuarios.
@@ -37,14 +38,24 @@ use Mk\Director\Auth\Models\Role;
  *     estar cubierta por el actor → `ERR_ACCESS_NOT_HELD`. Quitar también
  *     cuenta: si no, un encargado desarma a quien tiene más. `*` cubre todo.
  *
- * "Cubierta" es la misma semántica que `canMk()`: `*`, el nombre exacto, o
- * `recurso.*`. Se mira lo que el actor tiene por roles y grants directos, no
- * las abilities de su token.
+ * "Covered" is the package's one wildcard rule, {@see AbilityResolver::matches()}:
+ * `*`, the exact name, or the FIRST-segment wildcard (`admin.*`). Se mira lo
+ * que el actor tiene por roles y grants directos, no las abilities de su token.
+ *
+ * Actor of ANOTHER scope (the managed resource: an admin managing waiters).
+ * Rules 1 and 3 still apply; rule 2 (outrank) does not. What rule 3 skips is
+ * only the names of the OTHER known scope (`mesero.*` given by an admin): that
+ * is the target's own namespace, and what the manager may do there is decided
+ * by `mk.ability:{manager}.{resource}.*` on the route. A name without a known
+ * scope prefix (`kitchen.send`, `cash.charge`) and `*` are NOT another
+ * namespace: they are checked exactly as in the same scope.
+ *
+ * 🔴 Measured in a consumer: before this, with only `admin.meseros.update`
+ * (or `admin.roles.update` for a waiter role) an admin handed a waiter shared
+ * abilities it did not hold, and even `*` — the cross-scope path returned
+ * before checking anything.
  *
  * Fuera de las reglas, a propósito:
- *  - Actor de OTRO scope (el recurso managed: un admin administrando meseros).
- *    Las abilities de otro scope son otro espacio de nombres; lo que el manager
- *    puede hacer lo decide `mk.ability:{manager}.{recurso}.*` en la ruta.
  *  - Sin actor autenticado (consola, seeders): no hay cuenta que escale.
  *
  * Uso (el scaffolder ya lo cablea en el controller y el Service generados):
@@ -94,11 +105,14 @@ class AccessGrantGuard
             throw new AccessGrantDeniedException('No podés cambiar tu propio acceso.', self::ERR_SELF_ACCESS_CHANGE);
         }
 
-        if (! $this->isSameScope($actor, $target)) {
-            return;
+        $sameScope = $this->isSameScope($actor, $target);
+
+        if ($sameScope) {
+            $this->assertDoesNotOutrank($actor, $target);
         }
 
-        $this->assertDoesNotOutrank($actor, $target);
+        // Another scope: its own names are gated by the route; the rest is checked.
+        $checked = fn (array $names): array => $sameScope ? $names : $this->outsideOtherScopes($actor, $names);
 
         if ($roleNames !== null) {
             $current = $target->roles->pluck('name')->all();
@@ -111,13 +125,13 @@ class AccessGrantGuard
                 ->get();
 
             foreach ($roles as $role) {
-                $this->assertHoldsAll($actor, $role->abilities->pluck('name')->all());
+                $this->assertHoldsAll($actor, $checked($role->abilities->pluck('name')->all()));
             }
         }
 
         if ($abilityNames !== null) {
             $current = $target->directAbilities->pluck('name')->all();
-            $this->assertHoldsAll($actor, $this->symmetricDifference($current, $abilityNames));
+            $this->assertHoldsAll($actor, $checked($this->symmetricDifference($current, $abilityNames)));
         }
     }
 
@@ -179,8 +193,12 @@ class AccessGrantGuard
      *    `guard`) o borrarlo también le cambia el acceso → `ERR_TARGET_OUTRANKS_ACTOR`.
      *  - Sólo se agrega o se quita lo que el actor tiene → `ERR_ACCESS_NOT_HELD`.
      *
-     * Fuera, como en las otras reglas: sin actor, quien tiene `*`, y un rol de
-     * OTRO scope que el del actor (un admin armando los roles de los meseros).
+     * Fuera, como en las otras reglas: sin actor y quien tiene `*`.
+     *
+     * A role of ANOTHER scope than the actor's (an admin building the waiters'
+     * roles) only gets the last rule, and only for the names outside that other
+     * scope: shared names (`kitchen.send`) and `*` that change have to be held.
+     * Self-role and outrank do not apply across scopes.
      *
      * @param  array<int, string>|null  $nextAbilities  El conjunto COMPLETO que va a quedar; null = no se tocan (editar). Borrar es `[]`.
      *
@@ -194,7 +212,15 @@ class AccessGrantGuard
 
         $this->assertRoleBelongsToActingTenant($role);
 
-        if (! $actor instanceof AuthUser || $actor->getAuthScope() !== $role->guard || $this->holds($actor, '*')) {
+        if (! $actor instanceof AuthUser || $this->holds($actor, '*')) {
+            return;
+        }
+
+        if ($actor->getAuthScope() !== $role->guard) {
+            if ($nextAbilities !== null) {
+                $this->assertHoldsAll($actor, $this->outsideOtherScopes($actor, $this->symmetricDifference($role->abilities()->pluck('name')->all(), $nextAbilities)));
+            }
+
             return;
         }
 
@@ -258,20 +284,13 @@ class AccessGrantGuard
     }
 
     /**
-     * ¿`$actor` tiene `$ability` por sus roles o grants directos? Misma
-     * semántica que `canMk()` (`*`, exacta, `recurso.*`), sin el atajo del token.
+     * Does `$actor` hold `$ability` through its roles or direct grants? Same
+     * rule as `canMk()` ({@see AbilityResolver::matches()}), without the token
+     * shortcut.
      */
     public function holds(AuthUser $actor, string $ability): bool
     {
-        $names = $actor->getEffectiveAbilities();
-
-        if (in_array('*', $names, true) || in_array($ability, $names, true)) {
-            return true;
-        }
-
-        $resource = explode('.', $ability, 2)[0];
-
-        return $resource !== '' && $resource !== '*' && in_array($resource.'.*', $names, true);
+        return AbilityResolver::matches($actor->getEffectiveAbilities(), $ability);
     }
 
     /**
@@ -358,19 +377,34 @@ class AccessGrantGuard
             return;
         }
 
+        foreach ($this->outsideOtherScopes($actor, $names) as $name) {
+            if (! $this->holds($actor, $name)) {
+                throw new AccessGrantDeniedException("No podés crear, renombrar ni borrar un acceso que no tenés: {$name}.", self::ERR_ACCESS_NOT_HELD);
+            }
+        }
+    }
+
+    /**
+     * The names the guard still checks when they belong to the target's side:
+     * every name EXCEPT the ones of another known scope than the actor's. A name
+     * without a known scope prefix (`kitchen.send`) and `*` stay in.
+     *
+     * @param  array<int, string>  $names
+     * @return array<int, string>
+     */
+    private function outsideOtherScopes(AuthUser $actor, array $names): array
+    {
         // Sin ningún scope configurado, ningún nombre queda afuera: falla cerrada.
         $scopes = AuthUser::configuredScopes();
 
-        foreach ($names as $name) {
+        return array_values(array_filter($names, function (string $name) use ($actor, $scopes): bool {
             // El scope es el primer segmento, en singular o plural (`crew.` o `crews.`).
             $prefix = explode('.', $name, 2)[0];
             $singular = str_ends_with($prefix, 's') ? substr($prefix, 0, -1) : $prefix;
             $scope = in_array($prefix, $scopes, true) ? $prefix : (in_array($singular, $scopes, true) ? $singular : null);
 
-            if (($scope === null || $scope === $actor->getAuthScope()) && ! $this->holds($actor, $name)) {
-                throw new AccessGrantDeniedException("No podés crear, renombrar ni borrar un acceso que no tenés: {$name}.", self::ERR_ACCESS_NOT_HELD);
-            }
-        }
+            return $scope === null || $scope === $actor->getAuthScope();
+        }));
     }
 
     private function isSameAccount(AuthUser $actor, AuthUser $target): bool

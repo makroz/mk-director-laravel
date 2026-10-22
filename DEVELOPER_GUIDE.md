@@ -1188,12 +1188,19 @@ son del **mismo** scope de auth:
 | Sólo se concede **y quita** lo que el actor tiene, ability por ability, y por cada rol que entra o sale. Quitar también cuenta: si no, un encargado desarma al dueño. `*` cubre todo | `ERR_ACCESS_NOT_HELD` |
 
 Los tres se renderizan como **403** con el sobre del paquete. «Cubierta» es la
-misma semántica de `canMk()` (`*`, exacta, `recurso.*`) y se mira lo que el actor
-tiene por roles y grants directos, **no** las abilities de su token.
+regla de comodines del paquete (abajo, «La regla de comodines») y se mira lo que
+el actor tiene por roles y grants directos, **no** las abilities de su token.
 
-Fuera de la regla a propósito: un actor de **otro** scope (un admin
-administrando meseros — otro espacio de nombres, lo decide `mk.ability` en la
-ruta) y sin actor autenticado (consola, seeders).
+**Actor de otro scope** (un admin administrando meseros): rigen la primera y la
+tercera regla; la de «más acceso» no. La tercera deja afuera **sólo** los nombres
+del otro scope conocido (`mesero.*` que da un admin): ése es el espacio de
+nombres del destino y lo decide `mk.ability:{manager}.{recurso}.*` en la ruta.
+Un nombre **sin** scope conocido (`kitchen.send`, `cash.charge`) y `*` no son de
+otro espacio: se exigen igual que en el mismo scope. 🔴 Medido en un consumidor:
+antes, con sólo `admin.meseros.update`, un admin le daba a un mesero
+compartidas que no tenía, y hasta `*`.
+
+Fuera de la regla a propósito: sin actor autenticado (consola, seeders).
 
 Tres métodos, en el orden en que se usan:
 
@@ -1225,8 +1232,10 @@ app(AccessGrantGuard::class)->assertCanChangeRole($request->user(), $role, $abil
 | Nadie toca un rol que tiene alguien con **más** acceso | `ERR_TARGET_OUTRANKS_ACTOR` |
 | Sólo se agrega o se quita lo que el actor tiene | `ERR_ACCESS_NOT_HELD` |
 
-Fuera, igual que arriba: quien tiene `*` (salvo el rol fijo) y un rol de otro
-scope que el del actor.
+Fuera: quien tiene `*` (salvo el rol fijo). Un rol de **otro** scope que el del
+actor (un admin armando los roles de los meseros) sólo pasa por la última regla,
+y sólo para los nombres que no son de ese otro scope: agregarle o sacarle una
+compartida (`kitchen.send`) o `*` pide tenerla; borrarlo (sync a `[]`) también.
 
 **El CRUD de abilities es la tercera puerta**: roles y grants apuntan a la
 ability por id, así que renombrarla es cambiarles el permiso a todos los que la
@@ -1247,7 +1256,26 @@ app(AccessGrantGuard::class)->assertCanDeleteAbility($request->user(), $ability)
 Un nombre de **otro** scope conocido (guard de `config/auth.php` cuyo modelo
 extiende `AuthUser`, el criterio de `mk:discover-abilities`) queda afuera. Uno
 sin scope conocido (`kitchen.send`) se exige. El `name` nuevo sigue validado
-con el prefijo del scope, en el alta y en la edición.
+con el prefijo del scope, en el alta y en la edición. Es el mismo criterio que
+usan las tres puertas cuando cruzan de scope.
+
+**La regla de comodines** — una sola, en el back y en los fronts. Un nombre que
+se tiene cubre a `$ability` si es:
+
+| Tiene | Cubre |
+|---|---|
+| `*` | todo |
+| el nombre exacto | ese nombre |
+| `{primer segmento}.*` (`admin.*`) | todo lo que empieza con ese segmento (`admin.discounts.view`, y `admin` a secas) |
+
+Nada más es comodín: `admin.discounts.*` es un **nombre** que sólo coincide con
+un chequeo de `admin.discounts.*` — **no** cubre `admin.discounts.view`. Y `*`
+nunca es un primer segmento: `*.*` no vale por `*`. Vive en
+`Mk\Director\Auth\Services\AbilityResolver::matches()`, y la usan
+`canMk()` (el resolver y su fallback sin container), `mk.ability` (por
+`canMk()`; el atajo del token de Sanctum es más estrecho: `*` o exacto) y
+`AccessGrantGuard::holds()`. En los fronts, `hasAbility()` de `@makroz/web` y
+`@makroz/mobile` usa `matchesAbility()` de `@makroz/core`, con la misma tabla.
 
 ⚠️ **Los scopes ya generados no la tienen**: el paquete no reescribe código
 emitido. Agregar las llamadas a mano, o regenerar el scope.
