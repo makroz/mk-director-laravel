@@ -31,9 +31,10 @@ use Illuminate\Database\Eloquent\Model;
  *     se borra, y ningún rol se renombra a `super-admin` → `ERR_FIXED_ROLE`.
  *     Ni siquiera un super-admin: el `before()` de las Policies le da todo a
  *     quien tenga un rol con ese nombre.
- *  2. Nadie cambia SUS roles, ni las abilities de un rol que tiene →
- *     `ERR_SELF_ACCESS_CHANGE`. Los roles propios, tampoco un super-admin,
- *     igual que en `AccessGrantGuard`: el que se quita el rol queda afuera.
+ *  2. Nadie cambia SUS roles, ni las abilities de un rol que tiene, ni borra
+ *     su propia cuenta → `ERR_SELF_ACCESS_CHANGE`. Tampoco un super-admin,
+ *     igual que en `AccessGrantGuard`: el que se quita el rol (o se borra)
+ *     queda afuera.
  *  3. Nadie toca a un usuario con MÁS acceso (asignarle o quitarle roles,
  *     editarlo —su contraseña incluida— o borrarlo), ni un rol que tiene
  *     alguien con más acceso → `ERR_TARGET_OUTRANKS_ACTOR`. `super-admin`
@@ -52,6 +53,7 @@ use Illuminate\Database\Eloquent\Model;
  *
  *     app(ModuleRbacGrantGuard::class)->assertCanChangeUserRole($request->user(), $user, $role);
  *     app(ModuleRbacGrantGuard::class)->assertCanChangeUser($request->user(), $user);
+ *     app(ModuleRbacGrantGuard::class)->assertCanDeleteUser($request->user(), $user);
  *     app(ModuleRbacGrantGuard::class)->assertCanChangeRole($request->user(), $role, $abilityNames, $newName);
  *
  * Cada `assert*` tira {@see AccessGrantDeniedException}, que se renderiza 403.
@@ -89,8 +91,8 @@ class ModuleRbacGrantGuard
     }
 
     /**
-     * Antes de editar o borrar `$target` por el CRUD. Editarse o borrarse a sí
-     * mismo no pasa por acá: es su cuenta.
+     * Antes de editar `$target` por el CRUD (y, vía `assertCanDeleteUser()`,
+     * de borrarlo). Editarse a sí mismo no pasa por acá: es su cuenta.
      *
      * @throws AccessGrantDeniedException
      */
@@ -101,6 +103,23 @@ class ModuleRbacGrantGuard
         }
 
         $this->assertDoesNotOutrank($actor, $target);
+    }
+
+    /**
+     * Before deleting `$target` through the CRUD: the same rules as editing,
+     * plus nobody deletes their OWN account → `ERR_SELF_ACCESS_CHANGE`, not
+     * even a super-admin. Before, the own account left through
+     * `assertCanChangeUser()`'s early `return` and `DELETE` gave 200.
+     *
+     * @throws AccessGrantDeniedException
+     */
+    public function assertCanDeleteUser(?Authenticatable $actor, Model $target): void
+    {
+        if ($this->applies($actor, $target::class) && $this->isSameAccount($actor, $target)) {
+            throw new AccessGrantDeniedException('No podés borrar tu propia cuenta.', AccessGrantGuard::ERR_SELF_ACCESS_CHANGE);
+        }
+
+        $this->assertCanChangeUser($actor, $target);
     }
 
     /**

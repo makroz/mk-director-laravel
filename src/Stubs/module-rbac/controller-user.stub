@@ -66,9 +66,12 @@ class {{ModuleName}}Controller extends SmartController
         return parent::update($request, $id);
     }
 
+    /**
+     * Nadie borra su propia cuenta, ni a alguien con más acceso.
+     */
     public function destroy(Request $request, string|int $id)
     {
-        app(ModuleRbacGrantGuard::class)->assertCanChangeUser($request->user(), $this->findScopedOrFail($request, $id));
+        app(ModuleRbacGrantGuard::class)->assertCanDeleteUser($request->user(), $this->findScopedOrFail($request, $id));
 
         return parent::destroy($request, $id);
     }

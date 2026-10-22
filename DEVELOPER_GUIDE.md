@@ -343,7 +343,9 @@ Genera **20 archivos** en `app/Modules/Admin/`:
   `Mk\Director\Auth\Access\ModuleRbacGrantGuard` (403, mismos códigos que
   `AccessGrantGuard`): `super-admin` es fijo (no se sincroniza, renombra ni
   borra, y ningún rol se renombra a él — `ERR_FIXED_ROLE`); nadie cambia sus
-  roles ni las abilities de un rol que tiene (`ERR_SELF_ACCESS_CHANGE`); nadie
+  roles ni las abilities de un rol que tiene, ni borra su propia cuenta
+  (`ERR_SELF_ACCESS_CHANGE`, «No podés borrar tu propia cuenta.»; el
+  `destroy` generado llama `assertCanDeleteUser()`); nadie
   toca a un usuario —ni su contraseña— o un rol de alguien con más acceso
   (`ERR_TARGET_OUTRANKS_ACTOR`); sólo se asigna, quita o sincroniza lo que el
   actor tiene (`ERR_ACCESS_NOT_HELD`). Un super-admin queda afuera del rango y
