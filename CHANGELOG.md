@@ -12,6 +12,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `resolveFormRequest()` valida una vez y con el pin puesto
+
+**Fixed**
+- **El FormRequest de `store_request`/`update_request` se valida UNA vez, y en `update()` ve el pin de
+  `resource_route_param` (hallazgo 93).** `resolveFormRequest()` hacía `app($formRequestClass)`, y Laravel valida un
+  FormRequest al resolverlo (`afterResolving` de `FormRequestServiceProvider`): todo el pipeline corría contra la ruta
+  REAL antes del pin, y el segundo `validateResolved()` reusaba el validator cacheado, así que el pin no llegaba
+  NUNCA a las reglas. `Rule::unique(...)->ignore($this->route('<param pineado>'))` no ignoraba la fila actual —
+  guardar sin cambiar el valor daba 422— y `prepareForValidation()`, `authorize()`, la validación y
+  `passedValidation()` corrían dos veces. Ahora la instancia se arma con `app()->build()` + `createFrom($request)` +
+  `setContainer()`/`setRedirector()`, se pinea la ruta y se llama `validateResolved()` una vez, en el orden de Laravel
+  (`prepareForValidation` → `authorize` → reglas → `passedValidation`). El pin es una copia de la ruta real con el
+  parámetro encima, así que los demás parámetros de la ruta siguen visibles. La forma del 422 y el 403 de
+  `authorize()` no cambian. ⚠️ Un `resolving()`/`afterResolving()` que un consumidor registre para SU clase de
+  FormRequest ya no corre en este camino. Test: `CrudSmartFormRequestValidaUnaVezTest`.
+
 ## [UNRELEASED] — `update()` autoriza antes de validar
 
 **Security**

@@ -17,7 +17,8 @@ use Mk\Director\Tests\MkLaravelTestCase;
  * (500 SQL) en vez de `ValidationException` (422 con errores estructurados).
  *
  * **Fix**: nuevo helper `resolveFormRequest(configKey, request, routeParamName, routeParamValue)`
- * en `CRUDSmart` resuelve el FormRequest vía `app()`, setContainer, setRedirector,
+ * en `CRUDSmart` arma el FormRequest con `app()->build()` + `createFrom()` (no `app()`:
+ * eso validaba antes del pin, hallazgo 93), setContainer, setRedirector,
  * setRouteResolver (con `{resource} = $id` para `Rule::unique(...)->ignore(...)`),
  * y corre `validateResolved()`. Si falla, ValidationException → 422.
  *
@@ -149,7 +150,7 @@ test('R-PKG-046 F9-B08 — BC: si store_request no pineado, retorna $request sin
     expect($helperBody)->toContain('return $request;');
 });
 
-test('R-PKG-046 F9-B08 — getResourceRouteParam() lee de $mkConfig (scaffolder pinea resource_route_param)', function () {
+test('R-PKG-046 F9-B08 — getResourceRouteParam() lee resource_route_param de $mkConfig', function () {
     $src = crudSmartFormRequestSource();
 
     expect($src)->toContain(

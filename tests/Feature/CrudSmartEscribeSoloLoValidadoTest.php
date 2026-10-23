@@ -40,10 +40,11 @@ use Mk\Director\Tests\MkLaravelTestCase;
  * **VACÍO**, así que no se escribía nada y el campo se quedaba con el valor viejo por el
  * motivo equivocado.
  *
- * La causa: `resolveFormRequest()` hace `app($formRequestClass)`, y lo que le copia la
- * entrada de la request real es el callback `resolving` que registra
- * `FoundationServiceProvider`. Sin ese provider, el FormRequest se construye sin input.
- * De ahí la app booteada, el provider registrado explícitamente y la ruta de verdad.
+ * La causa: `resolveFormRequest()` hacía `app($formRequestClass)`, y lo que le copiaba la
+ * entrada de la request real era el callback `resolving` que registra
+ * `FoundationServiceProvider`. Sin ese provider, el FormRequest se construía sin input.
+ * Desde el hallazgo 93 la copia es explícita (`createFrom()`), pero el provider se queda
+ * registrado: es lo que tiene una app real, y sin él un regreso a `app()` no se vería.
  *
  * ⚠️ Un valor de prueba que el bug puede producir por casualidad no mide nada, y acá el
  * bug producía justo el valor esperado.
