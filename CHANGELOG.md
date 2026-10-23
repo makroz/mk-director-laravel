@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `update()` autoriza antes de validar
+
+**Security**
+- **Con `authorize_with_policy`, `CRUDSmart::update()` busca, autoriza y DESPUÉS valida (hallazgo 92).** Validaba
+  primero: quien no podía editar recibía un 422 con los mensajes de validación en vez de un 403, una regla
+  `exists`/`unique` le contestaba si una fila existe, y un id inexistente con un cuerpo inválido daba 422 en vez de
+  404. Ahora es el mismo orden que `store()`: 404 → 403 → 422. Con el flag apagado el orden no cambia. Los hooks
+  `beforeSave`/`beforeUpdate` siguen después de validar; con el flag prendido sólo se adelanta el `beforeQuery` de la
+  búsqueda, que recibe la request original (mismo usuario). ⚠️ Un test de un consumidor que espere 422 de un usuario
+  sin permiso ahora recibe 403. `show()`, `destroy()` e `index()` no resuelven FormRequest y no cambian. Test:
+  `CrudSmartUpdateAutorizaAntesDeValidarTest`.
+
 ## [UNRELEASED] — `MkEnvelope`: un `{}` sigue siendo `{}`
 
 **Fixed**
