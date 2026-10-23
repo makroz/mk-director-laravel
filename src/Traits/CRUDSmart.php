@@ -1317,17 +1317,35 @@ trait CRUDSmart
      *   1. Lee `$mkConfig[$configKey]` (e.g. `store_request`, `update_request`).
      *   2. Si no está pineado o está vacío → retorna `$request` sin tocar (BC).
      *   3. Si está pineado:
-     *      a. Resuelve via `app($formRequestClass)` (DI completa).
+     *      a. Construye la instancia con `app()->build()` (DI del constructor, SIN los
+     *         callbacks `resolving`/`afterResolving`) y le copia la request con
+     *         `createFrom()`.
      *      b. `setContainer(app())` + `setRedirector(app('redirect'))` para que
      *         `validateResolved()` route correctamente las failures.
      *      c. Si `$routeParamName !== null` (caso update) → setRouteResolver
-     *         con un Route pineado que devuelve el `$id` para `{resource}`.
+     *         con una copia de la ruta real que además tiene `{$routeParamName} = $id`.
      *         Esto permite que `Rule::unique('admins', 'email')->ignore($this->route('admin'))`
-     *         funcione.
-     *      d. `validateResolved()` corre las `rules()` del FormRequest. Si falla,
-     *         `ValidationException` se lanza → 422 canónico.
-     *      e. Retorna el FormRequest validado (que ahora tiene `$request->validated()`
-     *         y `$request->all()` filtrados por las reglas).
+     *         funcione aunque la ruta real se llame `{id}`.
+     *      d. `validateResolved()` UNA vez: `prepareForValidation()` → `authorize()`
+     *         (403 si da false) → `rules()` → `passedValidation()`. Si las reglas
+     *         fallan, `ValidationException` se lanza → 422 canónico.
+     *      e. Retorna el FormRequest validado. `validated()` queda filtrado por las
+     *         reglas; `all()` NO (ver {@see inputParaEscritura()}).
+     *
+     * 🔴 HALLAZGO 93 — NO SE RESUELVE CON `app($formRequestClass)`.
+     *
+     * Laravel valida un FormRequest AL RESOLVERLO: `FormRequestServiceProvider`
+     * registra `afterResolving(ValidatesWhenResolved::class, fn ($r) => $r->validateResolved())`.
+     * Con `app()`, todo el pipeline corría DENTRO de la resolución, contra la ruta
+     * REAL, antes de que existiera el pin; y como el FormRequest cachea su validator,
+     * el segundo `validateResolved()` reusaba las reglas armadas SIN pin. El pin no
+     * llegaba nunca a las reglas, y `prepareForValidation()`, `authorize()`, la
+     * validación y `passedValidation()` corrían dos veces. Medido: con la ruta en
+     * `{id}` y `resource_route_param` pineado, guardar sin cambiar un valor `unique`
+     * daba 422. Lo fija `CrudSmartFormRequestValidaUnaVezTest`.
+     *
+     * Lo que se pierde de `app()`: un `resolving()`/`afterResolving()` que el
+     * consumidor haya registrado para SU clase de FormRequest ya no corre acá.
      *
      * @param  string  $configKey  'store_request' o 'update_request'
      * @param  Request  $request  El request original
@@ -1353,8 +1371,11 @@ trait CRUDSmart
             return $request;
         }
 
+        // `build()` y no `app()`: `app()` dispara el `afterResolving` de Laravel, que
+        // valida ANTES del pin (hallazgo 93, en el docblock). `build()` conserva la
+        // inyección del constructor y no dispara ningún callback.
         /** @var FormRequest $formRequest */
-        $formRequest = app($formRequestClass);
+        $formRequest = $formRequestClass::createFrom($request, app()->build($formRequestClass));
 
         $formRequest->setContainer(app());
         $formRequest->setRedirector(app('redirect'));
@@ -1364,23 +1385,19 @@ trait CRUDSmart
             //
             // FormRequest usa `$this->route('admin')` para reglas como
             // `Rule::unique('admins', 'email')->ignore($this->route('admin'))`.
-            // Pineamos un Route mock que devuelve `$routeParamValue` para
-            // `$routeParamName`. Esto es suficiente para que `Rule::ignore`
-            // extraiga el ID correcto y excluya el row actual del unique check.
-            $formRequest->setRouteResolver(function () use ($routeParamName, $routeParamValue) {
-                $route = new Route(
-                    ['PUT', 'PATCH'],
-                    '/api/{scope}/{resource}/'.$routeParamValue,
-                    [],
-                );
-                $route->setParameter($routeParamName, $routeParamValue);
+            // Se pinea una COPIA de la ruta real —conserva sus otros parámetros— con
+            // `$routeParamName = $routeParamValue` encima. La copia no toca la ruta
+            // del request original. Sin ruta real (fuera de HTTP), una vacía:
+            // `setParameter()` exige `parameters` inicializado o tira «Route is not bound».
+            $route = clone ($request->route() ?? new Route(['PUT', 'PATCH'], '{resource}', []));
+            $route->parameters ??= [];
+            $route->setParameter($routeParamName, $routeParamValue);
 
-                return $route;
-            });
+            $formRequest->setRouteResolver(fn () => $route);
         }
 
-        // validateResolved() corre las rules() del FormRequest. Si fallan,
-        // ValidationException se lanza → manejado por el framework → 422.
+        // validateResolved() corre el pipeline completo UNA vez. Si las reglas
+        // fallan, ValidationException se lanza → manejado por el framework → 422.
         $formRequest->validateResolved();
 
         // 🔴 `validated()` SÍ QUEDA FILTRADO. `all()` NO.
@@ -1403,9 +1420,9 @@ trait CRUDSmart
      * (e.g. `/api/admin/admins/{admin}`). El nombre del param es el singular del
      * resource name (e.g. `admin` para `Admin` scope, `member` para `Member` scope).
      *
-     * Pineado en `$mkConfig['resource_route_param']` por el scaffolder (auto).
-     * Fallback: derivado de `$mkConfig['resource']` o `null` (en cuyo caso
-     * el route resolver no se pinea y FormRequest asume que no necesita `$this->route(...)`).
+     * Se declara a mano en `$mkConfig['resource_route_param']`: el scaffolder NO lo
+     * emite (sus UpdateRequest leen el nombre de la ruta real). Sin la clave devuelve
+     * `null`, no se pinea nada y el FormRequest ve la ruta real tal cual.
      *
      * Si el consumer pineó `update_request` con reglas que usan
      * `$this->route('admin')`, DEBE pinear `resource_route_param` también.
