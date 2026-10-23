@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `MkEnvelope`: un `{}` sigue siendo `{}`
+
+**Fixed**
+- **El sobre ya no convierte un objeto JSON vacío en lista (hallazgo 80).** `MkEnvelope` leía el cuerpo con
+  `getData(true)` y lo reescribía con `setData()`: un `{}` salía `[]`, y un objeto con claves `"0"`, `"1"`… salía como
+  lista, en `data` y en sus hermanos (`__extraData`, `meta`, `errors`). Ahora decodifica a `stdClass` y cada `{}` y
+  cada `[]` sale como lo escribió el controller, a cualquier profundidad. ⚠️ Un 2xx sin `data` cuyo cuerpo es un
+  objeto da un `data` objeto: `{}` y `{"message": "ok"}` dan `"data": {}` (antes `[]`). El resto del sobre no cambia.
+  Sólo aplica con `force_envelope` o el alias `mk.envelope`. Test: `MkEnvelopeMiddlewareTest`.
+
 ## [UNRELEASED] — `AccessGrantGuard`: entre scopes sólo queda afuera el scope del destino
 
 **Security**

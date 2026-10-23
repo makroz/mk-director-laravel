@@ -7,6 +7,7 @@ namespace Mk\Director\Http\Middleware;
 use Closure;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use stdClass;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -54,6 +55,20 @@ use Symfony\Component\HttpFoundation\Response;
  * la señal de que la forma elegida es la equivocada. Es además la misma forma de un
  * nivel que R-PKG-024 ya impuso al `BaseController`.
  *
+ * ── 🔴 EL CUERPO SE DECODIFICA A OBJETOS, NO A ARREGLO ──────────────────────
+ *
+ * Hallazgo 80: con `getData(true)` un objeto JSON vacío y una lista vacía son el
+ * mismo `[]` de PHP, y el `setData()` escribía `[]` donde el controller había
+ * escrito `{}`. Medido en el piloto 2: `crusts_by_size`, un MAPA por tamaño, salía
+ * `(object) []` del controller y llegaba `[]` al cliente. Mismo viaje, misma
+ * pérdida: un objeto con claves `"0"`, `"1"`… llegaba como lista.
+ *
+ * Ahora se lee con `getData()` (objetos `stdClass`, listas como arreglo). Sólo el
+ * primer nivel pasa a arreglo para sacarle `message` y `data`; lo de adentro —el
+ * `data`, `__extraData`, `meta`, `errors`— sale como se escribió, a cualquier
+ * profundidad. Un 2xx sin `data` cuyo cuerpo era un objeto da un `data` objeto,
+ * también vacío: `{}` y `{"message": "ok"}` dan `"data": {}` (antes `[]`).
+ *
  * ── Lo que NO toca, y por qué ───────────────────────────────────────────────
  *
  *  - Lo que YA trae `success`: son las respuestas del propio paquete
@@ -61,7 +76,7 @@ use Symfony\Component\HttpFoundation\Response;
  *    sería pisar `__extraData` y `debugMsg`, que el front lee.
  *  - Los `204` / `304`: no tienen cuerpo. Meterles uno convierte la respuesta en
  *    inválida, y el cliente ya los trata aparte (`body === null` → `success: true`).
- *  - Cualquier cosa que no sea una `JsonResponse` con un array adentro.
+ *  - Cualquier cosa que no sea una `JsonResponse` con un objeto o una lista adentro.
  *
  * ── 🔴 `success` SALE DEL STATUS, NO DE UNA OPINIÓN ─────────────────────────
  *
@@ -96,18 +111,36 @@ class MkEnvelope
             return $respuesta;
         }
 
-        $cuerpo = $respuesta->getData(true);
+        // 🔴 SIN `true`: los objetos JSON vuelven como `stdClass` y las listas como
+        // arreglo. Con `true` los dos son `[]`, y el `setData()` de abajo escribía
+        // `[]` donde el controller había escrito `{}` (hallazgo 80).
+        $cuerpo = $respuesta->getData();
 
-        if (! is_array($cuerpo)) {
-            return $respuesta;
+        if ($cuerpo instanceof stdClass) {
+            // Ya viene con el sobre puesto (el propio paquete).
+            if (property_exists($cuerpo, 'success')) {
+                return $respuesta;
+            }
+
+            // Sólo el PRIMER nivel pasa a arreglo, para poder sacarle `message` y
+            // `data`. Lo de adentro sigue siendo `stdClass` y sale como lo escribieron.
+            $envuelto = $this->envolver(get_object_vars($cuerpo), $respuesta->getStatusCode());
+
+            // Un 2xx sin `data` tomó el cuerpo como dato: era un objeto, sigue
+            // siéndolo aunque haya quedado vacío al sacarle el `message`.
+            if (! property_exists($cuerpo, 'data') && is_array($envuelto['data'])) {
+                $envuelto['data'] = (object) $envuelto['data'];
+            }
+
+            return $respuesta->setData($envuelto);
         }
 
-        // Ya viene con el sobre puesto (el propio paquete).
-        if (array_key_exists('success', $cuerpo)) {
-            return $respuesta;
+        // Una lista pelada (`[1, 2]`, `[]`): no tiene `success` y entera es el dato.
+        if (is_array($cuerpo)) {
+            return $respuesta->setData($this->envolver($cuerpo, $respuesta->getStatusCode()));
         }
 
-        return $respuesta->setData($this->envolver($cuerpo, $respuesta->getStatusCode()));
+        return $respuesta;
     }
 
     /**
