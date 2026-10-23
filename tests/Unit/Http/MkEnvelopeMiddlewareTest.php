@@ -154,3 +154,68 @@ test('CONTROL: un cuerpo JSON que no es un array (una lista pelada) sale tal cua
 
     expect($salida->getData(true))->toBe('texto suelto');
 });
+
+/*
+|--------------------------------------------------------------------------
+| 🔴 HALLAZGO 80: UN OBJETO VACÍO `{}` SALÍA COMO `[]`.
+|
+| El middleware leía el cuerpo con `getData(true)` y lo volvía a escribir con
+| `setData()`. En PHP un objeto JSON vacío y una lista vacía son el mismo `[]`,
+| así que el viaje los confundía. Medido en el piloto 2: `crusts_by_size` es un
+| MAPA `{menu_size_id: [...]}`, el controller lo devuelve `(object) []` y el
+| cliente recibía `"crusts_by_size": []`.
+|
+| Mismo viaje, misma pérdida: un objeto con claves `"0"`, `"1"`… salía como lista.
+|
+| ⚠️ Las aserciones van sobre el TEXTO de la respuesta. `getData(true)` —el
+| helper de arriba— decodifica con el mismo defecto y no ve la diferencia.
+|--------------------------------------------------------------------------
+*/
+
+function textoDelSobre(mixed $respuesta): string
+{
+    return (string) pasarPorElSobre($respuesta)->getContent();
+}
+
+test('🔴 un `{}` adentro de `data` sale `{}` y un `[]` sale `[]`, a cualquier profundidad', function () {
+    $texto = textoDelSobre(JsonResponse::fromJsonString(
+        '{"data":{"crusts_by_size":{},"sizes":[],"deep":{"a":{"b":{}},"c":[[],{}]}}}'
+    ));
+
+    expect($texto)->toBe(
+        '{"success":true,"message":"","data":{"crusts_by_size":{},"sizes":[],"deep":{"a":{"b":{}},"c":[[],{}]}}}'
+    );
+});
+
+test('🔴 un objeto con claves `"0"`, `"1"` no se convierte en lista', function () {
+    $texto = textoDelSobre(JsonResponse::fromJsonString('{"data":{"by_slot":{"0":"a","1":"b"}}}'));
+
+    expect($texto)->toBe('{"success":true,"message":"","data":{"by_slot":{"0":"a","1":"b"}}}');
+});
+
+test('🔴 un 2xx SIN `data` cuyo cuerpo es `{}`: el dato sale `{}`', function () {
+    expect(textoDelSobre(JsonResponse::fromJsonString('{}')))
+        ->toBe('{"success":true,"message":"","data":{}}')
+        ->and(textoDelSobre(JsonResponse::fromJsonString('{"message":"Hecho","tags":{},"list":[]}')))
+        ->toBe('{"success":true,"message":"Hecho","data":{"tags":{},"list":[]}}');
+});
+
+test('🔴 los hermanos del `data` también conservan `{}` (`__extraData`, `meta`, `errors`)', function () {
+    expect(textoDelSobre(JsonResponse::fromJsonString(
+        '{"data":[],"__extraData":{"pagination":{"page":1},"filters":{}},"meta":{}}'
+    )))->toBe('{"success":true,"message":"","data":[],"__extraData":{"pagination":{"page":1},"filters":{}},"meta":{}}');
+
+    expect(textoDelSobre(JsonResponse::fromJsonString('{"message":"Invalid","errors":{}}', 422)))
+        ->toBe('{"success":false,"message":"Invalid","data":null,"errors":{}}');
+});
+
+test('CONTROL: una lista pelada sigue siendo el dato, vacía o no', function () {
+    expect(textoDelSobre(new JsonResponse([1, 2], 200)))->toBe('{"success":true,"message":"","data":[1,2]}')
+        ->and(textoDelSobre(new JsonResponse([], 200)))->toBe('{"success":true,"message":"","data":[]}');
+});
+
+test('CONTROL: un cuerpo con `success` y un `{}` adentro pasa byte a byte', function () {
+    $original = '{"success":true,"message":"ok","data":{"x":{}},"__extraData":{"pagination":{}}}';
+
+    expect(textoDelSobre(JsonResponse::fromJsonString($original)))->toBe($original);
+});
