@@ -386,6 +386,11 @@ trait CRUDSmart
      *    ese id existe en algún lado. Y de paso no hace una segunda consulta
      *    para traer la misma fila.
      *
+     * 4. **Se llama ANTES de resolver el FormRequest** en `store`/`update`
+     *    (hallazgo 92). Un 403 no depende de que el payload esté bien formado,
+     *    y una regla `exists`/`unique` no le contesta al que no puede escribir
+     *    si una fila existe.
+     *
      * @param  string  $ability  viewAny|view|create|update|delete
      * @param  mixed  $argument  class-string para los de colección, el modelo
      *                           para los que operan sobre una fila
@@ -1036,15 +1041,34 @@ trait CRUDSmart
      * scaffoldeada era dead code. Para `update`, también se pinea el route
      * resolver con `{resource} = $id` para que `Rule::unique(...)->ignore($this->route('admin'))`
      * funcione correctamente.
+     *
+     * 🔴 HALLAZGO 92 — CON `authorize_with_policy`, EL ORDEN ES BUSCAR → AUTORIZAR →
+     * VALIDAR. Antes validaba primero: quien no podía editar recibía un 422 con los
+     * mensajes de validación en vez de un 403, una regla `exists`/`unique` le
+     * contestaba si una fila existe, y un id inexistente con un cuerpo inválido daba
+     * 422 en vez de 404. Es el mismo criterio que `store()`.
+     *
+     * Con el flag apagado el orden queda como estaba (validar → buscar), a propósito:
+     * el flag apagado promete no cambiar nada. Los hooks del servicio (`beforeSave`,
+     * `beforeUpdate`) corren después de validar en los dos casos; lo único que se
+     * adelanta con el flag prendido es el `beforeQuery` de la búsqueda, que recibe la
+     * request original en vez del FormRequest (mismo usuario, mismos headers).
      */
     public function update(Request $request, string|int $id)
     {
         $service = $this->getService();
+        $autorizaAntesDeValidar = $this->isPolicyAuthorizationEnabled();
+
+        if ($autorizaAntesDeValidar) {
+            $model = $this->findScopedOrFail($request, $id);
+            $this->authorizeWithMkPolicy('update', $request, $model);
+        }
 
         // R-PKG-046 F9-B08 — Resolver FormRequest si está configurado.
         // Para update, pineamos route resolver con {resource} = $id para que
         // `Rule::unique('admins', 'email')->ignore($this->route('admin'))`
         // funcione correctamente (ignorar el row actual al validar unique).
+        // El pin usa el `$id`, no el modelo: no depende de haberlo buscado antes.
         $request = $this->resolveFormRequest(
             configKey: 'update_request',
             request: $request,
@@ -1052,11 +1076,11 @@ trait CRUDSmart
             routeParamValue: (string) $id,
         );
 
-        $model = $this->findScopedOrFail($request, $id);
-
-        // Policy del modelo — DESPUÉS del findOrFail (404 gana sobre 403) y
-        // ANTES de tocar nada.
-        $this->authorizeWithMkPolicy('update', $request, $model);
+        if (! $autorizaAntesDeValidar) {
+            // Flag apagado: `authorizeWithMkPolicy()` no hace nada; se busca
+            // después de validar, como siempre.
+            $model = $this->findScopedOrFail($request, $id);
+        }
 
         // Get input
         $input = $this->inputParaEscritura($request);
