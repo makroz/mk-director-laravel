@@ -3669,6 +3669,19 @@ pasa es que la pantalla abra sin filtros; antes devolvía datos equivocados
 afirmando éxito (`200`, `success: true`, y un `total` que confirmaba el número
 equivocado). Ver `CHANGELOG.md` § `[UNRELEASED] — BC: restaurar filtros`.
 
+**Lo restaurado es lo visible.** El estado guardado es exactamente lo que aplicó el
+último pedido: una clave ausente cuenta como limpia (el cliente no manda las
+vacías). Un pedido con `restore_state=1` completa sólo las claves que no trajo y
+devuelve lo aplicado en `__extraData.list_state`:
+
+```json
+"__extraData": { "pagination": { ... }, "list_state": { "filter": { "status": "1" }, "sort": "-created_at" } }
+```
+
+`useMkList` de `@makroz/web` lo copia a sus `params`; un selector se deriva de
+`params.filter`. El `sort` va en notación `-campo`; los valores del filtro, como
+strings.
+
 ### 4.3 Búsqueda Global (`q=`)
 Realiza una búsqueda tipo "LIKE" en todos los campos definidos en la configuración `'searchable'` del controlador.
 - Ejemplo: `/api/surveys?q=encuesta`

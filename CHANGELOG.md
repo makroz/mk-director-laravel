@@ -12,6 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `remember_state`: lo restaurado es lo visible
+
+**Fixed**
+- **Un filtro quitado volvía en la próxima visita.** El cliente descarta las claves vacías, así que limpiar un filtro
+  manda el pedido SIN `filter`, y `ListManager::restoreState()` sólo pisaba las claves presentes: el filtro viejo
+  quedaba guardado y el siguiente `restore_state=1` lo traía de vuelta, con la pantalla mostrando «todos». Ahora el
+  estado guardado es exactamente lo que aplicó el pedido: **una clave ausente cuenta como limpia**.
+- **El `sort` restaurado perdía la dirección.** Se guardaba sin el `-`, y un `sort=name&dir=asc` volvía descendente
+  (sin `dir`, `applySorting()` lee `desc`). Ahora se guarda en notación `-campo` con la dirección de cada campo.
+
+**Added**
+- **`__extraData.list_state`** en la respuesta de `CRUDSmart::index()` a un pedido con `restore_state=1`: el `q` /
+  `filter` / `sort` que se aplicaron de verdad (lo restaurado más lo que trajo el pedido; una clave ausente no se
+  aplicó; `{}` si nada). Un `setExtraData()` con la clave `list_state` la pisa. `ListManager::restoredState($request)`
+  lo expone para un controller propio. `@makroz/web` `useMkList` siembra sus `params` con esto.
+
+⚠️ BC: un pedido a la misma tabla y el mismo usuario sin `q` / `filter` / `sort` (un selector, una búsqueda de nombres)
+ahora **limpia** el estado guardado; antes lo dejaba intacto. Tests: `ListStateLeaksBetweenQueriesTest` (6 nuevos).
+
 ## [UNRELEASED] — `resolveFormRequest()` valida una vez y con el pin puesto
 
 **Fixed**

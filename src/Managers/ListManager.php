@@ -23,6 +23,9 @@ use Illuminate\Support\Str;
  */
 class ListManager
 {
+    /** Request attribute where `restoreState()` leaves what a restoring request applied. */
+    private const LIST_STATE_ATTRIBUTE = 'mk_list_state';
+
     public static function apply(Request $request, Model $model, array $searchable = [], array $allowedIncludes = [], array $allowedWithCount = [], array $features = []): Builder
     {
         $useRemember = $features['remember_state'] ?? config('mk_director.features.remember_state', false);
@@ -251,6 +254,28 @@ class ListManager
      * y del lado seguro: lo peor que pasa sin el parámetro es que la pantalla
      * abra sin filtros; lo que pasaba antes era mostrar datos equivocados
      * afirmando éxito.
+     *
+     * ── WHAT IS SAVED IS WHAT WAS APPLIED, AND THE CLIENT IS TOLD ───────────
+     *
+     * 🔴 A REMOVED FILTER CAME BACK. The client drops empty keys from the
+     * query string, so clearing a filter sends NO `filter` at all — and this
+     * method only overwrote the keys that were present, so the old filter
+     * stayed saved and the next `restore_state=1` brought it back. On top of
+     * that the restored values never reached the client: the screen showed
+     * "all" while the list was filtered, with no way to remove the filter.
+     *
+     * Now:
+     *
+     * - The saved state is exactly what the request applied. An absent key
+     *   counts as cleared, the same as an empty one.
+     * - A restoring request fills only the keys it did not send, and the
+     *   result goes back as `__extraData.list_state` (`restoredState()`), so
+     *   the client can seed its params with what is really applied.
+     * - `sort` is saved in the `-field` notation with each direction spelled
+     *   out, so restoring it does not depend on `dir`.
+     *
+     * ⚠️ Every list request to the same table and user overwrites the saved
+     * state, including one that is not a screen (a picker, a lookup).
      */
     protected static function restoreState(Request $request, Model $model): void
     {
@@ -283,73 +308,111 @@ class ListManager
             return;
         }
 
-        $modified = false;
+        // R2-012: the stored value may have been tampered with — sanitize it
+        // against the same whitelists before re-injecting any of it.
+        $saved = self::sanitizeState(is_array($state) ? $state : [], $model);
 
         // ¿El cliente PIDIÓ que se le devuelva lo último que había elegido?
         // Sólo entonces se re-inyecta. Sin esto, un pedido sin `q` recibía la
         // búsqueda de otro pedido y nadie se enteraba.
         $restaurar = self::clientAskedToRestore($request);
 
+        // Lo que ESTE pedido termina aplicando. Una clave ausente cuenta como
+        // limpia: es lo que el cliente pidió, y es lo que se guarda.
+        $applied = [];
+
         // 1. Search
         if ($request->has('q') || $request->has('search')) {
             $q = $request->query('q', $request->query('search'));
-            if ($q === '' || $q === null) {
-                unset($state['q'], $state['search']);
-                $modified = true;
-            } else {
-                $state['q'] = $q;
-                $modified = true;
+            if ($q !== '' && $q !== null) {
+                $applied['q'] = $q;
             }
-        } elseif ($restaurar && isset($state['q'])) {
-            $request->query->set('q', $state['q']);
+        } elseif ($restaurar && isset($saved['q'])) {
+            $request->query->set('q', $saved['q']);
+            $applied['q'] = $saved['q'];
         }
 
         // 2. Filters
         if ($request->has('filter') || $request->has('filters')) {
             $filters = $request->query('filter', $request->query('filters'));
-            if (empty($filters) || $filters === '' || $filters === 'null') {
-                unset($state['filter'], $state['filters']);
-                $modified = true;
-            } else {
-                $state['filter'] = $filters;
-                $modified = true;
+            if (! empty($filters) && $filters !== 'null') {
+                $applied['filter'] = $filters;
             }
-        } elseif ($restaurar && isset($state['filter'])) {
-            $request->query->set('filter', $state['filter']);
+        } elseif ($restaurar && isset($saved['filter'])) {
+            $request->query->set('filter', $saved['filter']);
+            $applied['filter'] = $saved['filter'];
         }
 
-        // 3. Sorting
+        // 3. Sorting — kept in the `-field` notation with the direction of
+        // EVERY field spelled out, so `dir` is no longer needed to read it.
+        // `sort=name` without `dir` is DESCENDING in `applySorting()`; saving
+        // the bare `name` restored it the other way around.
         if ($request->has('sort')) {
             $sort = $request->query('sort');
-            if ($sort === '' || $sort === null) {
-                unset($state['sort']);
-                $modified = true;
-            } else {
-                $state['sort'] = $sort;
-                $modified = true;
+            if (is_string($sort) && $sort !== '') {
+                $dir = (string) $request->query('dir', $request->query('orderBy', 'desc'));
+                $applied['sort'] = self::sanitizeSortState((string) $sort, $model, $dir);
             }
-        } elseif ($restaurar && isset($state['sort'])) {
-            $request->query->set('sort', $state['sort']);
+        } elseif ($restaurar && isset($saved['sort'])) {
+            $request->query->set('sort', $saved['sort']);
+            $request->query->set('dir', 'asc');
+            $applied['sort'] = $saved['sort'];
         }
 
-        // R2-012: sanitize restored state against the same whitelists
-        // we use in the apply path. A malicious actor who tampered with
-        // the cache/session value would otherwise be able to inject
-        // arbitrary filter fields or sort columns.
-        if (isset($state['filter']) && is_array($state['filter'])) {
-            $state['filter'] = self::sanitizeFilterState($state['filter']);
-        }
-        if (isset($state['sort'])) {
-            $state['sort'] = self::sanitizeSortState((string) $state['sort'], $model);
+        $applied = self::sanitizeState($applied, $model);
+
+        if ($restaurar) {
+            $request->attributes->set(self::LIST_STATE_ATTRIBUTE, $applied);
         }
 
-        if ($modified || $state !== []) {
+        if ($applied !== $state) {
             if ($request->hasSession()) {
-                $request->session()->put($hashedStorageKey, $state);
+                $request->session()->put($hashedStorageKey, $applied);
             } elseif ($userId !== null) {
-                Cache::put($hashedStorageKey, $state, 86400);
+                Cache::put($hashedStorageKey, $applied, 86400);
             }
         }
+    }
+
+    /**
+     * The `q` / `filter` / `sort` a restoring request ended up applying, or
+     * `null` when the request did not ask to restore (or the list does not
+     * remember state). It is what `CRUDSmart::index()` returns as
+     * `__extraData.list_state`, so the client can show exactly what was
+     * applied: a filter the server restored and the screen does not show is
+     * a filter the user cannot remove.
+     *
+     * @return array{q?: string, filter?: array<string, mixed>, sort?: string}|null
+     */
+    public static function restoredState(Request $request): ?array
+    {
+        $state = $request->attributes->get(self::LIST_STATE_ATTRIBUTE);
+
+        return is_array($state) ? $state : null;
+    }
+
+    /**
+     * Drops what a list state cannot carry: a `q` that is not a string, a
+     * `filter` outside the operator whitelist, a `sort` on an unknown column,
+     * and any key left empty — an empty key is a cleared one.
+     *
+     * @param  array<string, mixed>  $state
+     * @return array<string, mixed>
+     */
+    protected static function sanitizeState(array $state, Model $model): array
+    {
+        $clean = [];
+        if (isset($state['q']) && is_string($state['q'])) {
+            $clean['q'] = $state['q'];
+        }
+        if (isset($state['filter']) && is_array($state['filter'])) {
+            $clean['filter'] = self::sanitizeFilterState($state['filter']);
+        }
+        if (isset($state['sort']) && is_string($state['sort'])) {
+            $clean['sort'] = self::sanitizeSortState($state['sort'], $model);
+        }
+
+        return array_filter($clean, static fn ($value): bool => $value !== '' && $value !== []);
     }
 
     /**
@@ -405,18 +468,27 @@ class ListManager
     }
 
     /**
-     * Sanitize a restored sort value to known column names only.
+     * Sanitize a sort value to known column names only, keeping each field's
+     * direction as the `-field` prefix.
+     *
+     * `$dir` is the direction of an unprefixed field — the request's `dir`
+     * (default `desc`, as in `applySorting()`), or `asc` for a value already
+     * in this notation. It used to strip the `-` and lose the direction:
+     * `-created_at` came back ascending.
      */
-    protected static function sanitizeSortState(string $sort, Model $model): string
+    protected static function sanitizeSortState(string $sort, Model $model, string $dir = 'asc'): string
     {
-        $fields = is_array($sort) ? $sort : explode(',', $sort);
+        $fields = explode(',', $sort);
         $allowed = array_merge($model->getFillable(), [$model->getKeyName(), 'created_at', 'updated_at']);
+        $unprefixedDesc = strtolower(trim($dir)) !== 'asc';
 
         $clean = [];
         foreach ($fields as $field) {
-            $field = ltrim(trim((string) $field), '-');
+            $field = trim((string) $field);
+            $desc = str_starts_with($field, '-') || $unprefixedDesc;
+            $field = ltrim($field, '-');
             if (in_array($field, $allowed, true)) {
-                $clean[] = $field;
+                $clean[] = ($desc ? '-' : '').$field;
             }
         }
 
