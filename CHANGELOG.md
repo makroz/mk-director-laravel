@@ -28,8 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   aplicó; `{}` si nada). Un `setExtraData()` con la clave `list_state` la pisa. `ListManager::restoredState($request)`
   lo expone para un controller propio. `@makroz/web` `useMkList` siembra sus `params` con esto.
 
-⚠️ BC: un pedido a la misma tabla y el mismo usuario sin `q` / `filter` / `sort` (un selector, una búsqueda de nombres)
-ahora **limpia** el estado guardado; antes lo dejaba intacto. Tests: `ListStateLeaksBetweenQueriesTest` (6 nuevos).
+- **Sólo la lista misma guarda el estado**: un pedido con `restore_state` o con `save_state=1`
+  (`ListManager::SAVE_STATE_PARAM`), que `@makroz/web` `useMkList` manda en TODOS los pedidos de una lista que pide
+  `restore_state`. Un selector o una búsqueda de nombres a la misma tabla ya no pisa —ni limpia— el estado de la
+  pantalla.
+
+⚠️ BC: un front sin `save_state` (`@makroz/web` anterior) sigue restaurando, pero guarda sólo en la carga con
+`restore_state`; sus pedidos siguientes ya no escriben el estado. Tests: `ListStateLeaksBetweenQueriesTest` (8 nuevos).
 
 ## [UNRELEASED] — `resolveFormRequest()` valida una vez y con el pin puesto
 

@@ -355,7 +355,7 @@ test('ES remember_state: con la feature apagada, el cache prendido no arrastra n
 test('remember_state sigue recordando: el estado se devuelve cuando el cliente lo PIDE', function () {
     $token = tokenDeListStateAdmin();
 
-    nombresDe($this, '/api/items?q=zeta&per_page=50', $token);
+    nombresDe($this, '/api/items?q=zeta&per_page=50&save_state=1', $token);
 
     $restaurado = nombresDe($this, '/api/items?per_page=50&restore_state=1', $token);
 
@@ -372,7 +372,7 @@ test('el estado recordado es POR USUARIO: el de uno no se le aplica al otro', fu
     ]);
     $otroToken = app(TokenIssuer::class)->issueAccessToken($otroAdmin)->plainTextToken;
 
-    nombresDe($this, '/api/items?q=zeta&per_page=50', $unToken);
+    nombresDe($this, '/api/items?q=zeta&per_page=50&save_state=1', $unToken);
 
     $delOtro = nombresDe($this, '/api/items?per_page=50&restore_state=1', $otroToken);
 
@@ -402,20 +402,42 @@ function listStateBody(object $test, string $uri, string $token): array
 test('🔴 a filter cleared by OMITTING it does not come back with restore_state', function () {
     $token = tokenDeListStateAdmin();
 
-    expect(nombresDe($this, '/api/items?filter[name]=zeta-01&per_page=50', $token))->toBe(['zeta-01']);
+    expect(nombresDe($this, '/api/items?filter[name]=zeta-01&per_page=50&save_state=1', $token))->toBe(['zeta-01']);
 
     // The user picks "all": the request goes out without `filter`.
-    expect(nombresDe($this, '/api/items?per_page=50', $token))->toHaveCount(20);
+    expect(nombresDe($this, '/api/items?per_page=50&save_state=1', $token))->toHaveCount(20);
 
     // Next visit to the screen.
     expect(nombresDe($this, '/api/items?per_page=50&restore_state=1', $token))->toHaveCount(20);
 });
 
+test('🔴 a request WITHOUT save_state (a picker, a lookup) does not touch the saved state', function () {
+    $token = tokenDeListStateAdmin();
+
+    nombresDe($this, '/api/items?q=zeta&save_state=1&per_page=50', $token);
+
+    // Another component reads the same table: no `q`, then a `q` of its own.
+    expect(nombresDe($this, '/api/items?per_page=50', $token))->toHaveCount(20);
+    expect(nombresDe($this, '/api/items?q=alfa-01&per_page=50', $token))->toBe(['alfa-01']);
+
+    // Back on the screen: its search, not the picker's, and not cleared.
+    expect(nombresDe($this, '/api/items?per_page=50&restore_state=1', $token))->toBe(['zeta-03', 'zeta-02', 'zeta-01']);
+});
+
+test('a front without save_state (older @makroz/web) still restores, and only its restore_state load saves', function () {
+    $token = tokenDeListStateAdmin();
+
+    nombresDe($this, '/api/items?q=zeta&per_page=50&restore_state=1', $token);
+    nombresDe($this, '/api/items?per_page=50', $token);
+
+    expect(nombresDe($this, '/api/items?per_page=50&restore_state=1', $token))->toBe(['zeta-03', 'zeta-02', 'zeta-01']);
+});
+
 test('🔴 a search cleared by omitting it does not come back either', function () {
     $token = tokenDeListStateAdmin();
 
-    nombresDe($this, '/api/items?q=zeta&per_page=50', $token);
-    nombresDe($this, '/api/items?per_page=50', $token);
+    nombresDe($this, '/api/items?q=zeta&per_page=50&save_state=1', $token);
+    nombresDe($this, '/api/items?per_page=50&save_state=1', $token);
 
     expect(nombresDe($this, '/api/items?per_page=50&restore_state=1', $token))->toHaveCount(20);
 });
@@ -423,7 +445,7 @@ test('🔴 a search cleared by omitting it does not come back either', function 
 test('restore_state returns what it applied in __extraData.list_state', function () {
     $token = tokenDeListStateAdmin();
 
-    nombresDe($this, '/api/items?q=alfa&filter[name][like]=alfa-0&sort=name&dir=asc&per_page=3', $token);
+    nombresDe($this, '/api/items?q=alfa&filter[name][like]=alfa-0&sort=name&dir=asc&per_page=3&save_state=1', $token);
 
     $body = listStateBody($this, '/api/items?per_page=3&restore_state=1', $token);
 
@@ -442,7 +464,7 @@ test('restore_state returns what it applied in __extraData.list_state', function
 test('a descending sort is restored descending and reported in the -field notation', function () {
     $token = tokenDeListStateAdmin();
 
-    nombresDe($this, '/api/items?q=zeta&sort=name&dir=desc&per_page=50', $token);
+    nombresDe($this, '/api/items?q=zeta&sort=name&dir=desc&per_page=50&save_state=1', $token);
 
     $body = listStateBody($this, '/api/items?per_page=50&restore_state=1', $token);
 
@@ -453,7 +475,7 @@ test('a descending sort is restored descending and reported in the -field notati
 test('restore_state only fills the keys the request did not send', function () {
     $token = tokenDeListStateAdmin();
 
-    nombresDe($this, '/api/items?q=zeta&sort=name&dir=desc&per_page=50', $token);
+    nombresDe($this, '/api/items?q=zeta&sort=name&dir=desc&per_page=50&save_state=1', $token);
 
     $body = listStateBody($this, '/api/items?sort=name&dir=asc&per_page=50&restore_state=1', $token);
 

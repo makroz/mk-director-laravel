@@ -26,6 +26,14 @@ class ListManager
     /** Request attribute where `restoreState()` leaves what a restoring request applied. */
     private const LIST_STATE_ATTRIBUTE = 'mk_list_state';
 
+    /**
+     * Query flag every request of a remembering list carries (`@makroz/web`
+     * `useMkList` sends it for a list whose `initialParams` ask for
+     * `restore_state`). Only a request with it, or with `restore_state`,
+     * saves the list state.
+     */
+    public const SAVE_STATE_PARAM = 'save_state';
+
     public static function apply(Request $request, Model $model, array $searchable = [], array $allowedIncludes = [], array $allowedWithCount = [], array $features = []): Builder
     {
         $useRemember = $features['remember_state'] ?? config('mk_director.features.remember_state', false);
@@ -274,11 +282,31 @@ class ListManager
      * - `sort` is saved in the `-field` notation with each direction spelled
      *   out, so restoring it does not depend on `dir`.
      *
-     * ⚠️ Every list request to the same table and user overwrites the saved
-     * state, including one that is not a screen (a picker, a lookup).
+     * - Only the list itself saves: a request with `restore_state` or with
+     *   `save_state` (`SAVE_STATE_PARAM`, which `useMkList` sends on every
+     *   request of a list that asks for `restore_state`). A picker or a name
+     *   lookup to the same table does not touch the saved state — with
+     *   "absent = cleared" it would have wiped the screen's filter.
+     *
+     * BC: a front that never sends `save_state` (`@makroz/web` before it)
+     * still gets its saved state restored, and saves only on the
+     * `restore_state` load; its later requests no longer write.
      */
     protected static function restoreState(Request $request, Model $model): void
     {
+        // ¿El cliente PIDIÓ que se le devuelva lo último que había elegido?
+        // Sólo entonces se re-inyecta. Sin esto, un pedido sin `q` recibía la
+        // búsqueda de otro pedido y nadie se enteraba.
+        $restaurar = self::clientAskedToRestore($request);
+
+        // Only the remembering list itself writes the state: `restore_state`
+        // on its first load, `save_state` on every other request. Any other
+        // request to the same table (a picker, a name lookup) leaves it alone
+        // — it is not what the user chose on that screen.
+        if (! $restaurar && ! self::flagIsOn($request, self::SAVE_STATE_PARAM)) {
+            return;
+        }
+
         // R2-012: hash the storage key with the app secret so user A
         // cannot guess user B's state key. Also namespace by user id
         // so two authenticated users do not share cached state.
@@ -311,11 +339,6 @@ class ListManager
         // R2-012: the stored value may have been tampered with — sanitize it
         // against the same whitelists before re-injecting any of it.
         $saved = self::sanitizeState(is_array($state) ? $state : [], $model);
-
-        // ¿El cliente PIDIÓ que se le devuelva lo último que había elegido?
-        // Sólo entonces se re-inyecta. Sin esto, un pedido sin `q` recibía la
-        // búsqueda de otro pedido y nadie se enteraba.
-        $restaurar = self::clientAskedToRestore($request);
 
         // Lo que ESTE pedido termina aplicando. Una clave ausente cuenta como
         // limpia: es lo que el cliente pidió, y es lo que se guarda.
@@ -424,8 +447,15 @@ class ListManager
      */
     protected static function clientAskedToRestore(Request $request): bool
     {
-        $param = (string) config('mk_director.features.remember_state_param', 'restore_state');
+        return self::flagIsOn(
+            $request,
+            (string) config('mk_director.features.remember_state_param', 'restore_state'),
+        );
+    }
 
+    /** A boolean query flag, read with `filter_var` for the reason above. */
+    protected static function flagIsOn(Request $request, string $param): bool
+    {
         if (! $request->has($param)) {
             return false;
         }

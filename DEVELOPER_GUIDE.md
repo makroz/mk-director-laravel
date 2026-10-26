@@ -3669,9 +3669,11 @@ pasa es que la pantalla abra sin filtros; antes devolvía datos equivocados
 afirmando éxito (`200`, `success: true`, y un `total` que confirmaba el número
 equivocado). Ver `CHANGELOG.md` § `[UNRELEASED] — BC: restaurar filtros`.
 
-**Lo restaurado es lo visible.** El estado guardado es exactamente lo que aplicó el
-último pedido: una clave ausente cuenta como limpia (el cliente no manda las
-vacías). Un pedido con `restore_state=1` completa sólo las claves que no trajo y
+**Lo restaurado es lo visible.** Sólo guarda la lista misma: un pedido con
+`restore_state` o con `save_state=1` (`useMkList` lo manda en todos los pedidos de
+una lista que pide `restore_state`); un selector a la misma tabla no toca el
+estado. Lo guardado es exactamente lo que aplicó ese pedido: una clave ausente
+cuenta como limpia (el cliente no manda las vacías). Un pedido con `restore_state=1` completa sólo las claves que no trajo y
 devuelve lo aplicado en `__extraData.list_state`:
 
 ```json
