@@ -111,6 +111,7 @@ final class ListStateItemController extends SmartController
         'features' => [
             'auto_cache' => true,
             'remember_state' => true,
+            'allowed_filters' => ['name'],
         ],
     ];
 }
@@ -354,7 +355,7 @@ test('ES remember_state: con la feature apagada, el cache prendido no arrastra n
 test('remember_state sigue recordando: el estado se devuelve cuando el cliente lo PIDE', function () {
     $token = tokenDeListStateAdmin();
 
-    nombresDe($this, '/api/items?q=zeta&per_page=50', $token);
+    nombresDe($this, '/api/items?q=zeta&per_page=50&save_state=1', $token);
 
     $restaurado = nombresDe($this, '/api/items?per_page=50&restore_state=1', $token);
 
@@ -371,11 +372,125 @@ test('el estado recordado es POR USUARIO: el de uno no se le aplica al otro', fu
     ]);
     $otroToken = app(TokenIssuer::class)->issueAccessToken($otroAdmin)->plainTextToken;
 
-    nombresDe($this, '/api/items?q=zeta&per_page=50', $unToken);
+    nombresDe($this, '/api/items?q=zeta&per_page=50&save_state=1', $unToken);
 
     $delOtro = nombresDe($this, '/api/items?per_page=50&restore_state=1', $otroToken);
 
     expect($delOtro)->toHaveCount(20);
+});
+
+/**
+ * @return array<string, mixed>
+ */
+function listStateBody(object $test, string $uri, string $token): array
+{
+    $response = $test->httpGet($uri, ['HTTP_AUTHORIZATION' => 'Bearer '.$token]);
+
+    return (array) json_decode((string) $response->getContent(), true);
+}
+
+/*
+|--------------------------------------------------------------------------
+| THE RESTORED STATE IS EXACTLY THE VISIBLE ONE.
+|
+| 🔴 The client drops empty keys from the query string, so clearing a filter
+| sends NO `filter`. The state only overwrote the keys that came, so the
+| cleared filter stayed saved and the next `restore_state=1` brought it back
+| — while the screen, which never heard of it, showed "all".
+|--------------------------------------------------------------------------
+*/
+test('🔴 a filter cleared by OMITTING it does not come back with restore_state', function () {
+    $token = tokenDeListStateAdmin();
+
+    expect(nombresDe($this, '/api/items?filter[name]=zeta-01&per_page=50&save_state=1', $token))->toBe(['zeta-01']);
+
+    // The user picks "all": the request goes out without `filter`.
+    expect(nombresDe($this, '/api/items?per_page=50&save_state=1', $token))->toHaveCount(20);
+
+    // Next visit to the screen.
+    expect(nombresDe($this, '/api/items?per_page=50&restore_state=1', $token))->toHaveCount(20);
+});
+
+test('🔴 a request WITHOUT save_state (a picker, a lookup) does not touch the saved state', function () {
+    $token = tokenDeListStateAdmin();
+
+    nombresDe($this, '/api/items?q=zeta&save_state=1&per_page=50', $token);
+
+    // Another component reads the same table: no `q`, then a `q` of its own.
+    expect(nombresDe($this, '/api/items?per_page=50', $token))->toHaveCount(20);
+    expect(nombresDe($this, '/api/items?q=alfa-01&per_page=50', $token))->toBe(['alfa-01']);
+
+    // Back on the screen: its search, not the picker's, and not cleared.
+    expect(nombresDe($this, '/api/items?per_page=50&restore_state=1', $token))->toBe(['zeta-03', 'zeta-02', 'zeta-01']);
+});
+
+test('a front without save_state (older @makroz/web) still restores, and only its restore_state load saves', function () {
+    $token = tokenDeListStateAdmin();
+
+    nombresDe($this, '/api/items?q=zeta&per_page=50&restore_state=1', $token);
+    nombresDe($this, '/api/items?per_page=50', $token);
+
+    expect(nombresDe($this, '/api/items?per_page=50&restore_state=1', $token))->toBe(['zeta-03', 'zeta-02', 'zeta-01']);
+});
+
+test('🔴 a search cleared by omitting it does not come back either', function () {
+    $token = tokenDeListStateAdmin();
+
+    nombresDe($this, '/api/items?q=zeta&per_page=50&save_state=1', $token);
+    nombresDe($this, '/api/items?per_page=50&save_state=1', $token);
+
+    expect(nombresDe($this, '/api/items?per_page=50&restore_state=1', $token))->toHaveCount(20);
+});
+
+test('restore_state returns what it applied in __extraData.list_state', function () {
+    $token = tokenDeListStateAdmin();
+
+    nombresDe($this, '/api/items?q=alfa&filter[name][like]=alfa-0&sort=name&dir=asc&per_page=3&save_state=1', $token);
+
+    $body = listStateBody($this, '/api/items?per_page=3&restore_state=1', $token);
+
+    expect($body['__extraData']['list_state'] ?? null)->toBe([
+        'q' => 'alfa',
+        'filter' => ['name' => ['like' => 'alfa-0']],
+        'sort' => 'name',
+    ]);
+
+    // 🔴 And ascending, as it was asked. The state used to keep the bare
+    // `name` and restore it without `dir`, which `applySorting()` reads as
+    // DESC: the list came back upside down.
+    expect(array_column($body['data'], 'name'))->toBe(['alfa-01', 'alfa-02', 'alfa-03']);
+});
+
+test('a descending sort is restored descending and reported in the -field notation', function () {
+    $token = tokenDeListStateAdmin();
+
+    nombresDe($this, '/api/items?q=zeta&sort=name&dir=desc&per_page=50&save_state=1', $token);
+
+    $body = listStateBody($this, '/api/items?per_page=50&restore_state=1', $token);
+
+    expect($body['__extraData']['list_state'] ?? null)->toBe(['q' => 'zeta', 'sort' => '-name'])
+        ->and(array_column($body['data'], 'name'))->toBe(['zeta-03', 'zeta-02', 'zeta-01']);
+});
+
+test('restore_state only fills the keys the request did not send', function () {
+    $token = tokenDeListStateAdmin();
+
+    nombresDe($this, '/api/items?q=zeta&sort=name&dir=desc&per_page=50&save_state=1', $token);
+
+    $body = listStateBody($this, '/api/items?sort=name&dir=asc&per_page=50&restore_state=1', $token);
+
+    expect($body['__extraData']['list_state'] ?? null)->toBe(['q' => 'zeta', 'sort' => 'name'])
+        ->and(array_column($body['data'], 'name'))->toBe(['zeta-01', 'zeta-02', 'zeta-03']);
+});
+
+test('list_state is an empty object when nothing was saved, and absent without restore_state', function () {
+    $token = tokenDeListStateAdmin();
+
+    $restoring = $this->httpGet('/api/items?per_page=5&restore_state=1', ['HTTP_AUTHORIZATION' => 'Bearer '.$token]);
+    expect((string) $restoring->getContent())->toContain('"list_state":{}');
+
+    $plain = listStateBody($this, '/api/items?per_page=5', $token);
+    expect($plain['__extraData'])->not->toHaveKey('list_state');
 });
 
 /*

@@ -727,6 +727,15 @@ trait CRUDSmart
             }
         }
 
+        // `?restore_state=1` may have applied a saved `q` / `filter` / `sort`
+        // the client never sent. It goes back so the screen shows what the
+        // list is really filtered by (see `ListManager::restoreState()`).
+        // An object even when empty: `{}` means "nothing applied". Service
+        // keys still win on conflict.
+        if (($listState = ListManager::restoredState($request)) !== null) {
+            $extra = array_merge(['list_state' => (object) $listState], $extra);
+        }
+
         // Plugin Hook: afterResponse (receives the raw paginator so plugins
         // can read total / currentPage / etc. without unwrapping).
         $this->getPluginManager()->fireAfterResponse($paginator);
