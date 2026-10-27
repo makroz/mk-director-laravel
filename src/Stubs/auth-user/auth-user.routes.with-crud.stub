@@ -63,19 +63,12 @@ Route::prefix('api/{{moduleNameLower}}/roles')->group(function () {
         ->put('/{role}/abilities', [RoleController::class, 'syncAbilities']);
 });
 
-// CRUD de abilities, administrado por el scope `{{moduleNameLower}}`. Mismo criterio
-// de URI por scope que los roles.
+// Abilities del scope `{{moduleNameLower}}`: SÓLO LECTURA. Las crea
+// `mk:discover-abilities` y las limpia `mk:prune-abilities`; se asignan desde
+// los roles y los usuarios (arriba). Mismo criterio de URI por scope que los roles.
 Route::prefix('api/{{moduleNameLower}}/abilities')->group(function () {
     Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.abilities.viewAny'])
         ->get('/',         [AbilityController::class, 'index']);
     Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.abilities.view'])
         ->get('/{ability}',     [AbilityController::class, 'show']);
-    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.abilities.create'])
-        ->post('/',        [AbilityController::class, 'store']);
-    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.abilities.update'])
-        ->put('/{ability}',     [AbilityController::class, 'update']);
-    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.abilities.update'])
-        ->patch('/{ability}',   [AbilityController::class, 'update']);
-    Route::middleware(['mk.auth:{{moduleNameLower}}', 'mk.ability:{{moduleNameLower}}.abilities.delete'])
-        ->delete('/{ability}',  [AbilityController::class, 'destroy']);
 });

@@ -12,6 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Las abilities son del sistema: su CRUD generado es de sólo lectura
+
+**Changed**
+- **`mk:make:auth-user --with-crud`**: el `AbilityController` generado sólo lista y muestra. Las rutas de
+  `api/{scope}/abilities` son `GET /` (`{scope}.abilities.viewAny`) y `GET /{ability}` (`.view`); `store`, `update` y
+  `destroy` responden **405** aunque se les agregue una ruta. Las abilities las crea `mk:discover-abilities` y las
+  limpia `mk:prune-abilities`: una creada a mano no la exige ninguna ruta, y renombrar o borrar una le cambia el
+  permiso a todos los que la tienen. Los roles, y asignar abilities a un rol o a un usuario, no cambian.
+- El `RolesSeeder` generado concede `abilities` sólo con `viewAny`/`view`, y `mk:discover-abilities` ya no descubre
+  `{scope}.abilities.create|update|delete` desde el `$mkConfig` de un controller del modelo `Ability`.
+- `Docs/api_contract.md` generado: la sección 4 dice sólo lectura y ya no documenta `POST abilities`.
+
+⚠️ BC: sólo para lo que se genera de acá en más. Un `AbilityController` ya generado conserva su alta, edición y baja
+(con `AccessGrantGuard`, que no cambia). Las abilities `{scope}.abilities.create|update|delete` ya sembradas quedan:
+`mk:prune-abilities` las lista si ninguna ruta las exige (y si están otorgadas, avisa antes de tocarlas). Tests:
+`MakeAuthUserAccessEscalationTest` (los 6 de escribir abilities → 1 de 405), `HallazgoFase18CCrudAbilityPerRouteTest`,
+1 nuevo en `DiscoverAbilitiesCommandTest`.
+
 ## [UNRELEASED] — `mk:help:stale`: qué manual quedó viejo contra el código
 
 **Added**

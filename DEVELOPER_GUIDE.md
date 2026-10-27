@@ -1276,11 +1276,18 @@ y sólo para los nombres que no son del scope del rol: agregarle o sacarle una
 compartida (`kitchen.send`), `*` o un nombre de un tercer scope pide tenerlo;
 borrarlo (sync a `[]`) también.
 
-**El CRUD de abilities es la tercera puerta**: roles y grants apuntan a la
-ability por id, así que renombrarla es cambiarles el permiso a todos los que la
-tienen, y borrarla es sacárselo. Medido en RETO: con `{scope}.abilities.update`,
-un admin renombró una ability suya a `{scope}.*` y tuvo el scope entero. Renombrar
-no se prohíbe: se valida. El `AbilityController` generado llama:
+**Las abilities son del sistema: el `AbilityController` generado es de sólo
+lectura.** Las crea `mk:discover-abilities` leyendo el código y las limpia
+`mk:prune-abilities`: una creada a mano no sirve (ninguna ruta la exige), y roles
+y grants apuntan a la ability por id, así que renombrarla es cambiarles el permiso
+a todos los que la tienen. Medido en RETO: con `{scope}.abilities.update`, un admin
+renombró una ability suya a `{scope}.*` y tuvo el scope entero. Por eso el scaffold
+monta sólo `GET /` y `GET /{ability}` (`{scope}.abilities.viewAny` / `.view`),
+`store`/`update`/`destroy` responden 405 aunque se les agregue una ruta, y
+`mk:discover-abilities` ya no siembra `{scope}.abilities.create|update|delete`.
+
+Un `AbilityController` generado ANTES conserva su alta, edición y baja, que llaman
+a la guarda; sigue en el paquete con estas reglas:
 
 ```php
 app(AccessGrantGuard::class)->assertCanChangeAbility($request->user(), $ability, $newName); // alta: $ability = null
@@ -1289,14 +1296,12 @@ app(AccessGrantGuard::class)->assertCanDeleteAbility($request->user(), $ability)
 
 | Regla | Código |
 |---|---|
-| Una ability **fija** (`is_fixed`, y `*` siempre, por nombre: `giveAbilityTo('*')` la crea sin la marca) no se edita ni se borra, ni con `*`. `is_fixed` e `is_baseline` no llegan del body (422) | `ERR_FIXED_ABILITY` |
-| Crear pide tener el nombre (el alta `{scope}.{recurso}` pide los 5 verbos); renombrar, el viejo **y** el nuevo; borrar, el que se borra. Mandar el mismo `name` no es renombrar | `ERR_ACCESS_NOT_HELD` |
+| Una ability **fija** (`is_fixed`, y `*` siempre, por nombre: `giveAbilityTo('*')` la crea sin la marca) no se edita ni se borra, ni con `*` | `ERR_FIXED_ABILITY` |
+| Crear pide tener el nombre; renombrar, el viejo **y** el nuevo; borrar, el que se borra | `ERR_ACCESS_NOT_HELD` |
 
 Un nombre de **otro** scope conocido (guard de `config/auth.php` cuyo modelo
 extiende `AuthUser`, el criterio de `mk:discover-abilities`) queda afuera. Uno
-sin scope conocido (`kitchen.send`) se exige. El `name` nuevo sigue validado
-con el prefijo del scope, en el alta y en la edición. Es el mismo criterio que
-usan las tres puertas cuando cruzan de scope.
+sin scope conocido (`kitchen.send`) se exige.
 
 **La regla de comodines** — una sola, en el back y en los fronts. Un nombre que
 se tiene cubre a `$ability` si es:
@@ -2390,7 +2395,7 @@ Pre-fix, las 21 rutas CRUD scaffoldeadas por `--with-crud` pinean SOLO `mk.auth:
 | `PUT /{role}/abilities` (Roles) | `syncAbilities` | `{scope}.roles.update` |
 
 Rutas de **Roles** (prefix `api/roles`): usan `{scope}.roles.{action}`.
-Rutas de **Abilities** (prefix `api/abilities`): usan `{scope}.abilities.{action}`.
+Rutas de **Abilities** (prefix `api/{scope}/abilities`): **sólo lectura**, `GET /` con `{scope}.abilities.viewAny` y `GET /{ability}` con `{scope}.abilities.view`.
 
 **BREAKING CHANGE** (R-G-033 autoriza):
 

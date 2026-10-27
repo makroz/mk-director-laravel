@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
 use Mk\Director\Auth\Attributes\Ability;
+use Mk\Director\Auth\Models\Ability as AbilityModel;
 use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Controllers\SmartController;
 use ReflectionClass;
@@ -1144,8 +1145,13 @@ class DiscoverAbilitiesCommand extends Command
                 continue;
             }
 
-            // Generar las 5 abilities CRUD estándar.
-            foreach (['viewAny', 'view', 'create', 'update', 'delete'] as $verb) {
+            // Generar las 5 abilities CRUD estándar. Las abilities mismas son del
+            // sistema (las crea este comando): su controller es de sólo lectura,
+            // así que de `Ability` salen sólo `viewAny` y `view`.
+            $verbs = $modelClass === AbilityModel::class
+                ? ['viewAny', 'view']
+                : ['viewAny', 'view', 'create', 'update', 'delete'];
+            foreach ($verbs as $verb) {
                 $abilities[] = [
                     'name' => "{$scope}.{$resource}.{$verb}",
                     'description' => ucfirst($verb).' '.$resource.'.',

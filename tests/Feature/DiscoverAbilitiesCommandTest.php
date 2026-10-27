@@ -704,6 +704,32 @@ test('mkConfig de un modelo AuthUser: el recurso es su $table (el `--plural=` de
     (new Filesystem)->deleteDirectory($tempDir);
 });
 
+test('mkConfig del modelo Ability: sólo viewAny y view — las abilities son del sistema', function () {
+    // El AbilityController generado es de sólo lectura: sembrar
+    // `{scope}.abilities.create|update|delete` dejaría permisos que ninguna ruta exige.
+    $moduleName = 'Staff'.uniqid();
+    $uid = str_replace('.', '', uniqid('', true));
+    $ns = "TestNs\\{$moduleName}_{$uid}";
+    $controllerFqn = "{$ns}\\Http\\Controllers\\AbilityController";
+
+    eval("namespace {$ns}\\Http\\Controllers; class AbilityController extends \\Mk\\Director\\Controllers\\SmartController { protected array \$mkConfig = ['model' => \\Mk\\Director\\Auth\\Models\\Ability::class]; }");
+
+    $tempDir = sys_get_temp_dir()."/mk-discover-{$uid}";
+    mkdir("{$tempDir}/{$moduleName}/Http/Controllers", 0755, true);
+    $command = makeTestCommand($tempDir);
+    $command->setOutput(new OutputStyle(new \Symfony\Component\Console\Input\StringInput(''), new NullOutput()));
+
+    $names = array_column(invokeProtected($command, 'discoverAbilitiesFromMkConfig', [
+        ['path' => "{$tempDir}/{$moduleName}", 'classes' => [$controllerFqn]],
+        $moduleName,
+    ]), 'name');
+
+    $scope = Str::snake($moduleName);
+    expect($names)->toBe(["{$scope}.abilities.viewAny", "{$scope}.abilities.view"]);
+
+    (new Filesystem)->deleteDirectory($tempDir);
+});
+
 test('end-to-end: R-PKG-018 OBS-NEW-01 — non-SmartController is silently skipped', function () {
     $moduleName = 'Plain'.uniqid();
 

@@ -4,35 +4,24 @@ declare(strict_types=1);
 
 namespace App\Modules\{{ModuleName}}\Http\Controllers;
 
-use App\Modules\{{ModuleName}}\Http\Resources\AbilityResource;
-use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
-use Mk\Director\Auth\Access\AccessGrantGuard;
 use Mk\Director\Auth\Models\Ability;
 use Mk\Director\Controllers\SmartController;
 
 /**
- * AbilityController — CRUD de abilities del scope `{{moduleNameLower}}`.
+ * AbilityController — abilities del scope `{{moduleNameLower}}`, SÓLO LECTURA.
  *
  * Generado por `php artisan mk:make:auth-user {{ModuleName}}`.
  *
- * Las abilities son GLOBALES del paquete (`Mk\Director\Auth\Models\Ability`)
- * y se crean/gestionan vía:
- *   - `mk:discover-abilities` (auto-descubrir desde controllers)
- *   - `{{ModuleName}}Controller::assignDirectAbilities` (asignar a un user)
+ * Las abilities son del SISTEMA: las crea `mk:discover-abilities` leyendo el
+ * código y las limpia `mk:prune-abilities`. Una creada a mano no sirve —ninguna
+ * ruta la exige— y renombrar o borrar una le cambia el permiso a todos los que
+ * la tienen. Por eso este controller sólo lista y muestra (`index`, `show`,
+ * con `{scope}.abilities.viewAny` / `.view`), y `store`, `update` y `destroy`
+ * responden 405 aunque alguien les agregue una ruta.
  *
- * Este controller expone los 5 endpoints estándar. Para policies default-deny,
- * override en `App\Modules\{{ModuleName}}\Policies\AbilityPolicy` (si la generás
- * via `mk:module --with-rbac` por separado).
- *
- * Crear, renombrar o borrar una ability pasa por `AccessGrantGuard` (403):
- * roles y grants la apuntan por id, así que renombrarla es cambiarles el
- * permiso a todos los que la tienen. Hay que tener el nombre (el viejo y el
- * nuevo, al renombrar), y las fijas —`*` siempre— no se tocan. Si
- * sobreescribís `store()`, `update()` o `destroy()`, conservá la llamada. La
- * ability se carga con `findScopedOrFail()`, el lookup del CRUD: una fila que un
- * plugin esconde da 404 antes de la guarda.
+ * Asignarlas sigue igual: a un rol con `RoleController::syncAbilities` y a un
+ * usuario con `{{ModuleName}}Controller::assignDirectAbilities`.
  *
  * `with` y `allowedIncludes` van vacíos: `Ability` no tiene relación `roles()`,
  * y declararla haría fallar el listado.
@@ -59,114 +48,28 @@ class AbilityController extends SmartController
         ],
     ];
 
-    /** `{scope}.{recurso}` o `{scope}.{recurso}.{accion}`. */
-    private const NAME_REGEX = '/^{{moduleNameLower}}\.[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)?$/';
-
-    /** Los verbos del set CRUD que crea `store()` con `{scope}.{recurso}`. */
-    private const CRUD_VERBS = ['viewAny', 'view', 'create', 'update', 'delete'];
-
     public function __construct()
     {
         $this->middleware('mk.auth:{{moduleNameLower}}');
     }
 
-    /**
-     * POST /api/{{moduleNameLower}}/abilities
-     *
-     * Crea abilities con naming `{scope}.{recurso}[.{accion}]`. Según la cantidad
-     * de segmentos del `name`:
-     *   - `{{moduleNameLower}}.{recurso}` (2 segmentos, SIN acción) → EXPANDE a
-     *     las 5 abilities CRUD estándar del recurso: `.viewAny`, `.view`,
-     *     `.create`, `.update`, `.delete` (idempotente).
-     *   - `{{moduleNameLower}}.{recurso}.{accion}` (3 segmentos) → crea SOLO esa.
-     *
-     * El UI compone `name` como `{scope}.{recurso}` (el scope se prepende), así
-     * que el usuario solo tipea el recurso (o `recurso.accion`).
-     */
     public function store(Request $request)
     {
-        $request->validate([
-            'name' => ['required', 'string', 'regex:'.self::NAME_REGEX],
-            // Los pone el sistema (seeders, `mk:discover-abilities`), nunca la UI.
-            'is_fixed' => ['prohibited'],
-            'is_baseline' => ['prohibited'],
-        ]);
-
-        $name = trim((string) $request->input('name'));
-        $parts = explode('.', $name);
-        $guard = app(AccessGrantGuard::class);
-
-        // 2 segmentos = `{scope}.{recurso}` → expandir a las 5 CRUD.
-        if (count($parts) === 2) {
-            foreach (self::CRUD_VERBS as $verb) {
-                $guard->assertCanChangeAbility($request->user(), null, "{$name}.{$verb}");
-            }
-
-            return $this->storeCrudSet($parts[0], $parts[1]);
-        }
-
-        $guard->assertCanChangeAbility($request->user(), null, $name);
-
-        // 3 segmentos = `{scope}.{recurso}.{accion}` → single.
-        return parent::store($request);
+        $this->refuseWrite();
     }
 
-    /**
-     * Renombrar pide tener el nombre viejo y el nuevo; mandar el mismo `name`
-     * (el formulario lo manda siempre) no es renombrar. El nuevo sigue
-     * prefijado con el scope, como en `store()`.
-     */
     public function update(Request $request, string|int $id)
     {
-        $request->validate([
-            'name' => ['sometimes', 'required', 'string', 'regex:'.self::NAME_REGEX],
-            'is_fixed' => ['prohibited'],
-            'is_baseline' => ['prohibited'],
-        ]);
-
-        $name = $request->has('name') ? trim((string) $request->input('name')) : null;
-        app(AccessGrantGuard::class)->assertCanChangeAbility($request->user(), $this->findScopedOrFail($request, $id), $name);
-
-        return parent::update($request, $id);
+        $this->refuseWrite();
     }
 
-    /**
-     * Borrarla se la saca a todos los que la tienen: sólo la borra quien la tiene.
-     */
     public function destroy(Request $request, string|int $id)
     {
-        app(AccessGrantGuard::class)->assertCanDeleteAbility($request->user(), $this->findScopedOrFail($request, $id));
-
-        return parent::destroy($request, $id);
+        $this->refuseWrite();
     }
 
-    /**
-     * Crea las 5 abilities CRUD estándar de un recurso (`{scope}.{recurso}.{verbo}`)
-     * de forma idempotente y transaccional. Mismo naming + descripciones que
-     * `mk:discover-abilities`.
-     */
-    private function storeCrudSet(string $scope, string $resource): JsonResponse
+    private function refuseWrite(): never
     {
-        $verbs = self::CRUD_VERBS;
-
-        $abilities = DB::transaction(function () use ($scope, $resource, $verbs): array {
-            $created = [];
-            foreach ($verbs as $verb) {
-                $created[] = Ability::firstOrCreate(
-                    ['name' => "{$scope}.{$resource}.{$verb}"],
-                    ['description' => ucfirst($verb).' '.$resource.'.'],
-                );
-            }
-
-            return $created;
-        });
-
-        $new = collect($abilities)->filter->wasRecentlyCreated->count();
-        $existed = count($abilities) - $new;
-        $message = $existed === 0
-            ? "{$new} abilities creadas."
-            : "{$new} creadas, {$existed} ya existían.";
-
-        return $this->sendResponse(AbilityResource::collection($abilities), $message, 201);
+        abort(405, 'Las abilities las crea el sistema (mk:discover-abilities): no se crean, editan ni borran a mano.');
     }
 }
