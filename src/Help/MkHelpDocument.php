@@ -11,6 +11,7 @@ final readonly class MkHelpDocument
      * @param  list<string>  $screens
      * @param  list<string>  $related
      * @param  array<string, string>  $imagePaths  la ruta escrita en el cuerpo → el archivo
+     * @param  list<string>  $sources  `<repo>:<ruta o glob>` del código que describe
      */
     public function __construct(
         public string $slug,
@@ -24,5 +25,6 @@ final readonly class MkHelpDocument
         public array $imagePaths,
         public ?string $parentSlug,
         public string $hash,
+        public array $sources = [],
     ) {}
 }

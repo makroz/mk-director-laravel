@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — `mk:help:stale`: qué manual quedó viejo contra el código
+
+**Added**
+- **`sources` en el front matter de un manual**: `<repo>:<ruta o glob>` del código que describe
+  (`api:app/Modules/Bonuses/**`). El parser valida que sea una lista de textos con un alias de
+  **`mk_director.help.repos`** (nuevo; alias → carpeta git, default `['api' => base_path()]`).
+- **`mk:help:stale`**: por cada artículo con `sources`, `git log <base>..HEAD -- <rutas>` en cada repo, con la base
+  en `<content_path>/.reviewed.json` (`{slug: {repo: sha}}`) o, sin marca, el último commit del `.md` (y en los otros
+  repos, el último anterior a su fecha). `--diff=<slug>`, `--mark=<slug>` (repetible), `--mark-all` y `--fail`. Un
+  repo sin carpeta se avisa y se saltea. Tests: `HelpStaleCommandTest` (7) y 5 nuevos en `MkHelpParserTest`.
+
+⚠️ Un artículo con `sources` de un alias que la app no declaró en `help.repos` hace fallar `mk:help:sync`.
+
 ## [UNRELEASED] — `remember_state`: lo restaurado es lo visible
 
 **Fixed**

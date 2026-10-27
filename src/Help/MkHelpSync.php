@@ -52,7 +52,7 @@ final class MkHelpSync
         $docs = [];
         $errors = [];
 
-        foreach ($this->files($root) as $file) {
+        foreach (self::files($root) as $file) {
             try {
                 $doc = $this->parser->parse($root, $file);
             } catch (MkHelpContentException $e) {
@@ -308,7 +308,7 @@ final class MkHelpSync
      *
      * @return list<string>
      */
-    private function files(string $root): array
+    public static function files(string $root): array
     {
         $files = [];
         $readme = rtrim(str_replace('\\', '/', $root), '/').'/README.md';

@@ -17,6 +17,7 @@ use Symfony\Component\Yaml\Yaml;
  *   ability: admin.kyc.approve   # opcional e INFORMATIVO: nunca esconde el artículo
  *   screens: [admin.kyc.index]
  *   related: [admin/retiros/pagar]
+ *   sources: [api:app/Modules/Kyc/**, admin:modules/kyc/**]   # opcional; lo lee `mk:help:stale`
  *   ---
  *
  * El slug es la ruta relativa sin `.md`; un `index.md` toma el de su carpeta
@@ -51,6 +52,12 @@ final class MkHelpParser
      * enlaces por referencia (`[texto][ref]`) no se reconocen.
      */
     private const LINK_PATTERN = '/(?<!!)\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/';
+
+    /**
+     * @param  list<string>|null  $repos  los alias que acepta `sources`; null =
+     *                                    las claves de `mk_director.help.repos`
+     */
+    public function __construct(private readonly ?array $repos = null) {}
 
     /**
      * Los enlaces del cuerpo a otro artículo: cada href sin esquema, tal como
@@ -136,6 +143,7 @@ final class MkHelpParser
             ability: $ability,
             screens: $this->stringList($front, 'screens', $rel),
             related: $this->stringList($front, 'related', $rel),
+            sources: $this->sources($front, $rel),
             body: $body,
             imagePaths: $this->images($root, dirname($path), $body, $rel),
             parentSlug: str_contains($slug, '/') ? dirname($slug) : null,
@@ -199,6 +207,38 @@ final class MkHelpParser
         }
 
         return [$front, trim($m[2])."\n"];
+    }
+
+    /**
+     * `sources`: `<repo>:<ruta o glob>` del código que describe el artículo, con
+     * `<repo>` un alias de `mk_director.help.repos`. Sólo lo usa `mk:help:stale`.
+     *
+     * @param  array<string, mixed>  $front
+     * @return list<string>
+     */
+    private function sources(array $front, string $rel): array
+    {
+        $sources = $this->stringList($front, 'sources', $rel);
+
+        if ($sources === []) {
+            return [];
+        }
+
+        $repos = $this->repos ?? array_keys((array) config('mk_director.help.repos', []));
+
+        foreach ($sources as $source) {
+            [$repo, $path] = array_pad(explode(':', $source, 2), 2, '');
+
+            if (trim($path) === '') {
+                throw new MkHelpContentException("{$rel}: `sources` se escribe `<repo>:<ruta>`, no `{$source}`");
+            }
+
+            if (! in_array($repo, $repos, true)) {
+                throw new MkHelpContentException("{$rel}: `sources` usa el repo `{$repo}`, que no está en `mk_director.help.repos` (".implode(', ', $repos).')');
+            }
+        }
+
+        return $sources;
     }
 
     /**
