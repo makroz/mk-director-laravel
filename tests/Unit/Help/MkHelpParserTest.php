@@ -122,3 +122,35 @@ test('rejects a file that is not a png, jpg or webp image', function () {
 
     (new MkHelpParser)->parse($root, $file);
 })->throws(MkHelpContentException::class, 'no es una imagen');
+
+test('reads `sources` as `<repo>:<path>` with a known repo alias', function () {
+    [$root, $file] = helpTempFile('admin/x.md', "---\ntitle: X\naudience: admin\nsources: [api:app/Modules/Kyc/**, admin:modules/kyc/**]\n---\nx\n");
+
+    $doc = (new MkHelpParser(repos: ['api', 'admin']))->parse($root, $file);
+
+    expect($doc->sources)->toBe(['api:app/Modules/Kyc/**', 'admin:modules/kyc/**']);
+});
+
+test('`sources` is optional', function () {
+    [$root, $file] = helpTempFile('admin/x.md', "---\ntitle: X\naudience: admin\n---\nx\n");
+
+    expect((new MkHelpParser(repos: []))->parse($root, $file)->sources)->toBe([]);
+});
+
+test('rejects `sources` that is not a list of texts', function () {
+    [$root, $file] = helpTempFile('admin/x.md', "---\ntitle: X\naudience: admin\nsources: api:app/**\n---\nx\n");
+
+    (new MkHelpParser(repos: ['api']))->parse($root, $file);
+})->throws(MkHelpContentException::class, '`sources` tiene que ser una lista de textos');
+
+test('rejects a `sources` entry without a path', function () {
+    [$root, $file] = helpTempFile('admin/x.md', "---\ntitle: X\naudience: admin\nsources: [app/Modules/Kyc]\n---\nx\n");
+
+    (new MkHelpParser(repos: ['api']))->parse($root, $file);
+})->throws(MkHelpContentException::class, 'se escribe `<repo>:<ruta>`');
+
+test('rejects a `sources` repo alias that is not configured', function () {
+    [$root, $file] = helpTempFile('admin/x.md', "---\ntitle: X\naudience: admin\nsources: ['mobile:src/**']\n---\nx\n");
+
+    (new MkHelpParser(repos: ['api']))->parse($root, $file);
+})->throws(MkHelpContentException::class, 'usa el repo `mobile`, que no está en `mk_director.help.repos`');

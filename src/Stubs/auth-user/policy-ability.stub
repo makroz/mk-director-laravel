@@ -8,13 +8,13 @@ use App\Modules\{{ModuleName}}\Models\{{ModuleName}};
 use Mk\Director\Auth\Models\Ability;
 
 /**
- * AbilityPolicy — READ-ONLY por default.
+ * AbilityPolicy — SÓLO LECTURA.
  *
  * A1/A3: variante del pack `--with-crud`, opera sobre el modelo CENTRAL del
- * paquete `Mk\Director\Auth\Models\Ability`. `create`/`update`/`delete`
- * retornan `false` siempre (default-deny); solo `super-admin` escribe (vía
- * `before()` bypass). Las abilities se gestionan con `mk:discover-abilities` +
- * `RoleController::syncAbilities`.
+ * paquete `Mk\Director\Auth\Models\Ability`. Las abilities son del sistema:
+ * las crea `mk:discover-abilities` y las limpia `mk:prune-abilities`, así que
+ * no hay rutas de escritura y `create`/`update`/`delete` retornan `false`. Se
+ * asignan con `RoleController::syncAbilities` y `assignDirectAbilities`.
  *
  * Generado por `php artisan mk:make:auth-user {{ModuleName}}`.
  */

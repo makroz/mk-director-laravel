@@ -115,17 +115,18 @@ test('HALLAZGO-NEW-FASE18-C — CRUD stub: roles routes use scope.roles.{action}
         ->toContain("'mk.ability:{{moduleNameLower}}.roles.delete'");
 });
 
-test('HALLAZGO-NEW-FASE18-C — CRUD stub: abilities routes use scope.abilities.{action} ability', function () use ($crudStubPath) {
+test('HALLAZGO-NEW-FASE18-C — CRUD stub: abilities routes are read-only, gated by scope.abilities.viewAny/view', function () use ($crudStubPath) {
     $stub = (string) file_get_contents($crudStubPath);
 
-    // Abilities routes are global (prefix `api/abilities`) but gated by
-    // the scope. Action mapping: viewAny/view/create/update/delete.
+    // Abilities are system-owned (mk:discover-abilities / mk:prune-abilities):
+    // only index and show are routed.
     expect($stub)
         ->toContain("'mk.ability:{{moduleNameLower}}.abilities.viewAny'")
         ->toContain("'mk.ability:{{moduleNameLower}}.abilities.view'")
-        ->toContain("'mk.ability:{{moduleNameLower}}.abilities.create'")
-        ->toContain("'mk.ability:{{moduleNameLower}}.abilities.update'")
-        ->toContain("'mk.ability:{{moduleNameLower}}.abilities.delete'");
+        ->not->toContain('abilities.create')
+        ->not->toContain('abilities.update')
+        ->not->toContain('abilities.delete')
+        ->not->toMatch('/AbilityController::class,\s*\'(store|update|destroy)\'/');
 });
 
 test('HALLAZGO-NEW-FASE18-C — CRUD stub: every Route::xxx carries mk.auth + mk.ability middleware', function () use ($crudStubPath) {
@@ -146,9 +147,9 @@ test('HALLAZGO-NEW-FASE18-C — CRUD stub: every Route::xxx carries mk.auth + mk
     $middlewareCount = count($m1[0]);
     $verbCount = count($m2[0]);
 
-    // 8 admin routes + 7 roles routes + 6 abilities routes = 21 routes
+    // 8 admin routes + 7 roles routes + 2 abilities routes = 17 routes
     // total. Each MUST have a middleware block.
-    expect($middlewareCount)->toBeGreaterThanOrEqual(21);
+    expect($middlewareCount)->toBeGreaterThanOrEqual(17);
     expect($verbCount)->toBe($middlewareCount, "Number of verb routes ({$verbCount}) MUST equal number of middleware blocks ({$middlewareCount}).");
 });
 

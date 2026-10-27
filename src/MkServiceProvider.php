@@ -20,6 +20,7 @@ use Mk\Director\Console\Commands\CleanReportsCommand;
 use Mk\Director\Console\Commands\DiscoverAbilitiesCommand;
 use Mk\Director\Console\Commands\FixSanctumUuidsCommand;
 use Mk\Director\Console\Commands\GenerateDocsCommand;
+use Mk\Director\Console\Commands\HelpStaleCommand;
 use Mk\Director\Console\Commands\HelpSyncCommand;
 use Mk\Director\Console\Commands\LintBoundariesCommand;
 use Mk\Director\Console\Commands\MakeAuthUserCommand;
@@ -354,6 +355,8 @@ class MkServiceProvider extends ServiceProvider
                 PruneUploadsCommand::class,
                 // Indexa los manuales en Markdown. Corrélo en cada deploy, después de `migrate`.
                 HelpSyncCommand::class,
+                // Los manuales desactualizados contra el código de sus `sources`.
+                HelpStaleCommand::class,
             ]);
         }
 

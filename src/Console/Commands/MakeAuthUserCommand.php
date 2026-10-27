@@ -3929,8 +3929,11 @@ PHP;
 ## 4. Abilities
 
 > **Namespace**: `/api/{$scopeLower}/abilities` — mismo namespacing que Roles.
-> La **tabla** `abilities` es global del paquete. Los abilities que este módulo
-> declara se pinean con `php artisan mk:discover-abilities --force` post-scaffold.
+> La **tabla** `abilities` es global del paquete. 🔴 **Sólo lectura**: las abilities
+> son del sistema. Las crea `php artisan mk:discover-abilities --force` leyendo el
+> código y las limpia `mk:prune-abilities`; no hay alta, edición ni baja por la API
+> (`POST`/`PUT`/`DELETE` no tienen ruta, y el controller responde 405). Se asignan
+> con `PUT roles/{id}/abilities` y `POST /{id}/abilities` del usuario.
 
 ### 4.1 GET /api/{$scopeLower}/abilities
 
@@ -3993,28 +3996,6 @@ PHP;
     "{$scope}": ["{$scope}.view", "{$scope}.create", "{$scope}.edit", "{$scope}.delete", "{$scope}.*"],
     "Roles": ["roles.view", "roles.create", "..."]
   },
-  "debugMsg": []
-}
-```
-
-### 4.3 POST /api/{$scopeLower}/abilities
-
-**Ability**: `abilities.create`
-
-**Request**:
-```json
-{
-  "name": "Custom.action",
-  "description": "Custom ability description"
-}
-```
-
-**Response 201** — single-level envelope:
-```json
-{
-  "success": true,
-  "message": "Ability creada.",
-  "data": { /* AbilityResource */ },
   "debugMsg": []
 }
 ```

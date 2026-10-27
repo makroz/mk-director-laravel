@@ -6,10 +6,8 @@ use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
-use Illuminate\Validation\ValidationException;
 use Mk\Director\Auth\Access\AccessGrantDeniedException;
 use Mk\Director\Auth\Access\AccessGrantGuard;
-use Mk\Director\Auth\Enums\FixedStatus;
 use Mk\Director\Auth\Models\Ability;
 use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Auth\Models\Role;
@@ -21,6 +19,7 @@ use Mk\Director\Tenancy\TenantContext;
 use Mk\Director\Tests\Concerns\BootsHttpApp;
 use Mk\Director\Tests\Concerns\RunsAuthUserScaffolder;
 use Mk\Director\Tests\MkLaravelTestCase;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 
 /**
  * El CRUD GENERADO no deja escalar privilegios.
@@ -193,11 +192,10 @@ test('Service generado: bloquear o borrar al dueño es 403; su propio status tam
  * RETO). En sqlite/MySQL no revienta, devuelve null — por eso se mide la
  * CONSULTA, que es la causa, y no el 500, que depende del motor.
  */
-test('editar un rol o una ability NO busca un usuario con su id', function () {
+test('editar un rol NO busca un usuario con su id', function () {
     bootGeneratedCrew($this);
     $owner = crewUser('dueño', ['*']);
     $role = Role::query()->create(['name' => 'mesero', 'guard' => 'crew']);
-    $ability = Ability::query()->where('name', 'crew.crews.update')->firstOrFail();
 
     $queries = [];
     DB::listen(function ($q) use (&$queries) {
@@ -206,7 +204,6 @@ test('editar un rol o una ability NO busca un usuario con su id', function () {
 
     foreach ([
         ['RoleController', (string) $role->getKey(), ['name' => 'mozo', 'guard' => 'crew']],
-        ['AbilityController', (string) $ability->getKey(), ['description' => 'Editar crews.']],
     ] as [$class, $id, $data]) {
         $request = Request::create('/', 'PUT', $data);
         app()->instance('request', $request);
@@ -343,125 +340,37 @@ test('rol: el CRUD no escribe `is_fixed`, ni en el alta ni en la edición', func
 });
 
 /**
- * 🔴 El CRUD de ABILITIES es la tercera puerta al mismo acceso.
+ * 🔴 Las abilities eran la tercera puerta al mismo acceso.
  *
  * Roles y grants apuntan a la ability por id: renombrarla es cambiarles el
  * permiso a todos los que la tienen, y borrarla es sacárselo. Medido en RETO
  * (#27): con `admin.abilities.update`, un admin renombró una ability suya a
- * `admin.*` y tuvo el scope entero. Y cualquiera borraba o renombraba `*`.
+ * `admin.*` y tuvo el scope entero. Ahora son del sistema
+ * (`mk:discover-abilities`): el controller generado sólo lee, y escribir es 405
+ * aunque alguien le agregue una ruta — ni con `*`.
  */
-function crewAbilityController(): object
-{
-    return new ('App\\Modules\\Crew\\Http\\Controllers\\AbilityController');
-}
-
-function crewAbility(string $name): Ability
-{
-    return Ability::query()->where('name', $name)->firstOrFail();
-}
-
-test('ability: renombrar una propia a un nombre que no tiene es 403 — el caso medido', function () {
-    bootGeneratedCrew($this);
-    $manager = crewUser('encargado', ['crew.abilities.update', 'crew.crews.update']);
-    $ability = crewAbility('crew.crews.update');
-
-    // `crew.reports.export` es lo que pide la ruta de exportar: quien renombra
-    // una suya a ese nombre, y todos los que la tienen, pasan a poder.
-    expect(crewDenial(fn () => crewAbilityController()->update(crewPut(['name' => 'crew.reports.export'], $manager), (string) $ability->getKey())))->toBe(AccessGrantGuard::ERR_ACCESS_NOT_HELD);
-    // Y `crew.*` (el caso de RETO) ni siquiera es un nombre válido: 422.
-    expect(fn () => crewAbilityController()->update(crewPut(['name' => 'crew.*'], $manager), (string) $ability->getKey()))->toThrow(ValidationException::class);
-    expect($ability->fresh()->name)->toBe('crew.crews.update');
-});
-
-test('ability: renombrar pide el nombre viejo Y el nuevo; mandar el mismo nombre no es renombrar', function () {
-    bootGeneratedCrew($this);
-    $manager = crewUser('encargado', ['crew.abilities.update', 'crew.crews.update']);
-    $owner = crewUser('dueño', ['*']);
-    $foreign = crewAbility('crew.branches.viewAll');
-
-    // Viejo no tenido → 403, aunque el nuevo sea suyo.
-    expect(crewDenial(fn () => crewAbilityController()->update(crewPut(['name' => 'crew.crews.otra'], $manager), (string) $foreign->getKey())))->toBe(AccessGrantGuard::ERR_ACCESS_NOT_HELD);
-    expect($foreign->fresh()->name)->toBe('crew.branches.viewAll');
-
-    // El nuevo cubierto (`crew.*`) no alcanza: el viejo, sin scope conocido,
-    // se exige igual. Si no, quien tiene `crew.*` le saca `kitchen.send` a todos.
-    $scoped = crewUser('jefe', ['crew.*']);
-    $noScope = Ability::query()->create(['name' => 'kitchen.send']);
-    expect(crewDenial(fn () => crewAbilityController()->update(crewPut(['name' => 'crew.kitchen.send'], $scoped), (string) $noScope->getKey())))->toBe(AccessGrantGuard::ERR_ACCESS_NOT_HELD);
-    expect($noScope->fresh()->name)->toBe('kitchen.send');
-
-    // El mismo nombre con otra descripción: no es renombrar, pasa.
-    expect(crewAbilityController()->update(crewPut(['name' => 'crew.branches.viewAll', 'description' => 'Ver sucursales.'], $manager), (string) $foreign->getKey())->getStatusCode())->toBe(200);
-
-    // Contraprueba: quien tiene `*` renombra.
-    expect(crewAbilityController()->update(crewPut(['name' => 'crew.branches.list'], $owner), (string) $foreign->getKey())->getStatusCode())->toBe(200);
-    expect($foreign->fresh()->name)->toBe('crew.branches.list');
-});
-
-test('ability: crear y borrar piden tenerla; con `*` pasa (contraprueba)', function () {
-    bootGeneratedCrew($this);
-    $manager = crewUser('encargado', ['crew.abilities.create', 'crew.abilities.delete', 'crew.crews.update']);
-    $owner = crewUser('dueño', ['*']);
-
-    expect(crewDenial(fn () => crewAbilityController()->store(crewPut(['name' => 'crew.branches.export'], $manager, 'POST'))))->toBe(AccessGrantGuard::ERR_ACCESS_NOT_HELD);
-    expect(crewDenial(fn () => crewAbilityController()->store(crewPut(['name' => 'crew.reports'], $manager, 'POST'))))->toBe(AccessGrantGuard::ERR_ACCESS_NOT_HELD);
-    expect(Ability::query()->where('name', 'like', 'crew.reports%')->orWhere('name', 'crew.branches.export')->count())->toBe(0);
-
-    $foreign = crewAbility('crew.branches.viewAll');
-    expect(crewDenial(fn () => crewAbilityController()->destroy(crewPut([], $manager, 'DELETE'), (string) $foreign->getKey())))->toBe(AccessGrantGuard::ERR_ACCESS_NOT_HELD);
-    expect(Ability::query()->whereKey($foreign->getKey())->exists())->toBeTrue();
-
-    expect(crewAbilityController()->store(crewPut(['name' => 'crew.reports'], $owner, 'POST'))->getStatusCode())->toBe(201);
-    expect(crewAbilityController()->destroy(crewPut([], $owner, 'DELETE'), (string) $foreign->getKey())->getStatusCode())->toBe(200);
-});
-
-test('ability FIJA: `*` (aunque no tenga la marca) y las `is_fixed` no se editan ni se borran, ni con `*`', function () {
+test('ability: el controller generado no crea, edita ni borra — ni con `*`', function () {
     bootGeneratedCrew($this);
     $owner = crewUser('dueño', ['*']);
-    $wildcard = crewAbility('*');
-    expect($wildcard->is_fixed)->not->toBe(FixedStatus::Fixed); // `giveAbilityTo('*')` la crea sin la marca.
-    $fixed = Ability::query()->create(['name' => 'crew.system.run', 'is_fixed' => 1]);
+    $ability = Ability::query()->where('name', 'crew.branches.viewAll')->firstOrFail();
+    $controller = new ('App\\Modules\\Crew\\Http\\Controllers\\AbilityController');
 
-    foreach ([$wildcard, $fixed] as $ability) {
-        expect(crewDenial(fn () => crewAbilityController()->update(crewPut(['name' => 'crew.x.y'], $owner), (string) $ability->getKey())))->toBe(AccessGrantGuard::ERR_FIXED_ABILITY);
-        expect(crewDenial(fn () => crewAbilityController()->update(crewPut(['description' => 'otra'], $owner), (string) $ability->getKey())))->toBe(AccessGrantGuard::ERR_FIXED_ABILITY);
-        expect(crewDenial(fn () => crewAbilityController()->destroy(crewPut([], $owner, 'DELETE'), (string) $ability->getKey())))->toBe(AccessGrantGuard::ERR_FIXED_ABILITY);
-        expect($ability->fresh()->name)->toBe($ability->name);
-    }
-});
+    $status = function (Closure $fn): ?int {
+        try {
+            $fn();
+        } catch (HttpException $e) {
+            return $e->getStatusCode();
+        }
 
-test('ability: `is_fixed` e `is_baseline` no llegan del body; el renombre sigue pidiendo el prefijo del scope', function () {
-    bootGeneratedCrew($this);
-    $owner = crewUser('dueño', ['*']);
-    $ability = crewAbility('crew.branches.viewAll');
+        return null;
+    };
 
-    foreach (['is_fixed' => 1, 'is_baseline' => 1] as $field => $value) {
-        expect(fn () => crewAbilityController()->store(crewPut(['name' => 'crew.x.y', $field => $value], $owner, 'POST')))->toThrow(ValidationException::class);
-        expect(fn () => crewAbilityController()->update(crewPut([$field => $value], $owner), (string) $ability->getKey()))->toThrow(ValidationException::class);
-    }
-    expect(fn () => crewAbilityController()->update(crewPut(['name' => 'kitchen.send'], $owner), (string) $ability->getKey()))->toThrow(ValidationException::class);
+    expect($status(fn () => $controller->store(crewPut(['name' => 'crew.reports.export'], $owner, 'POST'))))->toBe(405)
+        ->and($status(fn () => $controller->update(crewPut(['name' => 'crew.*'], $owner), (string) $ability->getKey())))->toBe(405)
+        ->and($status(fn () => $controller->destroy(crewPut([], $owner, 'DELETE'), (string) $ability->getKey())))->toBe(405);
 
-    $fresh = $ability->fresh();
-    expect([$fresh->name, $fresh->is_fixed, $fresh->is_baseline])->toBe(['crew.branches.viewAll', FixedStatus::Editable, false]);
-    expect(Ability::query()->where('name', 'crew.x.y')->exists())->toBeFalse();
-});
-
-test('ability: un nombre de OTRO scope conocido queda afuera; uno sin scope conocido se exige', function () {
-    bootGeneratedCrew($this);
-    // Dos scopes de verdad: guards cuyo modelo extiende `AuthUser`.
-    $model = 'App\\Modules\\Crew\\Models\\Crew';
-    config([
-        'auth.guards.crew' => ['driver' => 'session', 'provider' => 'crews'],
-        'auth.guards.boss' => ['driver' => 'session', 'provider' => 'bosses'],
-        'auth.providers.crews' => ['driver' => 'eloquent', 'model' => $model],
-        'auth.providers.bosses' => ['driver' => 'eloquent', 'model' => $model],
-    ]);
-    $manager = crewUser('encargado', ['crew.abilities.delete']);
-    $otherScope = Ability::query()->create(['name' => 'boss.things.view']);
-    $noScope = Ability::query()->create(['name' => 'kitchen.send']);
-
-    expect(crewDenial(fn () => crewAbilityController()->destroy(crewPut([], $manager, 'DELETE'), (string) $noScope->getKey())))->toBe(AccessGrantGuard::ERR_ACCESS_NOT_HELD);
-    expect(crewAbilityController()->destroy(crewPut([], $manager, 'DELETE'), (string) $otherScope->getKey())->getStatusCode())->toBe(200);
+    expect($ability->fresh()->name)->toBe('crew.branches.viewAll')
+        ->and(Ability::query()->where('name', 'crew.reports.export')->exists())->toBeFalse();
 });
 
 /**

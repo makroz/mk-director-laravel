@@ -99,6 +99,7 @@ Los comandos principales que registra el paquete (la lista entera: `php artisan 
 | `mk:push:prune [--days=N] [--dry-run]` | Borra los teléfonos de push que no se vieron en N días (`MK_PUSH_PRUNE_AFTER_DAYS`, default 60; 0 la apaga). Programalo con `Schedule::command('mk:push:prune')->daily()`. ⚠️ OneSignal no siempre avisa de una dirección muerta: sin él quedan para siempre. |
 | `mk:uploads:prune [--hours=N] [--dry-run]` | Limpia las subidas directas que nadie va a usar: aborta las vencidas sin terminar y borra el objeto de las terminadas que nadie adjuntó en N horas (default 24). Programalo una vez por día: ver «Storage». |
 | `mk:help:sync [--dry-run]` | Indexa los manuales en Markdown de `resources/help` en `mk_help_articles`, todo o nada, y sube sus imágenes. Corrélo en cada deploy, después de `migrate`: ver «Ayuda y manuales». |
+| `mk:help:stale [--diff=<slug>] [--mark=<slug>] [--mark-all] [--fail]` | Lista los manuales desactualizados contra el código de sus `sources`: los commits de cada repo desde la última revisión. `--mark` guarda la revisión en `.reviewed.json`; `--fail` sale con 1 si hay alguno (para un hook). Ver «Ayuda y manuales». |
 | `mk:lint:boundaries [--strict]` | Linter de R-MK-001 (imports cross-module). Check de CI obligatorio. |
 | `mk:security-lint` | Auditoría estática: modelos Eloquent y config de `MkMultiTenantPlugin`. |
 | `mk:generate-docs` | OpenAPI estático desde los constructores MK. |
@@ -456,6 +457,7 @@ order: 20                  # entre sus hermanos; default 0 (empate: por slug)
 ability: admin.kyc.approve # opcional e INFORMATIVO: «Necesitás el permiso …»
 screens: [admin.kyc.index, admin.kyc.show]
 related: [admin/retiros/pagar, business/glosario]
+sources: [api:app/Modules/Kyc/**]   # opcional: el código que describe (`mk:help:stale`)
 ---
 El cuerpo, en Markdown. ![Menú KYC](img/kyc-menu.webp)
 ```
@@ -547,6 +549,39 @@ sin cambios, cuántas imágenes subió y qué pantallas no tienen artículo.
 - `--dry-run` corre la validación entera y cuenta, sin escribir en la base ni subir
   nada al storage. Sirve para revisar el contenido en un PR.
 
+### 3b. `mk:help:stale`: qué manual quedó viejo
+
+Un artículo dice qué código describe con `sources` en el front matter, `<repo>:<ruta o
+glob>` (pathspec `:(glob)` de git, relativo a la raíz del repo):
+
+```markdown
+sources: [api:app/Modules/Bonuses/**, admin:modules/bonuses/**]
+```
+
+`<repo>` es un alias de `mk_director.help.repos` (alias → carpeta del repo git;
+default `['api' => base_path()]`). La app suma los suyos con su ruta por `.env`, p. ej.
+`'admin' => env('MK_HELP_REPO_ADMIN')`. Un alias que no está en la config hace fallar
+la sync; una carpeta que no existe (el admin en el servidor de la API) se avisa y se
+saltea. Declará la clave aunque en un entorno no tenga ruta.
+
+```bash
+php artisan mk:help:stale                    # los desactualizados, con sus commits
+php artisan mk:help:stale --diff=admin/bonos # git diff --stat de su código, por repo
+php artisan mk:help:stale --mark=admin/bonos # revisado: guarda el HEAD de cada repo
+php artisan mk:help:stale --mark-all
+php artisan mk:help:stale --fail             # sale con 1 si hay alguno (hook, CI)
+```
+
+- La revisión vive en `<content_path>/.reviewed.json`, `{slug: {repo: sha}}`, y se
+  **commitea** con los manuales.
+- Sin marca, la base es el último commit que tocó el `.md` en el repo de los manuales;
+  en los otros repos, el último commit anterior a esa fecha. Un `.md` sin commits está
+  al día.
+- 🔴 La comparación es por **rango de SHAs** (`git log <base>..HEAD -- <sources>`), no
+  por fecha: una rama mergeada tarde trae commits con fecha vieja.
+- Imprime cada artículo desactualizado con la cantidad de commits por repo y los
+  primeros 10, y cuántos están al día y cuántos no tienen `sources`.
+
 ### 4. Enlaces compartidos (temporales y públicos)
 
 Un scope con `share: true` suma `GET/POST help/share-links` y
@@ -593,6 +628,7 @@ revoca **sus** enlaces.
     'articles_table' => env('MK_HELP_ARTICLES_TABLE', 'mk_help_articles'),
     'share_links_table' => env('MK_HELP_SHARE_LINKS_TABLE', 'mk_help_share_links'),
     'image_prefix' => 'help',
+    'repos' => ['api' => base_path()],             // alias → carpeta git, para `sources`
     'routes' => [
         'register' => env('MK_HELP_REGISTER_ROUTES', false),
         'scopes' => [],

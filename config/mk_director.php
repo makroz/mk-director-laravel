@@ -299,12 +299,19 @@ return [
     | `…/shared/{token}/articles/{slug}`, sin sesión y con el throttle de
     | `routes.public.middleware`; vencido o revocado es 410. Lo compartido se
     | ve entero: los permisos no esconden nada.
+    |
+    | `repos`: alias → carpeta del repo git, para `sources` del front matter
+    | (`api:app/Modules/Kyc/**`) y `mk:help:stale`. Declara la clave de cada
+    | repo aunque en un servidor no tenga carpeta: un alias que no está acá hace
+    | fallar la sync; una carpeta que no existe se avisa y se saltea.
+    |   'repos' => ['api' => base_path(), 'admin' => env('MK_HELP_REPO_ADMIN')]
     */
     'help' => [
         'content_path' => resource_path('help'),
         'articles_table' => env('MK_HELP_ARTICLES_TABLE', 'mk_help_articles'),
         'share_links_table' => env('MK_HELP_SHARE_LINKS_TABLE', 'mk_help_share_links'),
         'image_prefix' => 'help',                 // carpeta en el rol público del storage
+        'repos' => ['api' => base_path()],        // alias → carpeta git, para `sources`
         'routes' => [
             'register' => env('MK_HELP_REGISTER_ROUTES', false),
             'scopes' => [],

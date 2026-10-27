@@ -37,7 +37,10 @@ class {{ModuleName}}RolesSeeder extends Seeder
         // Si el seeder solo concede `{{moduleNamePluralLower}}`, el rol `admin`
         // recibe 403 en /roles y /abilities (solo el wildcard de super-admin
         // funcionaba). Concedemos los tres al `admin`, y read-only al `viewer`.
+        // `abilities` es SÓLO LECTURA (las crea el sistema): sus únicas
+        // acciones son `viewAny` y `view`.
         $resources = ['{{moduleNamePluralLower}}', 'roles', 'abilities'];
+        $actions = fn (string $resource): array => $resource === 'abilities' ? ['viewAny', 'view'] : CrudAction::all();
 
         // ── super-admin ─────────────────────────────────────────────────
         // El match incluye `guard` (= scope), no sólo `name`: los nombres
@@ -50,14 +53,14 @@ class {{ModuleName}}RolesSeeder extends Seeder
         );
         $this->attachAbility($superAdmin, '*', 'Wildcard: todas las abilities.', true);
 
-        // ── admin: CRUD completo sobre los tres recursos ────────────────
+        // ── admin: CRUD completo (abilities: lectura) ───────────────────
         $admin = Role::query()->updateOrCreate(
             ['name' => 'admin', 'guard' => $scope],
             [],
         );
         foreach ($resources as $resource) {
             // Acciones desde el enum `CrudAction` (fuente única).
-            foreach (CrudAction::all() as $action) {
+            foreach ($actions($resource) as $action) {
                 $this->attachAbility($admin, "{$scope}.{$resource}.{$action}", ucfirst($action).' '.$resource.'.');
             }
         }

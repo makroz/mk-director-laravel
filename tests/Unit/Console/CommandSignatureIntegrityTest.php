@@ -53,6 +53,7 @@ function mkExpectedCommandArguments(): array
         'mk:fix:sanctum-uuids' => [],
         'mk:generate-docs' => [],
         // Sin argumentos: la carpeta sale de `mk_director.help.content_path`.
+        'mk:help:stale' => [],
         'mk:help:sync' => [],
         'mk:lint:boundaries' => [],
         'mk:make:auth-user' => ['scope'],
