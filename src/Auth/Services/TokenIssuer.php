@@ -412,25 +412,26 @@ class TokenIssuer
      *   3. Hash comparar `plaintext` contra `token` (Sanctum v4.3.2 usa SHA256).
      *      Ver `vendor/laravel/sanctum/src/HasApiTokens.php:66` y
      *      `PersonalAccessToken.php:61,67`.
-     *   3a. DPoP: si el token está atado (`dpop_jkt:`), exigir una prueba de
-     *       ESA clave (sin `ath`); si el scope exige DPoP y el token está suelto,
-     *       rechazar. Va ANTES de la lápida, del vencimiento y del estado de la
-     *       cuenta: quien no tiene la clave no puede quemar, revocar ni borrar
-     *       nada — si no, un ladrón con el refresh copiado le cerraría la sesión
-     *       al dueño.
-     *   3b. Validar que ES un refresh token (ability `refresh`): un access
-     *       token no refresca.
-     *   4. Validar que el token no expiró.
-     *   5. Validar que el scope del token coincide con `$expectedScope` (defense-in-depth).
-     *   6. Cargar el `tokenable` (user).
-     *   6b. Re-chequear `AccountStatus`: si la cuenta ya no autentica, revocar
+     *   4. DPoP: si el token está atado (`dpop_jkt:`), exigir una prueba de
+     *      ESA clave (sin `ath`); si el scope exige DPoP y el token está suelto,
+     *      rechazar. Va ANTES de la lápida, del vencimiento y del estado de la
+     *      cuenta: quien no tiene la clave no puede quemar, revocar ni borrar
+     *      nada — si no, un ladrón con el refresh copiado le cerraría la sesión
+     *      al dueño.
+     *   5. Si es una lápida (ya rotado), revocar la familia entera y rechazar
+     *      (`ERR_REFRESH_REUSED`). Va antes del vencimiento y del scope: una
+     *      lápida vencida sigue siendo una copia.
+     *   6. Validar que ES un refresh token (ability `refresh`): un access
+     *      token no refresca.
+     *   7. Validar que el token no expiró.
+     *   8. Validar que el scope del token coincide con `$expectedScope` (defense-in-depth).
+     *   9. Cargar el `tokenable` (user).
+     *   10. Re-chequear `AccountStatus`: si la cuenta ya no autentica, revocar
      *       este refresh token y rechazar (`ERR_ACCOUNT_DISABLED`).
-     *   3c. Si es una lápida (ya rotado), revocar la familia entera y rechazar
-     *       (`ERR_REFRESH_REUSED`).
-     *   7. Si la rotación está prendida (constructor o
-     *      `mk_director.auth.refresh.rotate_on_refresh`), dejar el viejo como
-     *      lápida y emitir uno nuevo de la misma familia. Si no, mantener el viejo.
-     *   8. Emitir nuevo access token ligado al refresh vigente.
+     *   11. Si la rotación está prendida (constructor o
+     *       `mk_director.auth.refresh.rotate_on_refresh`), dejar el viejo como
+     *       lápida y emitir uno nuevo de la misma familia. Si no, mantener el viejo.
+     *   12. Emitir nuevo access token ligado al refresh vigente.
      *
      * @param  string  $refreshToken  El `<id>|<plaintext>` recibido del cliente.
      * @param  string  $expectedScope  Scope que el AuthController declara para esta ruta
