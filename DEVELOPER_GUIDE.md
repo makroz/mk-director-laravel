@@ -3684,6 +3684,10 @@ el cliente corrige el desfase de su reloj y reintenta **una** vez.
 `mk.auth`. Si un consumidor las protege con `auth:sanctum` en vez de
 `mk.auth:{scope}`, un token atado pasa ahí sin prueba.
 
+`mk-studio:perf` crea su propio token (`PerfAdmin`), sin clave: pide las pantallas
+dentro del proceso. Para esa corrida apaga la exigencia (`dpop.scopes` vacío),
+porque mide consultas sobre una copia descartable, no la autenticación.
+
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)
 
 Tanto para **Next.js** como para **React Native**, el consumo de listas es estandarizado mediante parámetros URL:

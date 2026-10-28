@@ -259,6 +259,9 @@ final class PerfCommand extends Command
         $filled = $seed->fill($connection, $tables, $volume, $graph);
         $this->analyze($connection, array_keys($filled));
         $token = (new PerfAdmin)->make($seed, $connection);
+        // The token is unbound (no DPoP key: the screens run in-process), and a scope that requires DPoP would refuse it
+        // with ERR_DPOP_UNBOUND. This run measures queries on a scratch copy, not auth: the requirement is off for it.
+        config(['mk_director.auth.dpop.scopes' => []]);
         $queries = [];
         $shapes = [];
         $list = $screens->screens($module, $token, $intro);
