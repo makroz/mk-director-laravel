@@ -254,6 +254,17 @@ test('scratch_db_is_dropped_after_the_run', function () {
         ->and(config('database.connections.app.database'))->toBe(PERF_APP_DB);
 });
 
+test('measures_even_when_the_scope_requires_dpop', function () {
+    // The perf token is unbound: with the requirement on, every screen would answer 401 ERR_DPOP_UNBOUND.
+    config(['mk_director.auth.dpop.scopes' => ['admin']]);
+
+    [$code, $output] = perfRun();
+    expect($code)->toBe(0, $output);
+
+    $run = json_decode($output, true, flags: JSON_THROW_ON_ERROR);
+    expect(array_unique(array_column($run['queries'], 'status')))->toBe([200]);
+});
+
 test('kept_with_keep', function () {
     [$code, $output] = perfRun(['--keep' => true]);
     expect($code)->toBe(0, $output)

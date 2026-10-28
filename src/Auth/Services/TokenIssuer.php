@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace Mk\Director\Auth\Services;
 
 use Illuminate\Contracts\Auth\Authenticatable;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\NewAccessToken;
 use Laravel\Sanctum\PersonalAccessToken;
 use Laravel\Sanctum\Sanctum;
+use Mk\Director\Auth\Enums\DpopFailure;
+use Mk\Director\Auth\Exceptions\DpopProofException;
 
 /**
  * TokenIssuer — emite access + refresh tokens Sanctum.
@@ -50,6 +53,10 @@ use Laravel\Sanctum\Sanctum;
  * de `refresh`) hasta su vencimiento. Si una lápida vuelve a llegar, alguien
  * tiene una copia vieja del token —el ladrón o el dueño, no se sabe cuál— y
  * se revoca la familia entera: los dos vuelven a loguear.
+ *
+ * DPoP (DEVELOPER_GUIDE § 3.24): con una prueba en el pedido, o con el scope en
+ * `mk_director.auth.dpop.scopes`, la sesión sale atada a la clave del cliente
+ * (`dpop_jkt:{huella}` en el access Y en el refresh) y cada rotación la hereda.
  */
 class TokenIssuer
 {
@@ -79,6 +86,9 @@ class TokenIssuer
      */
     public const ROTATED_ABILITY = 'refresh_rotated';
 
+    /** Ability que ata un token a la clave DPoP del cliente (`dpop_jkt:{huella}`). */
+    public const DPOP_JKT_PREFIX = 'dpop_jkt:';
+
     /**
      * @param  bool|null  $rotateOnRefresh  null = `mk_director.auth.refresh.rotate_on_refresh`
      */
@@ -107,17 +117,57 @@ class TokenIssuer
     /**
      * Emite una sesión: refresh token + access token ligado a él.
      *
+     * `$request` es el pedido que prueba la identidad (login, 2FA, social).
+     * Con él se ata la sesión a la clave DPoP si el pedido trae prueba o el
+     * scope la exige (sin `ath`: todavía no hay access token). Sin él, la
+     * sesión sale suelta — salvo que el scope la exija: entonces
+     * `DpopProofException` (`ERR_DPOP_REQUIRED`), porque un par suelto en ese
+     * scope no lo acepta ni `mk.auth` ni el refresh.
+     *
      * @return array{access: NewAccessToken, refresh: string}
+     *
+     * @throws DpopProofException
      */
-    public function issueTokenPair(Authenticatable $user): array
+    public function issueTokenPair(Authenticatable $user, ?Request $request = null): array
     {
+        $jkt = $this->dpopBinding($user, $request);
         $family = Str::random(32);
-        $refresh = $this->issueRefreshToken($user, $family);
+        $refresh = $this->issueRefreshToken($user, $family, $jkt);
 
         return [
-            'access' => $this->issueAccessToken($user, [self::refreshLinkAbility($refresh), self::FAMILY_PREFIX.$family]),
+            'access' => $this->issueAccessToken($user, [
+                self::refreshLinkAbility($refresh),
+                self::FAMILY_PREFIX.$family,
+                ...($jkt !== null ? [self::DPOP_JKT_PREFIX.$jkt] : []),
+            ]),
             'refresh' => $refresh,
         ];
+    }
+
+    /**
+     * La huella a la que se ata la sesión nueva, o null si sale suelta.
+     *
+     * Una prueba presente se verifica aunque el scope no la exija: quien la
+     * manda espera un token atado, y emitirlo suelto en silencio sería el
+     * downgrade.
+     *
+     * @throws DpopProofException
+     */
+    private function dpopBinding(Authenticatable $user, ?Request $request): ?string
+    {
+        $scope = substr($this->scopeAbilityFor($user), strlen(self::SCOPE_ABILITY_PREFIX));
+        $required = DpopProofVerifier::requiredFor($scope);
+        $present = $request !== null && $request->headers->has(DpopProofVerifier::HEADER);
+
+        if (! $present) {
+            if ($required) {
+                throw new DpopProofException(DpopFailure::Missing, 'DPoP proof required.');
+            }
+
+            return null;
+        }
+
+        return app(DpopProofVerifier::class)->verify($request);
     }
 
     /**
@@ -126,12 +176,16 @@ class TokenIssuer
      *
      * @param  string|null  $family  la sesión a la que pertenece; null = suelto
      *                               (la primera rotación le asigna una).
+     * @param  string|null  $dpopJkt  la huella DPoP a la que queda atado; null = suelto.
      */
-    public function issueRefreshToken(Authenticatable $user, ?string $family = null): string
+    public function issueRefreshToken(Authenticatable $user, ?string $family = null, ?string $dpopJkt = null): string
     {
         $abilities = [self::REFRESH_ABILITY, $this->scopeAbilityFor($user)];
         if ($family !== null) {
             $abilities[] = self::FAMILY_PREFIX.$family;
+        }
+        if ($dpopJkt !== null) {
+            $abilities[] = self::DPOP_JKT_PREFIX.$dpopJkt;
         }
 
         $token = $user->createToken(
@@ -296,6 +350,22 @@ class TokenIssuer
         return null;
     }
 
+    /**
+     * La huella DPoP a la que está atado un token, o null si está suelto.
+     *
+     * @param  array<int|string,mixed>  $abilities
+     */
+    public static function dpopJktOf(array $abilities): ?string
+    {
+        foreach (self::flattenAbilities($abilities) as $ability) {
+            if (str_starts_with($ability, self::DPOP_JKT_PREFIX)) {
+                return substr($ability, strlen(self::DPOP_JKT_PREFIX));
+            }
+        }
+
+        return null;
+    }
+
     /** `refresh_token_id:{id}` a partir del `<id>|<plaintext>` del refresh. */
     private static function refreshLinkAbility(string $refreshPlainText): string
     {
@@ -342,6 +412,12 @@ class TokenIssuer
      *   3. Hash comparar `plaintext` contra `token` (Sanctum v4.3.2 usa SHA256).
      *      Ver `vendor/laravel/sanctum/src/HasApiTokens.php:66` y
      *      `PersonalAccessToken.php:61,67`.
+     *   3a. DPoP: si el token está atado (`dpop_jkt:`), exigir una prueba de
+     *       ESA clave (sin `ath`); si el scope exige DPoP y el token está suelto,
+     *       rechazar. Va ANTES de la lápida, del vencimiento y del estado de la
+     *       cuenta: quien no tiene la clave no puede quemar, revocar ni borrar
+     *       nada — si no, un ladrón con el refresh copiado le cerraría la sesión
+     *       al dueño.
      *   3b. Validar que ES un refresh token (ability `refresh`): un access
      *       token no refresca.
      *   4. Validar que el token no expiró.
@@ -359,13 +435,17 @@ class TokenIssuer
      * @param  string  $refreshToken  El `<id>|<plaintext>` recibido del cliente.
      * @param  string  $expectedScope  Scope que el AuthController declara para esta ruta
      *                                 (e.g. `admin`). Previene escalación de scope vía refresh.
+     * @param  Request|null  $request  el pedido del refresh, de donde sale la prueba DPoP.
      * @return array{access_token: string, refresh_token: string, user_id: string}
      *
+     * @throws DpopProofException Si el token está atado y la prueba falta o no es de su clave,
+     *                            o el scope exige DPoP y el token está suelto. El token
+     *                            queda intacto.
      * @throws InvalidRefreshTokenException Si el token es malformado, no existe, no es
      *                                      refresh, expiró, el scope no coincide o la
      *                                      cuenta ya no puede autenticarse.
      */
-    public function rotateRefreshToken(string $refreshToken, string $expectedScope): array
+    public function rotateRefreshToken(string $refreshToken, string $expectedScope, ?Request $request = null): array
     {
         $parser = new RefreshTokenParser;
         [$tokenId, $plaintext] = $parser->parse($refreshToken);
@@ -414,6 +494,21 @@ class TokenIssuer
         }
 
         $abilities = self::flattenAbilities($tokenModel->abilities ?? []);
+
+        // 🔴 DPoP ANTES QUE NADA QUE TOQUE EL TOKEN. Sin la clave no se rota, no
+        // se marca lápida, no se revoca la familia ni se borra por cuenta
+        // bloqueada: un ladrón con el refresh copiado no puede cerrarle la sesión
+        // al dueño. Sin `ath`: el refresh no viaja como Bearer.
+        $jkt = self::dpopJktOf($abilities);
+        if ($jkt !== null) {
+            if ($request === null) {
+                throw new DpopProofException(DpopFailure::Missing, 'DPoP proof required.');
+            }
+            app(DpopProofVerifier::class)->verify($request, expectedJkt: $jkt);
+        } elseif (DpopProofVerifier::requiredFor($expectedScope)) {
+            // Una sesión anterior a la exigencia: se vuelve a loguear una vez.
+            throw new DpopProofException(DpopFailure::Unbound, 'This session is not bound to a DPoP key. Log in again.');
+        }
 
         // 🔴 REUTILIZACIÓN: el token es auténtico (el hash coincide) pero ya se
         // rotó. Quien lo presenta tiene una copia vieja: si es el ladrón, el
@@ -466,7 +561,7 @@ class TokenIssuer
             $tokenModel->forceFill([
                 'abilities' => [...$tombstone, self::ROTATED_ABILITY, self::FAMILY_PREFIX.$family],
             ])->save();
-            $newRefreshPlaintext = $this->issueRefreshToken($user, $family);
+            $newRefreshPlaintext = $this->issueRefreshToken($user, $family, $jkt);
         } else {
             // Mantener el viejo (BC default).
             $newRefreshPlaintext = $refreshToken;
@@ -476,6 +571,7 @@ class TokenIssuer
         $newAccess = $this->issueAccessToken($user, [
             self::refreshLinkAbility($newRefreshPlaintext),
             self::FAMILY_PREFIX.$family,
+            ...($jkt !== null ? [self::DPOP_JKT_PREFIX.$jkt] : []),
         ]);
 
         return [

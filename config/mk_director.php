@@ -735,6 +735,28 @@ return [
                 FILTER_VALIDATE_BOOLEAN,
             ),
         ],
+        'dpop' => [
+            // Tokens atados a una clave del cliente (RFC 9449, adaptado;
+            // DEVELOPER_GUIDE § 3.24). Un token robado no sirve sin la clave
+            // privada, que el navegador guarda como no exportable.
+            //
+            // `scopes`: los scopes que EXIGEN la prueba (lista separada por
+            // coma, ej. `admin`). Vacío por defecto: ningún consumidor cambia.
+            // Un token que ya salió atado exige la prueba siempre, esté o no
+            // su scope en esta lista: la exigencia sale del token.
+            'scopes' => array_values(array_filter(array_map(
+                'trim',
+                explode(',', (string) env('MK_AUTH_DPOP_SCOPES', '')),
+            ))),
+            // Cuánto vale una prueba alrededor del reloj del servidor, para
+            // los dos lados: se acepta |ahora - iat| <= max_age_seconds.
+            'max_age_seconds' => (int) env('MK_AUTH_DPOP_MAX_AGE_SECONDS', 60),
+            // Dónde se anotan los `jti` ya usados (anti-replay). null = el
+            // store default. 🔴 Con varios servidores tiene que ser COMPARTIDO
+            // (base o Redis): con `array` o `file` cada servidor acepta la
+            // misma prueba una vez.
+            'cache_store' => env('MK_AUTH_DPOP_CACHE_STORE'),
+        ],
     ],
 
     /*

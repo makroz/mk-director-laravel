@@ -12,6 +12,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Tokens atados a la clave del cliente (DPoP, RFC 9449 adaptado)
+
+**Added** (opt-in; sin migración; con `MK_AUTH_DPOP_SCOPES` vacío nada cambia)
+- Config `mk_director.auth.dpop`: `scopes` (`MK_AUTH_DPOP_SCOPES`, lista separada por coma, vacía por
+  defecto), `max_age_seconds` (60) y `cache_store` (null = el default; tiene que ser compartido entre
+  servidores).
+- `DpopProofVerifier`: verifica la prueba del header `DPoP` (`typ` `dpop+jwt`, sólo `ES256`, `jwk`
+  pública EC P-256 sin `d`, firma, `htm`, la RUTA de `htu`, `iat` en la ventana, `jti` no repetido,
+  `ath`) y devuelve la huella RFC 7638. Cada rechazo es un `DpopFailure` distinto.
+- `TokenIssuer::issueTokenPair($user, ?Request $request = null)`: con una prueba en el pedido, o si el
+  scope está en `scopes`, el access Y el refresh salen con `dpop_jkt:{huella}`. La usan el login, el
+  `two-factor/challenge` y el login social.
+- `TokenIssuer::rotateRefreshToken($token, $scope, ?Request $request = null)`: un refresh atado exige
+  una prueba de su clave **antes** de tocar el token (sin la clave no hay lápida, ni revocación de la
+  familia, ni borrado): un refresh robado no le cierra la sesión al dueño. El par nuevo hereda la huella.
+- `mk.auth`: un access atado exige en cada pedido una prueba de su clave con `ath`, esté o no su scope
+  en la config. El token sigue viajando como `Authorization: Bearer`.
+- Errores, todos 401: `ERR_DPOP_REQUIRED` (falta la prueba), `ERR_DPOP_INVALID` (con
+  `__extraData.reason`, y `server_time` si falló el `iat`) y `ERR_DPOP_UNBOUND` (el scope exige DPoP y
+  el token es de antes).
+
+⚠️ Al poner un scope en `MK_AUTH_DPOP_SCOPES`, sus tokens sueltos dejan de servir (`ERR_DPOP_UNBOUND`
+en `mk.auth` y en el refresh): cada usuario se loguea una vez. Desplegar primero el front que manda
+las pruebas. Rutas del paquete protegidas con `auth:sanctum` en vez de `mk.auth:{scope}` no exigen la
+prueba. Ver DEVELOPER_GUIDE § 3.24. Tests: `tests/Feature/Auth/DpopBoundTokensTest.php`.
+
 ## [UNRELEASED] — Las abilities son del sistema: su CRUD generado es de sólo lectura
 
 **Changed**

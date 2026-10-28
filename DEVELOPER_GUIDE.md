@@ -1132,8 +1132,8 @@ estado de la cuenta. Medido en el piloto NetPizza, con la cadena HTTP real:
 
 | Token | Nombre | Abilities | TTL | Sirve para |
 |---|---|---|---|---|
-| Access | `access` | `auth_scope:{scope}` + `refresh_token_id:{id}` + `refresh_family:{f}` (+ las que pase el caller) | `ttl.access_seconds` (15 min) | Bearer en rutas con `mk.auth:{scope}` |
-| Refresh | `refresh` | `refresh` + `auth_scope:{scope}` + `refresh_family:{f}` | `ttl.refresh_seconds` (7 días), o el del scope (§ 3.23) | **Sólo** el body de `POST /auth/refresh` |
+| Access | `access` | `auth_scope:{scope}` + `refresh_token_id:{id}` + `refresh_family:{f}` (+ `dpop_jkt:{huella}` si está atado, § 3.24) (+ las que pase el caller) | `ttl.access_seconds` (15 min) | Bearer en rutas con `mk.auth:{scope}` |
+| Refresh | `refresh` | `refresh` + `auth_scope:{scope}` + `refresh_family:{f}` (+ `dpop_jkt:{huella}`) | `ttl.refresh_seconds` (7 días), o el del scope (§ 3.23) | **Sólo** el body de `POST /auth/refresh` |
 
 - `mk.auth` rechaza un token con la ability `refresh` **o** el nombre `refresh` → `401 ERR_UNAUTHENTICATED`. El chequeo vive en `AuthScopeResolver`, así que aplica a todos los scopes.
 - `TokenIssuer::rotateRefreshToken()` exige la ability `refresh` → un access token da `401 ERR_UNAUTHENTICATED` y no emite nada.
@@ -3595,6 +3595,98 @@ no pagaba el bcrypt y el reloj decía qué correos tienen cuenta. Ahora el
 por login social) compara contra un hash descartable hecho con el driver y el
 costo configurados (`dummyPasswordHash()`, uno por proceso y driver). El primer
 login sin usuario de cada proceso paga además el `make`.
+
+### 3.24 Tokens atados a la clave del cliente (DPoP, RFC 9449 adaptado)
+
+Un access o refresh token copiado (XSS, una extensión, un log) sirve tal cual
+desde otra máquina. Con DPoP el cliente genera un par de claves EC P-256 que no
+sale de su dispositivo (WebCrypto, no exportable) y firma en **cada** pedido una
+prueba corta: un JWT en el header `DPoP`. El token queda atado a la huella de
+esa clave; sin la clave privada, el token copiado da 401.
+
+**Apagado por defecto.** Con `scopes` vacío y sin pruebas, nada cambia: ningún
+token sale atado y ningún pedido se verifica.
+
+#### 3.24.1 Config (`mk_director.auth.dpop`)
+
+| Clave | Env | Default | Qué hace |
+|---|---|---|---|
+| `scopes` | `MK_AUTH_DPOP_SCOPES` (`admin,operator`) | `[]` | Scopes que **exigen** la prueba en login, 2FA, login social, refresh y `mk.auth` |
+| `max_age_seconds` | `MK_AUTH_DPOP_MAX_AGE_SECONDS` | `60` | Ventana del `iat`, en los dos sentidos: `\|ahora - iat\| <= max_age` |
+| `cache_store` | `MK_AUTH_DPOP_CACHE_STORE` | `null` (el default) | Dónde se anotan los `jti` usados |
+
+🔴 **La caché tiene que ser COMPARTIDA entre servidores** (base o Redis). Con
+`array` o `file`, cada servidor acepta una vez la misma prueba: el anti-replay
+se divide por la cantidad de servidores. Cada `jti` vive `2 × max_age`.
+
+#### 3.24.2 Qué pasa en cada puerta
+
+| Puerta | Token atado (`dpop_jkt:` en sus abilities) | Scope en `scopes`, token suelto | Scope fuera de `scopes`, token suelto |
+|---|---|---|---|
+| Login / `two-factor/challenge` / login social (`issueTokenPair()`) | — | prueba obligatoria (sin `ath`) → el par sale atado | si viene prueba, se verifica y el par sale atado; si no, suelto (como siempre) |
+| `POST /auth/refresh` | prueba de **esa** clave (sin `ath`); el par nuevo hereda la huella | `401 ERR_DPOP_UNBOUND`: se vuelve a loguear una vez | como siempre |
+| Rutas con `mk.auth:{scope}` | prueba de esa clave **con `ath`** | `401 ERR_DPOP_UNBOUND` | como siempre |
+
+- **La exigencia sale del TOKEN, no de la config.** Un token atado exige su
+  prueba aunque se saque el scope de `scopes`. Por eso el token sigue viajando
+  como `Authorization: Bearer` (no con el esquema `DPoP` del RFC, para no tocar
+  Sanctum): mandarlo como Bearer sin prueba no es un downgrade posible.
+- **El refresh valida la clave ANTES de tocar el token.** Sin la clave no se
+  rota, no se marca lápida, no se revoca la familia (§ 3.23.3) ni se borra por
+  cuenta bloqueada: si no, un ladrón con el refresh copiado le cerraría la sesión
+  al dueño. Con la clave, la reutilización de una lápida revoca la familia igual
+  que siempre. El refresh se prueba **sin** `ath`: no viaja como Bearer.
+- Una prueba presente en el login se verifica aunque el scope no la exija: quien
+  la manda espera un token atado, y emitirlo suelto en silencio sería el
+  downgrade.
+- `issueTokenPair($user, $request)` y `rotateRefreshToken($token, $scope, $request)`
+  reciben el pedido como último parámetro opcional. Sin pedido, la sesión sale
+  suelta; si el scope exige DPoP, `DpopProofException` (`ERR_DPOP_REQUIRED`).
+- Una sesión por cookie (Sanctum stateful, `TransientToken`) cuenta como suelta.
+
+#### 3.24.3 Qué verifica `DpopProofVerifier`
+
+Exactamente un header `DPoP`; JOSE `typ = dpop+jwt`, `alg = ES256` (nada más:
+ni `none` ni `HS256`), `jwk` pública EC P-256 **sin** `d`; la firma con esa
+`jwk`; `htm` = el método real del pedido; la **ruta** de `htu`; `iat` dentro de
+la ventana; `jti` no visto (`Cache::add`); `ath` = base64url(SHA-256 del token
+tal cual vino en el `Authorization`) cuando hay access token; y que la huella
+(RFC 7638) sea la del token. El `jti` se anota al final: sólo una prueba
+aceptada lo consume.
+
+**`htu` se compara sólo por la ruta.** Detrás de un proxy (TLS terminado, host
+interno) la URL que ve el servidor no es la que firmó el cliente; la ruta sí se
+conserva. Esquema, host, query y fragmento se ignoran. Un proxy que **reescribe**
+la ruta (quita un prefijo) rompe la comparación.
+
+#### 3.24.4 Códigos de error (todos 401)
+
+| `__extraData.code` | Cuándo |
+|---|---|
+| `ERR_DPOP_REQUIRED` | No vino el header `DPoP` y hacía falta |
+| `ERR_DPOP_INVALID` | La prueba no vale; `__extraData.reason` dice por qué (`multiple`, `malformed`, `typ`, `alg`, `jwk`, `jwk_private`, `signature`, `htm`, `htu`, `iat`, `ath`, `key_mismatch`, `replayed`) |
+| `ERR_DPOP_UNBOUND` | El scope exige DPoP y el token no está atado (una sesión de antes): volver a loguear |
+
+Con `reason: iat` el 401 trae además `__extraData.server_time` (unix, segundos):
+el cliente corrige el desfase de su reloj y reintenta **una** vez.
+
+#### 3.24.5 Lo que tiene que hacer el cliente
+
+- Una clave por sesión (nueva en cada login), borrada en el logout.
+- Una prueba **nueva** en cada pedido, también en el reintento después de un
+  refresh: el `jti` no se puede repetir y el `ath` cambia con el access nuevo.
+- Las descargas y cualquier `fetch` propio que vaya a una ruta con `mk.auth`
+  necesitan su prueba.
+
+⚠️ **Rutas del paquete con middleware configurable** (`export.route_middleware`,
+`push.route_middleware`, `storage.routes.scopes.*.middleware`,
+`help.routes.scopes.*.middleware`, `openapi.middleware`): la prueba la exige
+`mk.auth`. Si un consumidor las protege con `auth:sanctum` en vez de
+`mk.auth:{scope}`, un token atado pasa ahí sin prueba.
+
+`mk-studio:perf` crea su propio token (`PerfAdmin`), sin clave: pide las pantallas
+dentro del proceso. Para esa corrida apaga la exigencia (`dpop.scopes` vacío),
+porque mide consultas sobre una copia descartable, no la autenticación.
 
 ## 🔍 4. ListManager: El Motor de Búsquedas (Guía para Frontend)
 

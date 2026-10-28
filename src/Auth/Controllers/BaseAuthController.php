@@ -17,6 +17,7 @@ use Laravel\Sanctum\PersonalAccessToken;
 use Mk\Director\Auth\Attributes\Ability;
 use Mk\Director\Auth\Enums\TwoFactorPolicy;
 use Mk\Director\Auth\Events\AuthEvent;
+use Mk\Director\Auth\Exceptions\DpopProofException;
 use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Auth\Services\AccountStatus;
 use Mk\Director\Auth\Services\EmailOtpService;
@@ -494,7 +495,13 @@ abstract class BaseAuthController extends BaseController
             $user->loadMissing(['roles', 'directAbilities']);
         }
 
-        ['access' => $accessToken, 'refresh' => $refreshToken] = $this->tokenIssuer()->issueTokenPair($user);
+        // DPoP (§ 3.24): el par sale atado a la clave de la prueba de ESTE
+        // pedido. Si el scope la exige y falta o no vale, 401 y no hay sesión.
+        try {
+            ['access' => $accessToken, 'refresh' => $refreshToken] = $this->tokenIssuer()->issueTokenPair($user, $request);
+        } catch (DpopProofException $e) {
+            return $this->dpopErrorResponse($e);
+        }
 
         $expiresIn = (int) config('mk_director.auth.ttl.access_seconds', 15 * 60);
 
@@ -544,6 +551,9 @@ abstract class BaseAuthController extends BaseController
      * 401 `ERR_UNAUTHENTICATED` si el token no es un refresh token (un access
      * token no refresca) o es inválido; 401 `ERR_ACCOUNT_DISABLED` si la
      * cuenta ya no puede autenticarse (el refresh token queda revocado).
+     * 401 `ERR_DPOP_REQUIRED`/`ERR_DPOP_INVALID`/`ERR_DPOP_UNBOUND` si el
+     * refresh está atado a una clave y la prueba falta o es de otra (el token
+     * queda intacto), o si el scope exige DPoP y el refresh está suelto (§ 3.24).
      */
     #[Ability('{scope}.auth.refresh', 'Rotar refresh token en el scope {scope}')]
     public function refresh(Request $request): JsonResponse
@@ -557,7 +567,15 @@ abstract class BaseAuthController extends BaseController
         $refreshToken = (string) $request->input('refresh_token');
 
         try {
-            $result = $this->tokenIssuer()->rotateRefreshToken($refreshToken, $scope);
+            $result = $this->tokenIssuer()->rotateRefreshToken($refreshToken, $scope, $request);
+        } catch (DpopProofException $e) {
+            $this->dispatchAuthEventSafe('auth.refresh.failed', [
+                'scope' => $scope,
+                'ip' => $request->ip(),
+                'reason' => $e->getMessage(),
+            ]);
+
+            return $this->dpopErrorResponse($e);
         } catch (InvalidRefreshTokenException $e) {
             // R-PKG-018 BUG-NEW-27 fix: capturar la excepción específica del
             // paquete ANTES del catch genérico para devolver el mensaje
@@ -583,6 +601,20 @@ abstract class BaseAuthController extends BaseController
             'token_type' => 'Bearer',
             'expires_in' => (int) config('mk_director.auth.ttl.access_seconds', 15 * 60),
         ], 'Refresh exitoso');
+    }
+
+    /**
+     * El 401 de una prueba DPoP rechazada: el sobre de `sendError()` con
+     * `__extraData.reason` (y `server_time` si falló el `iat`, para que el
+     * cliente corrija su reloj). Mismo sobre que el de `mk.auth`.
+     */
+    private function dpopErrorResponse(DpopProofException $e): JsonResponse
+    {
+        $response = $this->sendError($e->getMessage(), [], 401, $e->errorCode());
+        $payload = $response->getData(true);
+        $payload['__extraData'] = array_merge((array) ($payload['__extraData'] ?? []), $e->extraData());
+
+        return $response->setData($payload);
     }
 
     /**

@@ -9,9 +9,14 @@ use Illuminate\Auth\AuthenticationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Laravel\Sanctum\PersonalAccessToken;
+use Mk\Director\Auth\Enums\DpopFailure;
+use Mk\Director\Auth\Exceptions\DpopProofException;
 use Mk\Director\Auth\Exceptions\ScopeMismatchException;
 use Mk\Director\Auth\Services\AccountStatus;
 use Mk\Director\Auth\Services\AuthScopeResolver;
+use Mk\Director\Auth\Services\DpopProofVerifier;
+use Mk\Director\Auth\Services\TokenIssuer;
 use Mk\Director\Tenancy\TenantMembershipGate;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -33,6 +38,12 @@ use Symfony\Component\HttpFoundation\Response;
  * `ERR_UNAUTHENTICATED`. The account status is re-checked on every request
  * (`AccountStatus`, same rule as login/refresh): a blocked/inactive/pending
  * user → 401 `ERR_ACCOUNT_DISABLED`.
+ *
+ * DPoP (DEVELOPER_GUIDE § 3.24): un access token atado (`dpop_jkt:`) exige en
+ * CADA pedido una prueba de su clave con `ath`, sea cual sea la config; si el
+ * scope está en `mk_director.auth.dpop.scopes`, un token suelto → 401
+ * `ERR_DPOP_UNBOUND`. El token sigue llegando como `Authorization: Bearer`:
+ * mandarlo sin prueba no es un downgrade, porque la exigencia sale del token.
  *
  * **Envelope (R-PKG-042 FASE17-02 fix)**: el response 401 ahora usa el
  * envelope canónico R-PKG-024 (`{success, message, data, debugMsg}`) cuando
@@ -130,6 +141,12 @@ class MkAuthenticate
             return $this->unauthorizedResponse($request, $scope, $e->getMessage());
         }
 
+        try {
+            $this->checkDpop($request, $user, $scope);
+        } catch (DpopProofException $e) {
+            return $this->unauthorizedResponse($request, $scope, $e->getMessage(), $e->errorCode(), $e->extraData());
+        }
+
         // 🔴 El estado de la cuenta se re-chequea en CADA request, no sólo al
         // emitir tokens. Si no, bloquear a un usuario no corta su access token
         // vivo. Misma regla que login y refresh: `AccountStatus`. El motivo va
@@ -176,6 +193,34 @@ class MkAuthenticate
         }
 
         return $next($request);
+    }
+
+    /**
+     * La prueba DPoP del pedido, si el token está atado o el scope la exige.
+     *
+     * La huella se compara contra la del TOKEN, no contra la config: un token
+     * atado exige su clave aunque se saque el scope de la lista. El `ath` es el
+     * hash del Bearer tal cual llegó: la prueba no sirve con otro token.
+     *
+     * Una sesión por cookie (`TransientToken`, sin abilities) cuenta como
+     * suelta: en un scope que exige DPoP, 401.
+     *
+     * @throws DpopProofException
+     */
+    private function checkDpop(Request $request, object $user, string $scope): void
+    {
+        $token = method_exists($user, 'currentAccessToken') ? $user->currentAccessToken() : null;
+        $jkt = $token instanceof PersonalAccessToken ? TokenIssuer::dpopJktOf($token->abilities ?? []) : null;
+
+        if ($jkt === null) {
+            if (DpopProofVerifier::requiredFor($scope)) {
+                throw new DpopProofException(DpopFailure::Unbound, 'This session is not bound to a DPoP key. Log in again.');
+            }
+
+            return;
+        }
+
+        app(DpopProofVerifier::class)->verify($request, (string) $request->bearerToken(), $jkt);
     }
 
     /**

@@ -12,6 +12,7 @@ use Mk\Director\Auth\Middleware\MkAbility;
 use Mk\Director\Auth\Middleware\MkAuthenticate;
 use Mk\Director\Auth\Services\AbilityResolver;
 use Mk\Director\Auth\Services\AuthScopeResolver;
+use Mk\Director\Auth\Services\DpopProofVerifier;
 use Mk\Director\Auth\Services\EmailOtpService;
 use Mk\Director\Auth\Services\TokenIssuer;
 use Mk\Director\Auth\Services\TotpService;
@@ -28,6 +29,8 @@ use Mk\Director\Auth\Social\SocialProviderConfigResolver;
  *  - TotpService (singleton) — TOTP maths for the two-factor flow
  *    (DEVELOPER_GUIDE § 3.20). Stateless: the replay guard lives in the
  *    scope table (`two_factor_last_step`), not in the service.
+ *  - DpopProofVerifier (singleton) — verifies DPoP proofs for bound tokens
+ *    (DEVELOPER_GUIDE § 3.24). Stateless: the replay guard lives in the cache.
  *  - AuthScopeResolver — validates that the current token's scope matches
  *    the expected one.
  *  - AbilityResolver (scoped) — cachea el set de abilities por usuario.
@@ -43,6 +46,7 @@ class AuthServiceProvider extends ServiceProvider
         $this->app->singleton(TokenIssuer::class);
         $this->app->singleton(EmailOtpService::class);
         $this->app->singleton(TotpService::class);
+        $this->app->singleton(DpopProofVerifier::class);
         $this->app->bindIf(SocialProviderConfigResolver::class, ConfigSocialProviderConfigResolver::class);
         $this->app->bind(AuthScopeResolver::class, function ($app) {
             return new AuthScopeResolver($app['request']);
