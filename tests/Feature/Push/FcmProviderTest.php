@@ -125,6 +125,32 @@ test('a rejected service account throws, so the job is retried', function () {
     expect(fcmRequests(FCM_SEND_URL))->toBe([]);
 });
 
+test('the token and every send carry a timeout: a slow FCM costs seconds per phone, not 30', function (?int $configured, int $expected) {
+    if ($configured !== null) {
+        config(['mk_director.push.fcm.timeout' => $configured]);
+    }
+    $options = [];
+    $record = function (string $name, PromiseInterface $response) use (&$options) {
+        return function (Request $request, array $sent) use ($name, $response, &$options) {
+            $options[$name] = [$sent['timeout'] ?? null, $sent['connect_timeout'] ?? null];
+
+            return $response;
+        };
+    };
+    Http::fake([
+        FCM_TOKEN_URI => $record('token', Http::response(['access_token' => 'ya29.test', 'expires_in' => 3599])),
+        FCM_SEND_URL => $record('send', Http::response(['name' => 'projects/reto-test/messages/1'])),
+    ]);
+
+    app()->forgetInstance(PushProvider::class);
+    app(PushProvider::class)->send(new PushMessage('Hola', 'Uno'), ['token-a']);
+
+    expect($options)->toBe(['token' => [$expected, 2], 'send' => [$expected, 2]]);
+})->with([
+    'default' => [null, 5],
+    'MK_PUSH_FCM_TIMEOUT' => [9, 9],
+]);
+
 test('sends one request per token with the message', function () {
     fakeFcm();
 

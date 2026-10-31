@@ -504,3 +504,24 @@ test('a job queued before topics existed still runs', function () {
 
     expect($this->fake->calls)->toBe([['ana-phone']]);
 });
+
+test('the job retries a failure before sending, never a timeout, and logs when it gives up', function () {
+    $logger = new CapturingPushLogger;
+    $this->httpApp->instance('log', $logger);
+    $job = new SendPushJob(pushMessage(), [[PushTestUser::class, '1'], [PushTestUser::class, '2']]);
+
+    // A retry sends again to every phone of the job. What throws is what
+    // fails before the first send (the OAuth token, the database); a timeout
+    // may come after part of it went out, so it is not retried.
+    expect($job->tries)->toBe(3)
+        ->and($job->backoff)->toBe([10, 60])
+        ->and($job->timeout)->toBeLessThan(90)
+        ->and($job->failOnTimeout)->toBeTrue();
+
+    $job->failed(new RuntimeException('FCM rechazó la cuenta de servicio: HTTP 400 invalid_grant'));
+
+    expect($logger->lines)->toBe([[
+        '[mk-director] push: el job falló',
+        ['topic' => null, 'owners' => 2, 'title' => pushMessage()->title, 'error' => 'FCM rechazó la cuenta de servicio: HTTP 400 invalid_grant'],
+    ]]);
+});

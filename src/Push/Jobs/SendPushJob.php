@@ -11,9 +11,11 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Query\JoinClause;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Support\Facades\Log;
 use Mk\Director\Push\Contracts\PushProvider;
 use Mk\Director\Push\Models\MkPushDevice;
 use Mk\Director\Push\PushMessage;
+use Throwable;
 
 /**
  * Resuelve las direcciones de los dueños o de los suscriptos a un tema, se las
@@ -25,6 +27,23 @@ use Mk\Director\Push\PushMessage;
 final class SendPushJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable;
+
+    /**
+     * 🔴 Reintentar reenvía a TODOS los teléfonos del job: no queda registro
+     * de a cuáles ya les llegó. Por eso sólo se reintenta lo que tira antes
+     * del primer envío (el token OAuth, la base): el error de un teléfono no
+     * tira, se cuenta. Un timeout pudo cortar con parte ya enviada: no se
+     * reintenta (`failOnTimeout`). 60 s queda debajo del `retry_after` de 90
+     * de la conexión `database`, así que otro worker no lo toma a la vez.
+     */
+    public int $tries = 3;
+
+    /** @var list<int> */
+    public array $backoff = [10, 60];
+
+    public int $timeout = 60;
+
+    public bool $failOnTimeout = true;
 
     /**
      * 🔴 Propiedad con default y NO promovida en el constructor: un job que la
@@ -121,5 +140,16 @@ final class SendPushJob implements ShouldQueue
                 $q->orWhere(fn (Builder $o) => $o->where('mk_push_devices.owner_type', $type)->where('mk_push_devices.owner_id', $id));
             }
         });
+    }
+
+    /** Se rindió: queda en el log. Sin direcciones ni el texto del mensaje: sólo el título. */
+    public function failed(Throwable $e): void
+    {
+        Log::error('[mk-director] push: el job falló', [
+            'topic' => $this->topic,
+            'owners' => count($this->owners),
+            'title' => $this->message->title,
+            'error' => $e->getMessage(),
+        ]);
     }
 }
