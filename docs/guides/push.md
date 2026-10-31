@@ -44,6 +44,8 @@ MK_PUSH_QUEUE=
 # FCM: ruta ABSOLUTA al JSON de la cuenta de servicio de Firebase
 # (consola de Firebase → Configuración del proyecto → Cuentas de servicio → Generar nueva clave privada).
 MK_PUSH_FCM_CREDENTIALS=/path/to/service-account.json
+# Segundos de espera de la respuesta de Google por teléfono (y por el token). Conectar: 2.
+MK_PUSH_FCM_TIMEOUT=5
 
 # OneSignal: el App ID y una App API key (Settings → Keys & IDs).
 MK_PUSH_ONESIGNAL_APP_ID=
@@ -113,6 +115,13 @@ MkPush::to($member)->send(new PushMessage(
 ```bash
 php artisan queue:work      # sin worker no sale nada (salvo QUEUE_CONNECTION=sync)
 ```
+
+`SendPushJob` se reintenta hasta 3 veces (a los 10 y 60 s) sólo si tira **antes** de mandar: el
+token OAuth o la base. El error de un teléfono no tira: se cuenta y se loguea. Un reintento
+reenvía a todos los teléfonos del job, y un timeout (60 s) pudo cortar con parte ya enviada: por
+eso un timeout **no** se reintenta (`failOnTimeout`). Al rendirse deja `[mk-director] push: el job
+falló` en el log, con el título y la cantidad de destinatarios. Los 60 s quedan debajo del
+`retry_after` de 90 de la conexión `database`: si lo bajás, bajá también el timeout del job.
 
 ```php
 // routes/console.php

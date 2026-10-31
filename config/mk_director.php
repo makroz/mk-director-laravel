@@ -1089,7 +1089,13 @@ return [
         // sesión). Hace falta porque OneSignal no siempre avisa de una
         // dirección muerta. 0 o null la apaga. Programalo una vez por día.
         'prune_after_days' => env('MK_PUSH_PRUNE_AFTER_DAYS', 60),
-        'fcm' => ['credentials' => env('MK_PUSH_FCM_CREDENTIALS')],   // path to service-account JSON
+        'fcm' => [
+            'credentials' => env('MK_PUSH_FCM_CREDENTIALS'),   // path to service-account JSON
+            // Segundos que se espera la respuesta de Google por cada teléfono
+            // (y por el token). Un envío masivo con FCM lento no pasa de esto
+            // por teléfono.
+            'timeout' => (int) env('MK_PUSH_FCM_TIMEOUT', 5),
+        ],
 
         // Canales (grupos de avisos). Un mensaje con `channel: 'payments'`
         // hereda lo que dice su canal, y lo que diga el mensaje gana. Un

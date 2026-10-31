@@ -22,13 +22,21 @@ final class FcmAccessToken
 {
     public const SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
 
+    /**
+     * Segundos para abrir la conexión con Google, el token y cada envío. El
+     * de la respuesta es `mk_director.push.fcm.timeout`: sin ellos, el cliente
+     * HTTP espera 10 s para conectar y 30 por respuesta, y un FCM lento
+     * frena la cola entera.
+     */
+    public const CONNECT_TIMEOUT_SECONDS = 2;
+
     private const CACHE_SECONDS = 55 * 60;
 
     /** @param array{project_id: string, client_email: string, private_key: string, token_uri: string} $account */
-    public function __construct(private readonly array $account) {}
+    public function __construct(private readonly array $account, private readonly int $timeoutSeconds = 5) {}
 
     /** Lee la cuenta de servicio de `mk_director.push.fcm.credentials` (una ruta). */
-    public static function fromFile(?string $path): self
+    public static function fromFile(?string $path, int $timeoutSeconds = 5): self
     {
         if ($path === null || $path === '') {
             throw new RuntimeException('[mk-director] El driver de push \'fcm\' necesita MK_PUSH_FCM_CREDENTIALS: la ruta al JSON de la cuenta de servicio de Firebase.');
@@ -46,7 +54,7 @@ final class FcmAccessToken
             }
         }
 
-        return new self($account);
+        return new self($account, $timeoutSeconds);
     }
 
     public function projectId(): string
@@ -74,7 +82,7 @@ final class FcmAccessToken
             'exp' => $now + 3600,
         ], $this->account['private_key'], 'RS256');
 
-        $response = Http::asForm()->post($this->account['token_uri'], [
+        $response = Http::timeout($this->timeoutSeconds)->connectTimeout(self::CONNECT_TIMEOUT_SECONDS)->asForm()->post($this->account['token_uri'], [
             'grant_type' => 'urn:ietf:params:oauth:grant-type:jwt-bearer',
             'assertion' => $assertion,
         ]);

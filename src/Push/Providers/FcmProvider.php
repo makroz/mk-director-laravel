@@ -23,7 +23,7 @@ use Mk\Director\Push\PushResult;
  */
 final class FcmProvider implements PushProvider
 {
-    public function __construct(private readonly FcmAccessToken $token) {}
+    public function __construct(private readonly FcmAccessToken $token, private readonly int $timeoutSeconds = 5) {}
 
     public function name(): string
     {
@@ -41,6 +41,7 @@ final class FcmProvider implements PushProvider
         foreach ($addresses as $address) {
             try {
                 $response = Http::withToken($accessToken)->acceptJson()
+                    ->timeout($this->timeoutSeconds)->connectTimeout(FcmAccessToken::CONNECT_TIMEOUT_SECONDS)
                     ->post($url, ['message' => $this->payload($message, $address)]);
             } catch (ConnectionException $e) {
                 $failed++;

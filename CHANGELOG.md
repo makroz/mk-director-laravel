@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Push: timeouts y reintentos del envío
+
+**Changed**
+- `SendPushJob` declara `tries = 3`, `backoff = [10, 60]`, `timeout = 60`, `failOnTimeout = true` y
+  `failed()`, que loguea `[mk-director] push: el job falló`. Antes heredaba lo del worker y un timeout
+  podía reenviarse.
+- FCM: el token y cada envío esperan `mk_director.push.fcm.timeout` (`MK_PUSH_FCM_TIMEOUT`, 5 s) la
+  respuesta y 2 s la conexión, en vez de los 30 y 10 del cliente HTTP.
+
 ## [UNRELEASED] — Tokens atados a la clave del cliente (DPoP, RFC 9449 adaptado)
 
 **Added** (opt-in; sin migración; con `MK_AUTH_DPOP_SCOPES` vacío nada cambia)

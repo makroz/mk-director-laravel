@@ -186,11 +186,12 @@ class MkServiceProvider extends ServiceProvider
     protected function pushProvider(): PushProvider
     {
         $driver = (string) config('mk_director.push.driver', 'null');
+        $fcmTimeout = max(1, (int) config('mk_director.push.fcm.timeout', 5));
 
         return match ($driver) {
             'log' => new LogProvider,
             'null' => new NullProvider,
-            'fcm' => new FcmProvider(FcmAccessToken::fromFile(config('mk_director.push.fcm.credentials'))),
+            'fcm' => new FcmProvider(FcmAccessToken::fromFile(config('mk_director.push.fcm.credentials'), $fcmTimeout), $fcmTimeout),
             'onesignal' => $this->oneSignalProvider(),
             default => throw new \InvalidArgumentException(
                 "[mk-director] Driver de push desconocido: '{$driver}'. Valores válidos: fcm, onesignal, log, null."
