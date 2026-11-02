@@ -1210,7 +1210,7 @@ trait CRUDSmart
                 throw $e;
             }
 
-            return $this->sendError('No se puede eliminar: tiene registros vinculados. Desactivalo en lugar de borrarlo.', [], 409);
+            return $this->sendError('No se puede eliminar: tiene registros vinculados. Desactívelo en lugar de borrarlo.', [], 409);
         }
 
         // Auto-invalidate cache if enabled

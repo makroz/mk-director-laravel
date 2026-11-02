@@ -134,7 +134,7 @@ trait HasMkComments
         if (! $parent->isRoot()) {
             throw new InvalidArgumentException(
                 'No se puede responder a una respuesta: los comentarios admiten un solo nivel '
-                .'de anidamiento. Respondé al comentario raíz (id '.$parent->parent_id.').'
+                .'de anidamiento. Responda al comentario raíz (id '.$parent->parent_id.').'
             );
         }
 
