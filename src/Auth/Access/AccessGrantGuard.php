@@ -104,7 +104,7 @@ class AccessGrantGuard
         }
 
         if ($this->isSameAccount($actor, $target)) {
-            throw new AccessGrantDeniedException('No podés cambiar tu propio acceso.', self::ERR_SELF_ACCESS_CHANGE);
+            throw new AccessGrantDeniedException('No puede cambiar su propio acceso.', self::ERR_SELF_ACCESS_CHANGE);
         }
 
         $sameScope = $this->isSameScope($actor, $target);
@@ -154,7 +154,7 @@ class AccessGrantGuard
             // Mandar su propio status SIN cambiarlo es válido: un formulario de
             // edición manda el objeto entero.
             if (array_key_exists('status', $input) && $this->scalar($input['status']) !== $this->scalar($target->getAttribute('status'))) {
-                throw new AccessGrantDeniedException('No podés cambiar tu propio estado.', self::ERR_SELF_ACCESS_CHANGE);
+                throw new AccessGrantDeniedException('No puede cambiar su propio estado.', self::ERR_SELF_ACCESS_CHANGE);
             }
 
             return;
@@ -183,7 +183,7 @@ class AccessGrantGuard
         }
 
         if ($this->isSameAccount($actor, $target)) {
-            throw new AccessGrantDeniedException('No podés borrar tu propia cuenta.', self::ERR_SELF_ACCESS_CHANGE);
+            throw new AccessGrantDeniedException('No puede borrar su propia cuenta.', self::ERR_SELF_ACCESS_CHANGE);
         }
 
         if (! $this->isSameScope($actor, $target)) {
@@ -223,7 +223,7 @@ class AccessGrantGuard
     public function assertCanChangeRole(?Authenticatable $actor, Role $role, ?array $nextAbilities): void
     {
         if ($role->is_fixed === FixedStatus::Fixed) {
-            throw new AccessGrantDeniedException('Es un rol del sistema: no se modifica desde acá.', self::ERR_FIXED_ROLE);
+            throw new AccessGrantDeniedException('Es un rol del sistema: no se modifica desde aquí.', self::ERR_FIXED_ROLE);
         }
 
         $this->assertRoleBelongsToActingTenant($role);
@@ -241,7 +241,7 @@ class AccessGrantGuard
         }
 
         if ($nextAbilities !== null && $actor->roles()->whereKey($role->getKey())->exists()) {
-            throw new AccessGrantDeniedException('No podés cambiar las abilities de un rol que tenés.', self::ERR_SELF_ACCESS_CHANGE);
+            throw new AccessGrantDeniedException('No puede cambiar las abilities de un rol que tiene.', self::ERR_SELF_ACCESS_CHANGE);
         }
 
         $holders = $actor::query()->whereHas('roles', fn ($q) => $q->whereKey($role->getKey()))->get();
@@ -327,7 +327,7 @@ class AccessGrantGuard
 
         throw new AccessGrantDeniedException(
             $role->getAttribute('tenant_id') === null
-                ? 'Es un rol de la plataforma: no se modifica desde acá.'
+                ? 'Es un rol de la plataforma: no se modifica desde aquí.'
                 : 'Ese rol es de otra organización.',
             self::ERR_PLATFORM_ROLE,
         );
@@ -342,7 +342,7 @@ class AccessGrantGuard
     {
         if (Role::actingTenant() !== null) {
             throw new AccessGrantDeniedException(
-                'Los permisos los define la plataforma: no se crean ni se modifican desde acá.',
+                'Los permisos los define la plataforma: no se crean ni se modifican desde aquí.',
                 self::ERR_PLATFORM_ABILITY,
             );
         }
@@ -352,7 +352,7 @@ class AccessGrantGuard
     {
         foreach ($target->getEffectiveAbilities() as $ability) {
             if (! $this->holds($actor, $ability)) {
-                throw new AccessGrantDeniedException('No podés modificar a un usuario con más acceso que el tuyo.', self::ERR_TARGET_OUTRANKS_ACTOR);
+                throw new AccessGrantDeniedException('No puede modificar a un usuario con más acceso que el suyo.', self::ERR_TARGET_OUTRANKS_ACTOR);
             }
         }
     }
@@ -362,7 +362,7 @@ class AccessGrantGuard
     {
         foreach ($abilities as $ability) {
             if (! $this->holds($actor, $ability)) {
-                throw new AccessGrantDeniedException("No podés conceder ni quitar un acceso que no tenés: {$ability}.", self::ERR_ACCESS_NOT_HELD);
+                throw new AccessGrantDeniedException("No puede conceder ni quitar un acceso que no tiene: {$ability}.", self::ERR_ACCESS_NOT_HELD);
             }
         }
     }
@@ -375,7 +375,7 @@ class AccessGrantGuard
     private function assertAbilityNotFixed(Ability $ability): void
     {
         if ($ability->is_fixed === FixedStatus::Fixed || $ability->name === '*') {
-            throw new AccessGrantDeniedException('Es una ability del sistema: no se modifica desde acá.', self::ERR_FIXED_ABILITY);
+            throw new AccessGrantDeniedException('Es una ability del sistema: no se modifica desde aquí.', self::ERR_FIXED_ABILITY);
         }
     }
 
@@ -395,7 +395,7 @@ class AccessGrantGuard
 
         foreach ($this->outsideOtherScopes($actor, $names) as $name) {
             if (! $this->holds($actor, $name)) {
-                throw new AccessGrantDeniedException("No podés crear, renombrar ni borrar un acceso que no tenés: {$name}.", self::ERR_ACCESS_NOT_HELD);
+                throw new AccessGrantDeniedException("No puede crear, renombrar ni borrar un acceso que no tiene: {$name}.", self::ERR_ACCESS_NOT_HELD);
             }
         }
     }

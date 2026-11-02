@@ -74,7 +74,7 @@ class ModuleRbacGrantGuard
         }
 
         if ($this->isSameAccount($actor, $target)) {
-            throw new AccessGrantDeniedException('No podés cambiar tus propios roles.', AccessGrantGuard::ERR_SELF_ACCESS_CHANGE);
+            throw new AccessGrantDeniedException('No puede cambiar sus propios roles.', AccessGrantGuard::ERR_SELF_ACCESS_CHANGE);
         }
 
         if ($this->isSuperAdmin($actor)) {
@@ -116,7 +116,7 @@ class ModuleRbacGrantGuard
     public function assertCanDeleteUser(?Authenticatable $actor, Model $target): void
     {
         if ($this->applies($actor, $target::class) && $this->isSameAccount($actor, $target)) {
-            throw new AccessGrantDeniedException('No podés borrar tu propia cuenta.', AccessGrantGuard::ERR_SELF_ACCESS_CHANGE);
+            throw new AccessGrantDeniedException('No puede borrar su propia cuenta.', AccessGrantGuard::ERR_SELF_ACCESS_CHANGE);
         }
 
         $this->assertCanChangeUser($actor, $target);
@@ -149,7 +149,7 @@ class ModuleRbacGrantGuard
         $roleKey = $role->qualifyColumn($role->getKeyName());
 
         if ($nextAbilities !== null && $actor->roles()->where($roleKey, $role->getKey())->exists()) {
-            throw new AccessGrantDeniedException('No podés cambiar las abilities de un rol que tenés.', AccessGrantGuard::ERR_SELF_ACCESS_CHANGE);
+            throw new AccessGrantDeniedException('No puede cambiar las abilities de un rol que tiene.', AccessGrantGuard::ERR_SELF_ACCESS_CHANGE);
         }
 
         foreach ($role->users()->get() as $holder) {
@@ -193,7 +193,7 @@ class ModuleRbacGrantGuard
         $outranks = $this->isSuperAdmin($target) || array_diff($this->abilitiesOf($target), $this->abilitiesOf($actor)) !== [];
 
         if ($outranks) {
-            throw new AccessGrantDeniedException('No podés modificar a un usuario con más acceso que el tuyo.', AccessGrantGuard::ERR_TARGET_OUTRANKS_ACTOR);
+            throw new AccessGrantDeniedException('No puede modificar a un usuario con más acceso que el suyo.', AccessGrantGuard::ERR_TARGET_OUTRANKS_ACTOR);
         }
     }
 
@@ -204,7 +204,7 @@ class ModuleRbacGrantGuard
 
         foreach ($abilities as $ability) {
             if (! in_array($ability, $held, true)) {
-                throw new AccessGrantDeniedException("No podés conceder ni quitar un acceso que no tenés: {$ability}.", AccessGrantGuard::ERR_ACCESS_NOT_HELD);
+                throw new AccessGrantDeniedException("No puede conceder ni quitar un acceso que no tiene: {$ability}.", AccessGrantGuard::ERR_ACCESS_NOT_HELD);
             }
         }
     }

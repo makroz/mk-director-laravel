@@ -99,7 +99,7 @@ final class AsyncExportManager
             if (! $this->puedePedirElCustom($user, $type)) {
                 return new JsonResponse([
                     'success' => false,
-                    'message' => 'No tenés permiso para este reporte.',
+                    'message' => 'No tiene permiso para este reporte.',
                 ], 403);
             }
 
