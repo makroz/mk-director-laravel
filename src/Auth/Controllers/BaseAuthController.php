@@ -769,7 +769,7 @@ abstract class BaseAuthController extends BaseController
         ) {
             return $this->sendResponse(
                 null,
-                "Si el {$loginField} existe, recibirás un enlace para reset.",
+                "Si el {$loginField} existe, recibirá un enlace para reset.",
             );
         }
 
@@ -797,7 +797,7 @@ abstract class BaseAuthController extends BaseController
 
         return $this->sendResponse(
             null,
-            "Si el {$loginField} existe, recibirás un enlace para reset.",
+            "Si el {$loginField} existe, recibirá un enlace para reset.",
         );
     }
 
@@ -969,7 +969,7 @@ abstract class BaseAuthController extends BaseController
 
         if ($this->emailOtpService()->isRequestThrottled($scope, 'password_change', $identifier)) {
             return $this->sendError(
-                'Demasiadas solicitudes. Esperá antes de volver a intentar.',
+                'Demasiadas solicitudes. Espere antes de volver a intentar.',
                 [],
                 429,
                 'ERR_THROTTLED',
@@ -1033,7 +1033,7 @@ abstract class BaseAuthController extends BaseController
                     'ERR_CODE_EXPIRED',
                 ),
                 OtpVerifyResult::Locked => $this->sendError(
-                    'Demasiados intentos. Solicitá un nuevo código.',
+                    'Demasiados intentos. Solicite un nuevo código.',
                     [],
                     423,
                     'ERR_CODE_LOCKED',
@@ -1102,7 +1102,7 @@ abstract class BaseAuthController extends BaseController
 
         $genericOk = fn (): JsonResponse => $this->sendResponse(
             null,
-            "Si el {$loginField} existe, recibirás un código para restablecer tu contraseña.",
+            "Si el {$loginField} existe, recibirá un código para restablecer su contraseña.",
         );
 
         /** @var Authenticatable|null $user */
@@ -1198,7 +1198,7 @@ abstract class BaseAuthController extends BaseController
                     'ERR_CODE_EXPIRED',
                 ),
                 OtpVerifyResult::Locked => $this->sendError(
-                    'Demasiados intentos. Solicitá un nuevo código.',
+                    'Demasiados intentos. Solicite un nuevo código.',
                     [],
                     423,
                     'ERR_CODE_LOCKED',
@@ -1813,7 +1813,7 @@ abstract class BaseAuthController extends BaseController
 
         return $this->sendResponse(
             $this->twoFactorEnrollmentPayload($user, $secret),
-            'Escaneá el código y confirmá con los seis dígitos.',
+            'Escanee el código y confirme con los seis dígitos.',
         );
     }
 
@@ -1842,7 +1842,7 @@ abstract class BaseAuthController extends BaseController
 
         if (! $this->hasPendingTwoFactorSecret($user)) {
             return $this->sendError(
-                'No hay un enrolamiento en curso. Empezá por `two-factor/enable`.',
+                'No hay un enrolamiento en curso. Empiece por `two-factor/enable`.',
                 [],
                 422,
                 'ERR_2FA_NOT_ENABLED',
@@ -1994,7 +1994,7 @@ abstract class BaseAuthController extends BaseController
                 'two_factor' => 'challenge',
                 'challenge' => $this->issueTwoFactorCredential($user, self::TWO_FACTOR_CHALLENGE_PURPOSE, $ttl),
                 'expires_in' => $ttl,
-            ], 'Ingresá el código de tu app de autenticación.', 200, ['code' => 'TWO_FACTOR_REQUIRED']);
+            ], 'Ingrese el código de su app de autenticación.', 200, ['code' => 'TWO_FACTOR_REQUIRED']);
         }
 
         if ($policy->requiresEnrollment($confirmed)) {
@@ -2006,7 +2006,7 @@ abstract class BaseAuthController extends BaseController
                 'setup' => $this->issueTwoFactorCredential($user, self::TWO_FACTOR_SETUP_PURPOSE, $ttl),
                 'expires_in' => $ttl,
             ], $this->twoFactorEnrollmentPayload($user, $secret)),
-                'Este acceso exige verificación en dos pasos. Escaneá el código y confirmá.',
+                'Este acceso exige verificación en dos pasos. Escanee el código y confirme.',
                 200,
                 ['code' => 'TWO_FACTOR_SETUP_REQUIRED'],
             );
@@ -2179,13 +2179,13 @@ abstract class BaseAuthController extends BaseController
         return match ($verdict) {
             OtpVerifyResult::Confirmed => null,
             OtpVerifyResult::Expired => $this->sendError(
-                'El desafío expiró. Volvé a iniciar sesión.',
+                'El desafío expiró. Vuelva a iniciar sesión.',
                 [],
                 410,
                 'ERR_CODE_EXPIRED',
             ),
             OtpVerifyResult::Locked => $this->sendError(
-                'Demasiados intentos. Volvé a iniciar sesión.',
+                'Demasiados intentos. Vuelva a iniciar sesión.',
                 [],
                 423,
                 'ERR_CODE_LOCKED',

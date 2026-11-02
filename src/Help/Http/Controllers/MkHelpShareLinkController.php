@@ -114,7 +114,7 @@ final class MkHelpShareLinkController
         };
 
         return $article === null
-            ? $this->fail('Ese artículo no está en lo que te compartieron', 404)
+            ? $this->fail('Ese artículo no está en lo que le compartieron', 404)
             : $this->ok($this->sharedPayload($link, $article), $article->title);
     }
 

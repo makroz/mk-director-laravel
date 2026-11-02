@@ -130,7 +130,7 @@ test('nobody deletes their own account, not even a super-admin', function (strin
 
     expect($status)->toBe(403)
         ->and($body['__extraData']['code'])->toBe('ERR_SELF_ACCESS_CHANGE')
-        ->and($body['message'])->toBe('No podés borrar tu propia cuenta.')
+        ->and($body['message'])->toBe('No puede borrar su propia cuenta.')
         ->and(DB::table('squad_users')->where('id', $this->u[$actor])->exists())->toBeTrue();
 })->with(['editor', 'owner']);
 

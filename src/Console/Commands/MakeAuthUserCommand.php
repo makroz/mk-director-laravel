@@ -4711,7 +4711,7 @@ MD;
 
         return \$this->sendResponse(
             \$user->only(['id', 'name', '{$loginField}']),
-            'Registro exitoso. Verificá tu email para activar la cuenta.',
+            'Registro exitoso. Verifique su email para activar la cuenta.',
             201,
         );
     }

@@ -78,7 +78,7 @@ use Illuminate\Contracts\Auth\Authenticatable;
  */
 final class AccountStatus
 {
-    public const DEFAULT_DENIAL = 'Tu cuenta está deshabilitada.';
+    public const DEFAULT_DENIAL = 'Su cuenta está deshabilitada.';
 
     public const DEFAULT_CODE = 'ERR_ACCOUNT_DISABLED';
 

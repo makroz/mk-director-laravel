@@ -42,7 +42,7 @@ final class MkUploadException extends RuntimeException
     {
         // El mensaje lo lee la persona que eligió el archivo: sin nombres internos
         // (el perfil y el mime quedan en el log de quien depure, no en pantalla).
-        return new self('Ese tipo de archivo no se puede subir acá.', self::ERR_UPLOAD_TYPE, 422);
+        return new self('Ese tipo de archivo no se puede subir aquí.', self::ERR_UPLOAD_TYPE, 422);
     }
 
     public static function tooLarge(string $profile, int $maxBytes): self

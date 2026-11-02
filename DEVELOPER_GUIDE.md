@@ -344,7 +344,7 @@ Genera **20 archivos** en `app/Modules/Admin/`:
   `AccessGrantGuard`): `super-admin` es fijo (no se sincroniza, renombra ni
   borra, y ningún rol se renombra a él — `ERR_FIXED_ROLE`); nadie cambia sus
   roles ni las abilities de un rol que tiene, ni borra su propia cuenta
-  (`ERR_SELF_ACCESS_CHANGE`, «No podés borrar tu propia cuenta.»; el
+  (`ERR_SELF_ACCESS_CHANGE`, «No puede borrar su propia cuenta.»; el
   `destroy` generado llama `assertCanDeleteUser()`); nadie
   toca a un usuario —ni su contraseña— o un rol de alguien con más acceso
   (`ERR_TARGET_OUTRANKS_ACTOR`); sólo se asigna, quita o sincroniza lo que el
@@ -1220,7 +1220,7 @@ son del **mismo** scope de auth:
 
 | Regla | Código |
 |---|---|
-| Nadie cambia su **propio** acceso: roles, abilities directas ni `status` (mandar el propio `status` sin cambiarlo sí vale: un formulario manda el objeto entero). Tampoco **borra su propia cuenta**, ni con `*` (`No podés borrar tu propia cuenta.`) | `ERR_SELF_ACCESS_CHANGE` |
+| Nadie cambia su **propio** acceso: roles, abilities directas ni `status` (mandar el propio `status` sin cambiarlo sí vale: un formulario manda el objeto entero). Tampoco **borra su propia cuenta**, ni con `*` (`No puede borrar su propia cuenta.`) | `ERR_SELF_ACCESS_CHANGE` |
 | Nadie edita, bloquea, borra ni cambia el acceso de un usuario con **más** acceso que él | `ERR_TARGET_OUTRANKS_ACTOR` |
 | Sólo se concede **y quita** lo que el actor tiene, ability por ability, y por cada rol que entra o sale. Quitar también cuenta: si no, un encargado desarma al dueño. `*` cubre todo | `ERR_ACCESS_NOT_HELD` |
 
@@ -2346,7 +2346,7 @@ Pre-fix, el stub `src/Stubs/auth-user.auth-controller.stub` tenía 5 líneas hu�
         if (! $user || $user->getAuthScope() !== 'admin' || $isActiveCheck) {
             return $this->sendResponse(
                 null,
-                'Si el email existe, recibirás un enlace para reset.',
+                'Si el email existe, recibirá un enlace para reset.',
             );
         }
 //        return $this->sendResponse(         ← ELIMINAR
@@ -2711,7 +2711,7 @@ A diferencia de §3.18 (usuario autenticado, el PIN es una segunda prueba sobre 
 
 **`POST password/reset/code/request`** — recibe el `loginField` (típicamente `email`). Emite un PIN nuevo (`EmailOtpService` con `purpose='password_reset'`) y despacha `auth.password_reset_code.requested` con payload `{scope, user_id, code, expires_at, ip}` (`code` = PIN en plano, ver aviso en §3.18.5).
 
-> **Anti-enumeration**: SIEMPRE devuelve un `200` genérico — `"Si el {loginField} existe, recibirás un código para restablecer tu contraseña."` — exista o no la cuenta, **y también cuando el throttle a nivel cuenta dispararía** (`isRequestThrottled` NO emite `429` acá: el corte de cuenta es **silencioso**, para no filtrar existencia). El abuso por IP lo corta el `throttle:` de ruta (default `3,10`), que es **por IP** y por eso no revela si la cuenta existe.
+> **Anti-enumeration**: SIEMPRE devuelve un `200` genérico — `"Si el {loginField} existe, recibirá un código para restablecer su contraseña."` — exista o no la cuenta, **y también cuando el throttle a nivel cuenta dispararía** (`isRequestThrottled` NO emite `429` acá: el corte de cuenta es **silencioso**, para no filtrar existencia). El abuso por IP lo corta el `throttle:` de ruta (default `3,10`), que es **por IP** y por eso no revela si la cuenta existe.
 
 **`POST password/reset/code/confirm`** — validación: `code` `required|string`; `password` `required|string|min:8|max:255|confirmed`. Resuelve el usuario por `loginField`. `EmailOtpService::verify(purpose='password_reset')` es la **fuente única** del verdict; el controller solo mapea enum → HTTP:
 
@@ -3059,7 +3059,7 @@ mismo que devuelve el login exitoso en su sobre.
 // POST /api/operator/auth/login  → 200, y NINGÚN token
 {
   "success": true,
-  "message": "Ingresá el código de tu app de autenticación.",
+  "message": "Ingrese el código de su app de autenticación.",
   "data": { "two_factor": "challenge", "challenge": "9f2c…:a1b2…", "expires_in": 300 },
   "__extraData": { "code": "TWO_FACTOR_REQUIRED" }
 }
