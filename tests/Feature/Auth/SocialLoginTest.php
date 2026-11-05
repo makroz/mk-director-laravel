@@ -3,11 +3,14 @@
 declare(strict_types=1);
 
 use Firebase\JWT\JWT;
+use Firebase\JWT\Key;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Foundation\Providers\FoundationServiceProvider;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Hash;
@@ -21,6 +24,8 @@ use Mk\Director\Auth\Enums\TwoFactorPolicy;
 use Mk\Director\Auth\Events\AuthEvent;
 use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Auth\Services\TotpService;
+use Mk\Director\Auth\Social\AppleSigningKey;
+use Mk\Director\Auth\Social\AppleSigningKeyResolver;
 use Mk\Director\Auth\Social\SocialIdentity;
 use Mk\Director\Auth\Social\SocialProviderConfigResolver;
 use Mk\Director\Auth\Support\MorphPivot;
@@ -43,6 +48,8 @@ const SOCIAL_GOOGLE_JWKS = 'https://www.googleapis.com/oauth2/v3/certs';
 const SOCIAL_APPLE_JWKS = 'https://appleid.apple.com/auth/keys';
 const SOCIAL_GOOGLE_CLIENT = 'web-client.apps.googleusercontent.test';
 const SOCIAL_APPLE_CLIENT = 'test.mozzo.app';
+const APPLE_TOKEN_URL = 'https://appleid.apple.com/auth/token';
+const APPLE_REVOKE_URL = 'https://appleid.apple.com/auth/revoke';
 
 final class SocialDiner extends AuthUser
 {
@@ -120,6 +127,14 @@ final class SocialAuthController extends BaseAuthController
     protected function passwordResetTable(): string
     {
         return 'customer_password_reset_tokens';
+    }
+
+    /** Lo que haría el endpoint de borrar la cuenta del consumer: revocar y nada más. */
+    public function revokeMine(Request $request): JsonResponse
+    {
+        $this->revokeSocialAccess($request->user());
+
+        return response()->json(['ok' => true]);
     }
 }
 
@@ -312,6 +327,7 @@ beforeEach(function () {
 
     // La tabla del vínculo sale de la MIGRACIÓN del paquete, no de una copia.
     (require dirname(__DIR__, 3).'/src/Auth/Database/Migrations/2026_09_26_000001_create_mk_social_identities_table.php')->up();
+    (require dirname(__DIR__, 3).'/src/Auth/Database/Migrations/2026_11_05_000001_add_provider_tokens_to_mk_social_identities_table.php')->up();
 
     Route::middleware(['api'])->group(function () {
         Route::post('api/customer/auth/social/{provider}', [SocialAuthController::class, 'socialLogin']);
@@ -319,6 +335,7 @@ beforeEach(function () {
     });
     Route::middleware(['api', 'mk.auth:customer'])->group(function () {
         Route::get('api/customer/auth/me', [SocialAuthController::class, 'me']);
+        Route::delete('api/customer/auth/social-access', [SocialAuthController::class, 'revokeMine']);
     });
 
     $this->diner = SocialDiner::create([
@@ -702,4 +719,143 @@ test('borrar de verdad la cuenta se lleva su vínculo social, y sólo el suyo', 
     $this->diner->delete();
 
     expect(DB::table('mk_social_identities')->pluck('subject')->all())->toBe(['google-sub-2']);
+});
+
+// ─── Apple: canjear el código al entrar y revocar al borrar la cuenta ───────
+
+/** La clave `.p8` de prueba (EC P-256) y su pública, para verificar el `client_secret`. */
+function appleSigningPair(): array
+{
+    static $pair = null;
+
+    return $pair ??= (function () {
+        $res = openssl_pkey_new(['private_key_type' => OPENSSL_KEYTYPE_EC, 'curve_name' => 'prime256v1']);
+        openssl_pkey_export($res, $private);
+
+        return ['private' => $private, 'public' => openssl_pkey_get_details($res)['key']];
+    })();
+}
+
+function withAppleSigningKey(?AppleSigningKey $key): void
+{
+    app()->instance(AppleSigningKeyResolver::class, new class($key) implements AppleSigningKeyResolver
+    {
+        public function __construct(private readonly ?AppleSigningKey $key) {}
+
+        public function forScope(string $scope): ?AppleSigningKey
+        {
+            return $scope === 'customer' ? $this->key : null;
+        }
+    });
+}
+
+function testAppleKey(): AppleSigningKey
+{
+    return new AppleSigningKey('TEAM123456', 'KEY1234567', appleSigningPair()['private']);
+}
+
+/** El `client_secret` que mandó el paquete: ES256 con la `.p8`, del Team ID, para el `client_id`. */
+function assertAppleClientSecret(string $jwt, string $clientId): void
+{
+    [$header] = explode('.', $jwt);
+    $claims = (array) JWT::decode($jwt, new Key(appleSigningPair()['public'], 'ES256'));
+
+    expect(json_decode(JWT::urlsafeB64Decode($header), true)['kid'])->toBe('KEY1234567')
+        ->and($claims['iss'])->toBe('TEAM123456')
+        ->and($claims['sub'])->toBe($clientId)
+        ->and($claims['aud'])->toBe('https://appleid.apple.com')
+        ->and($claims['exp'] - $claims['iat'])->toBeLessThanOrEqual(600);
+}
+
+function appleIdentityRow(): ?object
+{
+    return DB::table('mk_social_identities')->where('provider', 'apple')->first();
+}
+
+test('🔴 Apple con código y la clave configurada: canjea el código y guarda el refresh token CIFRADO, con el client_id que lo emitió', function () {
+    withAppleSigningKey(testAppleKey());
+    linkDiner($this->diner, 'apple', '001234.apple-sub.0001');
+    fakeJwks();
+    Http::fake([APPLE_TOKEN_URL => Http::response(['access_token' => 'a-1', 'refresh_token' => 'r-apple-1', 'token_type' => 'Bearer'])]);
+
+    [$status, $body] = socialPost($this, 'apple', ['id_token' => appleToken(), 'authorization_code' => 'c-apple-1']);
+
+    expect($status)->toBe(200, json_encode($body));
+    $row = appleIdentityRow();
+    expect($row->client_id)->toBe(SOCIAL_APPLE_CLIENT)
+        ->and($row->refresh_token)->not->toBe('r-apple-1')
+        ->and(Crypt::decryptString($row->refresh_token))->toBe('r-apple-1');
+
+    $sent = Http::recorded(fn ($r) => $r->url() === APPLE_TOKEN_URL);
+    expect($sent)->toHaveCount(1);
+    $form = $sent->first()[0]->data();
+    expect($form['grant_type'])->toBe('authorization_code')
+        ->and($form['code'])->toBe('c-apple-1')
+        ->and($form['client_id'])->toBe(SOCIAL_APPLE_CLIENT);
+    assertAppleClientSecret($form['client_secret'], SOCIAL_APPLE_CLIENT);
+});
+
+test('🔴 si Apple no canjea el código, el login sigue y no queda token', function () {
+    withAppleSigningKey(testAppleKey());
+    linkDiner($this->diner, 'apple', '001234.apple-sub.0001');
+    fakeJwks();
+    Http::fake([APPLE_TOKEN_URL => Http::response(['error' => 'invalid_grant'], 400)]);
+
+    [$status, $body] = socialPost($this, 'apple', ['id_token' => appleToken(), 'authorization_code' => 'c-vencido']);
+
+    expect($status)->toBe(200, json_encode($body))
+        ->and(appleIdentityRow()->refresh_token)->toBeNull();
+});
+
+test('sin la clave de Apple configurada, no se llama a Apple y el login sigue igual', function () {
+    withAppleSigningKey(null);
+    linkDiner($this->diner, 'apple', '001234.apple-sub.0001');
+    fakeJwks();
+
+    [$status] = socialPost($this, 'apple', ['id_token' => appleToken(), 'authorization_code' => 'c-apple-1']);
+
+    expect($status)->toBe(200)
+        ->and(Http::recorded(fn ($r) => $r->url() === APPLE_TOKEN_URL))->toHaveCount(0)
+        ->and(appleIdentityRow()->refresh_token)->toBeNull();
+});
+
+test('🔴 revocar: Apple recibe el refresh token con su client_secret, y el vínculo se borra', function () {
+    withAppleSigningKey(testAppleKey());
+    linkDiner($this->diner, 'apple', '001234.apple-sub.0001');
+    linkDiner($this->diner, 'google', 'google-sub-1');
+    fakeJwks();
+    Http::fake([
+        APPLE_TOKEN_URL => Http::response(['refresh_token' => 'r-apple-1']),
+        APPLE_REVOKE_URL => Http::response('', 200),
+    ]);
+    [, $body] = socialPost($this, 'apple', ['id_token' => appleToken(), 'authorization_code' => 'c-apple-1']);
+
+    $r = $this->httpDelete('/api/customer/auth/social-access', ['HTTP_AUTHORIZATION' => 'Bearer '.$body['data']['access_token']]);
+
+    expect($r->getStatusCode())->toBe(200);
+    $sent = Http::recorded(fn ($req) => $req->url() === APPLE_REVOKE_URL);
+    expect($sent)->toHaveCount(1);
+    $form = $sent->first()[0]->data();
+    expect($form['token'])->toBe('r-apple-1')
+        ->and($form['token_type_hint'])->toBe('refresh_token')
+        ->and($form['client_id'])->toBe(SOCIAL_APPLE_CLIENT);
+    assertAppleClientSecret($form['client_secret'], SOCIAL_APPLE_CLIENT);
+    expect(DB::table('mk_social_identities')->where('user_id', $this->diner->getKey())->count())->toBe(0);
+});
+
+test('🔴 si Apple no revoca, el vínculo con su token queda para reintentar; el de Google se borra igual', function () {
+    withAppleSigningKey(testAppleKey());
+    linkDiner($this->diner, 'apple', '001234.apple-sub.0001');
+    linkDiner($this->diner, 'google', 'google-sub-1');
+    fakeJwks();
+    Http::fake([
+        APPLE_TOKEN_URL => Http::response(['refresh_token' => 'r-apple-1']),
+        APPLE_REVOKE_URL => Http::response(['error' => 'server_error'], 503),
+    ]);
+    [, $body] = socialPost($this, 'apple', ['id_token' => appleToken(), 'authorization_code' => 'c-apple-1']);
+
+    $this->httpDelete('/api/customer/auth/social-access', ['HTTP_AUTHORIZATION' => 'Bearer '.$body['data']['access_token']]);
+
+    expect(DB::table('mk_social_identities')->where('user_id', $this->diner->getKey())->pluck('provider')->all())->toBe(['apple'])
+        ->and(Crypt::decryptString(appleIdentityRow()->refresh_token))->toBe('r-apple-1');
 });

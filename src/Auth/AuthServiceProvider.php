@@ -16,6 +16,8 @@ use Mk\Director\Auth\Services\DpopProofVerifier;
 use Mk\Director\Auth\Services\EmailOtpService;
 use Mk\Director\Auth\Services\TokenIssuer;
 use Mk\Director\Auth\Services\TotpService;
+use Mk\Director\Auth\Social\AppleSigningKeyResolver;
+use Mk\Director\Auth\Social\ConfigAppleSigningKeyResolver;
 use Mk\Director\Auth\Social\ConfigSocialProviderConfigResolver;
 use Mk\Director\Auth\Social\SocialProviderConfigResolver;
 
@@ -48,6 +50,7 @@ class AuthServiceProvider extends ServiceProvider
         $this->app->singleton(TotpService::class);
         $this->app->singleton(DpopProofVerifier::class);
         $this->app->bindIf(SocialProviderConfigResolver::class, ConfigSocialProviderConfigResolver::class);
+        $this->app->bindIf(AppleSigningKeyResolver::class, ConfigAppleSigningKeyResolver::class);
         $this->app->bind(AuthScopeResolver::class, function ($app) {
             return new AuthScopeResolver($app['request']);
         });

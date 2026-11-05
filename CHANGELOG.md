@@ -12,6 +12,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Apple: canjear el código al entrar y revocar al borrar la cuenta
+
+**Added**
+- `socialLogin` acepta `authorization_code` (opcional). Con Apple y la clave del scope configurada,
+  lo canjea en `/auth/token` y guarda el refresh token cifrado en `mk_social_identities`, con su
+  `client_id`. Si falla, el login sigue (DEVELOPER_GUIDE § 3.22.5).
+- `BaseAuthController::revokeSocialAccess($user)`: para el endpoint de borrar la cuenta del consumer.
+  Revoca en Apple (`/auth/revoke`) y borra los vínculos sociales del usuario; el de Apple queda si
+  Apple no revoca.
+- `AppleSigningKey`, el contrato `AppleSigningKeyResolver` (default `ConfigAppleSigningKeyResolver`,
+  lee `mk_director.auth.social.providers.apple.{team_id,key_id,private_key}`) y `AppleTokenClient`
+  (canje, revocación y el `client_secret` ES256).
+- Migración: `mk_social_identities.client_id` y `refresh_token`, nulas.
+
+Sin la clave configurada no cambia nada: es el default.
+
 ## [UNRELEASED] — Push: timeouts y reintentos del envío
 
 **Changed**

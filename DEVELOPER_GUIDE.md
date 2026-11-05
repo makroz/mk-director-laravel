@@ -3489,16 +3489,60 @@ mandar `Ana@Gmail.com` y el scope tenerlo guardado en minúsculas.
 identidad cuyo email **ya** es de otra cuenta del scope: un `create()` a ciegas
 choca con el `unique` y responde 500. Decidilo en el hook (como en el ejemplo).
 
-#### 3.22.5 Qué NO hace
+#### 3.22.5 Apple: canjear el código y revocar al borrar la cuenta
 
-- **Ningún otro proveedor** ni el flujo OAuth con `code`/redirect: sólo ID
-  tokens de Google y Apple.
-- No revoca el token de Apple ni guarda refresh tokens del proveedor: el
-  proveedor sólo prueba identidad; la sesión es la del scope.
+Apple exige que una app que ofrece «Sign in with Apple» **revoque el acceso
+cuando la persona borra su cuenta** (`POST https://appleid.apple.com/auth/revoke`).
+Para revocar hace falta un token de Apple, y el ID token no sirve: sólo sale de
+canjear el `authorization.code` que Apple entrega junto al ID token.
+
+1. **El front manda el código.** `socialLogin` acepta `authorization_code`
+   (opcional, hasta 2048) además de `id_token` y `nonce`. Sólo se mira con
+   Apple.
+2. **El login lo canjea**, si el scope tiene la clave (`AppleSigningKeyResolver`
+   devuelve un `AppleSigningKey`: Team ID, Key ID y el contenido del `.p8`).
+   `AppleTokenClient::exchangeCode()` llama a `/auth/token` y el refresh token
+   se guarda **cifrado** (`Crypt::encryptString`) en `mk_social_identities`,
+   junto al `client_id` que lo emitió (el `aud` del ID token). 🔴 Nunca frena el
+   login: sin clave, o si Apple no canjea, la persona entra igual y queda
+   `mk.auth.apple.code_exchange_failed` en el log.
+3. **El borrado de la cuenta revoca.** El endpoint de borrar la cuenta lo
+   escribe el consumer (el paquete no sabe si su borrado es lógico o físico) y
+   llama a `$this->revokeSocialAccess($user)` desde su `AuthController`:
+   - un vínculo de Apple con token se revoca y, si Apple dice que sí, se borra;
+   - si Apple falla (o falta la clave), el vínculo queda con su token para
+     reintentar, y queda `mk.auth.apple.revoke_failed` en el log. No tira: el
+     borrado sigue;
+   - los demás vínculos (Google, o Apple sin token) se borran.
+
+   No cierra las sesiones ni toca la cuenta: eso lo hace el consumer.
+
+Las dos llamadas a Apple se autentican con un `client_secret` ES256 de cinco
+minutos (`iss` = Team ID, `kid` = Key ID, `sub` = el `client_id`, `aud` =
+`https://appleid.apple.com`), firmado con `firebase/php-jwt`.
+
+**De dónde sale la clave.** El default, `ConfigAppleSigningKeyResolver`, lee
+`mk_director.auth.social.providers.apple.{team_id,key_id,private_key}`
+(`MK_AUTH_SOCIAL_APPLE_TEAM_ID`, `_KEY_ID`, `_PRIVATE_KEY`). Sin las tres, no
+hay clave: es el estado por defecto, y un scope que no la configura no cambia
+en nada. Un consumer que guarda la clave en su base bindea el suyo:
+
+```php
+$this->app->bind(AppleSigningKeyResolver::class, DbAppleSigningKeyResolver::class);
+```
+
+Es un contrato aparte de `SocialProviderConfigResolver` para no romper a quien
+ya lo implementa.
+
+#### 3.22.6 Qué NO hace
+
+- **Ningún otro proveedor** ni el flujo OAuth con redirect: sólo ID tokens de
+  Google y Apple. El `code` de Apple se canjea para poder revocar (§ 3.22.5),
+  no para iniciar la sesión.
 - No agrega la ruta sola, ni al scaffolder: un scope ya generado y uno nuevo se
   prenden igual, con la línea de § 3.22.1.
 
-#### 3.22.6 Qué se mide, y cómo
+#### 3.22.7 Qué se mide, y cómo
 
 `tests/Feature/Auth/SocialLoginTest.php`, con la cadena HTTP real y **sin red**:
 las claves RSA se generan en el test y el JWKS sale de `Http::fake()`. Cada
@@ -3506,6 +3550,11 @@ guarda del verificador y del controller se reinyectó (se sacó el chequeo, el
 test se puso en rojo, se restauró). El chequeo propio de `alg` se mide por el
 motivo del evento: `firebase/php-jwt` también rechaza `none` y `HS256`, así que
 mirando sólo el 401 sacarlo dejaba el test en verde.
+
+El canje y la revocación de Apple se miden en el mismo archivo, con `/auth/token`
+y `/auth/revoke` de `Http::fake()` y una clave EC P-256 generada en el test: el
+`client_secret` se verifica con la pública. Reinyectado: guardar el token sin
+cifrar y borrar el vínculo aunque Apple no revoque ponen la suite en rojo.
 
 ### 3.23 La sesión larga: TTL y rotación del refresh por scope, y detección de reutilización
 
