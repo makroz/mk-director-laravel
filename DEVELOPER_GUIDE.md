@@ -3553,9 +3553,12 @@ la persona misma, con la sesión abierta:
 Route::middleware('mk.auth:customer')->group(function () {
     Route::post('me/social/{provider}', [CustomerAuthController::class, 'linkSocialAccount'])
         ->whereIn('provider', ['google', 'apple'])
-        ->middleware('throttle:10,1');
+        ->middleware('throttle:5,10');
 });
 ```
+
+⚠️ El freno, como el de `password/change`: con un access token robado, el
+endpoint contesta si la contraseña es la correcta.
 
 - Body: `id_token`, `nonce`, y con Apple `authorization_code` y `redirect_uri`,
   igual que el login, más `current_password`. 🔴 **Pide la contraseña
@@ -3567,6 +3570,9 @@ Route::middleware('mk.auth:customer')->group(function () {
 - Una identidad que ya es de **otra** cuenta del scope da 409
   `ERR_SOCIAL_ALREADY_LINKED` y no se mueve. Si ya es de la misma, la respuesta
   es 200 y no se duplica. Si era de una cuenta que ya no existe, se reasigna.
+  ⚠️ Entre buscar al dueño y guardar no hay candado: dos pedidos a la vez por
+  la misma identidad SIN dueño los gana el último (`updateOrInsert`). Hace
+  falta la contraseña de cada cuenta y un ID token válido de esa identidad.
 - El email del proveedor no tiene que coincidir con el de la cuenta.
 - Con Apple, el código se canjea y se guarda el refresh token como en el
   login (§ 3.22.5), para poder revocar al borrar la cuenta.
