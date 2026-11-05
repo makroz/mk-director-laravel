@@ -1451,6 +1451,108 @@ abstract class BaseAuthController extends BaseController
     }
 
     /**
+     * VINCULAR Google o Apple a la cuenta de la sesión:
+     * `POST {prefix}/me/social/{provider}` con `mk.auth:{scope}`.
+     *
+     * Para quien ya tiene cuenta con contraseña y quiere entrar también con el
+     * proveedor: sin esto, `socialLogin` con su correo cae en
+     * {@see createSocialUser()} y el consumer no tiene a quién darle el acceso.
+     *
+     * Body: `{id_token, nonce?, authorization_code?, redirect_uri?,
+     * current_password}`. El token se verifica igual que en {@see socialLogin()}.
+     *
+     * 🔴 PIDE LA CONTRASEÑA ACTUAL, como `changePassword`: un vínculo es una
+     * puerta nueva a la cuenta, y con un access token robado alcanzaría para
+     * dejar el Google del ladrón adentro para siempre. Un usuario sin contraseña
+     * no puede vincular por acá.
+     *
+     * - Identidad de OTRA cuenta del scope → 409 `ERR_SOCIAL_ALREADY_LINKED`, sin
+     *   moverla. De esta misma → 200 (idempotente). De una cuenta que ya no
+     *   existe → se reasigna, como en el login.
+     * - El email del proveedor no tiene que coincidir con el de la cuenta: la
+     *   prueba es la contraseña más el token.
+     * - Apple con `authorization_code` y la clave → se canjea y se guarda el
+     *   refresh token, como en el login (§ 3.22.5).
+     *
+     * 🔴 OPT-IN: ninguna ruta generada apunta acá (DEVELOPER_GUIDE § 3.22.6).
+     * Responde `{social_providers}`: los proveedores vinculados de la cuenta.
+     */
+    #[Ability('{scope}.auth.social-link', 'Vincular Google o Apple a la cuenta en {scope}')]
+    public function linkSocialAccount(Request $request, string $provider): JsonResponse
+    {
+        $user = $request->user();
+        if (! $user instanceof Authenticatable) {
+            return $this->sendError('No autenticado.', [], 401, 'ERR_UNAUTHENTICATED');
+        }
+
+        $data = $request->validate([
+            'id_token' => ['required', 'string', 'max:8192'],
+            'nonce' => ['nullable', 'string', 'max:255'],
+            'authorization_code' => ['nullable', 'string', 'max:2048'],
+            'redirect_uri' => ['nullable', 'string', 'url', 'max:2048'],
+            'current_password' => ['required', 'string'],
+        ]);
+
+        if (! Hash::check($data['current_password'], (string) $user->getAuthPassword())) {
+            return $this->sendError(
+                'Contraseña actual incorrecta.',
+                ['current_password' => ['Contraseña actual incorrecta.']],
+                422,
+                'ERR_VALIDATION',
+            );
+        }
+
+        try {
+            $identity = $this->idTokenVerifier()->verify(
+                $provider,
+                $data['id_token'],
+                $this->socialProviderConfigResolver()->clientIds($this->authScope(), $provider),
+                $data['nonce'] ?? null,
+            );
+        } catch (SocialLoginException $e) {
+            return $this->socialLoginError($request, $provider, $e);
+        }
+
+        $owner = $this->findLinkedSocialUser($identity);
+
+        if ($owner !== null && (string) $owner->getAuthIdentifier() !== (string) $user->getAuthIdentifier()) {
+            return $this->sendError(
+                'Ese acceso ya está vinculado a otra cuenta.',
+                [],
+                409,
+                'ERR_SOCIAL_ALREADY_LINKED',
+            );
+        }
+
+        if ($owner === null) {
+            $this->linkSocialIdentity($user, $identity);
+        }
+
+        if ($provider === 'apple' && ($data['authorization_code'] ?? '') !== '') {
+            $this->storeAppleRefreshToken($identity, $data['authorization_code'], $data['redirect_uri'] ?? null);
+        }
+
+        return $this->sendResponse(['social_providers' => $this->linkedSocialProviders($user)], 'Listo, quedó vinculado.');
+    }
+
+    /**
+     * Los proveedores vinculados a `$user` en el scope, ordenados y sin
+     * repetir. Para el perfil del consumer (p. ej. en {@see customizeMePayload()}).
+     *
+     * @return list<string>
+     */
+    protected function linkedSocialProviders(Authenticatable $user): array
+    {
+        return DB::table(self::SOCIAL_IDENTITIES_TABLE)
+            ->where('auth_scope', $this->authScope())
+            ->where('user_id', (string) $user->getAuthIdentifier())
+            ->distinct()
+            ->orderBy('provider')
+            ->pluck('provider')
+            ->all();
+    }
+
+    /**
      * Para el endpoint de BORRAR LA CUENTA del consumer: revoca en Apple el
      * acceso de `$user` y borra sus vínculos sociales del scope. Apple exige
      * revocar al borrar una cuenta que entró con Apple.
