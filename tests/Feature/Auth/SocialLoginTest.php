@@ -336,6 +336,7 @@ beforeEach(function () {
     Route::middleware(['api', 'mk.auth:customer'])->group(function () {
         Route::get('api/customer/auth/me', [SocialAuthController::class, 'me']);
         Route::delete('api/customer/auth/social-access', [SocialAuthController::class, 'revokeMine']);
+        Route::post('api/customer/auth/me/social/{provider}', [SocialAuthController::class, 'linkSocialAccount']);
     });
 
     $this->diner = SocialDiner::create([
@@ -888,4 +889,105 @@ test('🔴 una clave de Apple que no se puede leer (p. ej. la APP_KEY rotada) no
     [$status, $body] = socialPost($this, 'apple', ['id_token' => appleToken(), 'authorization_code' => 'c-1']);
 
     expect($status)->toBe(200, json_encode($body));
+});
+
+// ─── 5. Vincular desde la cuenta (`linkSocialAccount`) ──────────────────────
+
+/** @return array{0:int, 1:array<string,mixed>} */
+function linkPost(object $test, SocialDiner $diner, string $provider, array $body): array
+{
+    $token = app(Mk\Director\Auth\Services\TokenIssuer::class)->issueTokenPair($diner)['access']->plainTextToken;
+    $response = $test->httpPost("/api/customer/auth/me/social/{$provider}", $body, ['HTTP_AUTHORIZATION' => 'Bearer '.$token]);
+
+    return [$response->getStatusCode(), (array) json_decode((string) $response->getContent(), true)];
+}
+
+function linksOf(SocialDiner $diner): array
+{
+    return DB::table('mk_social_identities')->where('user_id', $diner->getKey())->orderBy('provider')->pluck('provider')->all();
+}
+
+test('🔴 con la contraseña: vincula Google a la cuenta de la sesión, y después ese Google entra a ESA cuenta', function () {
+    fakeJwks();
+
+    [$status, $body] = linkPost($this, $this->diner, 'google', ['id_token' => googleToken(['email' => 'otro@gmail.test']), 'current_password' => 'secret']);
+
+    expect($status)->toBe(200, json_encode($body))
+        ->and($body['data']['social_providers'])->toBe(['google'])
+        ->and(linksOf($this->diner))->toBe(['google']);
+
+    [$status, $body] = socialPost($this, 'google', ['id_token' => googleToken(['email' => 'otro@gmail.test'])]);
+    expect($status)->toBe(200, json_encode($body))
+        ->and($body['data']['customer']['id'])->toBe($this->diner->getKey());
+});
+
+test('🔴 sin la contraseña, o con otra, no vincula: 422 y ningún vínculo; sin sesión, 401', function () {
+    fakeJwks();
+
+    [$status] = linkPost($this, $this->diner, 'google', ['id_token' => googleToken()]);
+    expect($status)->toBe(422);
+
+    [$status, $body] = linkPost($this, $this->diner, 'google', ['id_token' => googleToken(), 'current_password' => 'otra']);
+    expect($status)->toBe(422)
+        ->and($body['__extraData']['errors'])->toHaveKey('current_password');
+
+    $r = $this->httpPost('/api/customer/auth/me/social/google', ['id_token' => googleToken(), 'current_password' => 'secret']);
+    expect($r->getStatusCode())->toBe(401)
+        ->and(DB::table('mk_social_identities')->count())->toBe(0);
+});
+
+test('🔴 un acceso ya vinculado a OTRA cuenta: 409 y no se mueve; a la misma: 200 sin duplicar', function () {
+    fakeJwks();
+    $otra = SocialDiner::create(['name' => 'Otra', 'email' => 'otra@mozzo.test', 'password' => Hash::make('x'), 'auth_scope' => 'customer']);
+    linkDiner($otra, 'google', 'google-sub-1');
+
+    [$status, $body] = linkPost($this, $this->diner, 'google', ['id_token' => googleToken(), 'current_password' => 'secret']);
+    expect($status)->toBe(409)
+        ->and(socialErr($body))->toBe('ERR_SOCIAL_ALREADY_LINKED')
+        ->and(linksOf($otra))->toBe(['google'])
+        ->and(linksOf($this->diner))->toBe([]);
+
+    [$status] = linkPost($this, $otra, 'google', ['id_token' => googleToken(), 'current_password' => 'x']);
+    expect($status)->toBe(200)
+        ->and(DB::table('mk_social_identities')->count())->toBe(1);
+});
+
+test('un vínculo cuya cuenta ya no existe se reasigna a la de la sesión', function () {
+    fakeJwks();
+    $vieja = SocialDiner::create(['name' => 'Vieja', 'email' => 'vieja@mozzo.test', 'password' => Hash::make('x'), 'auth_scope' => 'customer']);
+    linkDiner($vieja, 'google', 'google-sub-1');
+    $vieja->delete();
+
+    [$status] = linkPost($this, $this->diner, 'google', ['id_token' => googleToken(), 'current_password' => 'secret']);
+
+    expect($status)->toBe(200)
+        ->and(linksOf($this->diner))->toBe(['google'])
+        ->and(DB::table('mk_social_identities')->count())->toBe(1);
+});
+
+test('un token que no verifica: 401 y ningún vínculo; un proveedor apagado: 403', function () {
+    fakeJwks();
+
+    [$status, $body] = linkPost($this, $this->diner, 'google', ['id_token' => googleToken(['aud' => 'otra-app.test']), 'current_password' => 'secret']);
+    expect($status)->toBe(401)->and(socialErr($body))->toBe('ERR_SOCIAL_TOKEN_INVALID');
+
+    config(['mk_director.auth.social.providers.google' => ['enabled' => false, 'client_ids' => []]]);
+    [$status, $body] = linkPost($this, $this->diner, 'google', ['id_token' => googleToken(), 'current_password' => 'secret']);
+    expect($status)->toBe(403)->and(socialErr($body))->toBe('ERR_SOCIAL_PROVIDER_DISABLED')
+        ->and(DB::table('mk_social_identities')->count())->toBe(0);
+});
+
+test('🔴 Apple con código y la clave: al vincular también guarda el refresh token cifrado (para revocar al borrar)', function () {
+    withAppleSigningKey(testAppleKey());
+    fakeJwks();
+    Http::fake([APPLE_TOKEN_URL => Http::response(['refresh_token' => 'r-apple-9'])]);
+
+    [$status, $body] = linkPost($this, $this->diner, 'apple', [
+        'id_token' => appleToken(), 'authorization_code' => 'c-9', 'redirect_uri' => 'https://mozzo.test/perfil', 'current_password' => 'secret',
+    ]);
+
+    expect($status)->toBe(200, json_encode($body))
+        ->and(Crypt::decryptString(appleIdentityRow()->refresh_token))->toBe('r-apple-9')
+        ->and(appleIdentityRow()->user_id)->toBe($this->diner->getKey())
+        ->and(Http::recorded(fn ($r) => $r->url() === APPLE_TOKEN_URL)->first()[0]->data()['redirect_uri'])->toBe('https://mozzo.test/perfil');
 });

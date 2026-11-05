@@ -3542,7 +3542,48 @@ $this->app->bind(AppleSigningKeyResolver::class, DbAppleSigningKeyResolver::clas
 Es un contrato aparte de `SocialProviderConfigResolver` para no romper a quien
 ya lo implementa.
 
-#### 3.22.6 Qué NO hace
+#### 3.22.6 Vincular Google o Apple a una cuenta que ya existe
+
+Quien ya tiene cuenta con contraseña no puede entrar con Google si el scope no
+vincula por email (el default, § 3.22.4): `socialLogin` cae en
+`createSocialUser()` y el consumer no tiene a quién darle el acceso. Lo vincula
+la persona misma, con la sesión abierta:
+
+```php
+Route::middleware('mk.auth:customer')->group(function () {
+    Route::post('me/social/{provider}', [CustomerAuthController::class, 'linkSocialAccount'])
+        ->whereIn('provider', ['google', 'apple'])
+        ->middleware('throttle:5,10');
+});
+```
+
+⚠️ El freno, como el de `password/change`: con un access token robado, el
+endpoint contesta si la contraseña es la correcta.
+
+- Body: `id_token`, `nonce`, y con Apple `authorization_code` y `redirect_uri`,
+  igual que el login, más `current_password`. 🔴 **Pide la contraseña
+  actual**, como `changePassword`: un vínculo es una puerta nueva a la cuenta,
+  y con un access token robado alcanzaría para dejar el Google del ladrón
+  adentro para siempre. Un usuario sin contraseña no vincula por acá. Si la
+  contraseña no coincide, la respuesta es 422 (`errors.current_password`).
+- El token se verifica igual que en el login (401, 403 y 503 iguales).
+- Una identidad que ya es de **otra** cuenta del scope da 409
+  `ERR_SOCIAL_ALREADY_LINKED` y no se mueve. Si ya es de la misma, la respuesta
+  es 200 y no se duplica. Si era de una cuenta que ya no existe, se reasigna.
+  ⚠️ Entre buscar al dueño y guardar no hay candado: dos pedidos a la vez por
+  la misma identidad SIN dueño los gana el último (`updateOrInsert`). Hace
+  falta la contraseña de cada cuenta y un ID token válido de esa identidad.
+- El email del proveedor no tiene que coincidir con el de la cuenta.
+- Con Apple, el código se canjea y se guarda el refresh token como en el
+  login (§ 3.22.5), para poder revocar al borrar la cuenta.
+- Responde `{social_providers}`: los proveedores vinculados de la cuenta.
+  `linkedSocialProviders($user)` (protected) devuelve lo mismo, para ponerlo en
+  el perfil desde `customizeMePayload()`.
+
+No hay «desvincular»: se borra el vínculo al borrar la cuenta
+(`revokeSocialAccess`).
+
+#### 3.22.7 Qué NO hace
 
 - **Ningún otro proveedor** ni el flujo OAuth con redirect: sólo ID tokens de
   Google y Apple. El `code` de Apple se canjea para poder revocar (§ 3.22.5),
@@ -3550,7 +3591,7 @@ ya lo implementa.
 - No agrega la ruta sola, ni al scaffolder: un scope ya generado y uno nuevo se
   prenden igual, con la línea de § 3.22.1.
 
-#### 3.22.7 Qué se mide, y cómo
+#### 3.22.8 Qué se mide, y cómo
 
 `tests/Feature/Auth/SocialLoginTest.php`, con la cadena HTTP real y **sin red**:
 las claves RSA se generan en el test y el JWKS sale de `Http::fake()`. Cada

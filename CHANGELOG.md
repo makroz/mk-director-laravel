@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Vincular Google o Apple desde la cuenta
+
+**Added**
+- `BaseAuthController::linkSocialAccount($request, $provider)`: con sesión, vincula a la cuenta la
+  identidad de un ID token de Google o Apple. Pide `current_password`; una identidad de otra cuenta
+  da 409 `ERR_SOCIAL_ALREADY_LINKED`. Con Apple canjea el código como el login. Opt-in: el consumer
+  agrega la ruta (DEVELOPER_GUIDE § 3.22.6).
+- `linkedSocialProviders($user)` (protected): los proveedores vinculados, para el perfil.
+- La guía renumera: «Qué NO hace» pasa a § 3.22.7 y «Qué se mide» a § 3.22.8.
+
 ## [UNRELEASED] — Apple: canjear el código al entrar y revocar al borrar la cuenta
 
 **Added**
