@@ -615,6 +615,14 @@ return [
                 'apple' => [
                     'enabled' => filter_var(env('MK_AUTH_SOCIAL_APPLE_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
                     'client_ids' => env('MK_AUTH_SOCIAL_APPLE_CLIENT_IDS', ''),
+                    // La clave de «Sign in with Apple» (§ 3.22.5): con las tres,
+                    // el login canjea el código y al borrar la cuenta se revoca.
+                    // Sin alguna, ninguna de las dos cosas. La lee
+                    // `ConfigAppleSigningKeyResolver`; un consumer con la clave en
+                    // su base bindea su `AppleSigningKeyResolver`.
+                    'team_id' => env('MK_AUTH_SOCIAL_APPLE_TEAM_ID', ''),
+                    'key_id' => env('MK_AUTH_SOCIAL_APPLE_KEY_ID', ''),
+                    'private_key' => env('MK_AUTH_SOCIAL_APPLE_PRIVATE_KEY', ''),
                 ],
             ],
         ],

@@ -8,8 +8,10 @@ use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -25,6 +27,8 @@ use Mk\Director\Auth\Services\InvalidRefreshTokenException;
 use Mk\Director\Auth\Services\OtpVerifyResult;
 use Mk\Director\Auth\Services\TokenIssuer;
 use Mk\Director\Auth\Services\TotpService;
+use Mk\Director\Auth\Social\AppleSigningKeyResolver;
+use Mk\Director\Auth\Social\AppleTokenClient;
 use Mk\Director\Auth\Social\IdTokenVerifier;
 use Mk\Director\Auth\Social\SocialIdentity;
 use Mk\Director\Auth\Social\SocialLoginException;
@@ -1350,6 +1354,12 @@ abstract class BaseAuthController extends BaseController
         $data = $request->validate([
             'id_token' => ['required', 'string', 'max:8192'],
             'nonce' => ['nullable', 'string', 'max:255'],
+            // Sólo Apple: el `authorization.code` de su respuesta. Con la clave
+            // configurada se canjea para poder revocar al borrar la cuenta.
+            'authorization_code' => ['nullable', 'string', 'max:2048'],
+            // El `redirectURI` con el que el front abrió Apple: el código queda
+            // atado a él y Apple lo pide de nuevo en el canje. Una app nativa no tiene.
+            'redirect_uri' => ['nullable', 'string', 'url', 'max:2048'],
         ]);
 
         try {
@@ -1393,11 +1403,99 @@ abstract class BaseAuthController extends BaseController
             return $this->accountDeniedResponse($user);
         }
 
+        if ($provider === 'apple' && ($data['authorization_code'] ?? '') !== '') {
+            $this->storeAppleRefreshToken($identity, $data['authorization_code'], $data['redirect_uri'] ?? null);
+        }
+
         if ($gate = $this->twoFactorGate($request, $user)) {
             return $gate;
         }
 
         return $this->issueSessionResponse($request, $user);
+    }
+
+    /**
+     * Canjea el código de Apple y guarda el refresh token, CIFRADO, en el
+     * vínculo: sin ese token no hay cómo revocar al borrar la cuenta
+     * ({@see revokeSocialAccess()}).
+     *
+     * 🔴 Nunca frena el login: si no hay clave, o Apple no canjea, la persona
+     * entra igual y queda en el log. Lo que se pierde es poder revocar, no la
+     * sesión.
+     */
+    private function storeAppleRefreshToken(SocialIdentity $identity, string $code, ?string $redirectUri): void
+    {
+        $clientId = $identity->claims['aud'] ?? null;
+
+        try {
+            // Adentro del try también la clave: una que no se puede descifrar
+            // (la APP_KEY rotada) no puede convertir el login en un 500.
+            $key = $this->appleSigningKeyResolver()->forScope($this->authScope());
+
+            if ($key === null || ! is_string($clientId) || $clientId === '') {
+                return;
+            }
+
+            $token = $this->appleTokenClient()->exchangeCode($key, $clientId, $code, $redirectUri);
+        } catch (\Throwable $e) {
+            Log::warning('mk.auth.apple.code_exchange_failed', ['scope' => $this->authScope(), 'error' => $e->getMessage()]);
+
+            return;
+        }
+
+        DB::table(self::SOCIAL_IDENTITIES_TABLE)
+            ->where('auth_scope', $this->authScope())
+            ->where('provider', 'apple')
+            ->where('subject', $identity->subject)
+            ->update(['client_id' => $clientId, 'refresh_token' => Crypt::encryptString($token), 'updated_at' => now()]);
+    }
+
+    /**
+     * Para el endpoint de BORRAR LA CUENTA del consumer: revoca en Apple el
+     * acceso de `$user` y borra sus vínculos sociales del scope. Apple exige
+     * revocar al borrar una cuenta que entró con Apple.
+     *
+     * - Un vínculo de Apple con token: se revoca y, si Apple dice que sí, se
+     *   borra. Si Apple falla (o no hay clave), el vínculo queda con su token
+     *   para reintentar, y queda en el log. 🔴 No tira: el borrado sigue.
+     * - Los demás (Google, o Apple sin token): no hay nada que revocar; se borran.
+     *
+     * No toca las sesiones ni la cuenta: eso lo hace el consumer, que sabe si
+     * su borrado es lógico o físico.
+     */
+    protected function revokeSocialAccess(Authenticatable $user): void
+    {
+        $rows = DB::table(self::SOCIAL_IDENTITIES_TABLE)
+            ->where('auth_scope', $this->authScope())
+            ->where('user_id', (string) $user->getAuthIdentifier())
+            ->get(['id', 'provider', 'client_id', 'refresh_token']);
+
+        foreach ($rows as $row) {
+            if ($row->provider === 'apple' && $row->refresh_token !== null && ! $this->revokeAppleToken($row)) {
+                continue;
+            }
+
+            DB::table(self::SOCIAL_IDENTITIES_TABLE)->where('id', $row->id)->delete();
+        }
+    }
+
+    private function revokeAppleToken(object $row): bool
+    {
+        $key = $this->appleSigningKeyResolver()->forScope($this->authScope());
+
+        try {
+            if ($key === null) {
+                throw new \RuntimeException('Sin la clave de Apple configurada.');
+            }
+
+            $this->appleTokenClient()->revoke($key, (string) $row->client_id, Crypt::decryptString($row->refresh_token));
+
+            return true;
+        } catch (\Throwable $e) {
+            Log::warning('mk.auth.apple.revoke_failed', ['scope' => $this->authScope(), 'identity_id' => $row->id, 'error' => $e->getMessage()]);
+
+            return false;
+        }
     }
 
     /**
@@ -1565,6 +1663,16 @@ abstract class BaseAuthController extends BaseController
     protected function socialProviderConfigResolver(): SocialProviderConfigResolver
     {
         return app(SocialProviderConfigResolver::class);
+    }
+
+    protected function appleSigningKeyResolver(): AppleSigningKeyResolver
+    {
+        return app(AppleSigningKeyResolver::class);
+    }
+
+    protected function appleTokenClient(): AppleTokenClient
+    {
+        return app(AppleTokenClient::class);
     }
 
     // ============================================================
