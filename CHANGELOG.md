@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [UNRELEASED] — Apple: canjear el código al entrar y revocar al borrar la cuenta
 
 **Added**
-- `socialLogin` acepta `authorization_code` (opcional). Con Apple y la clave del scope configurada,
+- `socialLogin` acepta `authorization_code` y `redirect_uri` (opcionales; el segundo se reenvía en el canje). Con Apple y la clave del scope configurada,
   lo canjea en `/auth/token` y guarda el refresh token cifrado en `mk_social_identities`, con su
   `client_id`. Si falla, el login sigue (DEVELOPER_GUIDE § 3.22.5).
 - `BaseAuthController::revokeSocialAccess($user)`: para el endpoint de borrar la cuenta del consumer.

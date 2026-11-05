@@ -859,3 +859,33 @@ test('🔴 si Apple no revoca, el vínculo con su token queda para reintentar; e
     expect(DB::table('mk_social_identities')->where('user_id', $this->diner->getKey())->pluck('provider')->all())->toBe(['apple'])
         ->and(Crypt::decryptString(appleIdentityRow()->refresh_token))->toBe('r-apple-1');
 });
+
+test('🔴 la web manda su redirect_uri y el canje lo reenvía a Apple (el código está atado a él); sin él, no se manda', function () {
+    withAppleSigningKey(testAppleKey());
+    linkDiner($this->diner, 'apple', '001234.apple-sub.0001');
+    fakeJwks();
+    Http::fake([APPLE_TOKEN_URL => Http::response(['refresh_token' => 'r-apple-1'])]);
+
+    socialPost($this, 'apple', ['id_token' => appleToken(), 'authorization_code' => 'c-1', 'redirect_uri' => 'https://mozzo.test/entrar']);
+    socialPost($this, 'apple', ['id_token' => appleToken(), 'authorization_code' => 'c-2']);
+
+    $forms = Http::recorded(fn ($r) => $r->url() === APPLE_TOKEN_URL)->map(fn ($pair) => $pair[0]->data())->values();
+    expect($forms[0]['redirect_uri'])->toBe('https://mozzo.test/entrar')
+        ->and($forms[1])->not->toHaveKey('redirect_uri');
+});
+
+test('🔴 una clave de Apple que no se puede leer (p. ej. la APP_KEY rotada) no frena el login', function () {
+    app()->instance(AppleSigningKeyResolver::class, new class implements AppleSigningKeyResolver
+    {
+        public function forScope(string $scope): ?AppleSigningKey
+        {
+            throw new RuntimeException('The payload is invalid.');
+        }
+    });
+    linkDiner($this->diner, 'apple', '001234.apple-sub.0001');
+    fakeJwks();
+
+    [$status, $body] = socialPost($this, 'apple', ['id_token' => appleToken(), 'authorization_code' => 'c-1']);
+
+    expect($status)->toBe(200, json_encode($body));
+});

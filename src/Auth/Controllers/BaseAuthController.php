@@ -1357,6 +1357,9 @@ abstract class BaseAuthController extends BaseController
             // Sólo Apple: el `authorization.code` de su respuesta. Con la clave
             // configurada se canjea para poder revocar al borrar la cuenta.
             'authorization_code' => ['nullable', 'string', 'max:2048'],
+            // El `redirectURI` con el que el front abrió Apple: el código queda
+            // atado a él y Apple lo pide de nuevo en el canje. Una app nativa no tiene.
+            'redirect_uri' => ['nullable', 'string', 'url', 'max:2048'],
         ]);
 
         try {
@@ -1401,7 +1404,7 @@ abstract class BaseAuthController extends BaseController
         }
 
         if ($provider === 'apple' && ($data['authorization_code'] ?? '') !== '') {
-            $this->storeAppleRefreshToken($identity, $data['authorization_code']);
+            $this->storeAppleRefreshToken($identity, $data['authorization_code'], $data['redirect_uri'] ?? null);
         }
 
         if ($gate = $this->twoFactorGate($request, $user)) {
@@ -1420,17 +1423,20 @@ abstract class BaseAuthController extends BaseController
      * entra igual y queda en el log. Lo que se pierde es poder revocar, no la
      * sesión.
      */
-    private function storeAppleRefreshToken(SocialIdentity $identity, string $code): void
+    private function storeAppleRefreshToken(SocialIdentity $identity, string $code, ?string $redirectUri): void
     {
-        $key = $this->appleSigningKeyResolver()->forScope($this->authScope());
         $clientId = $identity->claims['aud'] ?? null;
 
-        if ($key === null || ! is_string($clientId) || $clientId === '') {
-            return;
-        }
-
         try {
-            $token = $this->appleTokenClient()->exchangeCode($key, $clientId, $code);
+            // Adentro del try también la clave: una que no se puede descifrar
+            // (la APP_KEY rotada) no puede convertir el login en un 500.
+            $key = $this->appleSigningKeyResolver()->forScope($this->authScope());
+
+            if ($key === null || ! is_string($clientId) || $clientId === '') {
+                return;
+            }
+
+            $token = $this->appleTokenClient()->exchangeCode($key, $clientId, $code, $redirectUri);
         } catch (\Throwable $e) {
             Log::warning('mk.auth.apple.code_exchange_failed', ['scope' => $this->authScope(), 'error' => $e->getMessage()]);
 

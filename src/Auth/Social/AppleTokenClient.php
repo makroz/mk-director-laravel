@@ -31,15 +31,22 @@ class AppleTokenClient
     /** Vida del `client_secret`: Apple acepta hasta seis meses; acá es de un solo uso. */
     private const SECRET_TTL_SECONDS = 300;
 
-    /** El refresh token que Apple da por el código. */
-    public function exchangeCode(AppleSigningKey $key, string $clientId, string $code): string
+    /**
+     * El refresh token que Apple da por el código.
+     *
+     * `$redirectUri`: el mismo con el que se pidió la autorización (la web lo
+     * tiene; una app nativa no). Apple ata el código a él y, si la autorización
+     * lo llevó, el canje sin él responde `invalid_grant`.
+     */
+    public function exchangeCode(AppleSigningKey $key, string $clientId, string $code, ?string $redirectUri = null): string
     {
-        $response = Http::asForm()->timeout(5)->post(self::TOKEN_URL, [
+        $response = Http::asForm()->timeout(5)->post(self::TOKEN_URL, array_filter([
             'client_id' => $clientId,
             'client_secret' => $this->clientSecret($key, $clientId),
             'code' => $code,
             'grant_type' => 'authorization_code',
-        ]);
+            'redirect_uri' => $redirectUri,
+        ], fn (?string $value): bool => $value !== null && $value !== ''));
 
         $token = $response->successful() ? $response->json('refresh_token') : null;
 

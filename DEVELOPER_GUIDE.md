@@ -3497,15 +3497,19 @@ Para revocar hace falta un token de Apple, y el ID token no sirve: sólo sale de
 canjear el `authorization.code` que Apple entrega junto al ID token.
 
 1. **El front manda el código.** `socialLogin` acepta `authorization_code`
-   (opcional, hasta 2048) además de `id_token` y `nonce`. Sólo se mira con
-   Apple.
+   (opcional, hasta 2048) además de `id_token` y `nonce`, y `redirect_uri`: el
+   `redirectURI` con el que abrió Apple (la web lo tiene; una app nativa no). 🔴
+   Apple ata el código a ese URI y, si la autorización lo llevó, el canje sin
+   él responde `invalid_grant`. Sólo se mira con Apple.
 2. **El login lo canjea**, si el scope tiene la clave (`AppleSigningKeyResolver`
    devuelve un `AppleSigningKey`: Team ID, Key ID y el contenido del `.p8`).
    `AppleTokenClient::exchangeCode()` llama a `/auth/token` y el refresh token
    se guarda **cifrado** (`Crypt::encryptString`) en `mk_social_identities`,
    junto al `client_id` que lo emitió (el `aud` del ID token). 🔴 Nunca frena el
-   login: sin clave, o si Apple no canjea, la persona entra igual y queda
-   `mk.auth.apple.code_exchange_failed` en el log.
+   login: sin clave, con una clave que no se puede leer, o si Apple no canjea,
+   la persona entra igual y queda `mk.auth.apple.code_exchange_failed` en el
+   log. ⚠️ Se canjea antes del segundo factor: un scope con 2FA guarda el token
+   aunque la persona no complete el desafío.
 3. **El borrado de la cuenta revoca.** El endpoint de borrar la cuenta lo
    escribe el consumer (el paquete no sabe si su borrado es lógico o físico) y
    llama a `$this->revokeSocialAccess($user)` desde su `AuthController`:
@@ -3516,6 +3520,10 @@ canjear el `authorization.code` que Apple entrega junto al ID token.
    - los demás vínculos (Google, o Apple sin token) se borran.
 
    No cierra las sesiones ni toca la cuenta: eso lo hace el consumer.
+
+   ⚠️ Una cuenta que sólo entra con Google o Apple y se restaura desde la base
+   después de revocar ya no tiene su vínculo: el próximo login social con el
+   mismo correo es el 409 de siempre, y hay que volver a vincularla a mano.
 
 Las dos llamadas a Apple se autentican con un `client_secret` ES256 de cinco
 minutos (`iss` = Team ID, `kid` = Key ID, `sub` = el `client_id`, `aud` =
