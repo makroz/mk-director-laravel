@@ -1573,12 +1573,101 @@ abstract class BaseAuthController extends BaseController
             ->get(['id', 'provider', 'client_id', 'refresh_token']);
 
         foreach ($rows as $row) {
-            if ($row->provider === 'apple' && $row->refresh_token !== null && ! $this->revokeAppleToken($row)) {
-                continue;
-            }
-
-            DB::table(self::SOCIAL_IDENTITIES_TABLE)->where('id', $row->id)->delete();
+            $this->revokeAndDeleteIdentity($row);
         }
+    }
+
+    /**
+     * DESVINCULAR Google o Apple de la cuenta de la sesión:
+     * `POST {prefix}/me/social/{provider}/unlink` con `mk.auth:{scope}`.
+     *
+     * Es POST y no DELETE porque lleva la contraseña en el body: el cliente
+     * HTTP de `@makroz/core` no manda body en un DELETE, y la contraseña no va
+     * en la URL.
+     *
+     * Body: `{current_password}`.
+     *
+     * 🔴 PIDE LA CONTRASEÑA ACTUAL, como vincular: con un access token robado
+     * no se le saca a la persona una forma de entrar. Y por lo mismo una cuenta
+     * SIN contraseña no desvincula (409 `ERR_SOCIAL_NO_PASSWORD`): se quedaría
+     * sin forma de entrar. Con contraseña, siempre le queda la contraseña.
+     *
+     * - Un proveedor que no está vinculado → 200 con la lista (idempotente).
+     * - Apple con refresh token: se revoca primero. 🔴 Si Apple falla (o falta
+     *   la clave), el vínculo queda con su token y responde 503
+     *   `ERR_SOCIAL_UNAVAILABLE`: borrarlo dejaría el token vivo en Apple sin
+     *   forma de revocarlo después. Apple sin token y Google: se borra sin más.
+     *
+     * 🔴 OPT-IN: ninguna ruta generada apunta acá (DEVELOPER_GUIDE § 3.22.6).
+     * Responde `{social_providers}`: lo que le queda vinculado a la cuenta.
+     */
+    #[Ability('{scope}.auth.social-unlink', 'Desvincular Google o Apple de la cuenta en {scope}')]
+    public function unlinkSocialAccount(Request $request, string $provider): JsonResponse
+    {
+        $user = $request->user();
+        if (! $user instanceof Authenticatable) {
+            return $this->sendError('No autenticado.', [], 401, 'ERR_UNAUTHENTICATED');
+        }
+
+        if ((string) $user->getAuthPassword() === '') {
+            return $this->sendError(
+                'Tu cuenta no tiene contraseña: si sacás este acceso no podrías volver a entrar.',
+                [],
+                409,
+                'ERR_SOCIAL_NO_PASSWORD',
+            );
+        }
+
+        $data = $request->validate([
+            'current_password' => ['required', 'string'],
+        ]);
+
+        if (! Hash::check($data['current_password'], (string) $user->getAuthPassword())) {
+            return $this->sendError(
+                'Contraseña actual incorrecta.',
+                ['current_password' => ['Contraseña actual incorrecta.']],
+                422,
+                'ERR_VALIDATION',
+            );
+        }
+
+        $rows = DB::table(self::SOCIAL_IDENTITIES_TABLE)
+            ->where('auth_scope', $this->authScope())
+            ->where('user_id', (string) $user->getAuthIdentifier())
+            ->where('provider', $provider)
+            ->get(['id', 'provider', 'client_id', 'refresh_token']);
+
+        foreach ($rows as $row) {
+            if (! $this->revokeAndDeleteIdentity($row)) {
+                return $this->sendError('No se pudo desvincular en este momento. Probá de nuevo más tarde.', [], 503, 'ERR_SOCIAL_UNAVAILABLE');
+            }
+        }
+
+        if ($rows->isNotEmpty()) {
+            $this->dispatchAuthEventSafe('auth.social.unlinked', [
+                'scope' => $this->authScope(),
+                'provider' => $provider,
+                'user_id' => (string) $user->getAuthIdentifier(),
+            ]);
+        }
+
+        return $this->sendResponse(['social_providers' => $this->linkedSocialProviders($user)], 'Listo, quedó desvinculado.');
+    }
+
+    /**
+     * Borra un vínculo social. Uno de Apple con refresh token se revoca antes y,
+     * si Apple no lo revoca, queda (con su token, para reintentar): devuelve
+     * `false`. Google y Apple sin token no tienen nada que revocar.
+     */
+    private function revokeAndDeleteIdentity(object $row): bool
+    {
+        if ($row->provider === 'apple' && $row->refresh_token !== null && ! $this->revokeAppleToken($row)) {
+            return false;
+        }
+
+        DB::table(self::SOCIAL_IDENTITIES_TABLE)->where('id', $row->id)->delete();
+
+        return true;
     }
 
     private function revokeAppleToken(object $row): bool

@@ -337,6 +337,7 @@ beforeEach(function () {
         Route::get('api/customer/auth/me', [SocialAuthController::class, 'me']);
         Route::delete('api/customer/auth/social-access', [SocialAuthController::class, 'revokeMine']);
         Route::post('api/customer/auth/me/social/{provider}', [SocialAuthController::class, 'linkSocialAccount']);
+        Route::post('api/customer/auth/me/social/{provider}/unlink', [SocialAuthController::class, 'unlinkSocialAccount']);
     });
 
     $this->diner = SocialDiner::create([
@@ -990,4 +991,125 @@ test('🔴 Apple con código y la clave: al vincular también guarda el refresh 
         ->and(Crypt::decryptString(appleIdentityRow()->refresh_token))->toBe('r-apple-9')
         ->and(appleIdentityRow()->user_id)->toBe($this->diner->getKey())
         ->and(Http::recorded(fn ($r) => $r->url() === APPLE_TOKEN_URL)->first()[0]->data()['redirect_uri'])->toBe('https://mozzo.test/perfil');
+});
+
+// ─── 6. Desvincular desde la cuenta (`unlinkSocialAccount`) ─────────────────
+
+/** @return array{0:int, 1:array<string,mixed>} */
+function unlinkPost(object $test, SocialDiner $diner, string $provider, array $body): array
+{
+    $token = app(Mk\Director\Auth\Services\TokenIssuer::class)->issueTokenPair($diner)['access']->plainTextToken;
+    $response = $test->httpPost("/api/customer/auth/me/social/{$provider}/unlink", $body, ['HTTP_AUTHORIZATION' => 'Bearer '.$token]);
+
+    return [$response->getStatusCode(), (array) json_decode((string) $response->getContent(), true)];
+}
+
+/** Un vínculo de Apple con su refresh token cifrado, como lo deja el canje del código. */
+function linkAppleWithToken(SocialDiner $diner, string $token): void
+{
+    linkDiner($diner, 'apple', '001234.apple-sub.0001');
+    DB::table('mk_social_identities')->where('provider', 'apple')->where('user_id', $diner->getKey())
+        ->update(['client_id' => SOCIAL_APPLE_CLIENT, 'refresh_token' => Crypt::encryptString($token)]);
+}
+
+test('🔴 con la contraseña: saca Google de la cuenta de la sesión, deja Apple, y no toca el Google de otra cuenta', function () {
+    $otra = SocialDiner::create(['name' => 'Otra', 'email' => 'otra@mozzo.test', 'password' => Hash::make('x'), 'auth_scope' => 'customer']);
+    linkDiner($this->diner, 'google', 'google-sub-1');
+    linkDiner($this->diner, 'apple', '001234.apple-sub.0001');
+    linkDiner($otra, 'google', 'google-sub-2');
+    $events = [];
+    Event::listen(AuthEvent::class, function (AuthEvent $event) use (&$events) {
+        $events[] = $event->type;
+    });
+
+    [$status, $body] = unlinkPost($this, $this->diner, 'google', ['current_password' => 'secret']);
+
+    expect($status)->toBe(200, json_encode($body))
+        ->and($body['data']['social_providers'])->toBe(['apple'])
+        ->and(linksOf($this->diner))->toBe(['apple'])
+        ->and(linksOf($otra))->toBe(['google'])
+        ->and($events)->toContain('auth.social.unlinked');
+});
+
+test('🔴 sin la contraseña, o con otra, no desvincula: 422 y el vínculo queda; sin sesión, 401', function () {
+    linkDiner($this->diner, 'google', 'google-sub-1');
+
+    [$status] = unlinkPost($this, $this->diner, 'google', []);
+    expect($status)->toBe(422);
+
+    [$status, $body] = unlinkPost($this, $this->diner, 'google', ['current_password' => 'otra']);
+    expect($status)->toBe(422)
+        ->and($body['__extraData']['errors'])->toHaveKey('current_password');
+
+    $r = $this->httpPost('/api/customer/auth/me/social/google/unlink', ['current_password' => 'secret']);
+    expect($r->getStatusCode())->toBe(401)
+        ->and(linksOf($this->diner))->toBe(['google']);
+});
+
+test('🔴 una cuenta SIN contraseña no desvincula: 409 ERR_SOCIAL_NO_PASSWORD (se quedaría sin forma de entrar)', function () {
+    // Sin clave, como un alta con Google: el cast `hashed` no deja guardar un vacío por el modelo.
+    $social = SocialDiner::create(['name' => 'Social', 'email' => 'social@mozzo.test', 'password' => 'x', 'auth_scope' => 'customer']);
+    DB::table('social_diners')->where('id', $social->getKey())->update(['password' => '']);
+    $social->refresh();
+    linkDiner($social, 'google', 'google-sub-3');
+
+    [$status, $body] = unlinkPost($this, $social, 'google', ['current_password' => '']);
+
+    expect($status)->toBe(409, json_encode($body))
+        ->and(socialErr($body))->toBe('ERR_SOCIAL_NO_PASSWORD')
+        ->and(linksOf($social))->toBe(['google']);
+});
+
+test('un proveedor que no está vinculado: 200 con la lista, sin tocar nada (idempotente)', function () {
+    linkDiner($this->diner, 'apple', '001234.apple-sub.0001');
+
+    [$status, $body] = unlinkPost($this, $this->diner, 'google', ['current_password' => 'secret']);
+
+    expect($status)->toBe(200)
+        ->and($body['data']['social_providers'])->toBe(['apple'])
+        ->and(linksOf($this->diner))->toBe(['apple']);
+});
+
+test('🔴 Apple con token: se revoca en Apple y recién ahí se borra el vínculo', function () {
+    withAppleSigningKey(testAppleKey());
+    linkAppleWithToken($this->diner, 'r-apple-7');
+    Http::fake([APPLE_REVOKE_URL => Http::response('', 200)]);
+
+    [$status, $body] = unlinkPost($this, $this->diner, 'apple', ['current_password' => 'secret']);
+
+    expect($status)->toBe(200, json_encode($body))
+        ->and($body['data']['social_providers'])->toBe([])
+        ->and(linksOf($this->diner))->toBe([]);
+    $sent = Http::recorded(fn ($r) => $r->url() === APPLE_REVOKE_URL);
+    expect($sent)->toHaveCount(1)
+        ->and($sent->first()[0]->data()['token'])->toBe('r-apple-7');
+    assertAppleClientSecret($sent->first()[0]->data()['client_secret'], SOCIAL_APPLE_CLIENT);
+});
+
+test('🔴 si Apple no revoca (o falta la clave), 503 y el vínculo queda con su token para reintentar', function () {
+    withAppleSigningKey(testAppleKey());
+    linkAppleWithToken($this->diner, 'r-apple-7');
+    Http::fake([APPLE_REVOKE_URL => Http::response(['error' => 'server_error'], 503)]);
+
+    [$status, $body] = unlinkPost($this, $this->diner, 'apple', ['current_password' => 'secret']);
+    expect($status)->toBe(503, json_encode($body))
+        ->and(socialErr($body))->toBe('ERR_SOCIAL_UNAVAILABLE')
+        ->and(Crypt::decryptString(appleIdentityRow()->refresh_token))->toBe('r-apple-7');
+
+    withAppleSigningKey(null);
+    [$status] = unlinkPost($this, $this->diner, 'apple', ['current_password' => 'secret']);
+    expect($status)->toBe(503)
+        ->and(linksOf($this->diner))->toBe(['apple']);
+});
+
+test('Apple SIN token (entró antes de configurar la clave): no hay nada que revocar, se borra sin llamar a Apple', function () {
+    withAppleSigningKey(testAppleKey());
+    linkDiner($this->diner, 'apple', '001234.apple-sub.0001');
+    Http::fake();
+
+    [$status] = unlinkPost($this, $this->diner, 'apple', ['current_password' => 'secret']);
+
+    expect($status)->toBe(200)
+        ->and(linksOf($this->diner))->toBe([])
+        ->and(Http::recorded(fn ($r) => $r->url() === APPLE_REVOKE_URL))->toHaveCount(0);
 });
