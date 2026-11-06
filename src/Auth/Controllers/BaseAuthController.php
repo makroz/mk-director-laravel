@@ -1593,6 +1593,9 @@ abstract class BaseAuthController extends BaseController
      * sin forma de entrar. Con contraseña, siempre le queda la contraseña.
      *
      * - Un proveedor que no está vinculado → 200 con la lista (idempotente).
+     * - Si no le queda otra forma de entrar ({@see keepsSignInAfterUnlink()},
+     *   p. ej. el consumer apagó el login con contraseña) → 409
+     *   `ERR_SOCIAL_LAST_METHOD`, sin tocar el vínculo.
      * - Apple con refresh token: se revoca primero. 🔴 Si Apple falla (o falta
      *   la clave), el vínculo queda con su token y responde 503
      *   `ERR_SOCIAL_UNAVAILABLE`: borrarlo dejaría el token vivo en Apple sin
@@ -1637,6 +1640,15 @@ abstract class BaseAuthController extends BaseController
             ->where('provider', $provider)
             ->get(['id', 'provider', 'client_id', 'refresh_token']);
 
+        if ($rows->isNotEmpty() && ! $this->keepsSignInAfterUnlink($user, $provider)) {
+            return $this->sendError(
+                'Si sacás este acceso no te queda otra forma de entrar.',
+                [],
+                409,
+                'ERR_SOCIAL_LAST_METHOD',
+            );
+        }
+
         foreach ($rows as $row) {
             if (! $this->revokeAndDeleteIdentity($row)) {
                 return $this->sendError('No se pudo desvincular en este momento. Probá de nuevo más tarde.', [], 503, 'ERR_SOCIAL_UNAVAILABLE');
@@ -1652,6 +1664,21 @@ abstract class BaseAuthController extends BaseController
         }
 
         return $this->sendResponse(['social_providers' => $this->linkedSocialProviders($user)], 'Listo, quedó desvinculado.');
+    }
+
+    /**
+     * ¿A `$user` le queda una forma de entrar si se le saca `$provider`? Se
+     * pregunta DESPUÉS de verificar la contraseña y sólo si hay algo que sacar.
+     *
+     * Default `true`: a esta altura la cuenta tiene contraseña. 🔴 Override si
+     * el consumer puede APAGAR el login con contraseña (o un proveedor): con
+     * eso apagado, la contraseña no abre nada y sacar el último proveedor
+     * prendido deja la cuenta con su sesión actual y nada más. `false` → 409
+     * `ERR_SOCIAL_LAST_METHOD`, sin tocar el vínculo.
+     */
+    protected function keepsSignInAfterUnlink(Authenticatable $user, string $provider): bool
+    {
+        return true;
     }
 
     /**

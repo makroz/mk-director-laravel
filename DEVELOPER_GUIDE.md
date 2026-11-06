@@ -3595,6 +3595,12 @@ Route::post('me/social/{provider}/unlink', [CustomerAuthController::class, 'unli
   cuenta **sin** contraseña no desvincula: 409 `ERR_SOCIAL_NO_PASSWORD`,
   porque se quedaría sin forma de entrar.
 - Un proveedor que no está vinculado: 200 con la lista (idempotente).
+- 🔴 **Si el consumer puede apagar el login con contraseña** (o un proveedor),
+  la contraseña sola no garantiza la entrada: override
+  `keepsSignInAfterUnlink($user, $provider)` (default `true`) y devolvé `false`
+  cuando sin ese proveedor no le quede nada prendido. La respuesta es 409
+  `ERR_SOCIAL_LAST_METHOD` y el vínculo queda. Se pregunta después de la
+  contraseña y sólo si hay algo que sacar.
 - 🔴 Apple con refresh token se **revoca primero**. Si Apple falla, o falta la
   clave, el vínculo queda con su token y la respuesta es 503
   `ERR_SOCIAL_UNAVAILABLE`, para reintentar: borrarlo dejaría el token vivo en

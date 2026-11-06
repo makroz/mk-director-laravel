@@ -83,9 +83,22 @@ final class SocialAuthController extends BaseAuthController
 
     public static TwoFactorPolicy $policy = TwoFactorPolicy::Off;
 
+    /** `null` = el default del paquete (con contraseña, siempre queda una forma de entrar). */
+    public static ?bool $keepsSignIn = null;
+
+    /** @var list<string> */
+    public static array $keepsSignInAsked = [];
+
     protected function twoFactorPolicy(): TwoFactorPolicy
     {
         return self::$policy;
+    }
+
+    protected function keepsSignInAfterUnlink(Authenticatable $user, string $provider): bool
+    {
+        self::$keepsSignInAsked[] = $provider;
+
+        return self::$keepsSignIn ?? parent::keepsSignInAfterUnlink($user, $provider);
     }
 
     protected function socialAutoLinkByEmail(): bool
@@ -255,6 +268,8 @@ beforeEach(function () {
     Carbon::setTestNow(Carbon::create(2026, 9, 26, 12, 0, 0));
 
     SocialAuthController::$autoLink = null;
+    SocialAuthController::$keepsSignIn = null;
+    SocialAuthController::$keepsSignInAsked = [];
     SocialAuthController::$creates = false;
     SocialAuthController::$createCalls = 0;
     SocialAuthController::$policy = TwoFactorPolicy::Off;
@@ -1112,4 +1127,40 @@ test('Apple SIN token (entró antes de configurar la clave): no hay nada que rev
     expect($status)->toBe(200)
         ->and(linksOf($this->diner))->toBe([])
         ->and(Http::recorded(fn ($r) => $r->url() === APPLE_REVOKE_URL))->toHaveCount(0);
+});
+
+test('🔴 si al consumer no le queda otra forma de entrar (p. ej. apagó el login con contraseña): 409 ERR_SOCIAL_LAST_METHOD y el vínculo queda', function () {
+    linkDiner($this->diner, 'google', 'google-sub-1');
+    SocialAuthController::$keepsSignIn = false;
+
+    [$status, $body] = unlinkPost($this, $this->diner, 'google', ['current_password' => 'secret']);
+
+    expect($status)->toBe(409, json_encode($body))
+        ->and(socialErr($body))->toBe('ERR_SOCIAL_LAST_METHOD')
+        ->and(SocialAuthController::$keepsSignInAsked)->toBe(['google'])
+        ->and(linksOf($this->diner))->toBe(['google']);
+});
+
+test('🔴 el hook se pregunta DESPUÉS de la contraseña: con otra contraseña, 422 sin consultarlo', function () {
+    linkDiner($this->diner, 'google', 'google-sub-1');
+    SocialAuthController::$keepsSignIn = false;
+
+    [$status] = unlinkPost($this, $this->diner, 'google', ['current_password' => 'otra']);
+
+    expect($status)->toBe(422)
+        ->and(SocialAuthController::$keepsSignInAsked)->toBe([]);
+});
+
+test('el vínculo del mismo usuario en OTRO scope no se toca', function () {
+    linkDiner($this->diner, 'google', 'google-sub-1');
+    DB::table('mk_social_identities')->insert([
+        'auth_scope' => 'admin', 'provider' => 'google', 'subject' => 'google-sub-admin',
+        'user_id' => (string) $this->diner->getKey(), 'email' => $this->diner->email, 'created_at' => now(), 'updated_at' => now(),
+    ]);
+
+    [$status] = unlinkPost($this, $this->diner, 'google', ['current_password' => 'secret']);
+
+    expect($status)->toBe(200)
+        ->and(DB::table('mk_social_identities')->where('auth_scope', 'admin')->count())->toBe(1)
+        ->and(DB::table('mk_social_identities')->where('auth_scope', 'customer')->count())->toBe(0);
 });
