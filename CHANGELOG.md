@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Desvincular Google o Apple desde la cuenta
+
+**Added**
+- `BaseAuthController::unlinkSocialAccount($request, $provider)`: con sesión, saca de la cuenta el
+  vínculo de ese proveedor. `POST` con `current_password` (el cliente no manda body en un `DELETE`);
+  una cuenta sin contraseña da 409 `ERR_SOCIAL_NO_PASSWORD`. Apple con refresh token se revoca
+  primero y, si Apple falla, el vínculo queda y responde 503 `ERR_SOCIAL_UNAVAILABLE`. Emite
+  `auth.social.unlinked`. Opt-in: el consumer agrega la ruta (DEVELOPER_GUIDE § 3.22.6).
+- Hook `keepsSignInAfterUnlink($user, $provider)` (default `true`): un consumer que puede apagar el
+  login con contraseña devuelve `false` cuando no le queda otra forma de entrar → 409
+  `ERR_SOCIAL_LAST_METHOD`, sin tocar el vínculo.
+
 ## [UNRELEASED] — Vincular Google o Apple desde la cuenta
 
 **Added**

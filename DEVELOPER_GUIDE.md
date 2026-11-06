@@ -3580,8 +3580,34 @@ endpoint contesta si la contraseña es la correcta.
   `linkedSocialProviders($user)` (protected) devuelve lo mismo, para ponerlo en
   el perfil desde `customizeMePayload()`.
 
-No hay «desvincular»: se borra el vínculo al borrar la cuenta
-(`revokeSocialAccess`).
+**Desvincular** (`unlinkSocialAccount`), con la misma sesión y el mismo freno:
+
+```php
+Route::post('me/social/{provider}/unlink', [CustomerAuthController::class, 'unlinkSocialAccount'])
+    ->whereIn('provider', ['google', 'apple'])
+    ->middleware('throttle:5,10');
+```
+
+- Es `POST` y no `DELETE`: lleva la contraseña en el body, y el cliente de
+  `@makroz/core` no manda body en un `DELETE` (la contraseña no va en la URL).
+- Body: `current_password`. 🔴 **Pide la contraseña**, como vincular: con un
+  access token robado no se le saca a la persona una forma de entrar. Y una
+  cuenta **sin** contraseña no desvincula: 409 `ERR_SOCIAL_NO_PASSWORD`,
+  porque se quedaría sin forma de entrar.
+- Un proveedor que no está vinculado: 200 con la lista (idempotente).
+- 🔴 **Si el consumer puede apagar el login con contraseña** (o un proveedor),
+  la contraseña sola no garantiza la entrada: override
+  `keepsSignInAfterUnlink($user, $provider)` (default `true`) y devolvé `false`
+  cuando sin ese proveedor no le quede nada prendido. La respuesta es 409
+  `ERR_SOCIAL_LAST_METHOD` y el vínculo queda. Se pregunta después de la
+  contraseña y sólo si hay algo que sacar.
+- 🔴 Apple con refresh token se **revoca primero**. Si Apple falla, o falta la
+  clave, el vínculo queda con su token y la respuesta es 503
+  `ERR_SOCIAL_UNAVAILABLE`, para reintentar: borrarlo dejaría el token vivo en
+  Apple sin forma de revocarlo. Apple sin token y Google se borran sin más.
+- Emite `auth.social.unlinked` y responde `{social_providers}`: lo que le queda.
+
+Al borrar la cuenta, `revokeSocialAccess` se lleva todos los vínculos (§ 3.22.5).
 
 #### 3.22.7 Qué NO hace
 
