@@ -106,6 +106,12 @@ final class FcmProvider implements PushProvider
             $payload['apns']['fcm_options'] = ['image' => $message->image];
         }
 
+        // Un navegador abre la URL al tocar el aviso. FCM exige HTTPS en `fcm_options.link` y valida el mensaje ENTERO aunque el
+        // token sea nativo: una ruta relativa de la app (`/orders/…`) haría fallar también el push al teléfono. Sólo va con `https://`.
+        if ($message->url !== null && str_starts_with($message->url, 'https://')) {
+            $payload['webpush'] = ['fcm_options' => ['link' => $message->url]];
+        }
+
         // FCM sólo acepta strings en `data`, y un `data` vacío viaja como `[]`
         // (lista, no mapa) y da 400: sin datos, la clave no va.
         if ($data !== []) {

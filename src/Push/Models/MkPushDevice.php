@@ -40,7 +40,8 @@ class MkPushDevice extends EloquentModel
      */
     public const PROVIDERS = ['fcm', 'onesignal'];
 
-    public const PLATFORMS = ['ios', 'android'];
+    /** `web` = el navegador (push web por FCM: el token sale del service worker). */
+    public const PLATFORMS = ['ios', 'android', 'web'];
 
     protected $table = 'mk_push_devices';
 

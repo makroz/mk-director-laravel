@@ -169,6 +169,7 @@ test('sends one request per token with the message', function () {
             'notification' => ['title' => 'Tu retiro fue pagado', 'body' => 'Te transferimos 100,00 BOB.'],
             'android' => ['priority' => 'high'],
             'apns' => ['payload' => ['aps' => ['sound' => 'default']]],
+            // A relative url is an app route: no `webpush` block (FCM wants an HTTPS link and would refuse the whole message).
             // FCM rechaza un valor que no sea string: el 100 viaja como '100'.
             'data' => ['kind' => 'withdrawal.paid', 'amount' => '100', 'url' => '/wallet'],
         ]);
@@ -180,7 +181,25 @@ test('a message without data or url sends no data key', function () {
     app(PushProvider::class)->send(new PushMessage('Hola', 'Sin datos'), ['token-a']);
 
     // `[]` viajaría como lista JSON, y FCM espera un mapa: 400 para todos.
-    expect(fcmRequests(FCM_SEND_URL)[0]['message'])->not->toHaveKey('data');
+    expect(fcmRequests(FCM_SEND_URL)[0]['message'])->not->toHaveKey('data')
+        // Sin url no hay link que abrir: el bloque `webpush` no va.
+        ->not->toHaveKey('webpush');
+});
+
+test('an https url also travels as the web push link', function () {
+    fakeFcm();
+
+    app(PushProvider::class)->send(new PushMessage('Aviso', 'Abra el panel', url: 'https://admin.example.test/orders?id=1'), ['token-a']);
+
+    expect(fcmRequests(FCM_SEND_URL)[0]['message']['webpush'])->toBe(['fcm_options' => ['link' => 'https://admin.example.test/orders?id=1']]);
+});
+
+test('an http url sends no web push link', function () {
+    fakeFcm();
+
+    app(PushProvider::class)->send(new PushMessage('Aviso', 'Abra el panel', url: 'http://localhost:3601/orders'), ['token-a']);
+
+    expect(fcmRequests(FCM_SEND_URL)[0]['message'])->not->toHaveKey('webpush');
 });
 
 test('invalid tokens are reported and other failures only counted', function () {
