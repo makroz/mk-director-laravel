@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — El login devuelve lo que `customizeMePayload()` agrega
+
+**Fixed**
+- `BaseAuthController::issueSessionResponse()` (login y los logins propios del consumer que lo usan) mezcla
+  `customizeMePayload($user)` en el usuario, igual que `me()`. Antes el login devolvía el usuario sin esos
+  campos y un front que guarda la sesión de esa respuesta no los tenía hasta volver a pedir `me` (por
+  ejemplo, el nombre de la tienda del admin aparecía recién al recargar).
+
 ## [UNRELEASED] — Desvincular Google o Apple desde la cuenta
 
 **Added**
