@@ -302,7 +302,9 @@ abstract class BaseAuthController extends BaseController
     }
 
     /**
-     * Campos adicionales a mergear dentro de `data` del response /me.
+     * Campos adicionales a mergear dentro de `data` del response /me, y del
+     * usuario que devuelve el login (`issueSessionResponse`): el usuario de la
+     * sesión tiene UNA forma, salga de donde salga.
      *
      * El scaffold default retorna:
      *   data: {
@@ -531,6 +533,14 @@ abstract class BaseAuthController extends BaseController
         $userPayload['abilities'] = method_exists($user, 'getEffectiveAbilities')
             ? $user->getEffectiveAbilities()
             : [];
+
+        // The session user is ONE shape, whichever endpoint hands it out: what the consumer adds to `me` comes with the
+        // login too. Without it a front that stores the user from this response lacked those fields until it asked
+        // `me` again (in a consumer: the admin's store name showed up only after a reload).
+        $customized = $this->customizeMePayload($user);
+        if (is_array($customized) && $customized !== []) {
+            $userPayload = array_merge($userPayload, $customized);
+        }
 
         return $this->sendResponse(array_merge([
             'access_token' => $tokens['access_token'],
