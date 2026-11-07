@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Push web (plataforma `web` y bloque `webpush` de FCM)
+
+**Added**
+- `MkPushDevice::PLATFORMS` suma `web`: el navegador registra el token de su service worker igual que un
+  teléfono (la columna `platform` es `string(16)`, sin migración).
+- `FcmProvider` agrega `webpush.fcm_options.link` con la `url` del mensaje cuando la hay, para que tocar el aviso
+  abra la página (FCM pide HTTPS absoluta para un navegador). Aditivo: `android` y `apns` no cambian y un token
+  nativo ignora el bloque.
+
 ## [UNRELEASED] — El login devuelve lo que `customizeMePayload()` agrega
 
 **Fixed**

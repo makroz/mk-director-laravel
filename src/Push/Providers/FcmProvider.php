@@ -106,6 +106,12 @@ final class FcmProvider implements PushProvider
             $payload['apns']['fcm_options'] = ['image' => $message->image];
         }
 
+        // Un navegador abre la URL al tocar el aviso (`fcm_options.link` pide HTTPS; en localhost FCM lo deja pasar).
+        // Un token nativo ignora el bloque `webpush`.
+        if ($message->url !== null) {
+            $payload['webpush'] = ['fcm_options' => ['link' => $message->url]];
+        }
+
         // FCM sólo acepta strings en `data`, y un `data` vacío viaja como `[]`
         // (lista, no mapa) y da 400: sin datos, la clave no va.
         if ($data !== []) {

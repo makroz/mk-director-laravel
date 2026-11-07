@@ -60,6 +60,13 @@ test('re-registering an address moves it to the new owner', function () {
         ->and($device->platform)->toBe('ios');
 });
 
+test('a browser registers as the web platform', function () {
+    [$ana, $token] = $this->pushUser('Ana');
+
+    expect($this->registerDevice($token, pushDevice('web-token', platform: 'web')))->toBe(204)
+        ->and(MkPushDevice::query()->ownedBy($ana)->sole()->platform)->toBe('web');
+});
+
 test('rejects unknown platform and provider', function (array $body) {
     [, $token] = $this->pushUser('Ana');
 

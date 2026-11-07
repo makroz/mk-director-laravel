@@ -169,6 +169,7 @@ test('sends one request per token with the message', function () {
             'notification' => ['title' => 'Tu retiro fue pagado', 'body' => 'Te transferimos 100,00 BOB.'],
             'android' => ['priority' => 'high'],
             'apns' => ['payload' => ['aps' => ['sound' => 'default']]],
+            'webpush' => ['fcm_options' => ['link' => '/wallet']],
             // FCM rechaza un valor que no sea string: el 100 viaja como '100'.
             'data' => ['kind' => 'withdrawal.paid', 'amount' => '100', 'url' => '/wallet'],
         ]);
@@ -180,7 +181,9 @@ test('a message without data or url sends no data key', function () {
     app(PushProvider::class)->send(new PushMessage('Hola', 'Sin datos'), ['token-a']);
 
     // `[]` viajaría como lista JSON, y FCM espera un mapa: 400 para todos.
-    expect(fcmRequests(FCM_SEND_URL)[0]['message'])->not->toHaveKey('data');
+    expect(fcmRequests(FCM_SEND_URL)[0]['message'])->not->toHaveKey('data')
+        // Sin url no hay link que abrir: el bloque `webpush` no va.
+        ->not->toHaveKey('webpush');
 });
 
 test('invalid tokens are reported and other failures only counted', function () {
