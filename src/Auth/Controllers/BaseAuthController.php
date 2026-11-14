@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Mk\Director\Auth\Controllers;
 
 use Illuminate\Contracts\Auth\Authenticatable;
+use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -1464,23 +1465,41 @@ abstract class BaseAuthController extends BaseController
      * VINCULAR Google o Apple a la cuenta de la sesión:
      * `POST {prefix}/me/social/{provider}` con `mk.auth:{scope}`.
      *
-     * Para quien ya tiene cuenta con contraseña y quiere entrar también con el
-     * proveedor: sin esto, `socialLogin` con su correo cae en
-     * {@see createSocialUser()} y el consumer no tiene a quién darle el acceso.
+     * Para quien ya tiene cuenta y quiere entrar también con el proveedor: sin
+     * esto, `socialLogin` con su correo cae en {@see createSocialUser()} y el
+     * consumer no tiene a quién darle el acceso.
      *
-     * Body: `{id_token, nonce?, authorization_code?, redirect_uri?,
-     * current_password}`. El token se verifica igual que en {@see socialLogin()}.
+     * Body: `{id_token, nonce?, authorization_code?, redirect_uri?}` más UNA
+     * prueba de que la persona es la dueña. El token se verifica igual que en
+     * {@see socialLogin()}.
      *
-     * 🔴 PIDE LA CONTRASEÑA ACTUAL, como `changePassword`: un vínculo es una
-     * puerta nueva a la cuenta, y con un access token robado alcanzaría para
-     * dejar el Google del ladrón adentro para siempre. Un usuario sin contraseña
-     * no puede vincular por acá.
+     * 🔴 POR QUÉ HAY PRUEBA: un vínculo es una puerta nueva a la cuenta, y con
+     * un access token robado alcanzaría para dejar el Google del ladrón adentro
+     * para siempre. La prueba depende de la cuenta ({@see socialLinkProof()}):
+     *
+     * - Con contraseña: `current_password`, como `changePassword`. Se mira
+     *   ANTES del token, como siempre.
+     * - Sin contraseña y con el correo VERIFICADO: `code`, el que mandó
+     *   {@see requestSocialLinkCode()} a ese correo.
+     * - Sin contraseña y sin correo verificado: volver a entrar en el momento
+     *   con un proveedor que ya tiene vinculado (`reauth_provider`,
+     *   `reauth_id_token`, y con Apple `reauth_nonce`), con un token de hace
+     *   {@see SOCIAL_REAUTH_MAX_AGE_SECONDS} segundos o menos.
+     *
+     * Mario, 2026-11-13: «el codigo al correo, si no tiene, ya la otra opcion».
+     * Con correo verificado el código es EL camino: volver a entrar no alcanza.
+     * Una prueba que no es la de la cuenta → 422 `ERR_VALIDATION` que dice cuál.
+     *
+     * Sin contraseña, el token NUEVO se verifica antes que la prueba: un token
+     * malo del proveedor nuevo no le cuesta un intento al código. El código se
+     * gasta en la misma transacción que guarda el vínculo.
+     *
+     * Esto nunca pone una contraseña: la cuenta sigue sin clave.
      *
      * - Identidad de OTRA cuenta del scope → 409 `ERR_SOCIAL_ALREADY_LINKED`, sin
      *   moverla. De esta misma → 200 (idempotente). De una cuenta que ya no
      *   existe → se reasigna, como en el login.
-     * - El email del proveedor no tiene que coincidir con el de la cuenta: la
-     *   prueba es la contraseña más el token.
+     * - El email del proveedor no tiene que coincidir con el de la cuenta.
      * - Apple con `authorization_code` y la clave → se canjea y se guarda el
      *   refresh token, como en el login (§ 3.22.5).
      *
@@ -1495,21 +1514,38 @@ abstract class BaseAuthController extends BaseController
             return $this->sendError('No autenticado.', [], 401, 'ERR_UNAUTHENTICATED');
         }
 
+        $proof = $this->socialLinkProof($user);
+
         $data = $request->validate([
             'id_token' => ['required', 'string', 'max:8192'],
             'nonce' => ['nullable', 'string', 'max:255'],
             'authorization_code' => ['nullable', 'string', 'max:2048'],
             'redirect_uri' => ['nullable', 'string', 'url', 'max:2048'],
-            'current_password' => ['required', 'string'],
+            'current_password' => [$proof === 'password' ? 'required' : 'nullable', 'string'],
+            'code' => ['nullable', 'string', 'max:32'],
+            'reauth_provider' => ['nullable', 'string', 'max:32'],
+            'reauth_id_token' => ['nullable', 'string', 'max:8192'],
+            'reauth_nonce' => ['nullable', 'required_if:reauth_provider,apple', 'string', 'max:255'],
         ]);
 
-        if (! Hash::check($data['current_password'], (string) $user->getAuthPassword())) {
+        if ($proof === 'password' && ! Hash::check($data['current_password'], (string) $user->getAuthPassword())) {
             return $this->sendError(
                 'Contraseña actual incorrecta.',
                 ['current_password' => ['Contraseña actual incorrecta.']],
                 422,
                 'ERR_VALIDATION',
             );
+        }
+
+        $code = (string) ($data['code'] ?? '');
+        if ($proof === 'code' && $code === '') {
+            $message = 'Tu cuenta no tiene contraseña: pedí el código que te mandamos al correo para vincular.';
+
+            return $this->sendError($message, ['code' => [$message]], 422, 'ERR_VALIDATION');
+        }
+
+        if ($proof === 'reauth' && (($data['reauth_provider'] ?? '') === '' || ($data['reauth_id_token'] ?? '') === '')) {
+            return $this->invalidSocialReauth();
         }
 
         try {
@@ -1523,9 +1559,22 @@ abstract class BaseAuthController extends BaseController
             return $this->socialLoginError($request, $provider, $e);
         }
 
+        if ($proof === 'reauth' && ! $this->acceptsSocialReauth($user, $data)) {
+            return $this->invalidSocialReauth();
+        }
+
+        $identifier = (string) $user->getAuthIdentifier();
+
+        if ($proof === 'code') {
+            $verdict = $this->emailOtpService()->reserveAttempt($this->authScope(), 'social_link', $identifier, $code);
+            if ($verdict !== OtpVerifyResult::Confirmed) {
+                return $this->socialLinkCodeVerdictResponse($verdict);
+            }
+        }
+
         $owner = $this->findLinkedSocialUser($identity);
 
-        if ($owner !== null && (string) $owner->getAuthIdentifier() !== (string) $user->getAuthIdentifier()) {
+        if ($owner !== null && (string) $owner->getAuthIdentifier() !== $identifier) {
             return $this->sendError(
                 'Ese acceso ya está vinculado a otra cuenta.',
                 [],
@@ -1534,8 +1583,22 @@ abstract class BaseAuthController extends BaseController
             );
         }
 
-        if ($owner === null) {
-            $this->linkSocialIdentity($user, $identity);
+        // El código y el vínculo van juntos: si guardar el vínculo falla, el
+        // código no queda gastado; si otra request ganó el código, no se vincula.
+        $linked = DB::transaction(function () use ($proof, $identifier, $code, $owner, $user, $identity): bool {
+            if ($proof === 'code' && ! $this->emailOtpService()->consume($this->authScope(), 'social_link', $identifier, $code)) {
+                return false;
+            }
+
+            if ($owner === null) {
+                $this->linkSocialIdentity($user, $identity);
+            }
+
+            return true;
+        });
+
+        if (! $linked) {
+            return $this->socialLinkCodeVerdictResponse(OtpVerifyResult::NotFound);
         }
 
         if ($provider === 'apple' && ($data['authorization_code'] ?? '') !== '') {
@@ -1543,6 +1606,163 @@ abstract class BaseAuthController extends BaseController
         }
 
         return $this->sendResponse(['social_providers' => $this->linkedSocialProviders($user)], 'Listo, quedó vinculado.');
+    }
+
+    /**
+     * Cuánto puede tener el token de «volver a entrar» ({@see linkSocialAccount()}):
+     * su `iat` no puede ser de hace más que esto. Es lo que tarda alguien en
+     * tocar «Entrar con Google» y después el proveedor nuevo; más que eso ya
+     * no es «en el momento», es un token que estaba guardado en algún lado.
+     */
+    protected const SOCIAL_REAUTH_MAX_AGE_SECONDS = 300;
+
+    /**
+     * POST /api/{scope}/auth/me/social/{provider}/code   con `mk.auth:{scope}`.
+     *
+     * Manda al correo de la cuenta el código para {@see linkSocialAccount()}.
+     * Sólo para una cuenta SIN contraseña y con el correo VERIFICADO:
+     *
+     * - Con contraseña → 409 `ERR_SOCIAL_HAS_PASSWORD`: vincula con ella.
+     * - Sin correo verificado → 409 `ERR_SOCIAL_NO_VERIFIED_EMAIL`. 🔴 Uno sin
+     *   verificar cuenta como ninguno: una cuenta social puede cambiar su correo
+     *   en el perfil sin prueba, y con un access token robado el ladrón se
+     *   mandaría el código a sí mismo.
+     * - Proveedor apagado o desconocido → 403 `ERR_SOCIAL_PROVIDER_DISABLED`.
+     * - Otro pedido dentro de la ventana → 429 `ERR_THROTTLED`.
+     *
+     * Mismo `EmailOtpService`, TTL, intentos y ventana que el código de
+     * `password_change` ({@see requestPasswordCode()}), con `purpose`
+     * `social_link` y el id de la cuenta como identifier. Emite
+     * `auth.social_link_code.requested` con `{scope, user_id, provider, code,
+     * expires_at, ip}`: el consumer manda el correo desde su listener.
+     *
+     * 🔴 OPT-IN, como vincular (DEVELOPER_GUIDE § 3.22.6).
+     */
+    #[Ability('{scope}.auth.social-link-code', 'Pedir el código para vincular Google o Apple en {scope}')]
+    public function requestSocialLinkCode(Request $request, string $provider): JsonResponse
+    {
+        $user = $request->user();
+        if (! $user instanceof Authenticatable) {
+            return $this->sendError('No autenticado.', [], 401, 'ERR_UNAUTHENTICATED');
+        }
+
+        $proof = $this->socialLinkProof($user);
+
+        if ($proof === 'password') {
+            return $this->sendError('Tu cuenta tiene contraseña: usala para vincular.', [], 409, 'ERR_SOCIAL_HAS_PASSWORD');
+        }
+
+        if ($proof === 'reauth') {
+            return $this->sendError(
+                'Tu cuenta no tiene un correo verificado: para vincular, volvé a entrar con un acceso que ya tengas vinculado.',
+                [],
+                409,
+                'ERR_SOCIAL_NO_VERIFIED_EMAIL',
+            );
+        }
+
+        if ($this->socialProviderConfigResolver()->clientIds($this->authScope(), $provider) === []) {
+            return $this->sendError('Este acceso no está disponible.', [], 403, 'ERR_SOCIAL_PROVIDER_DISABLED');
+        }
+
+        $scope = $this->authScope();
+        $identifier = (string) $user->getAuthIdentifier();
+
+        if ($this->emailOtpService()->isRequestThrottled($scope, 'social_link', $identifier)) {
+            return $this->sendError(
+                'Demasiadas solicitudes. Espere antes de volver a intentar.',
+                [],
+                429,
+                'ERR_THROTTLED',
+            );
+        }
+
+        $result = $this->emailOtpService()->issue($scope, 'social_link', $identifier);
+
+        $this->dispatchAuthEventSafe('auth.social_link_code.requested', [
+            'scope' => $scope,
+            'user_id' => $identifier,
+            'provider' => $provider,
+            'code' => $result->plainCode,  // plaintext — SOLO viaja acá, el listener lo envía por email.
+            'expires_at' => $result->expiresAt->toIso8601String(),
+            'ip' => $request->ip(),
+        ]);
+
+        return $this->sendResponse(
+            ['expires_at' => $result->expiresAt->toIso8601String()],
+            'Código enviado.',
+        );
+    }
+
+    /**
+     * Qué prueba pide vincular a esta cuenta: `password` (tiene contraseña),
+     * `code` (no tiene, y su correo está verificado) o `reauth` (ninguna de
+     * las dos). Sin `MustVerifyEmail` en el modelo, el correo cuenta como no
+     * verificado.
+     *
+     * @return 'password'|'code'|'reauth'
+     */
+    protected function socialLinkProof(Authenticatable $user): string
+    {
+        if ((string) $user->getAuthPassword() !== '') {
+            return 'password';
+        }
+
+        $verified = $user instanceof MustVerifyEmail
+            && $user->hasVerifiedEmail()
+            && (string) $user->getEmailForVerification() !== '';
+
+        return $verified ? 'code' : 'reauth';
+    }
+
+    /**
+     * ¿El token de «volver a entrar» prueba que la persona es la dueña? Tiene
+     * que verificar como en el login, ser de un acceso vinculado a ESTA cuenta,
+     * y ser de hace {@see SOCIAL_REAUTH_MAX_AGE_SECONDS} segundos o menos.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    private function acceptsSocialReauth(Authenticatable $user, array $data): bool
+    {
+        $reauthProvider = (string) $data['reauth_provider'];
+
+        try {
+            $reauth = $this->idTokenVerifier()->verify(
+                $reauthProvider,
+                (string) $data['reauth_id_token'],
+                $this->socialProviderConfigResolver()->clientIds($this->authScope(), $reauthProvider),
+                $data['reauth_nonce'] ?? null,
+            );
+        } catch (SocialLoginException) {
+            return false;
+        }
+
+        $issuedAt = $reauth->claims['iat'] ?? null;
+        if (! is_int($issuedAt) || now()->getTimestamp() - $issuedAt > self::SOCIAL_REAUTH_MAX_AGE_SECONDS) {
+            return false;
+        }
+
+        $owner = $this->findLinkedSocialUser($reauth);
+
+        return $owner !== null && (string) $owner->getAuthIdentifier() === (string) $user->getAuthIdentifier();
+    }
+
+    private function invalidSocialReauth(): JsonResponse
+    {
+        $message = 'Tu cuenta no tiene contraseña ni correo verificado: para vincular, volvé a entrar ahora con un acceso que ya tengas vinculado.';
+
+        return $this->sendError($message, ['reauth_id_token' => [$message]], 422, 'ERR_VALIDATION');
+    }
+
+    /** Los veredictos del código de vincular, como {@see confirmPasswordCode()}. */
+    private function socialLinkCodeVerdictResponse(OtpVerifyResult $verdict): JsonResponse
+    {
+        return match ($verdict) {
+            OtpVerifyResult::Expired => $this->sendError('Código expirado.', [], 410, 'ERR_CODE_EXPIRED'),
+            OtpVerifyResult::Locked => $this->sendError('Demasiados intentos. Solicite un nuevo código.', [], 423, 'ERR_CODE_LOCKED'),
+            // Anti-oracle: no dice si nunca existió, si venció por otra vía o si ya se usó.
+            default => $this->sendError('Código inválido.', ['code' => ['Código inválido.']], 422, 'ERR_VALIDATION'),
+        };
     }
 
     /**

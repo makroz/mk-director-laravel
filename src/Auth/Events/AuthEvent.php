@@ -25,6 +25,7 @@ use Mk\Director\Plugins\Enterprise\MkAuditLoggerPlugin;
  * | `auth.password_reset.requested` | `{email, ip}` (login field value, sin importar nombre)    |
  * | `auth.password_reset.success` | `{user_id}`                                                 |
  * | `auth.password_change_code.requested` | `{scope, user_id, code, expires_at, ip}` ⚠️ ver abajo |
+ * | `auth.social_link_code.requested` | `{scope, user_id, provider, code, expires_at, ip}` ⚠️ ver abajo |
  * | `auth.password_changed`       | `{user_id, ip}`                                             |
  * | `auth.two_factor.enabled`     | `{scope, user_id, ip}`                                      |
  * | `auth.two_factor.disabled`    | `{scope, user_id, ip}`                                      |
@@ -51,8 +52,9 @@ use Mk\Director\Plugins\Enterprise\MkAuditLoggerPlugin;
  * sanitiza en el AuthController antes de emitir el evento. Ver
  * `R-PKG-010 ACR-004 anti-patterns`.
  *
- * ⚠️ **`auth.password_change_code.requested` transporta el PIN en claro**
- * (`payload['code']`). Es el ÚNICO punto donde el PIN existe en texto plano:
+ * ⚠️ **`auth.password_change_code.requested` y `auth.social_link_code.requested`
+ * transportan el PIN en claro**
+ * (`payload['code']`). Son los ÚNICOS puntos donde el PIN existe en texto plano:
  * viaja SOLO para que el listener de email lo despache al usuario. Un listener
  * que consuma este evento **NUNCA** debe loggearlo, persistirlo, ni reenviarlo
  * a un canal de auditoría — sería equivalente a loggear una credencial. En DB
