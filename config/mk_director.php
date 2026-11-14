@@ -591,6 +591,10 @@ return [
             // `POST /auth/social/{provider}` (§ 3.22), sólo si el consumer la
             // cablea. Pública: el corte es por IP, igual que login.
             'social' => env('MK_AUTH_RATE_LIMIT_SOCIAL', '10,1'),
+            // `POST /me/social/{provider}/code` (§ 3.22.6): el código al correo
+            // para que una cuenta SIN contraseña vincule otro proveedor. Mismo
+            // corte que `password_code_request`; sólo si el consumer la cablea.
+            'social_link_code_request' => env('MK_AUTH_RATE_LIMIT_SOCIAL_LINK_CODE_REQ', '3,10'),
         ],
 
         // Login con Google y Apple por ID token (DEVELOPER_GUIDE § 3.22).
