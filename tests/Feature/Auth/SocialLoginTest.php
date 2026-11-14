@@ -145,9 +145,7 @@ final class SocialAuthController extends BaseAuthController
     /** Lo que haría el endpoint de borrar la cuenta del consumer: revocar y nada más. */
     public function revokeMine(Request $request): JsonResponse
     {
-        $this->revokeSocialAccess($request->user());
-
-        return response()->json(['ok' => true]);
+        return response()->json(['ok' => true, 'revoked' => $this->revokeSocialAccess($request->user())]);
     }
 }
 
@@ -849,7 +847,8 @@ test('🔴 revocar: Apple recibe el refresh token con su client_secret, y el ví
 
     $r = $this->httpDelete('/api/customer/auth/social-access', ['HTTP_AUTHORIZATION' => 'Bearer '.$body['data']['access_token']]);
 
-    expect($r->getStatusCode())->toBe(200);
+    expect($r->getStatusCode())->toBe(200)
+        ->and(json_decode((string) $r->getContent(), true)['revoked'])->toBeTrue();
     $sent = Http::recorded(fn ($req) => $req->url() === APPLE_REVOKE_URL);
     expect($sent)->toHaveCount(1);
     $form = $sent->first()[0]->data();
@@ -860,7 +859,7 @@ test('🔴 revocar: Apple recibe el refresh token con su client_secret, y el ví
     expect(DB::table('mk_social_identities')->where('user_id', $this->diner->getKey())->count())->toBe(0);
 });
 
-test('🔴 si Apple no revoca, el vínculo con su token queda para reintentar; el de Google se borra igual', function () {
+test('🔴 si Apple no revoca, devuelve false y NO toca ningún vínculo: ni el de Apple, ni el de Google', function () {
     withAppleSigningKey(testAppleKey());
     linkDiner($this->diner, 'apple', '001234.apple-sub.0001');
     linkDiner($this->diner, 'google', 'google-sub-1');
@@ -871,9 +870,10 @@ test('🔴 si Apple no revoca, el vínculo con su token queda para reintentar; e
     ]);
     [, $body] = socialPost($this, 'apple', ['id_token' => appleToken(), 'authorization_code' => 'c-apple-1']);
 
-    $this->httpDelete('/api/customer/auth/social-access', ['HTTP_AUTHORIZATION' => 'Bearer '.$body['data']['access_token']]);
+    $r = $this->httpDelete('/api/customer/auth/social-access', ['HTTP_AUTHORIZATION' => 'Bearer '.$body['data']['access_token']]);
 
-    expect(DB::table('mk_social_identities')->where('user_id', $this->diner->getKey())->pluck('provider')->all())->toBe(['apple'])
+    expect(json_decode((string) $r->getContent(), true)['revoked'])->toBeFalse()
+        ->and(DB::table('mk_social_identities')->where('user_id', $this->diner->getKey())->orderBy('provider')->pluck('provider')->all())->toBe(['apple', 'google'])
         ->and(Crypt::decryptString(appleIdentityRow()->refresh_token))->toBe('r-apple-1');
 });
 
