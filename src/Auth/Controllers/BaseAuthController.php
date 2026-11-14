@@ -1620,13 +1620,12 @@ abstract class BaseAuthController extends BaseController
      * POST /api/{scope}/auth/me/social/{provider}/code   con `mk.auth:{scope}`.
      *
      * Manda al correo de la cuenta el código para {@see linkSocialAccount()}.
-     * Sólo para una cuenta SIN contraseña y con el correo VERIFICADO:
+     * Sólo para una cuenta SIN contraseña cuyo correo GARANTIZÓ un proveedor
+     * vinculado ({@see socialLinkProof()}):
      *
      * - Con contraseña → 409 `ERR_SOCIAL_HAS_PASSWORD`: vincula con ella.
-     * - Sin correo verificado → 409 `ERR_SOCIAL_NO_VERIFIED_EMAIL`. 🔴 Uno sin
-     *   verificar cuenta como ninguno: una cuenta social puede cambiar su correo
-     *   en el perfil sin prueba, y con un access token robado el ladrón se
-     *   mandaría el código a sí mismo.
+     * - Sin ese correo → 409 `ERR_SOCIAL_NO_VERIFIED_EMAIL`: vuelve a entrar
+     *   con un acceso vinculado.
      * - Proveedor apagado o desconocido → 403 `ERR_SOCIAL_PROVIDER_DISABLED`.
      * - Otro pedido dentro de la ventana → 429 `ERR_THROTTLED`.
      *
@@ -1654,7 +1653,7 @@ abstract class BaseAuthController extends BaseController
 
         if ($proof === 'reauth') {
             return $this->sendError(
-                'Tu cuenta no tiene un correo verificado: para vincular, volvé a entrar con un acceso que ya tengas vinculado.',
+                'Tu correo no es el que te verificó Google o Apple: para vincular, volvé a entrar con un acceso que ya tengas vinculado.',
                 [],
                 409,
                 'ERR_SOCIAL_NO_VERIFIED_EMAIL',
@@ -1696,9 +1695,16 @@ abstract class BaseAuthController extends BaseController
 
     /**
      * Qué prueba pide vincular a esta cuenta: `password` (tiene contraseña),
-     * `code` (no tiene, y su correo está verificado) o `reauth` (ninguna de
-     * las dos). Sin `MustVerifyEmail` en el modelo, el correo cuenta como no
-     * verificado.
+     * `code` (no tiene, y su correo es uno que GARANTIZÓ un proveedor ya
+     * vinculado) o `reauth` (volver a entrar con un acceso vinculado).
+     *
+     * 🔴 «Verificado» NO alcanza (2026-11-13, un verificador lo reprodujo): una
+     * cuenta social cambia su correo en el perfil sin prueba y verifica el
+     * nuevo con el enlace firmado, así que con un access token robado el
+     * ladrón pondría su correo, lo verificaría y se mandaría el código. Sólo
+     * vale el correo que Google o Apple dieron por verificado al vincular
+     * ({@see linkSocialIdentity()} guarda sólo ése); si la persona lo cambió,
+     * vuelve a entrar con su proveedor.
      *
      * @return 'password'|'code'|'reauth'
      */
@@ -1708,11 +1714,15 @@ abstract class BaseAuthController extends BaseController
             return 'password';
         }
 
-        $verified = $user instanceof MustVerifyEmail
-            && $user->hasVerifiedEmail()
-            && (string) $user->getEmailForVerification() !== '';
+        $email = $user instanceof MustVerifyEmail && $user->hasVerifiedEmail() ? mb_strtolower(trim((string) $user->getEmailForVerification())) : '';
 
-        return $verified ? 'code' : 'reauth';
+        $vouched = $email !== '' && DB::table(self::SOCIAL_IDENTITIES_TABLE)
+            ->where('auth_scope', $this->authScope())
+            ->where('user_id', (string) $user->getAuthIdentifier())
+            ->whereRaw('lower(email) = ?', [$email])
+            ->exists();
+
+        return $vouched ? 'code' : 'reauth';
     }
 
     /**
@@ -2078,7 +2088,8 @@ abstract class BaseAuthController extends BaseController
             ],
             [
                 'user_id' => (string) $user->getAuthIdentifier(),
-                'email' => $identity->email,
+                // 🔴 Sólo el correo que el proveedor VERIFICÓ: es el que habilita el código de {@see socialLinkProof()}.
+                'email' => $identity->emailVerified ? $identity->email : null,
                 'created_at' => now(),
                 'updated_at' => now(),
             ],

@@ -1016,6 +1016,11 @@ test('🔴 Apple con código y la clave: al vincular también guarda el refresh 
 // Cada prueba tiene que frenar a quien sólo tiene un access token robado.
 
 /** Una cuenta sin clave, como un alta con Google. `$verified` = su correo está verificado. */
+/**
+ * Una cuenta sin contraseña. `$verified`: su correo es el que le verificó Apple
+ * al entrar (queda vinculada a Apple con ese correo), que es lo que habilita el
+ * código; sin eso no tiene ningún vínculo.
+ */
 function passwordlessDiner(bool $verified, string $email = 'social@mozzo.test'): SocialDiner
 {
     $diner = SocialDiner::create(['name' => 'Social', 'email' => $email, 'password' => 'x', 'auth_scope' => 'customer']);
@@ -1024,6 +1029,10 @@ function passwordlessDiner(bool $verified, string $email = 'social@mozzo.test'):
         'password' => '',
         'email_verified_at' => $verified ? now() : null,
     ]);
+
+    if ($verified) {
+        linkDiner($diner->refresh(), 'apple', 'apple-own-'.$diner->getKey());
+    }
 
     return $diner->refresh();
 }
@@ -1084,6 +1093,34 @@ test('🔴 código: una cuenta CON contraseña no lo pide (409 ERR_SOCIAL_HAS_PA
         ->and(DB::table('verification_codes')->count())->toBe(0);
 });
 
+test('🔴🔴 cambió el correo y lo verificó con el enlace: el código NO sale (un token robado no alcanza para mandarse el código)', function () {
+    $social = passwordlessDiner(verified: true);
+    // Lo que hace `PATCH me` + el enlace firmado: otro correo, verificado, que ningún proveedor garantizó.
+    DB::table('social_diners')->where('id', $social->getKey())->update(['email' => 'ladron@otro.test', 'email_verified_at' => now()]);
+
+    [$status, $body, $code] = linkCodeRequest($this, $social->refresh());
+
+    expect($status)->toBe(409)->and(socialErr($body))->toBe('ERR_SOCIAL_NO_VERIFIED_EMAIL')->and($code)->toBeNull()
+        ->and(DB::table('verification_codes')->count())->toBe(0);
+
+    [$status, $body] = linkPost($this, $social, 'google', ['id_token' => googleToken(['sub' => 'google-del-ladron']), 'code' => '123456']);
+    expect($status)->toBe(422)->and(linksOf($social))->toBe(['apple']);
+});
+
+test('🔴 al vincular, el correo del proveedor se guarda SÓLO si el proveedor lo verificó', function () {
+    $social = passwordlessDiner(verified: false, email: 'sin-verificar@mozzo.test');
+    linkDiner($social, 'google', 'google-sub-own');
+    [, , $code] = [null, null, null];
+    $token = app(Mk\Director\Auth\Services\TokenIssuer::class)->issueTokenPair($social)['access']->plainTextToken;
+    fakeJwks();
+    $this->httpPost('/api/customer/auth/me/social/apple', [
+        'id_token' => appleToken(['email' => 'sin-verificar@mozzo.test', 'email_verified' => false]),
+        'reauth_provider' => 'google', 'reauth_id_token' => googleToken(['sub' => 'google-sub-own']),
+    ], ['HTTP_AUTHORIZATION' => 'Bearer '.$token]);
+
+    expect(DB::table('mk_social_identities')->where('provider', 'apple')->where('user_id', $social->getKey())->value('email'))->toBeNull();
+});
+
 test('🔴 código: pedir otro dentro de la ventana da 429 ERR_THROTTLED y no pisa el primero', function () {
     $social = passwordlessDiner(verified: true);
     [, , $first] = linkCodeRequest($this, $social);
@@ -1104,12 +1141,12 @@ test('🔴 con el código: vincula, y el código queda gastado (un segundo uso e
 
     [$status, $body] = linkPost($this, $social, 'google', ['id_token' => googleToken(['sub' => 'google-sub-9']), 'code' => $code]);
     expect($status)->toBe(200, json_encode($body))
-        ->and($body['data']['social_providers'])->toBe(['google'])
-        ->and(linksOf($social))->toBe(['google']);
+        ->and($body['data']['social_providers'])->toBe(['apple', 'google'])
+        ->and(linksOf($social))->toBe(['apple', 'google']);
 
     [$status, $body] = linkPost($this, $social, 'apple', ['id_token' => appleToken(), 'code' => $code]);
     expect($status)->toBe(422)->and(linkErrors($body))->toHaveKey('code')
-        ->and(linksOf($social))->toBe(['google']);
+        ->and(linksOf($social))->toBe(['apple', 'google']);
 });
 
 test('🔴 con un código equivocado: 422 en `code`, ningún vínculo, y el bueno sigue sirviendo', function () {
@@ -1121,10 +1158,10 @@ test('🔴 con un código equivocado: 422 en `code`, ningún vínculo, y el buen
     [$status, $body] = linkPost($this, $social, 'google', ['id_token' => googleToken(['sub' => 'google-sub-9']), 'code' => $wrong]);
     expect($status)->toBe(422)->and(socialErr($body))->toBe('ERR_VALIDATION')
         ->and(linkErrors($body))->toHaveKey('code')
-        ->and(linksOf($social))->toBe([]);
+        ->and(linksOf($social))->toBe(['apple']);
 
     [$status] = linkPost($this, $social, 'google', ['id_token' => googleToken(['sub' => 'google-sub-9']), 'code' => $code]);
-    expect($status)->toBe(200)->and(linksOf($social))->toBe(['google']);
+    expect($status)->toBe(200)->and(linksOf($social))->toBe(['apple', 'google']);
 });
 
 test('código vencido: 410 ERR_CODE_EXPIRED; con los intentos agotados: 423 ERR_CODE_LOCKED aunque sea el bueno', function () {
@@ -1144,7 +1181,7 @@ test('código vencido: 410 ERR_CODE_EXPIRED; con los intentos agotados: 423 ERR_
     Carbon::setTestNow(now()->addMinutes(11));
     [$status, $body] = linkPost($this, $social, 'google', ['id_token' => googleToken(['sub' => 'google-sub-9']), 'code' => $fresh]);
     expect($status)->toBe(410)->and(socialErr($body))->toBe('ERR_CODE_EXPIRED')
-        ->and(linksOf($social))->toBe([]);
+        ->and(linksOf($social))->toBe(['apple']);
 });
 
 test('🔴 un token del proveedor NUEVO que no verifica no gasta el código ni un intento', function () {
@@ -1224,7 +1261,7 @@ test('🔴 con el correo verificado, volver a entrar NO alcanza: el código es e
 
     expect($status)->toBe(422)->and(socialErr($body))->toBe('ERR_VALIDATION')
         ->and(linkErrors($body))->toHaveKey('code')
-        ->and(linksOf($social))->toBe(['google']);
+        ->and(linksOf($social))->toBe(['apple', 'google']);
 });
 
 test('🔴 una cuenta sin contraseña que manda `current_password` (o nada): 422 que dice qué prueba usar', function () {
@@ -1240,7 +1277,7 @@ test('🔴 una cuenta sin contraseña que manda `current_password` (o nada): 422
         expect($status)->toBe(422)->and(linkErrors($body)['reauth_id_token'][0])->toContain('volvé a entrar');
     }
 
-    expect(DB::table('mk_social_identities')->count())->toBe(0);
+    expect(DB::table('mk_social_identities')->where('provider', 'google')->count())->toBe(0);
 });
 
 test('🔴 una cuenta CON contraseña no vincula con un código: sigue pidiendo la contraseña', function () {

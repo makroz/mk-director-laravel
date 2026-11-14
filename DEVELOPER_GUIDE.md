@@ -3570,26 +3570,29 @@ endpoint contesta si la contraseña es la correcta.
   depende de la cuenta:
   - **Con contraseña**: `current_password`, como `changePassword`. Si no
     coincide, 422 (`errors.current_password`).
-  - **Sin contraseña y con el correo verificado**: `code`, el que manda
+  - **Sin contraseña, con el correo que le garantizó un proveedor**: `code`, el que manda
     `requestSocialLinkCode` (abajo). Vencido 410 `ERR_CODE_EXPIRED`, sin
     intentos 423 `ERR_CODE_LOCKED`, otro 422 (`errors.code`). Un token malo del
     proveedor nuevo no gasta el código ni un intento, y el código se gasta en
     la misma transacción que guarda el vínculo.
-  - **Sin contraseña y sin correo verificado**: volver a entrar en el momento
+  - **Sin contraseña y sin ese correo**: volver a entrar en el momento
     con un proveedor que ya tiene vinculado: `reauth_provider`,
     `reauth_id_token` y, con Apple, `reauth_nonce` (obligatorio). El token se
     verifica como en el login, tiene que ser de un acceso de **esta** cuenta, y
     su `iat` de hace 300 segundos o menos (`SOCIAL_REAUTH_MAX_AGE_SECONDS`).
     Si no, 422 (`errors.reauth_id_token`).
-  - 🔴 Con correo verificado, el código es **el** camino: volver a entrar no
+  - 🔴 Con ese correo, el código es **el** camino: volver a entrar no
     alcanza. Una prueba que no es la de la cuenta (p. ej. `current_password`
     en una cuenta sin clave) da 422 en el campo que tocaba, con el mensaje de
     qué prueba usar. Nada de esto le pone contraseña a la cuenta.
-  - El correo verificado sale de `MustVerifyEmail::hasVerifiedEmail()`; un
-    modelo sin esa interfaz cuenta como sin correo verificado. ⚠️ Si el
-    perfil del consumer deja cambiar el correo, tiene que volver a ponerlo
-    como no verificado: si no, con un access token robado el ladrón pone su
-    correo y se manda el código a sí mismo.
+  - 🔴 El correo vale sólo si está verificado (`MustVerifyEmail::hasVerifiedEmail()`)
+    **y** es el que Google o Apple dieron por verificado al vincular
+    (`mk_social_identities.email`, que ahora guarda sólo ése). «Verificado» a
+    secas no alcanza: si el perfil deja cambiar el correo, con un access token
+    robado el ladrón pone el suyo, lo verifica con el enlace y se manda el
+    código (2026-11-13, reproducido por un verificador). Si la persona cambió
+    el correo, vuelve a entrar con su proveedor. `socialLinkProof($user)`
+    (protected) dice qué prueba toca, para que el consumer se la mande al front.
 - El token se verifica igual que en el login (401, 403 y 503 iguales).
 - Una identidad que ya es de **otra** cuenta del scope da 409
   `ERR_SOCIAL_ALREADY_LINKED` y no se mueve. Si ya es de la misma, la respuesta
