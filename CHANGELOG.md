@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Apple: no borrar la cuenta sin revocar
+
+**Changed (BC)**
+- `BaseAuthController::revokeSocialAccess($user)` devuelve `bool` (antes `void`). Revoca primero los vínculos de
+  Apple con token; si Apple no revoca (o falta la clave), devuelve `false` **sin tocar ningún otro vínculo** —antes
+  borraba el de Google igual—, para que el consumer pueda no borrar la cuenta y dejarla entrando como antes.
+  Un consumer que lo sobrescribía con `: void` tiene que cambiar la firma; uno que ignora el resultado sigue
+  andando, pero ahora un fallo de Apple le deja también el vínculo de Google (DEVELOPER_GUIDE § 3.22.5).
+
 ## [UNRELEASED] — Push web (plataforma `web` y bloque `webpush` de FCM)
 
 **Added**

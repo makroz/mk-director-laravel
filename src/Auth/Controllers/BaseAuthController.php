@@ -1567,24 +1567,33 @@ abstract class BaseAuthController extends BaseController
      * acceso de `$user` y borra sus vínculos sociales del scope. Apple exige
      * revocar al borrar una cuenta que entró con Apple.
      *
-     * - Un vínculo de Apple con token: se revoca y, si Apple dice que sí, se
-     *   borra. Si Apple falla (o no hay clave), el vínculo queda con su token
-     *   para reintentar, y queda en el log. 🔴 No tira: el borrado sigue.
+     * - Los vínculos de Apple con token van PRIMERO: se revocan y, si Apple
+     *   dice que sí, se borran.
+     * - 🔴 Si Apple falla (o no hay clave), devuelve `false` y no toca nada
+     *   más: ese vínculo queda con su token y los que faltan (Google) quedan
+     *   como estaban, para que la cuenta que el consumer NO borra siga
+     *   entrando igual que antes. Queda `mk.auth.apple.revoke_failed` en el log.
      * - Los demás (Google, o Apple sin token): no hay nada que revocar; se borran.
      *
-     * No toca las sesiones ni la cuenta: eso lo hace el consumer, que sabe si
-     * su borrado es lógico o físico.
+     * El consumer decide qué hacer con un `false` (no borrar la cuenta y
+     * responder 503, por ejemplo). No toca las sesiones ni la cuenta: eso lo
+     * hace el consumer, que sabe si su borrado es lógico o físico.
      */
-    protected function revokeSocialAccess(Authenticatable $user): void
+    protected function revokeSocialAccess(Authenticatable $user): bool
     {
         $rows = DB::table(self::SOCIAL_IDENTITIES_TABLE)
             ->where('auth_scope', $this->authScope())
             ->where('user_id', (string) $user->getAuthIdentifier())
-            ->get(['id', 'provider', 'client_id', 'refresh_token']);
+            ->get(['id', 'provider', 'client_id', 'refresh_token'])
+            ->sortBy(static fn (object $row): int => $row->provider === 'apple' && $row->refresh_token !== null ? 0 : 1);
 
         foreach ($rows as $row) {
-            $this->revokeAndDeleteIdentity($row);
+            if (! $this->revokeAndDeleteIdentity($row)) {
+                return false;
+            }
         }
+
+        return true;
     }
 
     /**

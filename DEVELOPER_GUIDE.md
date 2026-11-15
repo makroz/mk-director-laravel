@@ -3513,11 +3513,14 @@ canjear el `authorization.code` que Apple entrega junto al ID token.
 3. **El borrado de la cuenta revoca.** El endpoint de borrar la cuenta lo
    escribe el consumer (el paquete no sabe si su borrado es lógico o físico) y
    llama a `$this->revokeSocialAccess($user)` desde su `AuthController`:
-   - un vínculo de Apple con token se revoca y, si Apple dice que sí, se borra;
-   - si Apple falla (o falta la clave), el vínculo queda con su token para
-     reintentar, y queda `mk.auth.apple.revoke_failed` en el log. No tira: el
-     borrado sigue;
-   - los demás vínculos (Google, o Apple sin token) se borran.
+   - los vínculos de Apple con token van primero: se revocan y, si Apple dice
+     que sí, se borran;
+   - 🔴 si Apple falla (o falta la clave), devuelve `false` y no toca ningún
+     otro vínculo: el de Apple queda con su token, el de Google queda como
+     estaba, y queda `mk.auth.apple.revoke_failed` en el log. No tira: el
+     consumer decide (lo esperable es no borrar la cuenta y responder 503, para
+     que la persona lo intente de nuevo y siga entrando como antes);
+   - los demás vínculos (Google, o Apple sin token) se borran, y devuelve `true`.
 
    No cierra las sesiones ni toca la cuenta: eso lo hace el consumer.
 
@@ -3607,7 +3610,7 @@ Route::post('me/social/{provider}/unlink', [CustomerAuthController::class, 'unli
   Apple sin forma de revocarlo. Apple sin token y Google se borran sin más.
 - Emite `auth.social.unlinked` y responde `{social_providers}`: lo que le queda.
 
-Al borrar la cuenta, `revokeSocialAccess` se lleva todos los vínculos (§ 3.22.5).
+Al borrar la cuenta, `revokeSocialAccess` se lleva todos los vínculos, o ninguno si Apple no revoca (§ 3.22.5).
 
 #### 3.22.7 Qué NO hace
 
