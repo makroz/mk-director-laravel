@@ -7,12 +7,15 @@ namespace Mk\Director\Auth\Models;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Mk\Director\Auth\Enums\FixedStatus;
+use Mk\Director\Tenancy\UsesCentralConnection;
 
 /**
  * Ability model — `resource.action` style, e.g. `users.view`.
  */
 class Ability extends Model
 {
+    use UsesCentralConnection;
+
     protected $table = 'abilities';
 
     protected $fillable = [

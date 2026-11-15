@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model as EloquentModel;
 use Illuminate\Support\Carbon;
 use Mk\Director\Help\MkHelpShareLinks;
+use Mk\Director\Tenancy\UsesCentralConnection;
 
 /**
  * Un enlace público y temporal a un manual o a un artículo. Lo crea y lo
@@ -30,6 +31,7 @@ use Mk\Director\Help\MkHelpShareLinks;
 class MkHelpShareLink extends EloquentModel
 {
     use HasUuids;
+    use UsesCentralConnection;
 
     protected $fillable = [
         'token_hash',

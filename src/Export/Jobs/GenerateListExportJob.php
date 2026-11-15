@@ -265,7 +265,6 @@ class GenerateListExportJob implements ShouldQueue
 
         $requestPrevio = app()->bound('request') ? app('request') : null;
         $usuarioPrevio = Auth::user();
-        $tenantPrevio = $tenant->current();
 
         try {
             app()->instance('request', $request);
@@ -274,19 +273,13 @@ class GenerateListExportJob implements ShouldQueue
                 Auth::setUser($usuario);
             }
 
-            if ($report->tenant_id !== null) {
-                $tenant->set($report->tenant_id);
-            }
-
-            $flujo();
+            $report->tenant_id !== null ? $tenant->run($report->tenant_id, $flujo) : $flujo();
         } finally {
             Auth::forgetGuards();
 
             if ($usuarioPrevio !== null) {
                 Auth::setUser($usuarioPrevio);
             }
-
-            $tenantPrevio !== null ? $tenant->set($tenantPrevio) : $tenant->flush();
 
             if ($requestPrevio !== null) {
                 app()->instance('request', $requestPrevio);

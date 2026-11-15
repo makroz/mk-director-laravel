@@ -1346,6 +1346,29 @@ return [
          |     plataforma ni el catálogo de abilities, ni con `*`.
          */
         'roles_per_tenant' => filter_var(env('MK_ROLES_PER_TENANT', false), FILTER_VALIDATE_BOOLEAN),
+
+        /*
+         | CONEXIÓN POR TENANT (opt-in). Clase que implementa
+         | `Mk\Director\Tenancy\TenantConnectionResolver`: dado un tenant devuelve
+         | el nombre de su conexión de base, o `null` para la conexión por defecto.
+         | Mientras el tenant está activo esa conexión pasa a ser la por defecto
+         | (la anterior vuelve al limpiar el tenant). El default no cambia nada.
+         */
+        'connection_resolver' => \Mk\Director\Tenancy\NullTenantConnectionResolver::class,
+
+        /*
+         | Conexión de los modelos CENTRALES del paquete (`UsesCentralConnection`:
+         | catálogo de abilities y manuales de ayuda), los que son de la
+         | plataforma y no de un tenant. `null` = la conexión por defecto.
+         */
+        'central_connection' => null,
+
+        /*
+         | El tenant activo viaja en el payload de los jobs encolados y el job
+         | corre con ese tenant; un job encolado sin tenant corre sin tenant.
+         | Apagado, payload y ejecución quedan como los de Laravel.
+         */
+        'queue_propagation' => filter_var(env('MK_TENANT_QUEUE_PROPAGATION', false), FILTER_VALIDATE_BOOLEAN),
     ],
 
     /*

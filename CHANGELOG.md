@@ -12,6 +12,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Costuras de tenancy (todo apagado por defecto)
+
+**Added**
+- `Tenancy\TenantConnectionResolver` (`connectionFor(string|int $tenantId): ?string`) y su default `NullTenantConnectionResolver`;
+  se reemplaza con `mk_director.tenant.connection_resolver`. Al fijarse un tenant su conexión pasa a ser la por defecto; al limpiarse vuelve la anterior
+  (`TenantConnectionSwitcher`).
+- `TenantContext::run($tenantId, $fn)`: fija el tenant, ejecuta y siempre restaura el anterior, también si `$fn` lanza.
+- Eventos `Tenancy\Events\TenantResolved($tenantId, $previous)` (sólo cuando el valor cambia) y `TenantFlushed($previous)` (sólo si había tenant).
+  `TenantContext` recibe un `Dispatcher` opcional en el constructor.
+- `mk_director.tenant.queue_propagation` (env `MK_TENANT_QUEUE_PROPAGATION`, default `false`): el tenant activo viaja en el payload
+  (`mk_tenant_id`) de todo job encolado y el job corre con él; al terminar vuelve el tenant anterior.
+- Trait `Tenancy\UsesCentralConnection` y `mk_director.tenant.central_connection` (default `null`), aplicado a `Ability`, `MkHelpArticle` y `MkHelpShareLink`.
+
+**Changed**
+- `GenerateListExportJob` y `GenerateCustomReportJob` usan `TenantContext::run` en vez de su `try/finally` copiado; mismo comportamiento.
+- Docblock de `TenantContext` corregido: el provider SÍ limpia el contexto al terminar cada request.
+
+**Unchanged**: con la config nueva en su default no cambia ninguna conexión ni ningún payload de job.
+Docs: `docs/guides/MULTI_TENANT.md` (conexión por tenant, eventos, cola, tabla de modelos centrales y reglas para tablas de tenant).
+
 ## [UNRELEASED] — Vincular Google o Apple a una cuenta sin contraseña
 
 **Added**

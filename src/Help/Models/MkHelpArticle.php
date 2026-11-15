@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model as EloquentModel;
 use Illuminate\Support\Carbon;
 use Mk\Director\Help\MkHelpSync;
+use Mk\Director\Tenancy\UsesCentralConnection;
 
 /**
  * Un artículo del manual, indexado desde su archivo por {@see MkHelpSync}.
@@ -33,6 +34,7 @@ use Mk\Director\Help\MkHelpSync;
 class MkHelpArticle extends EloquentModel
 {
     use HasUuids;
+    use UsesCentralConnection;
 
     protected $fillable = [
         'slug',
