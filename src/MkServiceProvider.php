@@ -72,6 +72,7 @@ use Mk\Director\Tenancy\TenantConnectionSwitcher;
 use Mk\Director\Tenancy\TenantContext;
 use Mk\Director\Tenancy\TenantQueuePropagation;
 use Mk\Director\Tenancy\TenantResolver;
+use Mk\Director\Tenancy\TenantRowLevelSecurity;
 use Mk\Director\Utils\MkDebugConfig;
 // 🔴 ESTE IMPORT FALTABA Y HABÍA DOS `catch (Throwable $e)` MUERTOS.
 // Sin él, dentro del namespace `Mk\Director` el nombre pelado resuelve a
@@ -812,6 +813,9 @@ class MkServiceProvider extends ServiceProvider
 
         $events->listen(TenantResolved::class, fn (TenantResolved $e) => $this->app->make(TenantConnectionSwitcher::class)->resolved($e));
         $events->listen(TenantFlushed::class, fn (TenantFlushed $e) => $this->app->make(TenantConnectionSwitcher::class)->flushed($e));
+        // After the switcher: the setting must land on the already-switched connection.
+        $events->listen(TenantResolved::class, fn (TenantResolved $e) => $this->app->make(TenantRowLevelSecurity::class)->resolved($e));
+        $events->listen(TenantFlushed::class, fn (TenantFlushed $e) => $this->app->make(TenantRowLevelSecurity::class)->flushed($e));
 
         TenantQueuePropagation::hookPayload();
         $events->listen(JobProcessing::class, fn (JobProcessing $e) => $this->app->make(TenantQueuePropagation::class)->starting($e));

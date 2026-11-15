@@ -1369,6 +1369,15 @@ return [
          | Apagado, payload y ejecución quedan como los de Laravel.
          */
         'queue_propagation' => filter_var(env('MK_TENANT_QUEUE_PROPAGATION', false), FILTER_VALIDATE_BOOLEAN),
+
+        /*
+         | ROW LEVEL SECURITY (opt-in, sólo Postgres). Al cambiar el tenant se
+         | fija `set_config('app.tenant_id', <id>, false)` en la conexión activa
+         | (y se vacía al limpiarlo); las políticas que crea `Tenancy\Rls::enable()`
+         | en las migraciones filtran por ese valor. Apagado, o con otro driver,
+         | no ejecuta ninguna query. Ver docs/guides/MULTI_TENANT.md.
+         */
+        'rls' => filter_var(env('MK_TENANT_RLS', false), FILTER_VALIDATE_BOOLEAN),
     ],
 
     /*

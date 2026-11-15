@@ -24,13 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `mk_director.tenant.queue_propagation` (env `MK_TENANT_QUEUE_PROPAGATION`, default `false`): el tenant activo viaja en el payload
   (`mk_tenant_id`) de todo job encolado y el job corre con él; al terminar vuelve el tenant anterior.
 - Trait `Tenancy\UsesCentralConnection` y `mk_director.tenant.central_connection` (default `null`), aplicado a `Ability`, `MkHelpArticle` y `MkHelpShareLink`.
+- Row Level Security opcional en Postgres: `mk_director.tenant.rls` (env `MK_TENANT_RLS`, default `false`) fija `app.tenant_id` con `set_config`
+  al cambiar el tenant (`TenantRowLevelSecurity`), y el helper de migraciones `Tenancy\Rls::enable($table, $column = 'tenant_id')` / `disable($table)`
+  hace `ENABLE` + `FORCE ROW LEVEL SECURITY` y crea la política `mk_tenant_isolation`. Test contra Postgres real con `MK_TEST_PGSQL_RLS_URL` (se salta si falta).
 
 **Changed**
 - `GenerateListExportJob` y `GenerateCustomReportJob` usan `TenantContext::run` en vez de su `try/finally` copiado; mismo comportamiento.
 - Docblock de `TenantContext` corregido: el provider SÍ limpia el contexto al terminar cada request.
 
 **Unchanged**: con la config nueva en su default no cambia ninguna conexión ni ningún payload de job.
-Docs: `docs/guides/MULTI_TENANT.md` (conexión por tenant, eventos, cola, tabla de modelos centrales y reglas para tablas de tenant).
+Docs: `docs/guides/MULTI_TENANT.md` (conexión por tenant, eventos, cola, tabla de modelos centrales, reglas para tablas de tenant y Row Level Security).
 
 ## [UNRELEASED] — Vincular Google o Apple a una cuenta sin contraseña
 
