@@ -161,3 +161,55 @@ test('Rls::enable twice is idempotent and Rls::disable gives the owner everythin
     expect(rlsLabels())->toBe(['a1', 'b1']);
     expect(DB::select("select 1 from pg_policies where tablename = 'rls_items'"))->toBe([]);
 });
+
+// ── Regressions found by the independent verifier ──────────────────
+
+final class RlsSecondConnectionResolver implements \Mk\Director\Tenancy\TenantConnectionResolver
+{
+    public function connectionFor(string|int $tenantId): ?string
+    {
+        return $tenantId === RLS_TENANT_B ? 'rls_pg2' : null;
+    }
+}
+
+test('flush clears the setting on the tenant connection, not only on the default one', function () {
+    bootRlsPostgres();
+    config([
+        'mk_director.tenant.connection_resolver' => RlsSecondConnectionResolver::class,
+        'database.connections.rls_pg2' => config('database.connections.rls_pg'),
+    ]);
+    app()->forgetInstance(\Mk\Director\Tenancy\TenantConnectionResolver::class);
+    app()->bind(\Mk\Director\Tenancy\TenantConnectionResolver::class, RlsSecondConnectionResolver::class);
+    app()->forgetInstance(\Mk\Director\Tenancy\TenantConnectionSwitcher::class);
+
+    $tenant = app(TenantContext::class);
+    rlsInsert(RLS_TENANT_B, 'b1');
+
+    $tenant->set(RLS_TENANT_B);
+    $tenant->flush();
+    expect(DB::connection('rls_pg2')->table('rls_items')->count())->toBe(0);
+
+    $tenant->set(RLS_TENANT_A);
+    $tenant->run(RLS_TENANT_B, fn () => null);
+    expect(DB::connection('rls_pg2')->table('rls_items')->count())->toBe(0);
+    $tenant->flush();
+});
+
+test('a rolled back transaction never leaves the setting out of sync with the context', function () {
+    bootRlsPostgres();
+    $tenant = app(TenantContext::class);
+    rlsInsert(RLS_TENANT_A, 'a1');
+
+    $tenant->set(RLS_TENANT_A);
+    DB::beginTransaction();
+    $tenant->flush();
+    DB::rollBack();
+    expect($tenant->current())->toBeNull()
+        ->and(rlsLabels())->toBe([]);
+
+    DB::beginTransaction();
+    $tenant->set(RLS_TENANT_A);
+    DB::rollBack();
+    expect(rlsLabels())->toBe(['a1']);
+    $tenant->flush();
+});

@@ -64,9 +64,11 @@ class TenantContext
     {
         $previous = $this->current;
 
-        $this->set($tenantId);
-
         try {
+            // Inside the try: if a TenantResolved listener throws, the previous
+            // tenant still comes back.
+            $this->set($tenantId);
+
             return $fn();
         } finally {
             $previous === null ? $this->flush() : $this->set($previous);

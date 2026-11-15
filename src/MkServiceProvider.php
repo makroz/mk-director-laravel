@@ -86,6 +86,7 @@ use Mk\Director\Utils\MkRequestAwareStorageUrl;
 use Illuminate\Queue\Events\JobExceptionOccurred;
 use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Queue\Events\JobProcessed;
+use Illuminate\Database\Events\TransactionRolledBack;
 use Illuminate\Queue\Events\JobProcessing;
 use Throwable;
 
@@ -151,6 +152,7 @@ class MkServiceProvider extends ServiceProvider
             )
         );
         $this->app->singleton(TenantConnectionSwitcher::class);
+        $this->app->singleton(TenantRowLevelSecurity::class);
         $this->app->singleton(TenantQueuePropagation::class);
 
         // Encabezado de los reportes exportados.
@@ -816,6 +818,7 @@ class MkServiceProvider extends ServiceProvider
         // After the switcher: the setting must land on the already-switched connection.
         $events->listen(TenantResolved::class, fn (TenantResolved $e) => $this->app->make(TenantRowLevelSecurity::class)->resolved($e));
         $events->listen(TenantFlushed::class, fn (TenantFlushed $e) => $this->app->make(TenantRowLevelSecurity::class)->flushed($e));
+        $events->listen(TransactionRolledBack::class, fn (TransactionRolledBack $e) => $this->app->make(TenantRowLevelSecurity::class)->rolledBack($e));
 
         TenantQueuePropagation::hookPayload();
         $events->listen(JobProcessing::class, fn (JobProcessing $e) => $this->app->make(TenantQueuePropagation::class)->starting($e));

@@ -166,3 +166,17 @@ test('export jobs clear the tenant afterwards when none was active, even if the 
     expect(fn () => $method->invoke($job, ...$args))->toThrow(RuntimeException::class);
     expect($context->current())->toBeNull();
 })->with('export jobs');
+
+test('run restores the previous tenant even when a listener of the inner set throws', function () {
+    $events = new Dispatcher;
+    $events->listen(TenantResolved::class, function (TenantResolved $e) {
+        if ($e->tenantId === 'bad') {
+            throw new RuntimeException('listener failed');
+        }
+    });
+    $context = new TenantContext($events);
+    $context->set('a');
+
+    expect(fn () => $context->run('bad', fn () => 1))->toThrow(RuntimeException::class, 'listener failed');
+    expect($context->current())->toBe('a');
+});

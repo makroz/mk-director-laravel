@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Row Level Security opcional en Postgres: `mk_director.tenant.rls` (env `MK_TENANT_RLS`, default `false`) fija `app.tenant_id` con `set_config`
   al cambiar el tenant (`TenantRowLevelSecurity`), y el helper de migraciones `Tenancy\Rls::enable($table, $column = 'tenant_id')` / `disable($table)`
   hace `ENABLE` + `FORCE ROW LEVEL SECURITY` y crea la política `mk_tenant_isolation`. Test contra Postgres real con `MK_TEST_PGSQL_RLS_URL` (se salta si falta).
+  El valor se vuelve a escribir después de cada rollback y, con una conexión por tenant, se limpia también en la conexión del tenant al hacer `flush`.
+- `TenantContext::run` restaura el tenant anterior aunque falle un listener del `set` inicial.
 
 **Changed**
 - `GenerateListExportJob` y `GenerateCustomReportJob` usan `TenantContext::run` en vez de su `try/finally` copiado; mismo comportamiento.
