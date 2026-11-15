@@ -3564,11 +3564,35 @@ Route::middleware('mk.auth:customer')->group(function () {
 endpoint contesta si la contraseña es la correcta.
 
 - Body: `id_token`, `nonce`, y con Apple `authorization_code` y `redirect_uri`,
-  igual que el login, más `current_password`. 🔴 **Pide la contraseña
-  actual**, como `changePassword`: un vínculo es una puerta nueva a la cuenta,
-  y con un access token robado alcanzaría para dejar el Google del ladrón
-  adentro para siempre. Un usuario sin contraseña no vincula por acá. Si la
-  contraseña no coincide, la respuesta es 422 (`errors.current_password`).
+  igual que el login, más **una prueba de que la persona es la dueña**: un
+  vínculo es una puerta nueva a la cuenta, y con un access token robado
+  alcanzaría para dejar el Google del ladrón adentro para siempre. La prueba
+  depende de la cuenta:
+  - **Con contraseña**: `current_password`, como `changePassword`. Si no
+    coincide, 422 (`errors.current_password`).
+  - **Sin contraseña, con el correo que le garantizó un proveedor**: `code`, el que manda
+    `requestSocialLinkCode` (abajo). Vencido 410 `ERR_CODE_EXPIRED`, sin
+    intentos 423 `ERR_CODE_LOCKED`, otro 422 (`errors.code`). Un token malo del
+    proveedor nuevo no gasta el código ni un intento, y el código se gasta en
+    la misma transacción que guarda el vínculo.
+  - **Sin contraseña y sin ese correo**: volver a entrar en el momento
+    con un proveedor que ya tiene vinculado: `reauth_provider`,
+    `reauth_id_token` y, con Apple, `reauth_nonce` (obligatorio). El token se
+    verifica como en el login, tiene que ser de un acceso de **esta** cuenta, y
+    su `iat` de hace 300 segundos o menos (`SOCIAL_REAUTH_MAX_AGE_SECONDS`).
+    Si no, 422 (`errors.reauth_id_token`).
+  - 🔴 Con ese correo, el código es **el** camino: volver a entrar no
+    alcanza. Una prueba que no es la de la cuenta (p. ej. `current_password`
+    en una cuenta sin clave) da 422 en el campo que tocaba, con el mensaje de
+    qué prueba usar. Nada de esto le pone contraseña a la cuenta.
+  - 🔴 El correo vale sólo si está verificado (`MustVerifyEmail::hasVerifiedEmail()`)
+    **y** es el que Google o Apple dieron por verificado al vincular
+    (`mk_social_identities.email`, que ahora guarda sólo ése). «Verificado» a
+    secas no alcanza: si el perfil deja cambiar el correo, con un access token
+    robado el ladrón pone el suyo, lo verifica con el enlace y se manda el
+    código (2026-11-13, reproducido por un verificador). Si la persona cambió
+    el correo, vuelve a entrar con su proveedor. `socialLinkProof($user)`
+    (protected) dice qué prueba toca, para que el consumer se la mande al front.
 - El token se verifica igual que en el login (401, 403 y 503 iguales).
 - Una identidad que ya es de **otra** cuenta del scope da 409
   `ERR_SOCIAL_ALREADY_LINKED` y no se mueve. Si ya es de la misma, la respuesta
@@ -3582,6 +3606,25 @@ endpoint contesta si la contraseña es la correcta.
 - Responde `{social_providers}`: los proveedores vinculados de la cuenta.
   `linkedSocialProviders($user)` (protected) devuelve lo mismo, para ponerlo en
   el perfil desde `customizeMePayload()`.
+
+**El código para vincular** (`requestSocialLinkCode`), con la misma sesión:
+
+```php
+Route::post('me/social/{provider}/code', [CustomerAuthController::class, 'requestSocialLinkCode'])
+    ->whereIn('provider', ['google', 'apple'])
+    ->middleware('throttle:3,10'); // config mk_director.auth.rate_limits.social_link_code_request
+```
+
+- Sólo para una cuenta sin contraseña y con el correo verificado. Con
+  contraseña, 409 `ERR_SOCIAL_HAS_PASSWORD`; sin correo verificado, 409
+  `ERR_SOCIAL_NO_VERIFIED_EMAIL`; proveedor apagado, 403
+  `ERR_SOCIAL_PROVIDER_DISABLED`; otro pedido dentro de la ventana, 429
+  `ERR_THROTTLED`.
+- Mismo `EmailOtpService`, TTL, intentos y ventana que el código de
+  `password_change`, con `purpose` `social_link`.
+- Emite `auth.social_link_code.requested` con `{scope, user_id, provider, code,
+  expires_at, ip}`: el consumer manda el correo desde su listener, como con
+  `auth.password_change_code.requested`. Responde `{expires_at}`.
 
 **Desvincular** (`unlinkSocialAccount`), con la misma sesión y el mismo freno:
 

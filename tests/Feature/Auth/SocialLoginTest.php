@@ -287,6 +287,7 @@ beforeEach(function () {
         $t->string('name');
         $t->string('email')->unique();
         $t->string('password');
+        $t->timestamp('email_verified_at')->nullable();
         $t->string('auth_scope')->default('customer');
         $t->unsignedTinyInteger('status')->default(ScopeStatus::Active->value);
         $t->text('two_factor_secret')->nullable();
@@ -350,6 +351,7 @@ beforeEach(function () {
         Route::get('api/customer/auth/me', [SocialAuthController::class, 'me']);
         Route::delete('api/customer/auth/social-access', [SocialAuthController::class, 'revokeMine']);
         Route::post('api/customer/auth/me/social/{provider}', [SocialAuthController::class, 'linkSocialAccount']);
+        Route::post('api/customer/auth/me/social/{provider}/code', [SocialAuthController::class, 'requestSocialLinkCode']);
         Route::post('api/customer/auth/me/social/{provider}/unlink', [SocialAuthController::class, 'unlinkSocialAccount']);
     });
 
@@ -1006,6 +1008,285 @@ test('🔴 Apple con código y la clave: al vincular también guarda el refresh 
         ->and(Crypt::decryptString(appleIdentityRow()->refresh_token))->toBe('r-apple-9')
         ->and(appleIdentityRow()->user_id)->toBe($this->diner->getKey())
         ->and(Http::recorded(fn ($r) => $r->url() === APPLE_TOKEN_URL)->first()[0]->data()['redirect_uri'])->toBe('https://mozzo.test/perfil');
+});
+
+// ─── 5b. Vincular SIN contraseña: código al correo o volver a entrar ─────────
+//
+// Mario, 2026-11-13: «el codigo al correo, si no tiene, ya la otra opcion».
+// Cada prueba tiene que frenar a quien sólo tiene un access token robado.
+
+/** Una cuenta sin clave, como un alta con Google. `$verified` = su correo está verificado. */
+/**
+ * Una cuenta sin contraseña. `$verified`: su correo es el que le verificó Apple
+ * al entrar (queda vinculada a Apple con ese correo), que es lo que habilita el
+ * código; sin eso no tiene ningún vínculo.
+ */
+function passwordlessDiner(bool $verified, string $email = 'social@mozzo.test'): SocialDiner
+{
+    $diner = SocialDiner::create(['name' => 'Social', 'email' => $email, 'password' => 'x', 'auth_scope' => 'customer']);
+    // El cast `hashed` no deja guardar un vacío por el modelo.
+    DB::table('social_diners')->where('id', $diner->getKey())->update([
+        'password' => '',
+        'email_verified_at' => $verified ? now() : null,
+    ]);
+
+    if ($verified) {
+        linkDiner($diner->refresh(), 'apple', 'apple-own-'.$diner->getKey());
+    }
+
+    return $diner->refresh();
+}
+
+/**
+ * Los errores de campo: los del controller vienen en el sobre; los de
+ * `validate()` (campo obligatorio), en la forma cruda de Laravel en este harness.
+ *
+ * @return array<string, list<string>>
+ */
+function linkErrors(array $body): array
+{
+    return $body['__extraData']['errors'] ?? $body['errors'] ?? [];
+}
+
+/** @return array{0:int, 1:array<string,mixed>, 2:?string} status, body y el código en claro que viajó en el evento */
+function linkCodeRequest(object $test, SocialDiner $diner, string $provider = 'google'): array
+{
+    $code = null;
+    Event::listen(AuthEvent::class, function (AuthEvent $event) use (&$code) {
+        if ($event->type === 'auth.social_link_code.requested') {
+            $code = $event->payload['code'];
+        }
+    });
+
+    $token = app(Mk\Director\Auth\Services\TokenIssuer::class)->issueTokenPair($diner)['access']->plainTextToken;
+    $response = $test->httpPost("/api/customer/auth/me/social/{$provider}/code", [], ['HTTP_AUTHORIZATION' => 'Bearer '.$token]);
+
+    return [$response->getStatusCode(), (array) json_decode((string) $response->getContent(), true), $code];
+}
+
+test('🔴 código: una cuenta sin contraseña con el correo verificado lo recibe por el evento, con el proveedor', function () {
+    $social = passwordlessDiner(verified: true);
+    $payloads = [];
+    Event::listen(AuthEvent::class, function (AuthEvent $event) use (&$payloads) {
+        $payloads[$event->type] = $event->payload;
+    });
+
+    [$status, $body, $code] = linkCodeRequest($this, $social, 'apple');
+
+    expect($status)->toBe(200, json_encode($body))
+        ->and($body['data']['expires_at'])->toBeString()
+        ->and($code)->toMatch('/^\d{6}$/')
+        ->and($payloads['auth.social_link_code.requested'])->toMatchArray([
+            'scope' => 'customer', 'user_id' => $social->getKey(), 'provider' => 'apple',
+        ])
+        ->and(DB::table('verification_codes')->where('purpose', 'social_link')->where('identifier', $social->getKey())->count())->toBe(1);
+});
+
+test('🔴 código: una cuenta CON contraseña no lo pide (409 ERR_SOCIAL_HAS_PASSWORD); sin correo verificado, 409 ERR_SOCIAL_NO_VERIFIED_EMAIL', function () {
+    [$status, $body, $code] = linkCodeRequest($this, $this->diner);
+    expect($status)->toBe(409)->and(socialErr($body))->toBe('ERR_SOCIAL_HAS_PASSWORD')->and($code)->toBeNull();
+
+    // Sin verificar cuenta como sin correo: una cuenta social cambia el correo
+    // en el perfil sin prueba, y con eso el ladrón se mandaría el código a sí mismo.
+    [$status, $body, $code] = linkCodeRequest($this, passwordlessDiner(verified: false));
+    expect($status)->toBe(409)->and(socialErr($body))->toBe('ERR_SOCIAL_NO_VERIFIED_EMAIL')->and($code)->toBeNull()
+        ->and(DB::table('verification_codes')->count())->toBe(0);
+});
+
+test('🔴🔴 cambió el correo y lo verificó con el enlace: el código NO sale (un token robado no alcanza para mandarse el código)', function () {
+    $social = passwordlessDiner(verified: true);
+    // Lo que hace `PATCH me` + el enlace firmado: otro correo, verificado, que ningún proveedor garantizó.
+    DB::table('social_diners')->where('id', $social->getKey())->update(['email' => 'ladron@otro.test', 'email_verified_at' => now()]);
+
+    [$status, $body, $code] = linkCodeRequest($this, $social->refresh());
+
+    expect($status)->toBe(409)->and(socialErr($body))->toBe('ERR_SOCIAL_NO_VERIFIED_EMAIL')->and($code)->toBeNull()
+        ->and(DB::table('verification_codes')->count())->toBe(0);
+
+    [$status, $body] = linkPost($this, $social, 'google', ['id_token' => googleToken(['sub' => 'google-del-ladron']), 'code' => '123456']);
+    expect($status)->toBe(422)->and(linksOf($social))->toBe(['apple']);
+});
+
+test('🔴 al vincular, el correo del proveedor se guarda SÓLO si el proveedor lo verificó', function () {
+    $social = passwordlessDiner(verified: false, email: 'sin-verificar@mozzo.test');
+    linkDiner($social, 'google', 'google-sub-own');
+    [, , $code] = [null, null, null];
+    $token = app(Mk\Director\Auth\Services\TokenIssuer::class)->issueTokenPair($social)['access']->plainTextToken;
+    fakeJwks();
+    $this->httpPost('/api/customer/auth/me/social/apple', [
+        'id_token' => appleToken(['email' => 'sin-verificar@mozzo.test', 'email_verified' => false]),
+        'reauth_provider' => 'google', 'reauth_id_token' => googleToken(['sub' => 'google-sub-own']),
+    ], ['HTTP_AUTHORIZATION' => 'Bearer '.$token]);
+
+    expect(DB::table('mk_social_identities')->where('provider', 'apple')->where('user_id', $social->getKey())->value('email'))->toBeNull();
+});
+
+test('🔴 código: pedir otro dentro de la ventana da 429 ERR_THROTTLED y no pisa el primero', function () {
+    $social = passwordlessDiner(verified: true);
+    [, , $first] = linkCodeRequest($this, $social);
+
+    [$status, $body, $second] = linkCodeRequest($this, $social);
+
+    expect($status)->toBe(429)->and(socialErr($body))->toBe('ERR_THROTTLED')->and($second)->toBeNull();
+
+    fakeJwks();
+    [$status, $body] = linkPost($this, $social, 'google', ['id_token' => googleToken(['sub' => 'google-sub-9']), 'code' => $first]);
+    expect($status)->toBe(200, json_encode($body));
+});
+
+test('🔴 con el código: vincula, y el código queda gastado (un segundo uso es 422)', function () {
+    fakeJwks();
+    $social = passwordlessDiner(verified: true);
+    [, , $code] = linkCodeRequest($this, $social);
+
+    [$status, $body] = linkPost($this, $social, 'google', ['id_token' => googleToken(['sub' => 'google-sub-9']), 'code' => $code]);
+    expect($status)->toBe(200, json_encode($body))
+        ->and($body['data']['social_providers'])->toBe(['apple', 'google'])
+        ->and(linksOf($social))->toBe(['apple', 'google']);
+
+    [$status, $body] = linkPost($this, $social, 'apple', ['id_token' => appleToken(), 'code' => $code]);
+    expect($status)->toBe(422)->and(linkErrors($body))->toHaveKey('code')
+        ->and(linksOf($social))->toBe(['apple', 'google']);
+});
+
+test('🔴 con un código equivocado: 422 en `code`, ningún vínculo, y el bueno sigue sirviendo', function () {
+    fakeJwks();
+    $social = passwordlessDiner(verified: true);
+    [, , $code] = linkCodeRequest($this, $social);
+    $wrong = $code === '000000' ? '111111' : '000000';
+
+    [$status, $body] = linkPost($this, $social, 'google', ['id_token' => googleToken(['sub' => 'google-sub-9']), 'code' => $wrong]);
+    expect($status)->toBe(422)->and(socialErr($body))->toBe('ERR_VALIDATION')
+        ->and(linkErrors($body))->toHaveKey('code')
+        ->and(linksOf($social))->toBe(['apple']);
+
+    [$status] = linkPost($this, $social, 'google', ['id_token' => googleToken(['sub' => 'google-sub-9']), 'code' => $code]);
+    expect($status)->toBe(200)->and(linksOf($social))->toBe(['apple', 'google']);
+});
+
+test('código vencido: 410 ERR_CODE_EXPIRED; con los intentos agotados: 423 ERR_CODE_LOCKED aunque sea el bueno', function () {
+    fakeJwks();
+    $social = passwordlessDiner(verified: true);
+    [, , $code] = linkCodeRequest($this, $social);
+    $wrong = $code === '000000' ? '111111' : '000000';
+
+    for ($i = 0; $i < 5; $i++) {
+        linkPost($this, $social, 'google', ['id_token' => googleToken(['sub' => 'google-sub-9']), 'code' => $wrong]);
+    }
+    [$status, $body] = linkPost($this, $social, 'google', ['id_token' => googleToken(['sub' => 'google-sub-9']), 'code' => $code]);
+    expect($status)->toBe(423)->and(socialErr($body))->toBe('ERR_CODE_LOCKED');
+
+    Carbon::setTestNow(now()->addMinutes(11));
+    [, , $fresh] = linkCodeRequest($this, $social);
+    Carbon::setTestNow(now()->addMinutes(11));
+    [$status, $body] = linkPost($this, $social, 'google', ['id_token' => googleToken(['sub' => 'google-sub-9']), 'code' => $fresh]);
+    expect($status)->toBe(410)->and(socialErr($body))->toBe('ERR_CODE_EXPIRED')
+        ->and(linksOf($social))->toBe(['apple']);
+});
+
+test('🔴 un token del proveedor NUEVO que no verifica no gasta el código ni un intento', function () {
+    fakeJwks();
+    $social = passwordlessDiner(verified: true);
+    [, , $code] = linkCodeRequest($this, $social);
+
+    [$status, $body] = linkPost($this, $social, 'google', ['id_token' => googleToken(['aud' => 'otra-app.test']), 'code' => $code]);
+    expect($status)->toBe(401)->and(socialErr($body))->toBe('ERR_SOCIAL_TOKEN_INVALID')
+        ->and(DB::table('verification_codes')->value('attempts'))->toBe(0);
+
+    [$status] = linkPost($this, $social, 'google', ['id_token' => googleToken(['sub' => 'google-sub-9']), 'code' => $code]);
+    expect($status)->toBe(200);
+});
+
+test('🔴 sin correo verificado: vincula volviendo a entrar en el momento con un proveedor que ya tiene', function () {
+    fakeJwks();
+    $social = passwordlessDiner(verified: false);
+    linkDiner($social, 'google', 'google-sub-3');
+
+    [$status, $body] = linkPost($this, $social, 'apple', [
+        'id_token' => appleToken(),
+        'reauth_provider' => 'google',
+        'reauth_id_token' => googleToken(['sub' => 'google-sub-3']),
+    ]);
+
+    expect($status)->toBe(200, json_encode($body))
+        ->and(linksOf($social))->toBe(['apple', 'google']);
+});
+
+test('🔴 volver a entrar: con un acceso de OTRA cuenta, con uno sin vincular o con un token viejo, 422 en `reauth_id_token` y ningún vínculo', function () {
+    fakeJwks();
+    $social = passwordlessDiner(verified: false);
+    linkDiner($social, 'google', 'google-sub-3');
+    linkDiner($this->diner, 'google', 'google-sub-1');
+
+    $tries = [
+        'de otra cuenta' => googleToken(['sub' => 'google-sub-1']),
+        'sin vincular' => googleToken(['sub' => 'google-sub-404']),
+        'de hace más de 5 minutos' => googleToken(['sub' => 'google-sub-3', 'iat' => now()->subSeconds(301)->getTimestamp()]),
+        'sin iat' => googleToken(['sub' => 'google-sub-3', 'iat' => null]),
+        'que no verifica' => googleToken(['sub' => 'google-sub-3', 'aud' => 'otra-app.test']),
+    ];
+
+    foreach ($tries as $why => $reauth) {
+        [$status, $body] = linkPost($this, $social, 'apple', ['id_token' => appleToken(), 'reauth_provider' => 'google', 'reauth_id_token' => $reauth]);
+        expect($status)->toBe(422, $why.': '.json_encode($body))
+            ->and(socialErr($body))->toBe('ERR_VALIDATION')
+            ->and(linkErrors($body))->toHaveKey('reauth_id_token');
+    }
+
+    expect(linksOf($social))->toBe(['google']);
+
+    // De 300 segundos justos todavía entra.
+    [$status] = linkPost($this, $social, 'apple', ['id_token' => appleToken(), 'reauth_provider' => 'google', 'reauth_id_token' => googleToken(['sub' => 'google-sub-3', 'iat' => now()->subSeconds(300)->getTimestamp()])]);
+    expect($status)->toBe(200);
+});
+
+test('🔴 volver a entrar con Apple exige el nonce crudo (sin él, 422)', function () {
+    fakeJwks();
+    $social = passwordlessDiner(verified: false);
+    linkDiner($social, 'apple', '001234.apple-sub.0001');
+
+    [$status, $body] = linkPost($this, $social, 'google', ['id_token' => googleToken(['sub' => 'google-sub-9']), 'reauth_provider' => 'apple', 'reauth_id_token' => appleToken(['nonce' => hash('sha256', 'n-1')])]);
+    expect($status)->toBe(422)->and(linkErrors($body))->toHaveKey('reauth_nonce');
+
+    [$status, $body] = linkPost($this, $social, 'google', ['id_token' => googleToken(['sub' => 'google-sub-9']), 'reauth_provider' => 'apple', 'reauth_id_token' => appleToken(['nonce' => hash('sha256', 'n-1')]), 'reauth_nonce' => 'n-1']);
+    expect($status)->toBe(200, json_encode($body));
+});
+
+test('🔴 con el correo verificado, volver a entrar NO alcanza: el código es el camino (422 en `code`)', function () {
+    fakeJwks();
+    $social = passwordlessDiner(verified: true);
+    linkDiner($social, 'google', 'google-sub-3');
+
+    [$status, $body] = linkPost($this, $social, 'apple', ['id_token' => appleToken(), 'reauth_provider' => 'google', 'reauth_id_token' => googleToken(['sub' => 'google-sub-3'])]);
+
+    expect($status)->toBe(422)->and(socialErr($body))->toBe('ERR_VALIDATION')
+        ->and(linkErrors($body))->toHaveKey('code')
+        ->and(linksOf($social))->toBe(['apple', 'google']);
+});
+
+test('🔴 una cuenta sin contraseña que manda `current_password` (o nada): 422 que dice qué prueba usar', function () {
+    fakeJwks();
+    $verified = passwordlessDiner(verified: true);
+    $unverified = passwordlessDiner(verified: false, email: 'social2@mozzo.test');
+
+    foreach ([['current_password' => ''], ['current_password' => 'x'], []] as $proof) {
+        [$status, $body] = linkPost($this, $verified, 'google', ['id_token' => googleToken(['sub' => 'google-sub-9'])] + $proof);
+        expect($status)->toBe(422)->and(linkErrors($body)['code'][0])->toContain('código');
+
+        [$status, $body] = linkPost($this, $unverified, 'google', ['id_token' => googleToken(['sub' => 'google-sub-9'])] + $proof);
+        expect($status)->toBe(422)->and(linkErrors($body)['reauth_id_token'][0])->toContain('volvé a entrar');
+    }
+
+    expect(DB::table('mk_social_identities')->where('provider', 'google')->count())->toBe(0);
+});
+
+test('🔴 una cuenta CON contraseña no vincula con un código: sigue pidiendo la contraseña', function () {
+    fakeJwks();
+
+    [$status, $body] = linkPost($this, $this->diner, 'google', ['id_token' => googleToken(), 'code' => '123456']);
+
+    expect($status)->toBe(422)->and(linkErrors($body))->toHaveKey('current_password')
+        ->and(DB::table('mk_social_identities')->count())->toBe(0);
 });
 
 // ─── 6. Desvincular desde la cuenta (`unlinkSocialAccount`) ─────────────────

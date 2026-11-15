@@ -12,6 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Vincular Google o Apple a una cuenta sin contraseña
+
+**Added**
+- `BaseAuthController::requestSocialLinkCode($request, $provider)` (`POST me/social/{provider}/code`, opt-in): manda
+  al correo de una cuenta SIN contraseña el código para vincular, sólo si es el correo que le verificó un proveedor ya vinculado (`purpose` `social_link`, evento
+  `auth.social_link_code.requested`). 409 `ERR_SOCIAL_HAS_PASSWORD` / `ERR_SOCIAL_NO_VERIFIED_EMAIL`, 429 `ERR_THROTTLED`.
+- `linkSocialAccount` acepta, en una cuenta sin contraseña, `code` (con ese correo) o volver a entrar con un
+  proveedor ya vinculado (`reauth_provider`, `reauth_id_token`, `reauth_nonce` con Apple; `iat` de 300 s o menos)
+  cuando no lo tiene. Antes una cuenta sin contraseña no podía vincular.
+
+**Changed**
+- `mk_social_identities.email` guarda sólo el correo que el proveedor VERIFICÓ (antes, cualquiera): es el que habilita
+  el código. Las filas viejas pueden tener correos sin verificar; un consumer en producción las limpia antes de usar el código.
+- `config('mk_director.auth.rate_limits.social_link_code_request')` (`3,10`).
+
+**Unchanged**: una cuenta con contraseña sigue vinculando con `current_password` y los mismos errores
+(DEVELOPER_GUIDE § 3.22.6).
+
 ## [UNRELEASED] — Apple: no borrar la cuenta sin revocar
 
 **Changed (BC)**
