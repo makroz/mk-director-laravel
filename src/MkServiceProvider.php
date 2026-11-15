@@ -64,8 +64,15 @@ use Mk\Director\Push\Providers\FcmProvider;
 use Mk\Director\Push\Providers\LogProvider;
 use Mk\Director\Push\Providers\NullProvider;
 use Mk\Director\Push\Providers\OneSignalProvider;
+use Mk\Director\Tenancy\Events\TenantFlushed;
+use Mk\Director\Tenancy\Events\TenantResolved;
+use Mk\Director\Tenancy\NullTenantConnectionResolver;
+use Mk\Director\Tenancy\TenantConnectionResolver;
+use Mk\Director\Tenancy\TenantConnectionSwitcher;
 use Mk\Director\Tenancy\TenantContext;
+use Mk\Director\Tenancy\TenantQueuePropagation;
 use Mk\Director\Tenancy\TenantResolver;
+use Mk\Director\Tenancy\TenantRowLevelSecurity;
 use Mk\Director\Utils\MkDebugConfig;
 // 🔴 ESTE IMPORT FALTABA Y HABÍA DOS `catch (Throwable $e)` MUERTOS.
 // Sin él, dentro del namespace `Mk\Director` el nombre pelado resuelve a
@@ -76,6 +83,11 @@ use Mk\Director\Utils\MkDebugConfig;
 // auto-discover fallido y lo dejaba pasar entero.
 // El que sí funcionaba (línea ~195) usa `\Throwable` con la barra.
 use Mk\Director\Utils\MkRequestAwareStorageUrl;
+use Illuminate\Queue\Events\JobExceptionOccurred;
+use Illuminate\Queue\Events\JobFailed;
+use Illuminate\Queue\Events\JobProcessed;
+use Illuminate\Database\Events\TransactionRolledBack;
+use Illuminate\Queue\Events\JobProcessing;
 use Throwable;
 
 class MkServiceProvider extends ServiceProvider
@@ -133,6 +145,15 @@ class MkServiceProvider extends ServiceProvider
         // singleton so the same instance is shared by the
         // middleware (writer) and the trait (reader).
         $this->app->singleton(TenantContext::class);
+        $this->app->bind(
+            TenantConnectionResolver::class,
+            fn ($app) => $app->make(
+                config('mk_director.tenant.connection_resolver') ?: NullTenantConnectionResolver::class
+            )
+        );
+        $this->app->singleton(TenantConnectionSwitcher::class);
+        $this->app->singleton(TenantRowLevelSecurity::class);
+        $this->app->singleton(TenantQueuePropagation::class);
 
         // Encabezado de los reportes exportados.
         //
@@ -295,6 +316,7 @@ class MkServiceProvider extends ServiceProvider
 
         $this->registerTenantMiddleware();
         $this->registerEnvelopeMiddleware();
+        $this->registerTenantSeams();
 
         // R2-005: Flush the TenantContext at the end of every request
         // so long-lived workers (Octane / Swoole) do not leak tenant
@@ -780,6 +802,28 @@ class MkServiceProvider extends ServiceProvider
             if (method_exists($kernel, 'hasMiddleware') && ! $kernel->hasMiddleware(MkApiEnvelope::class)) {
                 $kernel->pushMiddleware(MkApiEnvelope::class);
             }
+        }
+    }
+
+    /**
+     * Costuras de tenancy: conexión por tenant (S1) y tenant en la cola (S3).
+     * Ambas son inertes con la config por defecto.
+     */
+    private function registerTenantSeams(): void
+    {
+        $events = $this->app->make('events');
+
+        $events->listen(TenantResolved::class, fn (TenantResolved $e) => $this->app->make(TenantConnectionSwitcher::class)->resolved($e));
+        $events->listen(TenantFlushed::class, fn (TenantFlushed $e) => $this->app->make(TenantConnectionSwitcher::class)->flushed($e));
+        // After the switcher: the setting must land on the already-switched connection.
+        $events->listen(TenantResolved::class, fn (TenantResolved $e) => $this->app->make(TenantRowLevelSecurity::class)->resolved($e));
+        $events->listen(TenantFlushed::class, fn (TenantFlushed $e) => $this->app->make(TenantRowLevelSecurity::class)->flushed($e));
+        $events->listen(TransactionRolledBack::class, fn (TransactionRolledBack $e) => $this->app->make(TenantRowLevelSecurity::class)->rolledBack($e));
+
+        TenantQueuePropagation::hookPayload();
+        $events->listen(JobProcessing::class, fn (JobProcessing $e) => $this->app->make(TenantQueuePropagation::class)->starting($e));
+        foreach ([JobProcessed::class, JobFailed::class, JobExceptionOccurred::class] as $event) {
+            $events->listen($event, fn ($e) => $this->app->make(TenantQueuePropagation::class)->finished($e));
         }
     }
 

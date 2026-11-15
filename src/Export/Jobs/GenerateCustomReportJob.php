@@ -124,26 +124,19 @@ class GenerateCustomReportJob implements ShouldQueue
         $tenant = app(TenantContext::class);
 
         $usuarioPrevio = Auth::user();
-        $tenantPrevio = $tenant->current();
 
         try {
             if ($usuario !== null) {
                 Auth::setUser($usuario);
             }
 
-            if ($report->tenant_id !== null) {
-                $tenant->set($report->tenant_id);
-            }
-
-            return $flujo();
+            return $report->tenant_id !== null ? $tenant->run($report->tenant_id, $flujo) : $flujo();
         } finally {
             Auth::forgetGuards();
 
             if ($usuarioPrevio !== null) {
                 Auth::setUser($usuarioPrevio);
             }
-
-            $tenantPrevio !== null ? $tenant->set($tenantPrevio) : $tenant->flush();
         }
     }
 }
