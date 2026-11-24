@@ -96,6 +96,9 @@ return [
     | Allowed request headers. Por defecto todos (`*`).
     | Si `supports_credentials` es `true`, NO se puede usar `*` para
     | `allowed_headers` en algunos browsers — explícito es más seguro.
+    | 🔴 Si la hacés explícita, incluí `If-Match`: con
+    | `features.optimistic_locking` los fronts lo mandan en cada update, y
+    | sin él el preflight bloquea TODOS los guardados de la web.
     */
     'allowed_headers' => ['*'],
 

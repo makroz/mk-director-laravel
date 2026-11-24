@@ -147,6 +147,27 @@ return [
          */
         'write_only_validated' => env('MK_WRITE_ONLY_VALIDATED', false),
 
+        /*
+         * Optimistic locking: que dos personas editando el mismo registro no se
+         * pisen en silencio. Con esto en `true`, `show()`/`update()` responden
+         * `ETag` con la versión de la fila (`updated_at`) y `update()` exige
+         * `If-Match`: 412 `ERR_PRECONDITION_FAILED` si la versión cambió, 428
+         * `ERR_PRECONDITION_REQUIRED` si falta. Los fronts del paquete
+         * (`useMkCrud`) mandan `If-Match` solos con el `updated_at` de la fila.
+         *
+         * ⚠️ DEFAULT `false` A PROPÓSITO: prendido, todo `update` sin `If-Match`
+         * responde 428, y un consumidor que llama `api.put` a mano se rompería en
+         * un `composer update`.
+         *
+         * 🔴 El modelo necesita timestamps: sin `updated_at` el update tira una
+         * `LogicException` en vez de dejar pasar sin proteger.
+         *
+         * Se puede pinear por controller en
+         * `$mkConfig['features']['optimistic_locking']`, que gana sobre este
+         * valor en los dos sentidos.
+         */
+        'optimistic_locking' => env('MK_OPTIMISTIC_LOCKING', false),
+
         // R-PKG-007: auto-run `mk:discover-abilities` on every boot.
         // Solo usar en sandbox/dev. Idempotente (UPSERT), pero agrega overhead.
         'auto_discover_abilities' => env('MK_AUTO_DISCOVER_ABILITIES', false),

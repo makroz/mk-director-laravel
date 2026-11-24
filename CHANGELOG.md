@@ -12,6 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `canMk()`**, y no avisa. El cableado correcto (`path repository` con symlink)
 > está en `docs/guides/ARRANQUE.md` del monorepo.
 
+## [UNRELEASED] — Optimistic locking en el update (apagado por defecto)
+
+**Added**
+- `mk_director.features.optimistic_locking` (env `MK_OPTIMISTIC_LOCKING`, default `false`). También se puede fijar por controller en
+  `$mkConfig['features']['optimistic_locking']`, que gana en los dos sentidos. Prendido, `show()` y `update()` responden `ETag` con la versión
+  de la fila (su `updated_at` entre comillas, en el mismo ISO que la lista). `update()` exige `If-Match`: responde 412 `ERR_PRECONDITION_FAILED`
+  si la versión cambió y 428 `ERR_PRECONDITION_REQUIRED` si falta; en los dos casos no escribe nada. La versión se compara dos veces: antes de los
+  hooks y otra vez dentro de la transacción con la fila bloqueada (`lockForUpdate`), para que dos updates con la misma versión no pasen los dos.
+  `If-Match: *` pasa siempre, y una fila con `updated_at` nulo no se puede proteger, así que pasa.
+  Un tag que no es una fecha ISO no nombra ninguna versión: `""`, `now` o `today` responden 412 (Carbon los leería como el instante actual). Una fila borrada entre el control y el bloqueo también responde 412.
+- `defaultErrorCode()` mapea 412 a `ERR_PRECONDITION_FAILED` y 428 a `ERR_PRECONDITION_REQUIRED` (antes caían en `ERR_ERROR`).
+- El stub `cors.php.stub` avisa que una lista explícita de `allowed_headers` tiene que incluir `If-Match`.
+
+**Notes**
+- La comparación es al segundo, que es la precisión con la que la base guarda `updated_at`. Dos guardados del mismo registro dentro del mismo
+  segundo no se distinguen.
+- Con el flag prendido, un modelo sin timestamps lanza una `LogicException`; no se deja pasar sin proteger.
+
 ## [UNRELEASED] — Costuras de tenancy (todo apagado por defecto)
 
 **Added**

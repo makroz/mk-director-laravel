@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace Mk\Director\Traits;
 
+use Carbon\Carbon;
 use Illuminate\Contracts\Pagination\CursorPaginator;
 use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Routing\Route;
@@ -18,6 +20,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
+use LogicException;
 use Mk\Director\Auth\Models\AuthUser;
 use Mk\Director\Contracts\MkModuleServiceInterface;
 use Mk\Director\DTOs\DTOFactory;
@@ -28,6 +31,7 @@ use Mk\Director\Managers\CacheManager;
 use Mk\Director\Managers\ListManager;
 use Mk\Director\Managers\PluginManager;
 use Mk\Director\Tenancy\TenantContext;
+use Symfony\Component\HttpKernel\Exception\PreconditionFailedHttpException;
 
 /**
  * CRUDSmart Trait - Lógica CRUD automática basada en configuración
@@ -314,6 +318,130 @@ trait CRUDSmart
         }
 
         return (bool) config('mk_director.features.write_only_validated', false);
+    }
+
+    /**
+     * ¿Este controller protege el `update` contra la edición perdida?
+     *
+     * Con esto prendido, `show()` y `update()` responden el header `ETag` con la
+     * versión de la fila (su `updated_at`), y `update()` exige `If-Match`: si no
+     * coincide con la versión actual responde 412 y no escribe nada; si falta,
+     * responde 428. Sin esto, dos personas editando el mismo registro se pisan:
+     * gana la última y la otra pierde su cambio con un 200 en la mano.
+     *
+     * Mismo criterio que {@see isPolicyAuthorizationEnabled()}: el valor
+     * per-controller gana en los dos sentidos sobre el global.
+     */
+    protected function isOptimisticLockingEnabled(): bool
+    {
+        $features = $this->getListFeatures();
+
+        if (array_key_exists('optimistic_locking', $features)) {
+            return (bool) $features['optimistic_locking'];
+        }
+
+        return (bool) config('mk_director.features.optimistic_locking', false);
+    }
+
+    /**
+     * La versión de la fila para el optimistic locking: su `updated_at`.
+     *
+     * 🔴 Un modelo sin timestamps con el flag prendido es un error de
+     * configuración y se dice fuerte: dejarlo pasar sería una protección que se
+     * lee en el `$mkConfig` y no protege nada.
+     */
+    private function rowVersion(Model $model): mixed
+    {
+        $column = $model->getUpdatedAtColumn();
+
+        if (! $model->usesTimestamps() || $column === null) {
+            throw new LogicException(sprintf(
+                'features.optimistic_locking needs an updated_at column, and %s has none.',
+                $model::class,
+            ));
+        }
+
+        return $model->getAttribute($column);
+    }
+
+    /**
+     * El ETag de una versión: el instante entre comillas, en el mismo formato
+     * ISO con el que una fila de la lista serializa su `updated_at`. Así el front
+     * puede mandar `If-Match` con el valor de la fila sin haber llamado al `show`.
+     */
+    private function etagFor(mixed $version): ?string
+    {
+        return $version === null ? null : '"'.Carbon::parse($version)->toJSON().'"';
+    }
+
+    /**
+     * ¿El header `If-Match` nombra esta versión? `*` siempre la nombra; el
+     * prefijo débil `W/` se ignora; un valor que no es una fecha ISO no la
+     * nombra. 🔴 El formato se exige ANTES de `Carbon::parse()`: Carbon lee
+     * `""`, `now` o `today` como el instante actual, y esos valores coincidían
+     * con una fila guardada en el mismo segundo.
+     *
+     * ponytail: compara al segundo, porque es la precisión con la que la base
+     * guarda `updated_at`. Dos guardados del mismo registro dentro del mismo
+     * segundo no se distinguen; si eso llega a importar, la salida es una
+     * columna `version` entera que se incremente en cada update.
+     *
+     * Una fila sin versión todavía (`updated_at` nulo, típico de un seed) no se
+     * puede proteger: pasa.
+     */
+    private function ifMatchNames(string $ifMatch, mixed $version): bool
+    {
+        if ($version === null) {
+            return true;
+        }
+
+        $current = Carbon::parse($version)->getTimestamp();
+
+        foreach (explode(',', $ifMatch) as $tag) {
+            $tag = trim($tag);
+
+            if ($tag === '*') {
+                return true;
+            }
+
+            $tag = trim((string) preg_replace('#^W/#', '', $tag), '"');
+
+            if (preg_match('/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/', $tag) !== 1) {
+                continue;
+            }
+
+            try {
+                if (Carbon::parse($tag)->getTimestamp() === $current) {
+                    return true;
+                }
+            } catch (\Throwable) {
+                // Not a date: it names no version.
+            }
+        }
+
+        return false;
+    }
+
+    /** La respuesta con el `ETag` de la fila, si el optimistic locking está prendido. */
+    private function withVersionHeader(JsonResponse $response, Model $model): JsonResponse
+    {
+        if (! $this->isOptimisticLockingEnabled()) {
+            return $response;
+        }
+
+        $etag = $this->etagFor($this->rowVersion($model));
+
+        return $etag === null ? $response : $response->header('ETag', $etag);
+    }
+
+    private function preconditionFailed(): JsonResponse
+    {
+        return $this->sendError(
+            'El registro fue modificado por otra persona. Recárguelo e intente de nuevo.',
+            [],
+            412,
+            'ERR_PRECONDITION_FAILED',
+        );
     }
 
     /**
@@ -810,7 +938,7 @@ trait CRUDSmart
         // Plugin Hook: afterResponse
         $this->getPluginManager()->fireAfterResponse($data);
 
-        return $this->sendResponse($data);
+        return $this->withVersionHeader($this->sendResponse($data), $model);
     }
 
     /**
@@ -1091,6 +1219,31 @@ trait CRUDSmart
             $model = $this->findScopedOrFail($request, $id);
         }
 
+        // Optimistic locking: se mira ANTES de los hooks, así un 412/428 no deja
+        // efectos de `beforeSave`/`beforeUpdate` (un plugin que ya subió el
+        // archivo nuevo, por ejemplo). Se vuelve a mirar dentro de la transacción,
+        // con la fila bloqueada: entre acá y la escritura otra request puede
+        // haber guardado.
+        $ifMatch = null;
+
+        if ($this->isOptimisticLockingEnabled()) {
+            $version = $this->rowVersion($model);
+            $ifMatch = $request->header('If-Match');
+
+            if ($ifMatch === null && $version !== null) {
+                return $this->sendError(
+                    'Falta el header If-Match con la versión del registro.',
+                    [],
+                    428,
+                    'ERR_PRECONDITION_REQUIRED',
+                );
+            }
+
+            if ($ifMatch !== null && ! $this->ifMatchNames($ifMatch, $version)) {
+                return $this->preconditionFailed();
+            }
+        }
+
         // Get input
         $input = $this->inputParaEscritura($request);
 
@@ -1123,18 +1276,40 @@ trait CRUDSmart
         // que falla a medias deja la fila con los valores nuevos y sin el
         // efecto que los justificaba — y no se distingue de una actualización
         // que salió bien.
-        $model = DB::transaction(function () use ($model, $input, $service, $request, $id) {
-            $model->update($input);
-            $model = $model->fresh();
+        try {
+            $model = DB::transaction(function () use ($model, $input, $service, $request, $id, $ifMatch) {
+                if ($ifMatch !== null) {
+                    // La fila bloqueada hasta el commit: dos updates con la misma
+                    // versión no pasan los dos. Sin los scopes globales porque la
+                    // fila ya se encontró con ellos arriba.
+                    $column = $model->getUpdatedAtColumn();
+                    $locked = $model->newQueryWithoutScopes()
+                        ->whereKey($model->getKey())
+                        ->lockForUpdate()
+                        ->first([$column]);
 
-            if ($service && method_exists($service, 'afterUpdate')) {
-                $service->afterUpdate($request, $model, $input, $id);
-            }
+                    // Una fila borrada mientras tanto tampoco es la versión
+                    // que se editó: sin esto, `value()` daba null, el null
+                    // «pasa», y el update corría sobre nada.
+                    if ($locked === null || ! $this->ifMatchNames($ifMatch, $locked->getAttribute($column))) {
+                        throw new PreconditionFailedHttpException;
+                    }
+                }
 
-            $this->getPluginManager()->fireAfterSave($model, $request, 'update');
+                $model->update($input);
+                $model = $model->fresh();
 
-            return $model;
-        });
+                if ($service && method_exists($service, 'afterUpdate')) {
+                    $service->afterUpdate($request, $model, $input, $id);
+                }
+
+                $this->getPluginManager()->fireAfterSave($model, $request, 'update');
+
+                return $model;
+            });
+        } catch (PreconditionFailedHttpException) {
+            return $this->preconditionFailed();
+        }
 
         // Auto-invalidate cache if enabled
         if ($this->isCacheEnabled()) {
@@ -1147,7 +1322,7 @@ trait CRUDSmart
         // Plugin Hook: afterResponse
         $this->getPluginManager()->fireAfterResponse($data);
 
-        return $this->sendResponse($data, 'Actualizado con éxito');
+        return $this->withVersionHeader($this->sendResponse($data, 'Actualizado con éxito'), $model);
     }
 
     /**
