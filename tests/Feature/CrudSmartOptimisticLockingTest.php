@@ -314,3 +314,36 @@ test('global config on: a controller that turns it off wins', function () {
 
     expect($this->httpSendPatch('/api/notes-off/1', ['title' => 'Mine'])->getStatusCode())->toBe(200);
 });
+
+test('flag on: an If-Match that is not an ISO date names no version, even in the same second', function () {
+    bootLockedNotes($this);
+    // The row version is "now": a relative string that Carbon would read as now must not match it.
+    LockedNote::query()->whereKey(1)->update(['updated_at' => Carbon::now()]);
+
+    foreach (['""', '"now"', '"today"', 'now'] as $tag) {
+        $response = $this->httpSendPatch('/api/notes-on/1', ['title' => 'Mine'], ['HTTP_IF_MATCH' => $tag]);
+
+        expect($response->getStatusCode())->toBe(412, "If-Match {$tag}");
+    }
+
+    expect(LockedNote::query()->find(1)->title)->toBe('Original');
+});
+
+test('flag on: a row deleted between the check and the write answers 412, not a write on nothing', function () {
+    bootLockedNotes($this);
+    // The service hook runs between the early check and the transaction.
+    $this->httpApp->instance(SomeoneElseSavesMeanwhile::class, new class extends SomeoneElseSavesMeanwhile
+    {
+        public function beforeUpdate(Request $request, string|int $id, array $input): array
+        {
+            LockedNote::query()->whereKey($id)->delete();
+
+            return $input;
+        }
+    });
+
+    $response = $this->httpSendPatch('/api/notes-race/1', ['title' => 'Mine'], ['HTTP_IF_MATCH' => versionSeenInTheList()]);
+
+    expect($response->getStatusCode())->toBe(412, (string) $response->getContent())
+        ->and(LockedNote::query()->find(1))->toBeNull();
+});

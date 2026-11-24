@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   si la versión cambió y 428 `ERR_PRECONDITION_REQUIRED` si falta; en los dos casos no escribe nada. La versión se compara dos veces: antes de los
   hooks y otra vez dentro de la transacción con la fila bloqueada (`lockForUpdate`), para que dos updates con la misma versión no pasen los dos.
   `If-Match: *` pasa siempre, y una fila con `updated_at` nulo no se puede proteger, así que pasa.
+  Un tag que no es una fecha ISO no nombra ninguna versión: `""`, `now` o `today` responden 412 (Carbon los leería como el instante actual). Una fila borrada entre el control y el bloqueo también responde 412.
 - `defaultErrorCode()` mapea 412 a `ERR_PRECONDITION_FAILED` y 428 a `ERR_PRECONDITION_REQUIRED` (antes caían en `ERR_ERROR`).
 - El stub `cors.php.stub` avisa que una lista explícita de `allowed_headers` tiene que incluir `If-Match`.
 

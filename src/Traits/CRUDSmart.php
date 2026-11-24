@@ -376,7 +376,10 @@ trait CRUDSmart
 
     /**
      * ¿El header `If-Match` nombra esta versión? `*` siempre la nombra; el
-     * prefijo débil `W/` se ignora; un valor que no es una fecha no la nombra.
+     * prefijo débil `W/` se ignora; un valor que no es una fecha ISO no la
+     * nombra. 🔴 El formato se exige ANTES de `Carbon::parse()`: Carbon lee
+     * `""`, `now` o `today` como el instante actual, y esos valores coincidían
+     * con una fila guardada en el mismo segundo.
      *
      * ponytail: compara al segundo, porque es la precisión con la que la base
      * guarda `updated_at`. Dos guardados del mismo registro dentro del mismo
@@ -401,8 +404,14 @@ trait CRUDSmart
                 return true;
             }
 
+            $tag = trim((string) preg_replace('#^W/#', '', $tag), '"');
+
+            if (preg_match('/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/', $tag) !== 1) {
+                continue;
+            }
+
             try {
-                if (Carbon::parse(trim((string) preg_replace('#^W/#', '', $tag), '"'))->getTimestamp() === $current) {
+                if (Carbon::parse($tag)->getTimestamp() === $current) {
                     return true;
                 }
             } catch (\Throwable) {
@@ -1273,12 +1282,16 @@ trait CRUDSmart
                     // La fila bloqueada hasta el commit: dos updates con la misma
                     // versión no pasan los dos. Sin los scopes globales porque la
                     // fila ya se encontró con ellos arriba.
+                    $column = $model->getUpdatedAtColumn();
                     $locked = $model->newQueryWithoutScopes()
                         ->whereKey($model->getKey())
                         ->lockForUpdate()
-                        ->value($model->getUpdatedAtColumn());
+                        ->first([$column]);
 
-                    if (! $this->ifMatchNames($ifMatch, $locked)) {
+                    // Una fila borrada mientras tanto tampoco es la versión
+                    // que se editó: sin esto, `value()` daba null, el null
+                    // «pasa», y el update corría sobre nada.
+                    if ($locked === null || ! $this->ifMatchNames($ifMatch, $locked->getAttribute($column))) {
                         throw new PreconditionFailedHttpException;
                     }
                 }
